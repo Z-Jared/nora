@@ -22,6 +22,15 @@ class AutonomousStepRecord:
     result: str
 
 
+@dataclass(frozen=True)
+class AutonomousPreflight:
+    goal: str
+    max_steps: int
+    available_tool_count: int
+    hidden_tools: list[str]
+    high_risk_tools: list[str]
+
+
 class MiniAgent:
     max_tool_rounds = 4
     max_autonomous_steps = 6
@@ -74,8 +83,11 @@ class MiniAgent:
             return "受控自主执行需要配置支持工具调用的模型。"
 
         step_limit = self._autonomous_step_limit(max_steps)
-        messages = self.memory.messages() + [{"role": "user", "content": self._autonomous_instruction(goal)}]
         tools = self._autonomous_tools()
+        preflight = self._autonomous_preflight(goal, step_limit, tools)
+        messages = self.memory.messages() + [
+            {"role": "user", "content": self._autonomous_instruction(goal, preflight)}
+        ]
         records = []
         final_status = "max_steps_reached"
 
@@ -134,7 +146,7 @@ class MiniAgent:
         else:
             final_status = "max_steps_reached"
 
-        answer = self._format_autonomous_report(goal, final_status, records)
+        answer = self._format_autonomous_report(goal, final_status, records, preflight)
         return self._record_turn(f"/auto {goal}", answer)
 
     def _run_with_llm_tools(self, text: str) -> str:
@@ -189,18 +201,37 @@ class MiniAgent:
             requested = self.max_autonomous_steps
         return max(1, min(requested, self.max_autonomous_steps))
 
-    def _autonomous_instruction(self, goal: str) -> str:
+    def _autonomous_instruction(self, goal: str, preflight: AutonomousPreflight) -> str:
         return "\n".join(
             [
                 "受控自主执行请求。",
                 f"目标: {goal}",
+                "",
+                self._format_autonomous_preflight(preflight),
+                "",
                 "规则:",
                 "- 在有限步骤内推进目标；每步最多调用一个必要工具，或直接给出最终结论。",
                 "- 优先使用只读、预览和检查工具，再考虑写入、执行、Git、浏览器交互或进程工具。",
                 "- 高风险工具可能需要用户确认；如果被取消、拒绝或失败，请停止并说明阻塞原因。",
+                "- 不要调用隐藏工具；如果目标需要隐藏工具，请停止并说明 blocked。",
                 "- 不要尝试绕过权限确认，不要无限循环。",
                 "- 完成时给出 done 总结；无法继续时给出 blocked 原因。",
             ]
+        )
+
+    def _autonomous_preflight(self, goal: str, step_limit: int, tools: list[dict]) -> AutonomousPreflight:
+        available_names = [_tool_name(tool) for tool in tools if _tool_name(tool)]
+        high_risk_tools = sorted(
+            name
+            for name in available_names
+            if _is_high_risk_autonomous_tool(name)
+        )
+        return AutonomousPreflight(
+            goal=goal,
+            max_steps=step_limit,
+            available_tool_count=len(available_names),
+            hidden_tools=sorted(self.autonomous_disabled_tools),
+            high_risk_tools=high_risk_tools,
         )
 
     def _autonomous_status_from_result(self, result: str) -> str:
@@ -215,8 +246,38 @@ class MiniAgent:
             return "blocked"
         return "done"
 
-    def _format_autonomous_report(self, goal: str, status: str, records: list[AutonomousStepRecord]) -> str:
-        lines = [f"受控自主执行已停止: {status}", f"目标: {goal}", "步骤:"]
+    def _format_autonomous_preflight(self, preflight: AutonomousPreflight) -> str:
+        hidden = ", ".join(preflight.hidden_tools) if preflight.hidden_tools else "无"
+        high_risk = ", ".join(preflight.high_risk_tools[:12]) if preflight.high_risk_tools else "无"
+        if len(preflight.high_risk_tools) > 12:
+            high_risk += f", ... (+{len(preflight.high_risk_tools) - 12})"
+        return "\n".join(
+            [
+                "执行前计划:",
+                "1. 先用只读工具收集必要上下文。",
+                "2. 每步最多调用一个工具，并在达到目标或遇到阻塞时停止。",
+                "3. 如需隐藏工具或被拒绝的高风险工具，返回 blocked 原因。",
+                "确认摘要:",
+                f"- 最大步数: {preflight.max_steps}",
+                f"- 可用工具数: {preflight.available_tool_count}",
+                f"- 隐藏工具: {hidden}",
+                f"- 仍需确认的高风险工具: {high_risk}",
+            ]
+        )
+
+    def _format_autonomous_report(
+        self,
+        goal: str,
+        status: str,
+        records: list[AutonomousStepRecord],
+        preflight: AutonomousPreflight,
+    ) -> str:
+        lines = [
+            f"受控自主执行已停止: {status}",
+            f"目标: {goal}",
+            self._format_autonomous_preflight(preflight),
+            "步骤:",
+        ]
         if not records:
             lines.append("- 未执行任何步骤。")
             return "\n".join(lines)
@@ -293,3 +354,27 @@ class MiniAgent:
                 break
 
         return cleaned.strip()
+
+
+def _tool_name(tool: dict) -> str:
+    return str((tool.get("function") or {}).get("name") or "")
+
+
+def _is_high_risk_autonomous_tool(name: str) -> bool:
+    return any(
+        term in name
+        for term in [
+            "write",
+            "replace",
+            "apply",
+            "delete",
+            "shell",
+            "test",
+            "repair",
+            "git_",
+            "browser_click",
+            "browser_fill",
+            "background_process",
+            "task",
+        ]
+    )

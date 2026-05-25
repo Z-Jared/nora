@@ -979,6 +979,32 @@ class MiniAgentTests(unittest.TestCase):
         self.assertIn("tool:calculate", answer)
         self.assertIn("result: 5", answer)
 
+    def test_autonomous_loop_includes_preflight_plan_and_confirmation_summary(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                return LLMResponse(content="done")
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(
+            build_default_registry(),
+            llm=llm,
+            autonomous_disabled_tools={"write_project_file", "run_shell_command"},
+        )
+
+        answer = agent.run_autonomous("检查项目", max_steps=3)
+        first_prompt = llm.calls[0]["messages"][-1]["content"]
+
+        self.assertIn("执行前计划", answer)
+        self.assertIn("确认摘要", answer)
+        self.assertIn("最大步数: 3", answer)
+        self.assertIn("隐藏工具: run_shell_command, write_project_file", answer)
+        self.assertIn("执行前计划", first_prompt)
+        self.assertIn("不要调用隐藏工具", first_prompt)
+
     def test_autonomous_loop_respects_max_steps(self):
         class FakeToolCallingLLM:
             def __init__(self):

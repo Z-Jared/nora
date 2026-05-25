@@ -16,7 +16,7 @@
 - 多步骤任务状态管理：创建任务、更新步骤、记录步骤总结、查看任务、完成任务，并在推进步骤时提示建议工具类型
 - Git 本地工作流：查看 status/diff/log/current branch/staged diff，汇总变更、审查 staged diff、提交前检查，显式暂存/取消暂存路径，创建本地分支，提交已暂存改动；不提供 push/pull/fetch 等远程写操作
 - 测试与诊断：运行白名单 unittest 命令，从失败输出中提取 traceback、断言和文件行号，并支持最多 3 轮的受控修复测试循环
-- 受控自主执行：显式 `/auto` 入口，有限步数推进目标，每步记录 trace，高风险工具仍需确认
+- 受控自主执行：显式 `/auto` 入口，执行前生成计划和确认摘要，有限步数推进目标，每步记录 trace，高风险工具仍需确认
 - Python 代码理解：用 AST 查找 class、function、method，生成文件 outline，查看符号签名/上下文，并查找 Name/Attribute 可能引用
 - 上下文摘要：本地 JSONL 保存、搜索和列出短中期项目上下文，并拒绝敏感内容
 - 上下文窗口管理：模型工具调用链路会自动压缩过长工具结果，只保留头尾和统计信息；完整结果可用 `result_id` 缓存在 `data/tool_results.jsonl` 后分段读取
@@ -293,7 +293,7 @@ python3 main.py
 安全审计报告基于已脱敏的 `logs/tool_calls.jsonl` 生成，只统计工具名、状态、高风险类别、敏感路径提示和最近高风险操作摘要，不输出 patch/content/text/API key/secret/token 原文。
 模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；如果完整结果不含敏感标记，会缓存到 `data/tool_results.jsonl` 并在压缩内容里返回 `result_id`，模型可用 `list_tool_results`、`read_tool_result`、`search_tool_results` 分段回看；CLI slash commands 仍会直接显示工具返回。
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤。
-受控自主执行只能通过显式 `/auto` 进入，有最大步数硬上限；每步最多执行一个工具调用，所有工具仍经过 `ToolRegistry` 权限确认和日志记录，取消、拒绝或失败会停止为 blocked，不会绕过 `run_task_once` 的一步一推进语义。
+受控自主执行只能通过显式 `/auto` 进入，有最大步数硬上限；执行前会生成本地计划和确认摘要，列出最大步数、可用工具数、隐藏工具和仍需确认的高风险工具；每步最多执行一个工具调用，所有工具仍经过 `ToolRegistry` 权限确认和日志记录，取消、拒绝或失败会停止为 blocked，不会绕过 `run_task_once` 的一步一推进语义。
 安全模式默认是 `normal`，保持现有行为；`strict` 适合真实项目或不想让模型触碰高风险动作的场景。`allow_autonomous_write: false` 只影响 `/auto` 暴露给模型的工具，不会移除 CLI 手动命令。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
