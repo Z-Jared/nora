@@ -2205,6 +2205,44 @@ class TaskManagerTests(unittest.TestCase):
 
         self.assertIn("summary", result)
 
+    def test_done_without_summary_returns_guidance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json")
+            manager.start("目标", "步骤一")
+
+            result = manager.update_step(1, "done")
+
+        self.assertIn("建议填写 summary", result)
+
+    def test_blocked_requires_reason(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json")
+            manager.start("目标", "步骤一")
+
+            result = manager.update_step(1, "blocked")
+
+        self.assertIn("阻塞原因", result)
+
+    def test_list_highlights_current_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json")
+            manager.start("目标", "步骤一\n步骤二")
+            manager.run_once()
+
+            listing = manager.list()
+
+        self.assertIn("当前步骤: 1. 步骤一", listing)
+
+    def test_run_once_suggests_tool_type(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json")
+            manager.start("目标", "运行测试")
+
+            result = manager.run_once()
+
+        self.assertIn("建议工具类型", result)
+        self.assertIn("test/", result)
+
 
 class ProjectRAGTests(unittest.TestCase):
     def test_searches_project_text_files_by_keyword(self):

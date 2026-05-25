@@ -87,6 +87,8 @@ def main() -> int:
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
         EvalCase("task_run_once_marks_step", eval_task_run_once_marks_step),
         EvalCase("task_update_step_records_summary", eval_task_update_step_records_summary),
+        EvalCase("task_run_once_suggests_tool_type", eval_task_run_once_suggests_tool_type),
+        EvalCase("task_blocked_requires_reason", eval_task_blocked_requires_reason),
         EvalCase("provider_factory_openai", eval_provider_factory_openai),
         EvalCase("provider_factory_anthropic", eval_provider_factory_anthropic),
         EvalCase("provider_factory_gemini", eval_provider_factory_gemini),
@@ -656,6 +658,25 @@ def eval_task_update_step_records_summary():
         listing = manager.list()
         assert "备注: 测试通过" in listing
         assert "总结: 实现完成" in listing
+
+
+def eval_task_run_once_suggests_tool_type():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manager = TaskManager(Path(tmpdir) / "task.json")
+        manager.start("eval task", "运行测试")
+        result = manager.run_once()
+        listing = manager.list()
+        assert "建议工具类型" in result, result
+        assert "test/" in result, result
+        assert "当前步骤: 1. 运行测试" in listing, listing
+
+
+def eval_task_blocked_requires_reason():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        manager = TaskManager(Path(tmpdir) / "task.json")
+        manager.start("eval task", "等待依赖")
+        result = manager.update_step(1, "blocked")
+        assert "阻塞原因" in result, result
 
 
 def eval_provider_factory_openai():

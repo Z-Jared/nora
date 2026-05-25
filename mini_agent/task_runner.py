@@ -36,6 +36,11 @@ class TaskManager:
         if status not in VALID_STEP_STATUSES:
             return f"无效状态: {status}。可用状态: pending, in_progress, done, blocked。"
 
+        note = note.strip()
+        summary = summary.strip()
+        if status == "blocked" and not note and not summary:
+            return "标记 blocked 时请填写 note 或 summary 说明阻塞原因。"
+
         task = self._read()
         if not task:
             return "暂无任务。"
@@ -43,10 +48,13 @@ class TaskManager:
         for step in task["steps"]:
             if step["id"] == step_id:
                 step["status"] = status
-                step["note"] = note.strip()
-                step["summary"] = summary.strip()
+                step["note"] = note
+                step["summary"] = summary
                 self._write(task)
-                return f"已更新步骤 {step_id}: {status}"
+                message = f"已更新步骤 {step_id}: {status}"
+                if status == "done" and not summary:
+                    message += "。建议填写 summary 记录执行结果。"
+                return message
 
         return f"没有找到步骤: {step_id}"
 
@@ -84,6 +92,7 @@ class TaskManager:
                 return "\n".join(
                     [
                         f"下一步: {step['id']}. {step['text']}",
+                        f"建议工具类型: {_suggest_tool_type(step['text'])}",
                         "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态并填写 summary。",
                     ]
                 )
@@ -92,6 +101,7 @@ class TaskManager:
                 return "\n".join(
                     [
                         f"继续当前步骤: {step['id']}. {step['text']}",
+                        f"建议工具类型: {_suggest_tool_type(step['text'])}",
                         "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态并填写 summary。",
                     ]
                 )
@@ -113,6 +123,9 @@ class TaskManager:
 
     def _format(self, task: dict) -> str:
         lines = [f"任务: {task['goal']} (status={task['status']})"]
+        current_steps = [step for step in task["steps"] if step.get("status") == "in_progress"]
+        if current_steps:
+            lines.append("当前步骤: " + ", ".join(f"{step['id']}. {step['text']}" for step in current_steps))
         for step in task["steps"]:
             details = []
             if step.get("note"):
@@ -124,3 +137,18 @@ class TaskManager:
         if task.get("summary"):
             lines.append(f"总结: {task['summary']}")
         return "\n".join(lines)
+
+
+def _suggest_tool_type(step_text: str) -> str:
+    text = step_text.lower()
+    if any(term in text for term in ["测试", "test", "unittest", "验证"]):
+        return "test/read 或 test/execute；运行测试等高风险执行仍需确认"
+    if any(term in text for term in ["git", "提交", "暂存", "commit", "diff"]):
+        return "git/read 或 git/write；暂存和提交仍需确认"
+    if any(term in text for term in ["浏览器", "browser", "页面", "click", "点击", "输入"]):
+        return "browser/read 或 browser/interact；点击和输入仍需确认"
+    if any(term in text for term in ["进程", "process", "启动", "停止", "后台"]):
+        return "process/read 或 process/execute；启动和停止仍需确认"
+    if any(term in text for term in ["写", "修改", "实现", "patch", "文件", "代码"]):
+        return "workspace/read 或 workspace/write；写入和 patch 仍需确认"
+    return "workspace/read 或 planning/read"
