@@ -11,7 +11,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
-from mini_agent.llm import ChatMessage, LLMResponse, OpenAICompatibleClient, ToolCall
+from mini_agent.llm import ChatMessage, LLMError, LLMResponse, OpenAICompatibleClient, ToolCall
 from mini_agent.logs import JsonlToolLogger
 from mini_agent.memory import ConversationMemory, LongTermMemory
 from mini_agent.process_manager import ProcessManager
@@ -766,6 +766,36 @@ class MiniAgentTests(unittest.TestCase):
         self.assertIn("ZZZZZZZZZZ", answer)
         self.assertNotIn("MIDDLE", answer)
 
+    def test_llm_gets_final_answer_chance_after_max_tool_rounds(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                if len(self.calls) <= MiniAgent.max_tool_rounds:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id=f"call_{len(self.calls)}",
+                                name="calculate",
+                                arguments={"expression": "1 + 1"},
+                            )
+                        ],
+                    )
+                return LLMResponse(content="最终答案: 工具结果足够回答。")
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm)
+
+        answer = agent.run("连续使用工具后回答")
+
+        self.assertIn("最终答案", answer)
+        self.assertEqual(len(llm.calls), MiniAgent.max_tool_rounds + 1)
+        self.assertEqual(llm.calls[-1]["tools"], [])
+        self.assertIn("不要再调用工具", llm.calls[-1]["messages"][-1]["content"])
+
     def test_llm_can_save_and_search_long_term_memory(self):
         class FakeToolCallingLLM:
             def __init__(self):
@@ -1002,6 +1032,19 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertIn("需要配置支持工具调用的模型", MiniAgent(build_default_registry()).run_autonomous("目标"))
         self.assertIn("需要配置支持工具调用的模型", MiniAgent(build_default_registry(), llm=FakeLLM()).run_autonomous("目标"))
+
+    def test_autonomous_loop_reports_llm_error_as_blocked(self):
+        class FailingToolCallingLLM:
+            def chat(self, messages, tools=None):
+                raise LLMError("network unavailable")
+
+        agent = MiniAgent(build_default_registry(), llm=FailingToolCallingLLM())
+
+        answer = agent.run_autonomous("检查项目", max_steps=3)
+
+        self.assertIn("受控自主执行已停止: blocked", answer)
+        self.assertIn("模型调用失败", answer)
+        self.assertIn("network unavailable", answer)
 
     def test_autonomous_loop_executes_one_tool_call_per_step(self):
         class FakeToolCallingLLM:
@@ -2219,6 +2262,26 @@ class JsonlToolLoggerTests(unittest.TestCase):
         self.assertIn("[redacted]", raw)
         self.assertNotIn(fake_key, result)
 
+    def test_redacts_common_token_patterns(self):
+        bearer = "Bearer " + "a" * 40
+        github_token = "gh" + "p_" + "b" * 36
+        google_key = "AI" + "za" + "c" * 35
+        jwt = "ey" + "J" + "d" * 20 + "." + "e" * 20 + "." + "f" * 20
+        sensitive_text = "\n".join([bearer, github_token, google_key, jwt])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "tools.jsonl"
+            logger = JsonlToolLogger(log_path)
+            logger.record("fetch_url", {"authorization": bearer, "note": github_token}, "ok", sensitive_text)
+
+            raw = log_path.read_text(encoding="utf-8")
+            result = logger.list_recent(include_arguments=True)
+
+        for token in [bearer, github_token, google_key, jwt]:
+            self.assertNotIn(token, raw)
+            self.assertNotIn(token, result)
+        self.assertIn("[redacted]", raw)
+
     def test_generates_audit_report_without_sensitive_arguments(self):
         fake_key = "sk" + "-secret"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2260,6 +2323,23 @@ class ToolResultStoreTests(unittest.TestCase):
             result_id = store.save("read_project_file", fake_key)
 
         self.assertEqual(result_id, "")
+        self.assertFalse(path.exists())
+
+    def test_rejects_common_token_patterns(self):
+        github_token = "gh" + "p_" + "b" * 36
+        google_key = "AI" + "za" + "c" * 35
+        jwt = "ey" + "J" + "d" * 20 + "." + "e" * 20 + "." + "f" * 20
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tool_results.jsonl"
+            store = ToolResultStore(path)
+
+            github_result_id = store.save("read_project_file", github_token)
+            google_result_id = store.save("read_project_file", google_key)
+            jwt_result_id = store.save("read_project_file", jwt)
+
+        self.assertEqual(github_result_id, "")
+        self.assertEqual(google_result_id, "")
+        self.assertEqual(jwt_result_id, "")
         self.assertFalse(path.exists())
 
     def test_read_result_enforces_limit(self):

@@ -78,7 +78,19 @@ class MiniAgent:
         final_status = "max_steps_reached"
 
         for step in range(1, step_limit + 1):
-            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            try:
+                response: LLMResponse = self.llm.chat(messages, tools=tools)
+            except LLMError as error:
+                final_status = "blocked"
+                records.append(
+                    AutonomousStepRecord(
+                        step=step,
+                        action="model",
+                        status="blocked",
+                        result=f"模型调用失败: {error}",
+                    )
+                )
+                break
             if not response.tool_calls:
                 final_status = self._autonomous_status_from_final(response.content)
                 records.append(
@@ -145,7 +157,16 @@ class MiniAgent:
                     }
                 )
 
-        raise LLMError("Tool call loop exceeded max rounds.")
+        messages.append(
+            {
+                "role": "user",
+                "content": "工具调用轮数已用完。请只基于已有工具结果给出最终回答，不要再调用工具。",
+            }
+        )
+        response = self.llm.chat(messages, tools=[])
+        if response.tool_calls:
+            raise LLMError("Tool call loop exceeded max rounds.")
+        return response.content or self._help_message()
 
     def _autonomous_step_limit(self, max_steps: Optional[int]) -> int:
         if max_steps is None:

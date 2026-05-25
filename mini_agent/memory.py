@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -10,6 +11,14 @@ SENSITIVE_MARKERS = (
     "OPENAI_API_KEY",
     "sk-",
     ".env",
+)
+
+SENSITIVE_PATTERNS = (
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b", re.IGNORECASE),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{20,}\b"),
 )
 
 
@@ -127,7 +136,9 @@ class LongTermMemory:
 
 
 def is_sensitive_text(text: str) -> bool:
-    return any(marker in text for marker in SENSITIVE_MARKERS)
+    return any(marker in text for marker in SENSITIVE_MARKERS) or any(
+        pattern.search(text) for pattern in SENSITIVE_PATTERNS
+    )
 
 
 def _parse_tags(tags: str) -> list[str]:
