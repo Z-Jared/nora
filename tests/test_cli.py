@@ -15,6 +15,7 @@ class MiniAgentCLITests(unittest.TestCase):
         cli.run()
 
         self.assertEqual(agent.inputs, ["hello"])
+        self.assertIn("Nora 已启动", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
 
     def test_quit_exits_without_agent_call(self):
@@ -159,7 +160,7 @@ class MiniAgentCLITests(unittest.TestCase):
             _init_git_repo(root)
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
 
-            self.assertIn("MiniAgent(", cli.prompt())
+            self.assertIn("Nora(", cli.prompt())
 
 
 class FakeCLIAgent:

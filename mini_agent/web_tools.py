@@ -46,7 +46,7 @@ class WebTools:
 def _fetch_url(url: str, timeout: int) -> str:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "MiniAgent/1.0"},
+        headers={"User-Agent": "Nora/1.0"},
         method="GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:

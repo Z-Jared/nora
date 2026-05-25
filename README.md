@@ -1,6 +1,6 @@
-# Mini Agent
+# Nora
 
-一个从零搭建的小型本地 agent，用来演示 agent 的基本结构：入口、controller、工具注册、工具调用和测试。
+Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地文件、项目代码、终端、浏览器、长期记忆和任务管理。
 
 ## 当前能力
 
@@ -26,6 +26,20 @@
 - 后台进程管理：只允许内置 profile 启动本地后台进程，支持查看状态、读取输出、等待输出和停止进程
 
 ## 运行
+
+首次安装本地命令：
+
+```bash
+python3 -m pip install -e .
+```
+
+之后可以在任意项目目录启动 Nora：
+
+```bash
+nora
+```
+
+也可以继续使用兼容入口：
 
 ```bash
 python3 main.py
@@ -314,7 +328,8 @@ python3 -m playwright install chromium
 ## 项目结构
 
 ```text
-main.py                         # CLI 入口
+main.py                         # 兼容 CLI 入口
+mini_agent/app.py               # Nora console script 入口
 mini_agent/cli.py               # CLI 交互、slash commands 和多行输入
 mini_agent/controller.py        # agent 主循环和工具调用流程
 mini_agent/config.py            # agent.yaml 配置读取

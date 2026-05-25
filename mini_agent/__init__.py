@@ -1,1 +1,1 @@
-"""A small local agent package."""
+"""Nora local AI assistant package."""

@@ -819,7 +819,7 @@ def eval_llm_calculate_tool_call():
 def eval_llm_read_project_file():
     agent = _build_real_llm_agent(PROJECT_ROOT)
     result = agent.run("请读取 README.md，并用一句话说明这个项目是什么。")
-    assert "Mini Agent" in result or "agent" in result.lower(), result
+    assert "Nora" in result or "agent" in result.lower(), result
 
 
 def eval_llm_search_project_context():
@@ -836,8 +836,8 @@ def eval_llm_rag_project_qa():
 
 def eval_llm_preview_replace_tool_call():
     agent = _build_real_llm_agent(PROJECT_ROOT)
-    result = agent.run("请使用工具预览把 README.md 里的 Mini Agent 替换成 Mini Agent Eval，最终说明 diff 里出现了什么。")
-    assert "README.md" in result or "diff" in result.lower() or "Mini Agent Eval" in result, result
+    result = agent.run("请使用工具预览把 README.md 里的 Nora 替换成 Nora Eval，最终说明 diff 里出现了什么。")
+    assert "README.md" in result or "diff" in result.lower() or "Nora Eval" in result, result
 
 
 def eval_llm_view_tool_logs():

@@ -38,7 +38,7 @@ class MiniAgentCLI:
 
     def banner(self) -> str:
         lines = [
-            "Mini Agent 已启动。输入 /help 查看命令，输入 exit 或 quit 退出。",
+            "Nora 已启动。输入 /help 查看命令，输入 exit 或 quit 退出。",
             f"Workspace: {self.root}",
         ]
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
@@ -54,8 +54,8 @@ class MiniAgentCLI:
     def prompt(self) -> str:
         branch = GitTools(self.root).current_branch().strip()
         if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
-            return f"MiniAgent({branch})> "
-        return "MiniAgent> "
+            return f"Nora({branch})> "
+        return "Nora> "
 
     def handle_input(self, text: str) -> Optional[str]:
         text = text.strip()
