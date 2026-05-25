@@ -18,6 +18,7 @@
 - 测试与诊断：运行白名单 unittest 命令，从失败输出中提取 traceback、断言和文件行号，并支持最多 3 轮的受控修复测试循环
 - Python 代码理解：用 AST 查找 class、function、method，生成文件 outline，查看符号签名/上下文，并查找 Name/Attribute 可能引用
 - 上下文摘要：本地 JSONL 保存、搜索和列出短中期项目上下文，并拒绝敏感内容
+- 上下文窗口管理：模型工具调用链路会自动压缩过长工具结果，只保留头尾和统计信息
 - 轻量 RAG：基于项目文本文件做综合排序检索，不依赖向量数据库
 - 联网搜索和网页读取：只读 HTTP/HTTPS 页面
 - 工具调用日志：记录到 `logs/tool_calls.jsonl`，会脱敏工具参数和敏感结果预览，并可通过工具查看最近日志
@@ -219,6 +220,7 @@ python3 main.py
 短期会话记忆只保存在当前进程内，程序退出后清空；包含 API key、`.env` 等敏感标记的内容不会写入记忆。
 长期记忆保存在 `data/long_term_memory.jsonl`，支持保存、搜索、列出和按 id 删除；包含 API key、`.env`、`sk-` 等敏感标记的内容会被拒绝保存。
 上下文摘要默认保存在 `data/context_summaries.jsonl`，适合记录读过的文件、阶段性判断、测试失败摘要和设计决策；包含 API key、`.env`、`sk-` 等敏感标记的内容会被拒绝保存。
+模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；CLI slash commands 仍会直接显示工具返回。
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，不会自动无限执行工具；完成步骤后需要调用 `update_task_step` 更新状态并填写步骤总结。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
@@ -250,6 +252,7 @@ mini_agent/tools.py             # 兼容导出层，旧 import 仍可用
 mini_agent/rag.py               # 项目上下文检索
 mini_agent/memory.py            # 短期会话记忆和长期记忆
 mini_agent/context_summary.py   # 上下文摘要存储和检索
+mini_agent/context_window.py    # 工具结果压缩和上下文窗口控制
 mini_agent/task_runner.py       # 多步骤任务状态管理
 mini_agent/git_tools.py         # Git 本地 status/diff/log/stage/commit
 mini_agent/diagnostics.py       # 测试运行和失败诊断
@@ -274,7 +277,7 @@ python3 -m unittest discover -s tests
 python3 evals/run_evals.py
 ```
 
-eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、工具日志查看、RAG 排序、长期记忆、任务执行和 provider factory。
+eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、上下文窗口压缩、工具日志查看、RAG 排序、长期记忆、任务执行和 provider factory。
 
 真实模型 eval：
 

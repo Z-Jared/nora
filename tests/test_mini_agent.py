@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mini_agent.cli import MiniAgentCLI
 from mini_agent.context_summary import ContextSummaryStore
+from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
@@ -622,6 +623,43 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertIn("Hello browser page", agent.run("用浏览器读取 example.com"))
 
+    def test_llm_receives_compacted_large_tool_result(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="call_1",
+                                name="large_output",
+                                arguments={},
+                            )
+                        ],
+                    )
+
+                return LLMResponse(content=messages[-1]["content"])
+
+        registry = ToolRegistry()
+        registry.register("large_output", "Large output", lambda: "A" * 30 + "MIDDLE" + "Z" * 30)
+        agent = MiniAgent(
+            registry,
+            llm=FakeToolCallingLLM(),
+            context_window=ContextWindow(max_tool_result_chars=30, head_chars=10, tail_chars=10),
+        )
+
+        answer = agent.run("读取大结果")
+
+        self.assertIn("tool_result_compacted", answer)
+        self.assertIn("original_chars=66", answer)
+        self.assertIn("AAAAAAAAAA", answer)
+        self.assertIn("ZZZZZZZZZZ", answer)
+        self.assertNotIn("MIDDLE", answer)
+
     def test_llm_can_save_and_search_long_term_memory(self):
         class FakeToolCallingLLM:
             def __init__(self):
@@ -781,6 +819,25 @@ class MiniAgentTests(unittest.TestCase):
                 {"role": "assistant", "content": "计算结果: 3"},
             ],
         )
+
+
+class ContextWindowTests(unittest.TestCase):
+    def test_keeps_small_tool_results_unchanged(self):
+        window = ContextWindow(max_tool_result_chars=100)
+
+        self.assertEqual(window.compact_tool_result("read_file", "short"), "short")
+
+    def test_compacts_large_tool_results_with_head_tail_and_metadata(self):
+        window = ContextWindow(max_tool_result_chars=10, head_chars=5, tail_chars=5)
+
+        result = window.compact_tool_result("read_file", "aaaaaMIDDLEzzzzz")
+
+        self.assertIn("tool_result_compacted", result)
+        self.assertIn("tool=read_file", result)
+        self.assertIn("original_chars=16", result)
+        self.assertIn("aaaaa", result)
+        self.assertIn("zzzzz", result)
+        self.assertNotIn("MIDDLE", result)
 
 
 class MiniAgentCLITests(unittest.TestCase):

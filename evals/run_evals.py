@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
 from mini_agent.context_summary import ContextSummaryStore
+from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
@@ -72,6 +73,7 @@ def main() -> int:
         EvalCase("symbols_find_references", eval_symbols_find_references),
         EvalCase("cli_symbol_and_refs_commands", eval_cli_symbol_and_refs_commands),
         EvalCase("context_summary_round_trip", eval_context_summary_round_trip),
+        EvalCase("context_window_compacts_tool_result", eval_context_window_compacts_tool_result),
         EvalCase("memory_rejects_secret", eval_memory_rejects_secret),
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
         EvalCase("task_run_once_marks_step", eval_task_run_once_marks_step),
@@ -504,6 +506,16 @@ def eval_context_summary_round_trip():
         assert "已保存上下文摘要" in store.save_summary("eval topic", "eval summary", source="eval")
         assert "eval topic" in store.search_summaries("summary")
         assert "eval summary" in store.list_summaries()
+
+
+def eval_context_window_compacts_tool_result():
+    window = ContextWindow(max_tool_result_chars=20, head_chars=6, tail_chars=6)
+    result = window.compact_tool_result("eval_tool", "AAAAAA" + "MIDDLE" * 5 + "ZZZZZZ")
+    assert "tool_result_compacted" in result
+    assert "eval_tool" in result
+    assert "AAAAAA" in result
+    assert "ZZZZZZ" in result
+    assert "MIDDLEMIDDLE" not in result
 
 
 def eval_memory_rejects_secret():

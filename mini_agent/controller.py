@@ -1,6 +1,7 @@
 import re
 from typing import Optional, Protocol
 
+from mini_agent.context_window import ContextWindow
 from mini_agent.memory import ConversationMemory
 from mini_agent.providers.base import LLMError, LLMResponse
 from mini_agent.registry import ToolRegistry
@@ -19,10 +20,12 @@ class MiniAgent:
         tools: ToolRegistry,
         llm: Optional[LLMClient] = None,
         memory: Optional[ConversationMemory] = None,
+        context_window: Optional[ContextWindow] = None,
     ):
         self.tools = tools
         self.llm = llm
         self.memory = memory or ConversationMemory()
+        self.context_window = context_window or ContextWindow()
 
     def run(self, user_input: str) -> str:
         text = user_input.strip()
@@ -60,6 +63,7 @@ class MiniAgent:
             messages.append(response.to_assistant_message())
             for tool_call in response.tool_calls:
                 result = self._call_tool(tool_call.name, tool_call.arguments)
+                result = self.context_window.compact_tool_result(tool_call.name, result)
                 messages.append(
                     {
                         "role": "tool",
