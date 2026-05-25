@@ -868,6 +868,11 @@ class AgentConfigTests(unittest.TestCase):
                         "  tail_chars: 8",
                         "tools:",
                         "  disabled: [\"fetch_url\", \"browser_click\"]",
+                        "permissions:",
+                        "  deny: [\"run_shell_command\"]",
+                        "  confirmation_overrides:",
+                        "    web_search: true",
+                        "    write_project_file: false",
                         "processes:",
                         "  profiles:",
                         "    ready:",
@@ -887,6 +892,11 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.context_window.head_chars, 12)
         self.assertEqual(config.context_window.tail_chars, 8)
         self.assertEqual(config.tools.disabled, {"fetch_url", "browser_click"})
+        self.assertEqual(config.permissions.deny, {"run_shell_command"})
+        self.assertEqual(
+            config.permissions.confirmation_overrides,
+            {"web_search": True, "write_project_file": False},
+        )
         self.assertEqual(config.processes.profiles["ready"], ["python3", "-c", "print('ready', flush=True)"])
 
     def test_config_overrides_llm_settings_without_storing_key(self):
@@ -953,6 +963,36 @@ class AgentConfigTests(unittest.TestCase):
         self.assertNotIn("browser_click", tool_names)
         with self.assertRaises(KeyError):
             registry.call("fetch_url", url="https://example.com")
+
+    def test_config_can_deny_tools_and_override_confirmation(self):
+        config = AgentConfig.from_dict(
+            {
+                "permissions": {
+                    "deny": ["run_shell_command"],
+                    "confirmation_overrides": {
+                        "fetch_url": True,
+                        "write_project_file": False,
+                    },
+                }
+            }
+        )
+
+        prompts = []
+        registry = build_default_registry(
+            disabled_tools=config.disabled_tools(),
+            permission_overrides=config.permission_overrides(),
+            confirm_action=lambda prompt: prompts.append(prompt) or False,
+            web_fetch=lambda url, timeout: "ok",
+        )
+        tool_names = {tool["function"]["name"] for tool in registry.to_openai_tools()}
+
+        self.assertNotIn("run_shell_command", tool_names)
+        self.assertEqual(registry.call("fetch_url", url="https://example.com"), "已取消操作。")
+        self.assertTrue(prompts)
+        self.assertIn("fetch_url", registry.describe_permissions())
+        self.assertIn("fetch_url: network/read, 需要确认", registry.describe_permissions())
+        with self.assertRaises(KeyError):
+            registry.call("run_shell_command", command="pwd")
 
 
 class MiniAgentCLITests(unittest.TestCase):

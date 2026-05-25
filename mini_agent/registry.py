@@ -35,11 +35,13 @@ class ToolRegistry:
         logger: Optional[ToolLogger] = None,
         confirm_action: Optional[Callable[[str], bool]] = None,
         disabled_tools: Optional[set[str]] = None,
+        permission_overrides: Optional[dict[str, bool]] = None,
     ):
         self._tools: dict[str, Tool] = {}
         self.logger = logger
         self.confirm_action = confirm_action or confirm_in_terminal
         self.disabled_tools = disabled_tools or set()
+        self.permission_overrides = permission_overrides or {}
 
     def register(
         self,
@@ -55,12 +57,20 @@ class ToolRegistry:
         if name in self._tools:
             raise ValueError(f"Tool already registered: {name}")
 
+        tool_permission = permission or ToolPermission()
+        if name in self.permission_overrides:
+            tool_permission = ToolPermission(
+                category=tool_permission.category,
+                risk=tool_permission.risk,
+                requires_confirmation=self.permission_overrides[name],
+            )
+
         self._tools[name] = Tool(
             name=name,
             description=description,
             handler=handler,
             parameters=parameters or {"type": "object", "properties": {}},
-            permission=permission or ToolPermission(),
+            permission=tool_permission,
         )
 
     def call(self, tool_name: str, **kwargs) -> str:

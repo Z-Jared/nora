@@ -32,6 +32,7 @@ def build_default_registry(
     context_summary_path: Optional[Path] = None,
     process_profiles: Optional[dict[str, list[str]]] = None,
     disabled_tools: Optional[set[str]] = None,
+    permission_overrides: Optional[dict[str, bool]] = None,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -53,6 +54,7 @@ def build_default_registry(
         logger=logger,
         confirm_action=confirm_action,
         disabled_tools=disabled_tools,
+        permission_overrides=permission_overrides,
     )
 
     registry.register(

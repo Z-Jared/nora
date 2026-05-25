@@ -42,12 +42,19 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True)
+class PermissionsConfig:
+    deny: set[str]
+    confirmation_overrides: dict[str, bool]
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm: LLMConfig
     paths: PathsConfig
     context_window: ContextWindowConfig
     processes: ProcessesConfig
     tools: ToolsConfig
+    permissions: PermissionsConfig
 
     @classmethod
     def defaults(cls) -> "AgentConfig":
@@ -57,6 +64,7 @@ class AgentConfig:
             context_window=ContextWindowConfig(),
             processes=ProcessesConfig(profiles=dict(DEFAULT_PROFILES)),
             tools=ToolsConfig(disabled=set()),
+            permissions=PermissionsConfig(deny=set(), confirmation_overrides={}),
         )
 
     @classmethod
@@ -68,6 +76,7 @@ class AgentConfig:
         process_data = _as_dict(data.get("processes"))
         profile_data = _as_dict(process_data.get("profiles"))
         tools_data = _as_dict(data.get("tools"))
+        permissions_data = _as_dict(data.get("permissions"))
 
         return cls(
             llm=LLMConfig(
@@ -93,6 +102,10 @@ class AgentConfig:
             ),
             processes=ProcessesConfig(profiles=_profiles(profile_data, defaults.processes.profiles)),
             tools=ToolsConfig(disabled=_string_set(tools_data.get("disabled"))),
+            permissions=PermissionsConfig(
+                deny=_string_set(permissions_data.get("deny")),
+                confirmation_overrides=_bool_map(permissions_data.get("confirmation_overrides")),
+            ),
         )
 
     def apply_to_llm_settings(self, settings: LLMSettings) -> LLMSettings:
@@ -109,6 +122,12 @@ class AgentConfig:
 
     def resolve_path(self, root: Path, path: Path) -> Path:
         return path if path.is_absolute() else root / path
+
+    def disabled_tools(self) -> set[str]:
+        return set(self.tools.disabled) | set(self.permissions.deny)
+
+    def permission_overrides(self) -> dict[str, bool]:
+        return dict(self.permissions.confirmation_overrides)
 
 
 def load_agent_config(path: Path = Path("agent.yaml")) -> AgentConfig:
@@ -195,3 +214,13 @@ def _string_set(value) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {str(item).strip() for item in value if str(item).strip()}
+
+
+def _bool_map(value) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for key, item in value.items():
+        if isinstance(item, bool):
+            result[str(key)] = item
+    return result

@@ -76,6 +76,7 @@ def main() -> int:
         EvalCase("context_summary_round_trip", eval_context_summary_round_trip),
         EvalCase("agent_config_loads_yaml", eval_agent_config_loads_yaml),
         EvalCase("agent_config_disables_tools", eval_agent_config_disables_tools),
+        EvalCase("agent_config_permission_policy", eval_agent_config_permission_policy),
         EvalCase("context_window_compacts_tool_result", eval_context_window_compacts_tool_result),
         EvalCase("memory_rejects_secret", eval_memory_rejects_secret),
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
@@ -540,6 +541,26 @@ def eval_agent_config_disables_tools():
     registry = build_default_registry(disabled_tools=config.tools.disabled)
     tool_names = {tool["function"]["name"] for tool in registry.to_openai_tools()}
     assert "fetch_url" not in tool_names
+
+
+def eval_agent_config_permission_policy():
+    config = AgentConfig.from_dict(
+        {
+            "permissions": {
+                "deny": ["run_shell_command"],
+                "confirmation_overrides": {"fetch_url": True},
+            }
+        }
+    )
+    registry = build_default_registry(
+        disabled_tools=config.disabled_tools(),
+        permission_overrides=config.permission_overrides(),
+        confirm_action=lambda prompt: False,
+        web_fetch=lambda url, timeout: "ok",
+    )
+    tool_names = {tool["function"]["name"] for tool in registry.to_openai_tools()}
+    assert "run_shell_command" not in tool_names
+    assert registry.call("fetch_url", url="https://example.com") == "已取消操作。"
 
 
 def eval_context_window_compacts_tool_result():
