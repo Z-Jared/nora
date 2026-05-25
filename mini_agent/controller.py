@@ -33,12 +33,14 @@ class MiniAgent:
         memory: Optional[ConversationMemory] = None,
         context_window: Optional[ContextWindow] = None,
         tool_result_store: Optional[ToolResultStore] = None,
+        autonomous_disabled_tools: Optional[set[str]] = None,
     ):
         self.tools = tools
         self.llm = llm
         self.memory = memory or ConversationMemory()
         self.context_window = context_window or ContextWindow()
         self.tool_result_store = tool_result_store
+        self.autonomous_disabled_tools = autonomous_disabled_tools or set()
 
     def run(self, user_input: str) -> str:
         text = user_input.strip()
@@ -73,7 +75,7 @@ class MiniAgent:
 
         step_limit = self._autonomous_step_limit(max_steps)
         messages = self.memory.messages() + [{"role": "user", "content": self._autonomous_instruction(goal)}]
-        tools = self.tools.to_openai_tools()
+        tools = self._autonomous_tools()
         records = []
         final_status = "max_steps_reached"
 
@@ -167,6 +169,16 @@ class MiniAgent:
         if response.tool_calls:
             raise LLMError("Tool call loop exceeded max rounds.")
         return response.content or self._help_message()
+
+    def _autonomous_tools(self) -> list[dict]:
+        tools = self.tools.to_openai_tools()
+        if not self.autonomous_disabled_tools:
+            return tools
+        return [
+            tool
+            for tool in tools
+            if (tool.get("function") or {}).get("name") not in self.autonomous_disabled_tools
+        ]
 
     def _autonomous_step_limit(self, max_steps: Optional[int]) -> int:
         if max_steps is None:

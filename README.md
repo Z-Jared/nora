@@ -131,6 +131,13 @@ rag:
   chunk_size: 80
   chunk_overlap: 20
 
+safety:
+  mode: normal
+  allow_autonomous_write: true
+  allow_shell_execute: true
+  allow_git_write: true
+  allow_browser_interact: true
+
 tools:
   disabled: []
 
@@ -148,6 +155,7 @@ processes:
 
 如果要关闭某些工具，把工具名放进 `tools.disabled`，例如 `disabled: ["fetch_url", "browser_click"]`。被禁用的工具不会注册，也不会暴露给模型。
 `rag.include_paths` 可限制只检索指定文件或目录，`rag.exclude_dirs` 可额外跳过目录；`chunk_size` 和 `chunk_overlap` 控制按行切分粒度，检索结果会带来源路径、行号范围、分数和片段。
+`safety.mode: strict` 会默认禁用终端执行、测试/修复循环、后台进程、Git 写操作和浏览器点击/输入，并让 `/auto` 隐藏写入、执行、Git、浏览器交互和本地持久化工具；如果确实需要，可以把对应 `allow_*` 设置为 `true`。
 如果要彻底禁止某些工具，把工具名放进 `permissions.deny`；如果要覆盖某个工具是否需要确认，可以在 `permissions.confirmation_overrides` 里按工具名设置 `true` 或 `false`。
 
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
@@ -286,6 +294,7 @@ python3 main.py
 模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；如果完整结果不含敏感标记，会缓存到 `data/tool_results.jsonl` 并在压缩内容里返回 `result_id`，模型可用 `list_tool_results`、`read_tool_result`、`search_tool_results` 分段回看；CLI slash commands 仍会直接显示工具返回。
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤。
 受控自主执行只能通过显式 `/auto` 进入，有最大步数硬上限；每步最多执行一个工具调用，所有工具仍经过 `ToolRegistry` 权限确认和日志记录，取消、拒绝或失败会停止为 blocked，不会绕过 `run_task_once` 的一步一推进语义。
+安全模式默认是 `normal`，保持现有行为；`strict` 适合真实项目或不想让模型触碰高风险动作的场景。`allow_autonomous_write: false` 只影响 `/auto` 暴露给模型的工具，不会移除 CLI 手动命令。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
 轻量 RAG 只索引 `.py`、`.md`、`.txt`、`.json`、`.toml`、`.yaml`、`.yml` 等文本文件，并跳过 `.env`、`data/`、`.git/`、`logs/`、`evals/.tmp/`；它按行 chunk 返回 path、line range、score、snippet，排序会综合考虑命中词覆盖、短语、路径和频次，`answer_with_project_context` 会要求模型只基于来源片段回答。

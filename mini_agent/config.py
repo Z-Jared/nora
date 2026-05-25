@@ -7,6 +7,36 @@ from mini_agent.process_manager import DEFAULT_PROFILES
 from mini_agent.settings import LLMSettings
 
 
+SHELL_EXECUTE_TOOLS = {
+    "run_shell_command",
+    "run_project_tests",
+    "run_repair_loop",
+    "start_background_process",
+    "stop_background_process",
+}
+GIT_WRITE_TOOLS = {
+    "git_create_branch",
+    "git_stage_paths",
+    "git_unstage_paths",
+    "git_commit_staged",
+}
+BROWSER_INTERACT_TOOLS = {"browser_click", "browser_fill"}
+AUTONOMOUS_WRITE_TOOLS = {
+    "save_note",
+    "write_project_file",
+    "replace_in_project_file",
+    "apply_project_patch",
+    "apply_project_multi_patch",
+    "save_context_summary",
+    "save_memory",
+    "delete_memory",
+    "start_task",
+    "update_task_step",
+    "finish_task",
+    "run_task_once",
+} | SHELL_EXECUTE_TOOLS | GIT_WRITE_TOOLS | BROWSER_INTERACT_TOOLS
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     provider: str = ""
@@ -57,6 +87,15 @@ class PermissionsConfig:
 
 
 @dataclass(frozen=True)
+class SafetyConfig:
+    mode: str = "normal"
+    allow_autonomous_write: bool = True
+    allow_shell_execute: bool = True
+    allow_git_write: bool = True
+    allow_browser_interact: bool = True
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm: LLMConfig
     paths: PathsConfig
@@ -65,6 +104,7 @@ class AgentConfig:
     processes: ProcessesConfig
     tools: ToolsConfig
     permissions: PermissionsConfig
+    safety: SafetyConfig
 
     @classmethod
     def defaults(cls) -> "AgentConfig":
@@ -76,6 +116,7 @@ class AgentConfig:
             processes=ProcessesConfig(profiles=dict(DEFAULT_PROFILES)),
             tools=ToolsConfig(disabled=set()),
             permissions=PermissionsConfig(deny=set(), confirmation_overrides={}),
+            safety=SafetyConfig(),
         )
 
     @classmethod
@@ -89,6 +130,9 @@ class AgentConfig:
         profile_data = _as_dict(process_data.get("profiles"))
         tools_data = _as_dict(data.get("tools"))
         permissions_data = _as_dict(data.get("permissions"))
+        safety_data = _as_dict(data.get("safety"))
+        safety_mode = str(safety_data.get("mode") or defaults.safety.mode)
+        strict_mode = safety_mode == "strict"
 
         return cls(
             llm=LLMConfig(
@@ -125,6 +169,25 @@ class AgentConfig:
                 deny=_string_set(permissions_data.get("deny")),
                 confirmation_overrides=_bool_map(permissions_data.get("confirmation_overrides")),
             ),
+            safety=SafetyConfig(
+                mode=safety_mode,
+                allow_autonomous_write=_bool(
+                    safety_data.get("allow_autonomous_write"),
+                    defaults.safety.allow_autonomous_write and not strict_mode,
+                ),
+                allow_shell_execute=_bool(
+                    safety_data.get("allow_shell_execute"),
+                    defaults.safety.allow_shell_execute and not strict_mode,
+                ),
+                allow_git_write=_bool(
+                    safety_data.get("allow_git_write"),
+                    defaults.safety.allow_git_write and not strict_mode,
+                ),
+                allow_browser_interact=_bool(
+                    safety_data.get("allow_browser_interact"),
+                    defaults.safety.allow_browser_interact and not strict_mode,
+                ),
+            ),
         )
 
     def apply_to_llm_settings(self, settings: LLMSettings) -> LLMSettings:
@@ -143,10 +206,22 @@ class AgentConfig:
         return path if path.is_absolute() else root / path
 
     def disabled_tools(self) -> set[str]:
-        return set(self.tools.disabled) | set(self.permissions.deny)
+        disabled = set(self.tools.disabled) | set(self.permissions.deny)
+        if not self.safety.allow_shell_execute:
+            disabled |= SHELL_EXECUTE_TOOLS
+        if not self.safety.allow_git_write:
+            disabled |= GIT_WRITE_TOOLS
+        if not self.safety.allow_browser_interact:
+            disabled |= BROWSER_INTERACT_TOOLS
+        return disabled
 
     def permission_overrides(self) -> dict[str, bool]:
         return dict(self.permissions.confirmation_overrides)
+
+    def autonomous_disabled_tools(self) -> set[str]:
+        if self.safety.allow_autonomous_write:
+            return set()
+        return set(AUTONOMOUS_WRITE_TOOLS)
 
 
 def load_agent_config(path: Path = Path("agent.yaml")) -> AgentConfig:
@@ -212,6 +287,10 @@ def _int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bool(value, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
 
 
 def _profiles(data: dict, defaults: dict[str, list[str]]) -> dict[str, list[str]]:

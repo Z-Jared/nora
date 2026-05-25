@@ -1157,6 +1157,12 @@ class AgentConfigTests(unittest.TestCase):
                         "  max_file_bytes: 4096",
                         "  chunk_size: 20",
                         "  chunk_overlap: 5",
+                        "safety:",
+                        "  mode: strict",
+                        "  allow_shell_execute: true",
+                        "  allow_git_write: false",
+                        "  allow_browser_interact: false",
+                        "  allow_autonomous_write: false",
                         "tools:",
                         "  disabled: [\"fetch_url\", \"browser_click\"]",
                         "permissions:",
@@ -1187,6 +1193,11 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.rag.max_file_bytes, 4096)
         self.assertEqual(config.rag.chunk_size, 20)
         self.assertEqual(config.rag.chunk_overlap, 5)
+        self.assertEqual(config.safety.mode, "strict")
+        self.assertTrue(config.safety.allow_shell_execute)
+        self.assertFalse(config.safety.allow_git_write)
+        self.assertFalse(config.safety.allow_browser_interact)
+        self.assertFalse(config.safety.allow_autonomous_write)
         self.assertEqual(config.tools.disabled, {"fetch_url", "browser_click"})
         self.assertEqual(config.permissions.deny, {"run_shell_command"})
         self.assertEqual(
@@ -1289,6 +1300,63 @@ class AgentConfigTests(unittest.TestCase):
         self.assertIn("fetch_url: network/read, 需要确认", registry.describe_permissions())
         with self.assertRaises(KeyError):
             registry.call("run_shell_command", command="pwd")
+
+    def test_strict_safety_mode_disables_high_risk_tools_by_default(self):
+        config = AgentConfig.from_dict({"safety": {"mode": "strict"}})
+
+        disabled_tools = config.disabled_tools()
+
+        self.assertIn("run_shell_command", disabled_tools)
+        self.assertIn("run_project_tests", disabled_tools)
+        self.assertIn("git_stage_paths", disabled_tools)
+        self.assertIn("git_commit_staged", disabled_tools)
+        self.assertIn("browser_click", disabled_tools)
+        self.assertIn("browser_fill", disabled_tools)
+        self.assertIn("write_project_file", config.autonomous_disabled_tools())
+        self.assertIn("apply_project_patch", config.autonomous_disabled_tools())
+
+    def test_safety_flags_can_allow_specific_risky_tool_groups(self):
+        config = AgentConfig.from_dict(
+            {
+                "safety": {
+                    "mode": "strict",
+                    "allow_shell_execute": True,
+                    "allow_git_write": True,
+                    "allow_browser_interact": True,
+                    "allow_autonomous_write": True,
+                }
+            }
+        )
+
+        disabled_tools = config.disabled_tools()
+
+        self.assertNotIn("run_shell_command", disabled_tools)
+        self.assertNotIn("git_stage_paths", disabled_tools)
+        self.assertNotIn("browser_click", disabled_tools)
+        self.assertEqual(config.autonomous_disabled_tools(), set())
+
+    def test_autonomous_loop_hides_disabled_tools(self):
+        class CapturingToolLLM:
+            def __init__(self):
+                self.tool_names = []
+
+            def chat(self, messages, tools=None):
+                self.tool_names = [tool["function"]["name"] for tool in tools or []]
+                return LLMResponse(content="done")
+
+        llm = CapturingToolLLM()
+        agent = MiniAgent(
+            build_default_registry(),
+            llm=llm,
+            autonomous_disabled_tools={"write_project_file", "run_shell_command"},
+        )
+
+        answer = agent.run_autonomous("检查项目", max_steps=1)
+
+        self.assertIn("done", answer)
+        self.assertIn("calculate", llm.tool_names)
+        self.assertNotIn("write_project_file", llm.tool_names)
+        self.assertNotIn("run_shell_command", llm.tool_names)
 
 
 class MiniAgentCLITests(unittest.TestCase):

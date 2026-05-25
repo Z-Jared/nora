@@ -42,6 +42,7 @@ def main() -> None:
         llm=llm,
         context_window=context_window,
         tool_result_store=tool_result_store,
+        autonomous_disabled_tools=config.autonomous_disabled_tools(),
     )
     MiniAgentCLI(agent, registry, settings=settings, root=root).run()
 
