@@ -16,6 +16,9 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(agent.inputs, ["hello"])
         self.assertIn("Nora 已启动", outputs[0])
+        self.assertIn("高风险工具会先确认", outputs[0])
+        self.assertIn("Workspace:", outputs[0])
+        self.assertIn("Tools:", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
 
     def test_quit_exits_without_agent_call(self):
@@ -52,7 +55,15 @@ class MiniAgentCLITests(unittest.TestCase):
         cli.run()
 
         self.assertEqual(agent.inputs, [])
-        self.assertTrue(any("/status" in output for output in outputs))
+        help_output = "\n".join(outputs)
+        self.assertIn("Nora 命令帮助", help_output)
+        self.assertIn("推荐开始:", help_output)
+        self.assertIn("Git:", help_output)
+        self.assertIn("代码理解与测试:", help_output)
+        self.assertIn("任务、记忆与上下文:", help_output)
+        self.assertIn("自主执行:", help_output)
+        self.assertIn("/auto [n] <goal>", help_output)
+        self.assertIn("/status", help_output)
 
     def test_status_command_calls_registry(self):
         registry = FakeCLIRegistry()
