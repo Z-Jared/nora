@@ -74,6 +74,22 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertEqual(registry.calls[-1], ("git_status", {}))
         self.assertIn("called git_status", result)
 
+    def test_doctor_reports_runtime_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertIn("Nora doctor", result)
+        self.assertIn("workspace:", result)
+        self.assertIn("git:", result)
+        self.assertIn("llm:", result)
+        self.assertIn("tools: 1", result)
+        self.assertIn("data path:", result)
+        self.assertIn("logs path:", result)
+        self.assertIn("nora command:", result)
+
     def test_symbol_commands_call_registry(self):
         registry = FakeCLIRegistry()
         cli = MiniAgentCLI(FakeCLIAgent(), registry)

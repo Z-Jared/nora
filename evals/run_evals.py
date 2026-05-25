@@ -45,6 +45,7 @@ def main() -> int:
         EvalCase("cli_runs_command_and_exits", eval_cli_runs_command_and_exits),
         EvalCase("cli_handles_help_command", eval_cli_handles_help_command),
         EvalCase("cli_slash_status_uses_registry", eval_cli_slash_status_uses_registry),
+        EvalCase("cli_doctor_reports_runtime_status", eval_cli_doctor_reports_runtime_status),
         EvalCase("cli_multiline_input", eval_cli_multiline_input),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
@@ -177,6 +178,17 @@ def eval_cli_slash_status_uses_registry():
     result = MiniAgentCLI(FakeCLIAgent(), registry).handle_slash_command("/status")
     assert registry.calls[-1] == ("git_status", {})
     assert "called git_status" in result
+
+
+def eval_cli_doctor_reports_runtime_status():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir)).handle_slash_command("/doctor")
+    assert "Nora doctor" in result
+    assert "workspace:" in result
+    assert "git:" in result
+    assert "llm:" in result
+    assert "tools: 1" in result
+    assert "nora command:" in result
 
 
 def eval_cli_multiline_input():

@@ -1,3 +1,4 @@
+import shutil
 import shlex
 from pathlib import Path
 from typing import Callable, Optional
@@ -102,6 +103,8 @@ class MiniAgentCLI:
             return self.registry.describe()
         if command == "/permissions":
             return self.registry.call("list_tool_permissions")
+        if command == "/doctor":
+            return self.doctor()
         if command == "/status":
             return self.registry.call("git_status")
         if command == "/diff":
@@ -221,6 +224,30 @@ class MiniAgentCLI:
 
         return f"未知命令: {command}\n输入 /help 查看可用命令。"
 
+    def doctor(self) -> str:
+        lines = [
+            "Nora doctor",
+            f"workspace: {self.root}",
+        ]
+        git_status = GitTools(self.root).status()
+        if "not a git repository" in git_status.lower() or git_status.startswith(("Git 命令失败", "Git 命令超时")):
+            lines.append("git: unavailable")
+        else:
+            lines.append("git: available")
+        if self.settings and getattr(self.settings, "is_llm_enabled", False):
+            lines.append(f"llm: enabled ({self.settings.provider} / {self.settings.model})")
+        else:
+            lines.append("llm: disabled")
+        try:
+            lines.append(f"tools: {len(self.registry.to_openai_tools())}")
+        except AttributeError:
+            lines.append("tools: unknown")
+        lines.append(f"data path: {self.root / 'data'} ({'exists' if (self.root / 'data').exists() else 'missing'})")
+        lines.append(f"logs path: {self.root / 'logs'} ({'exists' if (self.root / 'logs').exists() else 'missing'})")
+        nora_path = shutil.which("nora")
+        lines.append(f"nora command: {nora_path if nora_path else 'not found on PATH'}")
+        return "\n".join(lines)
+
     def _optional_int(self, args: list[str], default: int, name: str):
         if not args:
             return default
@@ -251,6 +278,7 @@ class MiniAgentCLI:
                 "  /help - 查看命令帮助",
                 "  /tools - 查看工具列表",
                 "  /permissions - 查看工具权限",
+                "  /doctor - 检查 workspace、Git、LLM、工具数量和 PATH",
                 "  /logs [n] - 查看工具日志",
                 "  /audit [n] - 生成工具调用安全审计摘要",
                 "",
