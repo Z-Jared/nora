@@ -64,6 +64,7 @@ def main() -> int:
         EvalCase("rag_respects_include_paths", eval_rag_respects_include_paths),
         EvalCase("rag_skips_sensitive_paths", eval_rag_skips_sensitive_paths),
         EvalCase("tool_logs_can_be_viewed", eval_tool_logs_can_be_viewed),
+        EvalCase("tool_audit_report", eval_tool_audit_report),
         EvalCase("git_status_readonly", eval_git_status_readonly),
         EvalCase("git_stage_and_commit_local", eval_git_stage_and_commit_local),
         EvalCase("git_rejects_sensitive_stage_path", eval_git_rejects_sensitive_stage_path),
@@ -419,6 +420,19 @@ def eval_tool_logs_can_be_viewed():
         assert "calculate" in result
         assert "ok" in result
         assert "expression" not in result
+
+
+def eval_tool_audit_report():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        log_path = root / "tool_calls.jsonl"
+        registry = build_default_registry(workspace_root=root, log_path=log_path, confirm_action=lambda prompt: False)
+        registry.call("calculate", expression="1 + 2")
+        registry.call("write_project_file", path="notes.md", content="ok", reason="eval")
+        result = registry.call("generate_audit_report", max_entries=10)
+        assert "审计范围" in result, result
+        assert "write_project_file" in result, result
+        assert "cancelled" in result, result
 
 
 def eval_git_status_readonly():

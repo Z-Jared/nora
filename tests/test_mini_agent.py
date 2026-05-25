@@ -269,6 +269,21 @@ class ToolRegistryTests(unittest.TestCase):
 
         self.assertIn("needle", result)
 
+    def test_default_registry_generates_audit_report(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            log_path = root / "tool_calls.jsonl"
+            registry = build_default_registry(workspace_root=root, log_path=log_path, confirm_action=lambda prompt: False)
+            registry.call("calculate", expression="1 + 2")
+            registry.call("write_project_file", path="notes.md", content="ok", reason="test")
+
+            result = registry.call("generate_audit_report", max_entries=10)
+
+        self.assertIn("审计范围", result)
+        self.assertIn("calculate", result)
+        self.assertIn("write_project_file", result)
+        self.assertIn("cancelled", result)
+
     def test_default_registry_confirmation_blocks_git_write(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1178,6 +1193,14 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertEqual(registry.calls[-2], ("git_review_staged_diff", {}))
         self.assertEqual(registry.calls[-1], ("git_check_before_commit", {}))
 
+    def test_audit_command_calls_registry(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        cli.handle_slash_command("/audit 7")
+
+        self.assertEqual(registry.calls[-1], ("generate_audit_report", {"max_entries": 7}))
+
     def test_symbol_commands_require_arguments(self):
         registry = FakeCLIRegistry()
         cli = MiniAgentCLI(FakeCLIAgent(), registry)
@@ -2036,6 +2059,23 @@ class JsonlToolLoggerTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", raw)
         self.assertIn("[redacted]", raw)
         self.assertNotIn(fake_key, result)
+
+    def test_generates_audit_report_without_sensitive_arguments(self):
+        fake_key = "sk" + "-secret"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = JsonlToolLogger(Path(tmpdir) / "tools.jsonl")
+            logger.record("calculate", {"expression": "1 + 2"}, "ok", "3")
+            logger.record("write_project_file", {"path": ".env", "content": fake_key}, "cancelled", "已取消操作。")
+            logger.record("browser_click", {"selector": "#submit"}, "error", "拒绝点击")
+
+            report = logger.generate_audit_report(max_entries=10)
+
+        self.assertIn("审计范围", report)
+        self.assertIn("write_project_file", report)
+        self.assertIn("浏览器交互: 1", report)
+        self.assertIn("涉及敏感路径", report)
+        self.assertIn("被拒绝或取消操作", report)
+        self.assertNotIn(fake_key, report)
 
 
 class ToolResultStoreTests(unittest.TestCase):

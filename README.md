@@ -21,7 +21,7 @@
 - 上下文窗口管理：模型工具调用链路会自动压缩过长工具结果，只保留头尾和统计信息；完整结果可用 `result_id` 缓存在 `data/tool_results.jsonl` 后分段读取
 - 轻量 RAG：按行 chunk 检索项目文本文件，返回 path、line range、score 和 snippet，不依赖向量数据库
 - 联网搜索和网页读取：只读 HTTP/HTTPS 页面
-- 工具调用日志：记录到 `logs/tool_calls.jsonl`，会脱敏工具参数和敏感结果预览，并可通过工具查看最近日志
+- 工具调用日志：记录到 `logs/tool_calls.jsonl`，会脱敏工具参数和敏感结果预览，并可通过工具查看最近日志或生成安全审计摘要
 - 后台进程管理：只允许内置 profile 启动本地后台进程，支持查看状态、读取输出、等待输出和停止进程
 
 ## 运行
@@ -171,6 +171,7 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 /task                         查看当前任务
 /task-next                    推进当前任务一步
 /logs [n]                     查看工具日志
+/audit [n]                    生成工具调用安全审计摘要
 /context [n]                  列出上下文摘要
 /context-search <query>       搜索上下文摘要
 /processes                    列出后台进程
@@ -229,6 +230,7 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 把任务第 2 步标记为 done，备注是测试已写好，总结是新增测试已通过
 查看当前任务
 查看最近 10 条工具调用日志
+生成最近 50 条工具调用安全审计摘要
 列出工具结果缓存
 读取工具结果 tr_1
 搜索工具结果里的 ToolRegistry
@@ -276,6 +278,7 @@ python3 main.py
 短期会话记忆只保存在当前进程内，程序退出后清空；包含 API key、`.env` 等敏感标记的内容不会写入记忆。
 长期记忆保存在 `data/long_term_memory.jsonl`，支持保存、搜索、列出和按 id 删除；包含 API key、`.env`、`sk-` 等敏感标记的内容会被拒绝保存。
 上下文摘要默认保存在 `data/context_summaries.jsonl`，适合记录读过的文件、阶段性判断、测试失败摘要和设计决策；包含 API key、`.env`、`sk-` 等敏感标记的内容会被拒绝保存。
+安全审计报告基于已脱敏的 `logs/tool_calls.jsonl` 生成，只统计工具名、状态、高风险类别、敏感路径提示和最近高风险操作摘要，不输出 patch/content/text/API key/secret/token 原文。
 模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；如果完整结果不含敏感标记，会缓存到 `data/tool_results.jsonl` 并在压缩内容里返回 `result_id`，模型可用 `list_tool_results`、`read_tool_result`、`search_tool_results` 分段回看；CLI slash commands 仍会直接显示工具返回。
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。

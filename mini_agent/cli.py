@@ -151,6 +151,11 @@ class MiniAgentCLI:
             if isinstance(count, str):
                 return count
             return self.registry.call("view_tool_logs", max_entries=count)
+        if command == "/audit":
+            count = self._optional_int(args, default=50, name="max_entries")
+            if isinstance(count, str):
+                return count
+            return self.registry.call("generate_audit_report", max_entries=count)
         if command == "/context":
             count = self._optional_int(args, default=20, name="max_results")
             if isinstance(count, str):
@@ -229,6 +234,7 @@ class MiniAgentCLI:
                 "/task - 查看当前任务",
                 "/task-next - 推进当前任务一步",
                 "/logs [n] - 查看工具日志",
+                "/audit [n] - 生成工具调用安全审计摘要",
                 "/context [n] - 列出上下文摘要",
                 "/context-search <query> - 搜索上下文摘要",
                 "/processes - 列出后台进程",

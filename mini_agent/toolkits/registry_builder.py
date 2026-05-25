@@ -1102,6 +1102,21 @@ def build_default_registry(
         permission=ToolPermission(category="browser", risk="read"),
     )
     registry.register(
+        "generate_audit_report",
+        "基于最近工具调用日志生成脱敏安全审计摘要，包括工具、状态、高风险类别和拒绝/取消情况。",
+        logger.generate_audit_report,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_entries": {
+                    "type": "integer",
+                    "description": "最多审计多少条最近日志，默认 50，最大 200",
+                }
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
         "view_tool_logs",
         "查看最近的工具调用日志。默认不展示工具参数，可按工具名或状态过滤。",
         logger.list_recent,
