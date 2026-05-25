@@ -1454,6 +1454,22 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
     registry.register(
+        "restore_task",
+        "从已完成任务历史恢复一个任务为当前 active 任务，便于继续 blocked 或 pending 步骤。",
+        task_manager.restore,
+        parameters={
+            "type": "object",
+            "properties": {
+                "history_id": {
+                    "type": "string",
+                    "description": "任务历史 id，例如 task_1",
+                }
+            },
+            "required": ["history_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",
         registry.describe_permissions,

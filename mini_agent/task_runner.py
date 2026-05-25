@@ -103,6 +103,23 @@ class TaskManager:
         matches.sort(key=lambda item: (-item[0], item[1].get("id", "")))
         return "\n".join(_format_history_record(record) for _, record in matches[:max_results])
 
+    def restore(self, history_id: str) -> str:
+        history_id = history_id.strip()
+        if not history_id:
+            return "请提供任务历史 id。"
+        record = self._find_history(history_id)
+        if not record:
+            return f"没有找到任务历史: {history_id}"
+
+        task = dict(record)
+        task.pop("id", None)
+        task["status"] = "active"
+        task["finished_at"] = None
+        task["restored_from"] = history_id
+        task["restored_at"] = datetime.now(timezone.utc).isoformat()
+        self._write(task)
+        return f"已恢复任务: {history_id}\n{self._format(task)}"
+
     def run_once(self) -> str:
         task = self._read()
         if not task:
@@ -170,8 +187,16 @@ class TaskManager:
                 continue
         return records
 
+    def _find_history(self, history_id: str) -> dict:
+        for record in self._read_history():
+            if record.get("id") == history_id:
+                return record
+        return {}
+
     def _format(self, task: dict) -> str:
         lines = [f"任务: {task['goal']} (status={task['status']})"]
+        if task.get("restored_from"):
+            lines.append(f"restored_from={task['restored_from']}")
         current_steps = [step for step in task["steps"] if step.get("status") == "in_progress"]
         if current_steps:
             lines.append("当前步骤: " + ", ".join(f"{step['id']}. {step['text']}" for step in current_steps))

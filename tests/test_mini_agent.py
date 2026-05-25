@@ -263,6 +263,7 @@ class ToolRegistryTests(unittest.TestCase):
 
         self.assertIn("list_task_history", tool_names)
         self.assertIn("search_task_history", tool_names)
+        self.assertIn("restore_task", tool_names)
 
     def test_default_registry_reads_tool_results(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1498,9 +1499,11 @@ class MiniAgentCLITests(unittest.TestCase):
 
         cli.handle_slash_command("/task-history 5")
         cli.handle_slash_command("/task-search blocked step")
+        cli.handle_slash_command("/task-restore task_1")
 
-        self.assertEqual(registry.calls[-2], ("list_task_history", {"max_results": 5}))
-        self.assertEqual(registry.calls[-1], ("search_task_history", {"query": "blocked step"}))
+        self.assertEqual(registry.calls[-3], ("list_task_history", {"max_results": 5}))
+        self.assertEqual(registry.calls[-2], ("search_task_history", {"query": "blocked step"}))
+        self.assertEqual(registry.calls[-1], ("restore_task", {"history_id": "task_1"}))
 
     def test_auto_command_requires_goal(self):
         agent = FakeCLIAgent()
@@ -2533,6 +2536,33 @@ class TaskManagerTests(unittest.TestCase):
 
         self.assertIn("暂无任务历史", history)
         self.assertIn("请提供搜索关键词", search)
+
+    def test_restores_task_from_history_as_active_current_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "task_history.jsonl")
+            manager.start("恢复目标", "已完成步骤\n阻塞步骤")
+            manager.update_step(1, "done", summary="done summary")
+            manager.update_step(2, "blocked", note="等待信息")
+            manager.finish("暂时完成")
+
+            restored = manager.restore("task_1")
+            listing = manager.list()
+            next_step = manager.run_once()
+
+        self.assertIn("已恢复任务: task_1", restored)
+        self.assertIn("任务: 恢复目标 (status=active)", listing)
+        self.assertIn("restored_from=task_1", listing)
+        self.assertIn("1. [done] 已完成步骤", listing)
+        self.assertIn("2. [blocked] 阻塞步骤", listing)
+        self.assertIn("下一步: 2. 阻塞步骤", next_step)
+
+    def test_restore_reports_missing_history_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "task_history.jsonl")
+
+            result = manager.restore("task_99")
+
+        self.assertIn("没有找到任务历史", result)
 
     def test_rejects_invalid_step_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:

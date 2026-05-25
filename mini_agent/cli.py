@@ -168,6 +168,10 @@ class MiniAgentCLI:
             if not args:
                 return "用法: /task-search <query>"
             return self.registry.call("search_task_history", query=" ".join(args))
+        if command == "/task-restore":
+            if len(args) != 1:
+                return "用法: /task-restore <task_id>"
+            return self.registry.call("restore_task", history_id=args[0])
         if command == "/logs":
             count = self._optional_int(args, default=10, name="max_entries")
             if isinstance(count, str):
@@ -258,6 +262,7 @@ class MiniAgentCLI:
                 "/task-next - 推进当前任务一步",
                 "/task-history [n] - 查看最近完成的任务历史",
                 "/task-search <query> - 搜索已完成任务历史",
+                "/task-restore <task_id> - 从历史恢复任务为当前任务",
                 "/logs [n] - 查看工具日志",
                 "/audit [n] - 生成工具调用安全审计摘要",
                 "/context [n] - 列出上下文摘要",
