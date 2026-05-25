@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
+from mini_agent.config import load_agent_config
 from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
@@ -73,6 +74,7 @@ def main() -> int:
         EvalCase("symbols_find_references", eval_symbols_find_references),
         EvalCase("cli_symbol_and_refs_commands", eval_cli_symbol_and_refs_commands),
         EvalCase("context_summary_round_trip", eval_context_summary_round_trip),
+        EvalCase("agent_config_loads_yaml", eval_agent_config_loads_yaml),
         EvalCase("context_window_compacts_tool_result", eval_context_window_compacts_tool_result),
         EvalCase("memory_rejects_secret", eval_memory_rejects_secret),
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
@@ -506,6 +508,30 @@ def eval_context_summary_round_trip():
         assert "已保存上下文摘要" in store.save_summary("eval topic", "eval summary", source="eval")
         assert "eval topic" in store.search_summaries("summary")
         assert "eval summary" in store.list_summaries()
+
+
+def eval_agent_config_loads_yaml():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "agent.yaml"
+        path.write_text(
+            "\n".join(
+                [
+                    "paths:",
+                    "  notes: state/notes.txt",
+                    "context_window:",
+                    "  max_tool_result_chars: 1234",
+                    "processes:",
+                    "  profiles:",
+                    "    ready:",
+                    "      command: [\"python3\", \"-c\", \"print('ready')\"]",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        config = load_agent_config(path)
+        assert config.paths.notes == Path("state/notes.txt")
+        assert config.context_window.max_tool_result_chars == 1234
+        assert config.processes.profiles["ready"] == ["python3", "-c", "print('ready')"]
 
 
 def eval_context_window_compacts_tool_result():

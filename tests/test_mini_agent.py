@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from mini_agent.cli import MiniAgentCLI
+from mini_agent.config import AgentConfig, load_agent_config
 from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
@@ -838,6 +839,105 @@ class ContextWindowTests(unittest.TestCase):
         self.assertIn("aaaaa", result)
         self.assertIn("zzzzz", result)
         self.assertNotIn("MIDDLE", result)
+
+
+class AgentConfigTests(unittest.TestCase):
+    def test_missing_config_uses_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_agent_config(Path(tmpdir) / "agent.yaml")
+
+        self.assertEqual(config.paths.notes, Path("data/notes.txt"))
+        self.assertEqual(config.context_window.max_tool_result_chars, 8000)
+        self.assertIn("static_server_8000", config.processes.profiles)
+
+    def test_loads_agent_yaml_subset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "agent.yaml"
+            path.write_text(
+                "\n".join(
+                    [
+                        "llm:",
+                        "  provider: anthropic",
+                        "  model: claude-test",
+                        "paths:",
+                        "  notes: custom/notes.txt",
+                        "  tool_logs: custom/tool_calls.jsonl",
+                        "context_window:",
+                        "  max_tool_result_chars: 40",
+                        "  head_chars: 12",
+                        "  tail_chars: 8",
+                        "processes:",
+                        "  profiles:",
+                        "    ready:",
+                        "      command: [\"python3\", \"-c\", \"print('ready', flush=True)\"]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_agent_config(path)
+
+        self.assertEqual(config.llm.provider, "anthropic")
+        self.assertEqual(config.llm.model, "claude-test")
+        self.assertEqual(config.paths.notes, Path("custom/notes.txt"))
+        self.assertEqual(config.paths.tool_logs, Path("custom/tool_calls.jsonl"))
+        self.assertEqual(config.context_window.max_tool_result_chars, 40)
+        self.assertEqual(config.context_window.head_chars, 12)
+        self.assertEqual(config.context_window.tail_chars, 8)
+        self.assertEqual(config.processes.profiles["ready"], ["python3", "-c", "print('ready', flush=True)"])
+
+    def test_config_overrides_llm_settings_without_storing_key(self):
+        settings = load_settings(
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_BASE_URL": "https://example.com/v1",
+                "LLM_API_KEY": "test-key",
+                "LLM_MODEL": "old-model",
+            }
+        )
+        config = AgentConfig.from_dict(
+            {"llm": {"provider": "gemini", "model": "gemini-test", "base_url": "https://gemini.test/v1beta"}}
+        )
+
+        updated = config.apply_to_llm_settings(settings)
+
+        self.assertEqual(updated.provider, "gemini")
+        self.assertEqual(updated.model, "gemini-test")
+        self.assertEqual(updated.base_url, "https://gemini.test/v1beta")
+        self.assertEqual(updated.api_key, "test-key")
+
+    def test_registry_uses_configured_paths_and_process_profiles(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "agent.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "paths:",
+                        "  notes: state/notes.txt",
+                        "  tool_logs: state/tool_calls.jsonl",
+                        "processes:",
+                        "  profiles:",
+                        "    ready:",
+                        "      command: [\"python3\", \"-c\", \"print('ready', flush=True)\"]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = load_agent_config(config_path)
+            registry = build_default_registry(
+                workspace_root=root,
+                notes_path=config.resolve_path(root, config.paths.notes),
+                log_path=config.resolve_path(root, config.paths.tool_logs),
+                process_profiles=config.processes.profiles,
+                confirm_action=lambda prompt: True,
+            )
+
+            self.assertEqual(registry.call("save_note", text="configured"), "笔记已保存。")
+            self.assertTrue((root / "state" / "notes.txt").exists())
+            started = registry.call("start_background_process", profile="ready", reason="test")
+            process_id = started.split()[1]
+            self.assertIn("已匹配", registry.call("wait_for_background_process_output", process_id=process_id, pattern="ready"))
 
 
 class MiniAgentCLITests(unittest.TestCase):

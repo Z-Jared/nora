@@ -30,6 +30,7 @@ def build_default_registry(
     long_term_memory_path: Optional[Path] = None,
     task_state_path: Optional[Path] = None,
     context_summary_path: Optional[Path] = None,
+    process_profiles: Optional[dict[str, list[str]]] = None,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -42,7 +43,7 @@ def build_default_registry(
     project_rag = ProjectRAG(root)
     web_tools = WebTools(fetcher=web_fetch)
     browser_tools = BrowserTools(root=root, backend=browser_backend)
-    process_manager = ProcessManager(root)
+    process_manager = ProcessManager(root, profiles=process_profiles)
     long_term_memory = LongTermMemory(long_term_memory_path or Path("data/long_term_memory.jsonl"))
     task_manager = TaskManager(task_state_path or Path("data/current_task.json"))
     context_summaries = ContextSummaryStore(context_summary_path or Path("data/context_summaries.jsonl"))

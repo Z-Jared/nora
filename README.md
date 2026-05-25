@@ -98,6 +98,36 @@ GEMINI_MODEL=gemini-2.5-pro
 
 没有配置 key 时，agent 会继续使用本地规则；配置 key 后，本地规则处理不了的问题会交给模型回答。
 
+## agent.yaml 配置
+
+`agent.yaml` 是可选配置文件；不存在时使用默认值。API key 仍放在 `.env`，不要写进 `agent.yaml`。
+
+示例：
+
+```yaml
+llm:
+  provider: openai-compatible
+  base_url: https://api.deepseek.com
+  model: deepseek-v4-flash
+
+paths:
+  notes: data/notes.txt
+  long_term_memory: data/long_term_memory.jsonl
+  task_state: data/current_task.json
+  context_summaries: data/context_summaries.jsonl
+  tool_logs: logs/tool_calls.jsonl
+
+context_window:
+  max_tool_result_chars: 8000
+  head_chars: 3000
+  tail_chars: 2000
+
+processes:
+  profiles:
+    static_server_8000:
+      command: ["python3", "-m", "http.server", "8000"]
+```
+
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
 
 ```text
@@ -240,6 +270,7 @@ python3 -m playwright install chromium
 main.py                         # CLI 入口
 mini_agent/cli.py               # CLI 交互、slash commands 和多行输入
 mini_agent/controller.py        # agent 主循环和工具调用流程
+mini_agent/config.py            # agent.yaml 配置读取
 mini_agent/registry.py          # 工具注册、权限元数据、统一确认和日志入口
 mini_agent/providers/           # OpenAI-compatible、Claude、Gemini 等模型接入
 mini_agent/toolkits/            # 本地工具实现
