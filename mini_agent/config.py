@@ -37,11 +37,17 @@ class ProcessesConfig:
 
 
 @dataclass(frozen=True)
+class ToolsConfig:
+    disabled: set[str]
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm: LLMConfig
     paths: PathsConfig
     context_window: ContextWindowConfig
     processes: ProcessesConfig
+    tools: ToolsConfig
 
     @classmethod
     def defaults(cls) -> "AgentConfig":
@@ -50,6 +56,7 @@ class AgentConfig:
             paths=PathsConfig(),
             context_window=ContextWindowConfig(),
             processes=ProcessesConfig(profiles=dict(DEFAULT_PROFILES)),
+            tools=ToolsConfig(disabled=set()),
         )
 
     @classmethod
@@ -60,6 +67,7 @@ class AgentConfig:
         context_data = _as_dict(data.get("context_window"))
         process_data = _as_dict(data.get("processes"))
         profile_data = _as_dict(process_data.get("profiles"))
+        tools_data = _as_dict(data.get("tools"))
 
         return cls(
             llm=LLMConfig(
@@ -84,6 +92,7 @@ class AgentConfig:
                 tail_chars=_int(context_data.get("tail_chars"), defaults.context_window.tail_chars),
             ),
             processes=ProcessesConfig(profiles=_profiles(profile_data, defaults.processes.profiles)),
+            tools=ToolsConfig(disabled=_string_set(tools_data.get("disabled"))),
         )
 
     def apply_to_llm_settings(self, settings: LLMSettings) -> LLMSettings:
@@ -180,3 +189,9 @@ def _profiles(data: dict, defaults: dict[str, list[str]]) -> dict[str, list[str]
         if isinstance(command, list) and command and all(isinstance(part, str) for part in command):
             profiles[str(name)] = list(command)
     return profiles or dict(defaults)
+
+
+def _string_set(value) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {str(item).strip() for item in value if str(item).strip()}

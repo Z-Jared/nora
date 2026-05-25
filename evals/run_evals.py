@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
-from mini_agent.config import load_agent_config
+from mini_agent.config import AgentConfig, load_agent_config
 from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
@@ -75,6 +75,7 @@ def main() -> int:
         EvalCase("cli_symbol_and_refs_commands", eval_cli_symbol_and_refs_commands),
         EvalCase("context_summary_round_trip", eval_context_summary_round_trip),
         EvalCase("agent_config_loads_yaml", eval_agent_config_loads_yaml),
+        EvalCase("agent_config_disables_tools", eval_agent_config_disables_tools),
         EvalCase("context_window_compacts_tool_result", eval_context_window_compacts_tool_result),
         EvalCase("memory_rejects_secret", eval_memory_rejects_secret),
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
@@ -532,6 +533,13 @@ def eval_agent_config_loads_yaml():
         assert config.paths.notes == Path("state/notes.txt")
         assert config.context_window.max_tool_result_chars == 1234
         assert config.processes.profiles["ready"] == ["python3", "-c", "print('ready')"]
+
+
+def eval_agent_config_disables_tools():
+    config = AgentConfig.from_dict({"tools": {"disabled": ["fetch_url"]}})
+    registry = build_default_registry(disabled_tools=config.tools.disabled)
+    tool_names = {tool["function"]["name"] for tool in registry.to_openai_tools()}
+    assert "fetch_url" not in tool_names
 
 
 def eval_context_window_compacts_tool_result():

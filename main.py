@@ -22,6 +22,7 @@ def main() -> None:
         task_state_path=config.resolve_path(root, config.paths.task_state),
         context_summary_path=config.resolve_path(root, config.paths.context_summaries),
         process_profiles=config.processes.profiles,
+        disabled_tools=config.tools.disabled,
     )
     context_window = ContextWindow(
         max_tool_result_chars=config.context_window.max_tool_result_chars,

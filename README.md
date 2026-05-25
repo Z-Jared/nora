@@ -122,11 +122,16 @@ context_window:
   head_chars: 3000
   tail_chars: 2000
 
+tools:
+  disabled: []
+
 processes:
   profiles:
     static_server_8000:
       command: ["python3", "-m", "http.server", "8000"]
 ```
+
+如果要关闭某些工具，把工具名放进 `tools.disabled`，例如 `disabled: ["fetch_url", "browser_click"]`。被禁用的工具不会注册，也不会暴露给模型。
 
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
 

@@ -34,10 +34,12 @@ class ToolRegistry:
         self,
         logger: Optional[ToolLogger] = None,
         confirm_action: Optional[Callable[[str], bool]] = None,
+        disabled_tools: Optional[set[str]] = None,
     ):
         self._tools: dict[str, Tool] = {}
         self.logger = logger
         self.confirm_action = confirm_action or confirm_in_terminal
+        self.disabled_tools = disabled_tools or set()
 
     def register(
         self,
@@ -47,6 +49,9 @@ class ToolRegistry:
         parameters: Optional[dict] = None,
         permission: Optional[ToolPermission] = None,
     ) -> None:
+        if name in self.disabled_tools:
+            return
+
         if name in self._tools:
             raise ValueError(f"Tool already registered: {name}")
 

@@ -866,6 +866,8 @@ class AgentConfigTests(unittest.TestCase):
                         "  max_tool_result_chars: 40",
                         "  head_chars: 12",
                         "  tail_chars: 8",
+                        "tools:",
+                        "  disabled: [\"fetch_url\", \"browser_click\"]",
                         "processes:",
                         "  profiles:",
                         "    ready:",
@@ -884,6 +886,7 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.context_window.max_tool_result_chars, 40)
         self.assertEqual(config.context_window.head_chars, 12)
         self.assertEqual(config.context_window.tail_chars, 8)
+        self.assertEqual(config.tools.disabled, {"fetch_url", "browser_click"})
         self.assertEqual(config.processes.profiles["ready"], ["python3", "-c", "print('ready', flush=True)"])
 
     def test_config_overrides_llm_settings_without_storing_key(self):
@@ -938,6 +941,18 @@ class AgentConfigTests(unittest.TestCase):
             started = registry.call("start_background_process", profile="ready", reason="test")
             process_id = started.split()[1]
             self.assertIn("已匹配", registry.call("wait_for_background_process_output", process_id=process_id, pattern="ready"))
+
+    def test_config_can_disable_tools(self):
+        config = AgentConfig.from_dict({"tools": {"disabled": ["fetch_url", "browser_click"]}})
+
+        registry = build_default_registry(disabled_tools=config.tools.disabled)
+        tool_names = {tool["function"]["name"] for tool in registry.to_openai_tools()}
+
+        self.assertEqual(config.tools.disabled, {"fetch_url", "browser_click"})
+        self.assertNotIn("fetch_url", tool_names)
+        self.assertNotIn("browser_click", tool_names)
+        with self.assertRaises(KeyError):
+            registry.call("fetch_url", url="https://example.com")
 
 
 class MiniAgentCLITests(unittest.TestCase):
