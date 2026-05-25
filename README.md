@@ -64,9 +64,12 @@ nora
 python3 main.py
 ```
 
-启动后可输入 `/help` 查看 CLI 命令。可尝试输入：
+启动后可输入 `/doctor` 检查 workspace、LLM、Git、工具数量和 PATH；如果启动或安装异常，优先运行 `/doctor`。也可以输入 `/help` 查看 CLI 命令。
+
+可尝试输入：
 
 ```text
+/doctor
 /help
 /status
 /diff README.md
