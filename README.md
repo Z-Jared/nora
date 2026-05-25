@@ -30,7 +30,26 @@ Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地�
 首次安装本地命令：
 
 ```bash
+python3 -m pip install --user .
+```
+
+如果使用较新的 pip，也可以用 editable 安装：
+
+```bash
 python3 -m pip install -e .
+```
+
+如果安装后提示 `nora: command not found`，通常是 Python user scripts 目录没有加入 `PATH`。macOS 系统 Python 3.9 常见路径是：
+
+```bash
+export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+```
+
+可写入 `~/.zshrc` 后重新加载：
+
+```bash
+echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 之后可以在任意项目目录启动 Nora：
