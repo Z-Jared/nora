@@ -153,6 +153,8 @@ def eval_cli_runs_command_and_exits():
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
     cli.run()
     assert agent.inputs == ["hello"]
+    assert "Nora 已启动" in outputs[0]
+    assert "高风险工具会先确认" in outputs[0]
     assert any("Agent: reply: hello" in output for output in outputs)
 
 
@@ -161,8 +163,13 @@ def eval_cli_handles_help_command():
     outputs = []
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["/help", "exit"]), output_func=outputs.append)
     cli.run()
+    help_output = "\n".join(outputs)
     assert agent.inputs == []
-    assert any("/status" in output for output in outputs)
+    assert "Nora 命令帮助" in help_output
+    assert "推荐开始:" in help_output
+    assert "Git:" in help_output
+    assert "/auto [n] <goal>" in help_output
+    assert "/status" in help_output
 
 
 def eval_cli_slash_status_uses_registry():
