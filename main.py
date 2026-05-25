@@ -21,6 +21,7 @@ def main() -> None:
         log_path=config.resolve_path(root, config.paths.tool_logs),
         long_term_memory_path=config.resolve_path(root, config.paths.long_term_memory),
         task_state_path=config.resolve_path(root, config.paths.task_state),
+        task_history_path=config.resolve_path(root, config.paths.task_history),
         context_summary_path=config.resolve_path(root, config.paths.context_summaries),
         process_profiles=config.processes.profiles,
         disabled_tools=config.disabled_tools(),

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,8 +9,9 @@ VALID_STEP_STATUSES = {"pending", "in_progress", "done", "blocked"}
 
 
 class TaskManager:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, history_path: Path = Path("data/task_history.jsonl")):
         self.path = path
+        self.history_path = history_path
 
     def start(self, goal: str, steps: str) -> str:
         goal = goal.strip()
@@ -74,7 +77,31 @@ class TaskManager:
         task["finished_at"] = datetime.now(timezone.utc).isoformat()
         task["summary"] = summary.strip()
         self._write(task)
+        self._append_history(task)
         return f"已完成任务: {task['goal']}\n总结: {task['summary']}"
+
+    def list_history(self, max_results: int = 20) -> str:
+        records = self._read_history()
+        if not records:
+            return "暂无任务历史。"
+        max_results = max(1, min(max_results, 100))
+        return "\n".join(_format_history_record(record) for record in records[-max_results:])
+
+    def search_history(self, query: str, max_results: int = 10) -> str:
+        terms = [term.lower() for term in query.split() if term.strip()]
+        if not terms:
+            return "请提供搜索关键词。"
+        max_results = max(1, min(max_results, 50))
+        matches = []
+        for record in self._read_history():
+            haystack = json.dumps(record, ensure_ascii=False).lower()
+            score = sum(haystack.count(term) for term in terms)
+            if score > 0:
+                matches.append((score, record))
+        if not matches:
+            return "没有找到匹配的任务历史。"
+        matches.sort(key=lambda item: (-item[0], item[1].get("id", "")))
+        return "\n".join(_format_history_record(record) for _, record in matches[:max_results])
 
     def run_once(self) -> str:
         task = self._read()
@@ -121,6 +148,28 @@ class TaskManager:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _append_history(self, task: dict) -> str:
+        history_id = f"task_{len(self._read_history()) + 1}"
+        record = dict(task)
+        record["id"] = history_id
+        self.history_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.history_path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return history_id
+
+    def _read_history(self) -> list[dict]:
+        if not self.history_path.exists():
+            return []
+        records = []
+        for line in self.history_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return records
+
     def _format(self, task: dict) -> str:
         lines = [f"任务: {task['goal']} (status={task['status']})"]
         current_steps = [step for step in task["steps"] if step.get("status") == "in_progress"]
@@ -152,3 +201,19 @@ def _suggest_tool_type(step_text: str) -> str:
     if any(term in text for term in ["写", "修改", "实现", "patch", "文件", "代码"]):
         return "workspace/read 或 workspace/write；写入和 patch 仍需确认"
     return "workspace/read 或 planning/read"
+
+
+def _format_history_record(record: dict) -> str:
+    steps = record.get("steps") or []
+    done = sum(1 for step in steps if step.get("status") == "done")
+    blocked = sum(1 for step in steps if step.get("status") == "blocked")
+    return " | ".join(
+        [
+            str(record.get("id", "")),
+            str(record.get("goal", "")),
+            f"status={record.get('status', '')}",
+            f"done={done}/{len(steps)}",
+            f"blocked={blocked}",
+            f"summary={record.get('summary', '')}",
+        ]
+    )

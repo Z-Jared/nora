@@ -159,6 +159,15 @@ class MiniAgentCLI:
             return self.registry.call("list_task")
         if command == "/task-next":
             return self.registry.call("run_task_once")
+        if command == "/task-history":
+            count = self._optional_int(args, default=20, name="max_results")
+            if isinstance(count, str):
+                return count
+            return self.registry.call("list_task_history", max_results=count)
+        if command == "/task-search":
+            if not args:
+                return "用法: /task-search <query>"
+            return self.registry.call("search_task_history", query=" ".join(args))
         if command == "/logs":
             count = self._optional_int(args, default=10, name="max_entries")
             if isinstance(count, str):
@@ -247,6 +256,8 @@ class MiniAgentCLI:
                 "/auto [n] <goal> - 受控自主执行，最多 n 步，高风险工具仍需确认",
                 "/task - 查看当前任务",
                 "/task-next - 推进当前任务一步",
+                "/task-history [n] - 查看最近完成的任务历史",
+                "/task-search <query> - 搜索已完成任务历史",
                 "/logs [n] - 查看工具日志",
                 "/audit [n] - 生成工具调用安全审计摘要",
                 "/context [n] - 列出上下文摘要",

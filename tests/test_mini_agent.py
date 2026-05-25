@@ -258,6 +258,12 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("read_tool_result", tool_names)
         self.assertIn("search_tool_results", tool_names)
 
+    def test_default_registry_exposes_task_history_tools(self):
+        tool_names = {tool["function"]["name"] for tool in build_default_registry().to_openai_tools()}
+
+        self.assertIn("list_task_history", tool_names)
+        self.assertIn("search_task_history", tool_names)
+
     def test_default_registry_reads_tool_results(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "tool_results.jsonl"
@@ -1173,6 +1179,7 @@ class AgentConfigTests(unittest.TestCase):
                         "paths:",
                         "  notes: custom/notes.txt",
                         "  tool_logs: custom/tool_calls.jsonl",
+                        "  task_history: custom/task_history.jsonl",
                         "context_window:",
                         "  max_tool_result_chars: 40",
                         "  head_chars: 12",
@@ -1211,6 +1218,7 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.llm.model, "claude-test")
         self.assertEqual(config.paths.notes, Path("custom/notes.txt"))
         self.assertEqual(config.paths.tool_logs, Path("custom/tool_calls.jsonl"))
+        self.assertEqual(config.paths.task_history, Path("custom/task_history.jsonl"))
         self.assertEqual(config.context_window.max_tool_result_chars, 40)
         self.assertEqual(config.context_window.head_chars, 12)
         self.assertEqual(config.context_window.tail_chars, 8)
@@ -1483,6 +1491,16 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(agent.autonomous_calls, [("inspect project", 3)])
         self.assertIn("Agent: auto reply: inspect project / 3", result)
+
+    def test_task_history_commands_call_registry(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        cli.handle_slash_command("/task-history 5")
+        cli.handle_slash_command("/task-search blocked step")
+
+        self.assertEqual(registry.calls[-2], ("list_task_history", {"max_results": 5}))
+        self.assertEqual(registry.calls[-1], ("search_task_history", {"query": "blocked step"}))
 
     def test_auto_command_requires_goal(self):
         agent = FakeCLIAgent()
@@ -2488,18 +2506,33 @@ class LongTermMemoryTests(unittest.TestCase):
 class TaskManagerTests(unittest.TestCase):
     def test_starts_updates_lists_and_finishes_task(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            manager = TaskManager(Path(tmpdir) / "task.json")
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "task_history.jsonl")
 
             started = manager.start("给 agent 增加新工具", "读代码\n写测试\n实现")
             updated = manager.update_step(2, "done", "测试已写好")
             listing = manager.list()
             finished = manager.finish("实现完成并通过测试")
             finished_listing = manager.list()
+            history = manager.list_history()
+            search = manager.search_history("通过测试")
 
         self.assertIn("已创建任务", started)
         self.assertIn("2. [done] 写测试 - 备注: 测试已写好", listing)
         self.assertIn("已完成任务", finished)
         self.assertIn("status=finished", finished_listing)
+        self.assertIn("task_1", history)
+        self.assertIn("给 agent 增加新工具", history)
+        self.assertIn("实现完成并通过测试", search)
+
+    def test_history_reports_empty_and_search_requires_query(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "task_history.jsonl")
+
+            history = manager.list_history()
+            search = manager.search_history("")
+
+        self.assertIn("暂无任务历史", history)
+        self.assertIn("请提供搜索关键词", search)
 
     def test_rejects_invalid_step_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:

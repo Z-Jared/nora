@@ -116,6 +116,7 @@ paths:
   notes: data/notes.txt
   long_term_memory: data/long_term_memory.jsonl
   task_state: data/current_task.json
+  task_history: data/task_history.jsonl
   context_summaries: data/context_summaries.jsonl
   tool_logs: logs/tool_calls.jsonl
 
@@ -181,6 +182,8 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 /auto [n] <goal>              受控自主执行，最多 n 步，高风险工具仍需确认
 /task                         查看当前任务
 /task-next                    推进当前任务一步
+/task-history [n]             查看最近完成的任务历史
+/task-search <query>          搜索已完成任务历史
 /logs [n]                     查看工具日志
 /audit [n]                    生成工具调用安全审计摘要
 /context [n]                  列出上下文摘要
@@ -292,7 +295,7 @@ python3 main.py
 上下文摘要默认保存在 `data/context_summaries.jsonl`，适合记录读过的文件、阶段性判断、测试失败摘要和设计决策；包含 API key、`.env`、`sk-` 等敏感标记的内容会被拒绝保存。
 安全审计报告基于已脱敏的 `logs/tool_calls.jsonl` 生成，只统计工具名、状态、高风险类别、敏感路径提示和最近高风险操作摘要，不输出 patch/content/text/API key/secret/token 原文。
 模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；如果完整结果不含敏感标记，会缓存到 `data/tool_results.jsonl` 并在压缩内容里返回 `result_id`，模型可用 `list_tool_results`、`read_tool_result`、`search_tool_results` 分段回看；CLI slash commands 仍会直接显示工具返回。
-任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤。
+任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤；`finish_task` 会把完成后的任务追加到 `data/task_history.jsonl`，可用 `/task-history` 和 `/task-search` 回看。
 受控自主执行只能通过显式 `/auto` 进入，有最大步数硬上限；执行前会生成本地计划和确认摘要，列出最大步数、可用工具数、隐藏工具和仍需确认的高风险工具；每步最多执行一个工具调用，所有工具仍经过 `ToolRegistry` 权限确认和日志记录，取消、拒绝或失败会停止为 blocked，不会绕过 `run_task_once` 的一步一推进语义。
 安全模式默认是 `normal`，保持现有行为；`strict` 适合真实项目或不想让模型触碰高风险动作的场景。`allow_autonomous_write: false` 只影响 `/auto` 暴露给模型的工具，不会移除 CLI 手动命令。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。

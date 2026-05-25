@@ -50,6 +50,7 @@ class PathsConfig:
     notes: Path = Path("data/notes.txt")
     long_term_memory: Path = Path("data/long_term_memory.jsonl")
     task_state: Path = Path("data/current_task.json")
+    task_history: Path = Path("data/task_history.jsonl")
     context_summaries: Path = Path("data/context_summaries.jsonl")
     tool_logs: Path = Path("logs/tool_calls.jsonl")
 
@@ -145,6 +146,7 @@ class AgentConfig:
                 notes=Path(str(paths_data.get("notes") or defaults.paths.notes)),
                 long_term_memory=Path(str(paths_data.get("long_term_memory") or defaults.paths.long_term_memory)),
                 task_state=Path(str(paths_data.get("task_state") or defaults.paths.task_state)),
+                task_history=Path(str(paths_data.get("task_history") or defaults.paths.task_history)),
                 context_summaries=Path(str(paths_data.get("context_summaries") or defaults.paths.context_summaries)),
                 tool_logs=Path(str(paths_data.get("tool_logs") or defaults.paths.tool_logs)),
             ),

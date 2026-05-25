@@ -30,6 +30,7 @@ def build_default_registry(
     browser_backend: Optional[BrowserBackend] = None,
     long_term_memory_path: Optional[Path] = None,
     task_state_path: Optional[Path] = None,
+    task_history_path: Optional[Path] = None,
     context_summary_path: Optional[Path] = None,
     process_profiles: Optional[dict[str, list[str]]] = None,
     disabled_tools: Optional[set[str]] = None,
@@ -61,7 +62,10 @@ def build_default_registry(
     browser_tools = BrowserTools(root=root, backend=browser_backend)
     process_manager = ProcessManager(root, profiles=process_profiles)
     long_term_memory = LongTermMemory(long_term_memory_path or Path("data/long_term_memory.jsonl"))
-    task_manager = TaskManager(task_state_path or Path("data/current_task.json"))
+    task_manager = TaskManager(
+        task_state_path or Path("data/current_task.json"),
+        task_history_path or Path("data/task_history.jsonl"),
+    )
     context_summaries = ContextSummaryStore(context_summary_path or Path("data/context_summaries.jsonl"))
     tool_results = ToolResultStore(tool_results_path or Path("data/tool_results.jsonl"))
     logger = JsonlToolLogger(log_path or Path("logs/tool_calls.jsonl"))
@@ -1413,6 +1417,41 @@ def build_default_registry(
         task_manager.run_once,
         parameters={"type": "object", "properties": {}},
         permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "list_task_history",
+        "列出最近完成的任务历史摘要。",
+        task_manager.list_history,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少条历史，默认 20，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+    registry.register(
+        "search_task_history",
+        "按关键词搜索已完成任务历史。",
+        task_manager.search_history,
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少条匹配历史，默认 10，最大 50",
+                },
+            },
+            "required": ["query"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
     )
     registry.register(
         "list_tool_permissions",
