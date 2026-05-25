@@ -28,6 +28,7 @@ from mini_agent.shell import ShellRunner
 from mini_agent.settings import load_settings
 from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
+from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 
 
@@ -79,6 +80,7 @@ def main() -> int:
         EvalCase("agent_config_disables_tools", eval_agent_config_disables_tools),
         EvalCase("agent_config_permission_policy", eval_agent_config_permission_policy),
         EvalCase("context_window_compacts_tool_result", eval_context_window_compacts_tool_result),
+        EvalCase("tool_result_store_round_trip", eval_tool_result_store_round_trip),
         EvalCase("memory_rejects_secret", eval_memory_rejects_secret),
         EvalCase("shell_rejects_rm", eval_shell_rejects_rm),
         EvalCase("task_run_once_marks_step", eval_task_run_once_marks_step),
@@ -590,6 +592,16 @@ def eval_context_window_compacts_tool_result():
     assert "MIDDLEMIDDLE" not in result
 
 
+def eval_tool_result_store_round_trip():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = ToolResultStore(Path(tmpdir) / "tool_results.jsonl")
+        result_id = store.save("eval_tool", "first line\nneedle line\nlast line")
+        assert result_id.startswith("tr_")
+        assert result_id in store.list()
+        assert "needle line" in store.read(result_id, offset=0, limit=100)
+        assert "needle line" in store.search(query="needle")
+
+
 def eval_memory_rejects_secret():
     with tempfile.TemporaryDirectory() as tmpdir:
         memory = LongTermMemory(Path(tmpdir) / "memory.jsonl")
@@ -789,7 +801,12 @@ def _build_real_llm_agent(
         browser_backend=browser_backend,
         confirm_action=lambda prompt: False,
     )
-    return MiniAgent(registry, llm=llm, context_window=context_window)
+    return MiniAgent(
+        registry,
+        llm=llm,
+        context_window=context_window,
+        tool_result_store=ToolResultStore(tmp_root / "tool_results.jsonl"),
+    )
 
 
 class FakeCLIAgent:

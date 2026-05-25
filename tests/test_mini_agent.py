@@ -26,6 +26,7 @@ from mini_agent.shell import ShellRunner
 from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.settings import load_settings
 from mini_agent.task_runner import TaskManager
+from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.browser import BrowserTools
 from mini_agent.tools import WorkspaceFiles, build_default_registry, make_plan
 from mini_agent.web_tools import WebTools
@@ -250,6 +251,24 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("run_repair_loop", tool_names)
         self.assertIn("start_background_process", tool_names)
 
+    def test_default_registry_exposes_tool_result_tools(self):
+        tool_names = {tool["function"]["name"] for tool in build_default_registry().to_openai_tools()}
+
+        self.assertIn("list_tool_results", tool_names)
+        self.assertIn("read_tool_result", tool_names)
+        self.assertIn("search_tool_results", tool_names)
+
+    def test_default_registry_reads_tool_results(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tool_results.jsonl"
+            store = ToolResultStore(path)
+            result_id = store.save("tool", "needle")
+            registry = build_default_registry(workspace_root=Path(tmpdir), tool_results_path=path)
+
+            result = registry.call("read_tool_result", result_id=result_id, offset=0, limit=20)
+
+        self.assertIn("needle", result)
+
     def test_default_registry_confirmation_blocks_git_write(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -363,6 +382,77 @@ class MiniAgentTests(unittest.TestCase):
             agent = MiniAgent(registry, llm=FakeToolCallingLLM())
 
             self.assertEqual(agent.run("读取 README"), "读到了: # Demo\n")
+
+    def test_compacted_tool_result_is_cached_with_result_id(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="call_1",
+                                name="read_project_file",
+                                arguments={"path": "README.md"},
+                            )
+                        ],
+                    )
+                return LLMResponse(content=messages[-1]["content"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "README.md").write_text("long-result-line\n" * 20, encoding="utf-8")
+            registry = build_default_registry(workspace_root=root)
+            store = ToolResultStore(root / "data" / "tool_results.jsonl")
+            agent = MiniAgent(
+                registry,
+                llm=FakeToolCallingLLM(),
+                context_window=ContextWindow(max_tool_result_chars=40, head_chars=10, tail_chars=10),
+                tool_result_store=store,
+            )
+
+            answer = agent.run("读取长文件")
+
+            self.assertIn("tool_result_compacted", answer)
+            self.assertIn("result_id=tr_1", answer)
+            self.assertIn("tr_1", store.list())
+            self.assertIn("long", store.read("tr_1", limit=20))
+
+    def test_sensitive_compacted_tool_result_is_not_cached(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="secret_tool", arguments={})],
+                    )
+                return LLMResponse(content=messages[-1]["content"])
+
+        fake_key = "sk" + "-secret"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            registry = ToolRegistry()
+            registry.register("secret_tool", "secret", lambda: fake_key * 30)
+            store = ToolResultStore(root / "data" / "tool_results.jsonl")
+            agent = MiniAgent(
+                registry,
+                llm=FakeToolCallingLLM(),
+                context_window=ContextWindow(max_tool_result_chars=40, head_chars=10, tail_chars=10),
+                tool_result_store=store,
+            )
+
+            answer = agent.run("call secret")
+
+        self.assertIn("sensitive result not cached", answer)
+        self.assertEqual(store.list(), "没有缓存的工具结果。")
 
     def test_llm_can_list_project_files(self):
         class FakeToolCallingLLM:
@@ -1935,6 +2025,42 @@ class JsonlToolLoggerTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", raw)
         self.assertIn("[redacted]", raw)
         self.assertNotIn(fake_key, result)
+
+
+class ToolResultStoreTests(unittest.TestCase):
+    def test_saves_lists_reads_and_searches_results(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ToolResultStore(Path(tmpdir) / "tool_results.jsonl")
+            result_id = store.save("read_project_file", "alpha\nneedle line\nomega")
+
+            listing = store.list()
+            chunk = store.read(result_id, offset=6, limit=20)
+            search = store.search(query="needle")
+
+        self.assertIn(result_id, listing)
+        self.assertIn("needle line", chunk)
+        self.assertIn("needle line", search)
+
+    def test_rejects_sensitive_results(self):
+        fake_key = "sk" + "-secret"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tool_results.jsonl"
+            store = ToolResultStore(path)
+
+            result_id = store.save("read_project_file", fake_key)
+
+        self.assertEqual(result_id, "")
+        self.assertFalse(path.exists())
+
+    def test_read_result_enforces_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ToolResultStore(Path(tmpdir) / "tool_results.jsonl")
+            result_id = store.save("tool", "abcdef")
+
+            result = store.read(result_id, offset=1, limit=2)
+
+        self.assertIn("shown=2", result)
+        self.assertTrue(result.endswith("bc"))
 
 
 class LongTermMemoryTests(unittest.TestCase):

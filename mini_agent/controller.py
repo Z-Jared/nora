@@ -5,6 +5,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.memory import ConversationMemory
 from mini_agent.providers.base import LLMError, LLMResponse
 from mini_agent.registry import ToolRegistry
+from mini_agent.tool_results import ToolResultStore
 
 
 class LLMClient(Protocol):
@@ -21,11 +22,13 @@ class MiniAgent:
         llm: Optional[LLMClient] = None,
         memory: Optional[ConversationMemory] = None,
         context_window: Optional[ContextWindow] = None,
+        tool_result_store: Optional[ToolResultStore] = None,
     ):
         self.tools = tools
         self.llm = llm
         self.memory = memory or ConversationMemory()
         self.context_window = context_window or ContextWindow()
+        self.tool_result_store = tool_result_store
 
     def run(self, user_input: str) -> str:
         text = user_input.strip()
@@ -63,7 +66,7 @@ class MiniAgent:
             messages.append(response.to_assistant_message())
             for tool_call in response.tool_calls:
                 result = self._call_tool(tool_call.name, tool_call.arguments)
-                result = self.context_window.compact_tool_result(tool_call.name, result)
+                result = self._compact_tool_result(tool_call.name, result)
                 messages.append(
                     {
                         "role": "tool",
@@ -79,6 +82,15 @@ class MiniAgent:
         self.memory.add_user(user_input)
         self.memory.add_assistant(answer)
         return answer
+
+    def _compact_tool_result(self, tool_name: str, result: str) -> str:
+        compacted = self.context_window.compact_tool_result(tool_name, result)
+        if compacted == result or not self.tool_result_store:
+            return compacted
+        result_id = self.tool_result_store.save(tool_name, result)
+        if not result_id:
+            return compacted + "\n[result_id unavailable: sensitive result not cached]"
+        return compacted + f"\n[result_id={result_id} use read_tool_result to inspect more]"
 
     def _call_tool(self, name: str, arguments: dict) -> str:
         try:

@@ -16,6 +16,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.toolkits.basic import calculate, current_time, make_plan
 from mini_agent.toolkits.browser import BrowserBackend, BrowserTools
 from mini_agent.toolkits.notes import NotesStore
+from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.web_tools import WebTools
 
@@ -33,6 +34,7 @@ def build_default_registry(
     process_profiles: Optional[dict[str, list[str]]] = None,
     disabled_tools: Optional[set[str]] = None,
     permission_overrides: Optional[dict[str, bool]] = None,
+    tool_results_path: Optional[Path] = None,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -49,6 +51,7 @@ def build_default_registry(
     long_term_memory = LongTermMemory(long_term_memory_path or Path("data/long_term_memory.jsonl"))
     task_manager = TaskManager(task_state_path or Path("data/current_task.json"))
     context_summaries = ContextSummaryStore(context_summary_path or Path("data/context_summaries.jsonl"))
+    tool_results = ToolResultStore(tool_results_path or Path("data/tool_results.jsonl"))
     logger = JsonlToolLogger(log_path or Path("logs/tool_calls.jsonl"))
     registry = ToolRegistry(
         logger=logger,
@@ -1110,6 +1113,69 @@ def build_default_registry(
                     "description": "是否展示截断后的工具参数，默认 false",
                 },
             },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "list_tool_results",
+        "列出已缓存的长工具结果 result_id。只读，不展示完整内容。",
+        tool_results.list,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少条缓存记录，默认 20，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "read_tool_result",
+        "按 result_id 分段读取缓存的长工具结果，有 offset/limit 上限。",
+        tool_results.read,
+        parameters={
+            "type": "object",
+            "properties": {
+                "result_id": {
+                    "type": "string",
+                    "description": "工具结果 id，例如 tr_1",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "读取起始字符偏移，默认 0",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多读取多少字符，默认 4000，最大 20000",
+                },
+            },
+            "required": ["result_id"],
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "search_tool_results",
+        "搜索缓存的长工具结果，可限定 result_id。",
+        tool_results.search,
+        parameters={
+            "type": "object",
+            "properties": {
+                "result_id": {
+                    "type": "string",
+                    "description": "可选，只搜索指定 result_id",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少个匹配行，默认 10，最大 20",
+                },
+            },
+            "required": ["query"],
         },
         permission=ToolPermission(category="logs", risk="read"),
     )
