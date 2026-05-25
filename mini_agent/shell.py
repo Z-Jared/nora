@@ -31,19 +31,22 @@ class ShellRunner:
         root: Path,
         confirm_action: Optional[Callable[[str], bool]] = None,
         timeout_seconds: int = 20,
+        require_confirmation: bool = True,
     ):
         self.root = root.resolve()
         self.confirm_action = confirm_action or confirm_in_terminal
         self.timeout_seconds = timeout_seconds
+        self.require_confirmation = require_confirmation
 
     def run(self, command: str, reason: str = "") -> str:
         parsed = self._parse_allowed_command(command)
         if not parsed:
             return "拒绝执行: 命令不在安全白名单内。"
 
-        prompt = self._confirmation_prompt(command, reason)
-        if not self.confirm_action(prompt):
-            return "已取消执行。"
+        if self.require_confirmation:
+            prompt = self._confirmation_prompt(command, reason)
+            if not self.confirm_action(prompt):
+                return "已取消执行。"
 
         try:
             completed = subprocess.run(

@@ -58,26 +58,26 @@ class ToolRegistry:
             permission=permission or ToolPermission(),
         )
 
-    def call(self, name: str, **kwargs) -> str:
-        if name not in self._tools:
-            raise KeyError(f"Unknown tool: {name}")
+    def call(self, tool_name: str, **kwargs) -> str:
+        if tool_name not in self._tools:
+            raise KeyError(f"Unknown tool: {tool_name}")
 
-        tool = self._tools[name]
+        tool = self._tools[tool_name]
         if tool.permission.requires_confirmation:
             if not self.confirm_action(self._confirmation_prompt(tool, kwargs)):
                 if self.logger:
-                    self.logger.record(name, kwargs, "cancelled")
+                    self.logger.record(tool_name, kwargs, "cancelled")
                 return "已取消操作。"
 
         try:
             result = tool.handler(**kwargs)
         except Exception:
             if self.logger:
-                self.logger.record(name, kwargs, "error")
+                self.logger.record(tool_name, kwargs, "error")
             raise
 
         if self.logger:
-            self.logger.record(name, kwargs, "ok", result)
+            self.logger.record(tool_name, kwargs, "ok", result)
 
         return result
 

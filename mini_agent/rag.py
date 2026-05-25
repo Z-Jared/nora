@@ -14,6 +14,7 @@ class SearchResult:
     path: str
     score: int
     snippet: str
+    line_number: int
 
 
 class ProjectRAG:
@@ -26,6 +27,21 @@ class ProjectRAG:
         if not terms:
             return "请提供要检索的关键词。"
 
+        results = self.search_results(query, max_results)
+        if not results:
+            return "没有找到相关项目上下文。"
+
+        return "\n\n".join(
+            f"[{index}] {result.path}:L{result.line_number} (score={result.score})\n{result.snippet}"
+            for index, result in enumerate(results, 1)
+        )
+
+    def search_results(self, query: str, max_results: int = 5) -> list[SearchResult]:
+        terms = _terms(query)
+        if not terms:
+            return []
+
+        phrase = query.strip().lower()
         max_results = max(1, min(max_results, 10))
         results = []
         for path in self._iter_text_files():
@@ -33,26 +49,23 @@ class ProjectRAG:
             if not text:
                 continue
 
-            score = sum(text.lower().count(term) for term in terms)
+            relative_path = path.relative_to(self.root).as_posix()
+            score = _score(text, relative_path, terms, phrase)
             if score <= 0:
                 continue
 
+            snippet, line_number = _snippet(text, terms)
             results.append(
                 SearchResult(
-                    path=path.relative_to(self.root).as_posix(),
+                    path=relative_path,
                     score=score,
-                    snippet=_snippet(text, terms),
+                    snippet=snippet,
+                    line_number=line_number,
                 )
             )
 
-        if not results:
-            return "没有找到相关项目上下文。"
-
         results.sort(key=lambda result: (-result.score, result.path))
-        return "\n\n".join(
-            f"[{index}] {result.path} (score={result.score})\n{result.snippet}"
-            for index, result in enumerate(results[:max_results], 1)
-        )
+        return results[:max_results]
 
     def context_for_question(self, question: str, max_results: int = 5) -> str:
         return f"问题: {question}\n\n相关项目上下文:\n{self.search(question, max_results)}"
@@ -89,9 +102,43 @@ def _terms(query: str) -> list[str]:
     return [term.lower() for term in re.findall(r"[\w.-]+", query) if len(term) > 1]
 
 
-def _snippet(text: str, terms: list[str], max_chars: int = 500) -> str:
-    lower = text.lower()
-    first_match = min((lower.find(term) for term in terms if term in lower), default=0)
-    start = max(0, first_match - 120)
-    snippet = text[start : start + max_chars].strip()
-    return re.sub(r"\n{3,}", "\n\n", snippet)
+def _score(text: str, path: str, terms: list[str], phrase: str) -> int:
+    lower_text = text.lower()
+    lower_path = path.lower()
+    matched_terms = {term for term in terms if term in lower_text or term in lower_path}
+    if not matched_terms:
+        return 0
+
+    coverage_score = len(matched_terms) * 100
+    phrase_score = 50 if len(phrase) > 1 and phrase in lower_text else 0
+    path_score = sum(25 for term in terms if term in lower_path)
+    frequency_score = min(sum(lower_text.count(term) for term in terms), 50)
+    return coverage_score + phrase_score + path_score + frequency_score
+
+
+def _snippet(text: str, terms: list[str], max_chars: int = 500) -> tuple[str, int]:
+    lines = text.splitlines()
+    if not lines:
+        return "", 1
+
+    best_index = 0
+    best_score = -1
+    for index, line in enumerate(lines):
+        lower_line = line.lower()
+        score = len({term for term in terms if term in lower_line}) * 10
+        score += sum(lower_line.count(term) for term in terms)
+        if score > best_score:
+            best_index = index
+            best_score = score
+
+    start_line = max(0, best_index - 2)
+    selected = []
+    current_chars = 0
+    for line in lines[start_line:]:
+        if selected and current_chars + len(line) + 1 > max_chars:
+            break
+        selected.append(line)
+        current_chars += len(line) + 1
+
+    snippet = "\n".join(selected).strip()
+    return re.sub(r"\n{3,}", "\n\n", snippet), start_line + 1

@@ -25,14 +25,14 @@ class TaskManager:
             "finished_at": None,
             "summary": "",
             "steps": [
-                {"id": index, "text": step, "status": "pending", "note": ""}
+                {"id": index, "text": step, "status": "pending", "note": "", "summary": ""}
                 for index, step in enumerate(parsed_steps, 1)
             ],
         }
         self._write(task)
         return f"已创建任务: {goal}\n{self._format(task)}"
 
-    def update_step(self, step_id: int, status: str, note: str = "") -> str:
+    def update_step(self, step_id: int, status: str, note: str = "", summary: str = "") -> str:
         if status not in VALID_STEP_STATUSES:
             return f"无效状态: {status}。可用状态: pending, in_progress, done, blocked。"
 
@@ -44,6 +44,7 @@ class TaskManager:
             if step["id"] == step_id:
                 step["status"] = status
                 step["note"] = note.strip()
+                step["summary"] = summary.strip()
                 self._write(task)
                 return f"已更新步骤 {step_id}: {status}"
 
@@ -83,7 +84,7 @@ class TaskManager:
                 return "\n".join(
                     [
                         f"下一步: {step['id']}. {step['text']}",
-                        "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态。",
+                        "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态并填写 summary。",
                     ]
                 )
 
@@ -91,7 +92,7 @@ class TaskManager:
                 return "\n".join(
                     [
                         f"继续当前步骤: {step['id']}. {step['text']}",
-                        "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态。",
+                        "请根据该步骤选择合适工具执行，完成后调用 update_task_step 更新状态并填写 summary。",
                     ]
                 )
 
@@ -113,7 +114,12 @@ class TaskManager:
     def _format(self, task: dict) -> str:
         lines = [f"任务: {task['goal']} (status={task['status']})"]
         for step in task["steps"]:
-            suffix = f" - {step['note']}" if step.get("note") else ""
+            details = []
+            if step.get("note"):
+                details.append(f"备注: {step['note']}")
+            if step.get("summary"):
+                details.append(f"总结: {step['summary']}")
+            suffix = f" - {'; '.join(details)}" if details else ""
             lines.append(f"{step['id']}. [{step['status']}] {step['text']}{suffix}")
         if task.get("summary"):
             lines.append(f"总结: {task['summary']}")

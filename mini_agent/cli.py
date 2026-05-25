@@ -1,0 +1,244 @@
+import shlex
+from pathlib import Path
+from typing import Callable, Optional
+
+from mini_agent.git_tools import GitTools
+
+
+class MiniAgentCLI:
+    def __init__(
+        self,
+        agent,
+        registry,
+        settings=None,
+        root: Optional[Path] = None,
+        input_func: Callable[[str], str] = input,
+        output_func: Callable[[str], None] = print,
+    ):
+        self.agent = agent
+        self.registry = registry
+        self.settings = settings
+        self.root = (root or Path.cwd()).resolve()
+        self.input_func = input_func
+        self.output_func = output_func
+        self.should_exit = False
+
+    def run(self) -> None:
+        self.output_func(self.banner())
+        while not self.should_exit:
+            try:
+                user_input = self.input_func(self.prompt()).strip()
+            except EOFError:
+                self.output_func("")
+                break
+
+            result = self.handle_input(user_input)
+            if result:
+                self.output_func(result)
+
+    def banner(self) -> str:
+        lines = [
+            "Mini Agent 已启动。输入 /help 查看命令，输入 exit 或 quit 退出。",
+            f"Workspace: {self.root}",
+        ]
+        if self.settings and getattr(self.settings, "is_llm_enabled", False):
+            lines.append(f"LLM: {self.settings.provider} / {self.settings.model}")
+        else:
+            lines.append("LLM: disabled，本地规则模式")
+        try:
+            lines.append(f"Tools: {len(self.registry.to_openai_tools())}")
+        except AttributeError:
+            pass
+        return "\n".join(lines)
+
+    def prompt(self) -> str:
+        branch = GitTools(self.root).current_branch().strip()
+        if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
+            return f"MiniAgent({branch})> "
+        return "MiniAgent> "
+
+    def handle_input(self, text: str) -> Optional[str]:
+        text = text.strip()
+        if text.lower() in {"exit", "quit", "/exit", "/quit"}:
+            self.should_exit = True
+            return None
+        if not text:
+            return None
+        if text == "<<<":
+            multiline = self.read_multiline(text)
+            if not multiline:
+                return None
+            return self._format_agent_response(self.agent.run(multiline))
+        if text.startswith("/"):
+            return self.handle_slash_command(text)
+        return self._format_agent_response(self.agent.run(text))
+
+    def read_multiline(self, first_line: str = "") -> str:
+        lines = []
+        while True:
+            try:
+                line = self.input_func("... ")
+            except EOFError:
+                break
+            if line.strip() == ">>>":
+                break
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    def handle_slash_command(self, text: str) -> str:
+        try:
+            parts = shlex.split(text)
+        except ValueError as error:
+            return f"命令解析失败: {error}"
+        if not parts:
+            return ""
+        command = parts[0]
+        args = parts[1:]
+
+        if command == "/help":
+            return self._help()
+        if command == "/tools":
+            return self.registry.describe()
+        if command == "/permissions":
+            return self.registry.call("list_tool_permissions")
+        if command == "/status":
+            return self.registry.call("git_status")
+        if command == "/diff":
+            return self.registry.call("git_diff", path=args[0] if args else "")
+        if command == "/staged":
+            return self.registry.call("git_staged_diff")
+        if command == "/changes":
+            return self.registry.call("git_summarize_changes")
+        if command == "/review-staged":
+            return self.registry.call("git_review_staged_diff")
+        if command == "/check-commit":
+            return self.registry.call("git_check_before_commit")
+        if command == "/branch":
+            return self.registry.call("git_current_branch")
+        if command == "/log":
+            count = self._optional_int(args, default=5, name="max_count")
+            if isinstance(count, str):
+                return count
+            return self.registry.call("git_log", max_count=count)
+        if command == "/symbols":
+            query = " ".join(args) if args else ""
+            return self.registry.call("list_python_symbols", query=query)
+        if command == "/symbol":
+            if not args:
+                return "用法: /symbol <name>"
+            return self.registry.call("describe_python_symbol", **{"name": " ".join(args)})
+        if command == "/refs":
+            if not args:
+                return "用法: /refs <name>"
+            return self.registry.call("find_python_references", **{"name": " ".join(args)})
+        if command == "/outline":
+            if len(args) != 1:
+                return "用法: /outline <path>"
+            return self.registry.call("outline_python_file", path=args[0])
+        if command == "/test":
+            return self.registry.call("run_project_tests")
+        if command == "/repair":
+            attempts = self._optional_int(args, default=2, name="max_attempts")
+            if isinstance(attempts, str):
+                return attempts
+            return self.registry.call("run_repair_loop", max_attempts=attempts)
+        if command == "/task":
+            return self.registry.call("list_task")
+        if command == "/task-next":
+            return self.registry.call("run_task_once")
+        if command == "/logs":
+            count = self._optional_int(args, default=10, name="max_entries")
+            if isinstance(count, str):
+                return count
+            return self.registry.call("view_tool_logs", max_entries=count)
+        if command == "/context":
+            count = self._optional_int(args, default=20, name="max_results")
+            if isinstance(count, str):
+                return count
+            return self.registry.call("list_context_summaries", max_results=count)
+        if command == "/context-search":
+            if not args:
+                return "用法: /context-search <query>"
+            return self.registry.call("search_context_summaries", query=" ".join(args))
+        if command == "/processes":
+            return self.registry.call("list_background_processes")
+        if command == "/git-stage":
+            if not args:
+                return "用法: /git-stage <path...>"
+            return self.registry.call("git_stage_paths", paths=args, reason="cli slash command")
+        if command == "/git-unstage":
+            if not args:
+                return "用法: /git-unstage <path...>"
+            return self.registry.call("git_unstage_paths", paths=args, reason="cli slash command")
+        if command == "/git-commit":
+            if not args:
+                return "用法: /git-commit <message>"
+            return self.registry.call("git_commit_staged", message=" ".join(args), reason="cli slash command")
+        if command == "/git-branch-create":
+            if len(args) != 1:
+                return "用法: /git-branch-create <name>"
+            return self.registry.call("git_create_branch", name=args[0], reason="cli slash command")
+        if command == "/process-start":
+            if len(args) != 1:
+                return "用法: /process-start <profile>"
+            return self.registry.call("start_background_process", profile=args[0], reason="cli slash command")
+        if command == "/process-stop":
+            if len(args) != 1:
+                return "用法: /process-stop <process_id>"
+            return self.registry.call("stop_background_process", process_id=args[0], reason="cli slash command")
+
+        return f"未知命令: {command}\n输入 /help 查看可用命令。"
+
+    def _optional_int(self, args: list[str], default: int, name: str):
+        if not args:
+            return default
+        if len(args) > 1:
+            return f"参数过多: {name} 只接受一个整数。"
+        try:
+            return int(args[0])
+        except ValueError:
+            return f"参数错误: {name} 必须是整数。"
+
+    def _format_agent_response(self, response: str) -> str:
+        if "\n" not in response:
+            return f"Agent: {response}"
+        first, rest = response.split("\n", 1)
+        return f"Agent: {first}\n{rest}"
+
+    def _help(self) -> str:
+        return "\n".join(
+            [
+                "可用命令:",
+                "/help - 查看命令帮助",
+                "/tools - 查看工具列表",
+                "/permissions - 查看工具权限",
+                "/status - 查看 Git 状态",
+                "/diff [path] - 查看 Git diff",
+                "/staged - 查看 staged diff",
+                "/changes - 汇总当前 Git 变更",
+                "/review-staged - 审查 staged diff",
+                "/check-commit - 提交前检查",
+                "/branch - 查看当前分支",
+                "/log [n] - 查看最近提交",
+                "/symbols [query] - 列出 Python 符号",
+                "/symbol <name> - 查看 Python 符号详情",
+                "/refs <name> - 查找 Python 可能引用",
+                "/outline <path> - 生成 Python 文件 outline",
+                "/test - 运行项目测试",
+                "/repair [n] - 运行受控修复测试循环",
+                "/task - 查看当前任务",
+                "/task-next - 推进当前任务一步",
+                "/logs [n] - 查看工具日志",
+                "/context [n] - 列出上下文摘要",
+                "/context-search <query> - 搜索上下文摘要",
+                "/processes - 列出后台进程",
+                "/git-stage <path...> - 暂存路径，需要确认",
+                "/git-unstage <path...> - 取消暂存路径，需要确认",
+                "/git-commit <message> - 提交 staged 改动，需要确认",
+                "/git-branch-create <name> - 创建本地分支，需要确认",
+                "/process-start <profile> - 启动后台进程，需要确认",
+                "/process-stop <process_id> - 停止后台进程，需要确认",
+                "<<< 开始多行输入，>>> 结束。",
+                "exit 或 quit 退出。",
+            ]
+        )
