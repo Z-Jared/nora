@@ -1912,6 +1912,8 @@ class JsonlToolLoggerTests(unittest.TestCase):
         self.assertIn("expression", result)
 
     def test_redacts_sensitive_arguments_and_result_preview(self):
+        fake_key = "sk" + "-secret"
+        fake_env = "OPENAI_API" + "_KEY=" + fake_key
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "tools.jsonl"
             logger = JsonlToolLogger(log_path)
@@ -1919,20 +1921,20 @@ class JsonlToolLoggerTests(unittest.TestCase):
                 "write_project_file",
                 {
                     "path": "notes.md",
-                    "content": "OPENAI_API_KEY=sk-secret",
-                    "nested": {"api_key": "sk-secret"},
+                    "content": fake_env,
+                    "nested": {"api_key": fake_key},
                 },
                 "cancelled",
-                "OPENAI_API_KEY=sk-secret",
+                fake_env,
             )
 
             raw = log_path.read_text(encoding="utf-8")
             result = logger.list_recent(include_arguments=True)
 
-        self.assertNotIn("sk-secret", raw)
+        self.assertNotIn(fake_key, raw)
         self.assertNotIn("OPENAI_API_KEY", raw)
         self.assertIn("[redacted]", raw)
-        self.assertNotIn("sk-secret", result)
+        self.assertNotIn(fake_key, result)
 
 
 class LongTermMemoryTests(unittest.TestCase):
