@@ -25,6 +25,11 @@ def main() -> None:
         process_profiles=config.processes.profiles,
         disabled_tools=config.disabled_tools(),
         permission_overrides=config.permission_overrides(),
+        rag_include_paths=config.rag.include_paths,
+        rag_exclude_dirs=config.rag.exclude_dirs,
+        rag_max_file_bytes=config.rag.max_file_bytes,
+        rag_chunk_size=config.rag.chunk_size,
+        rag_chunk_overlap=config.rag.chunk_overlap,
     )
     tool_result_store = ToolResultStore(root / "data" / "tool_results.jsonl")
     context_window = ContextWindow(

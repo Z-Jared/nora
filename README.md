@@ -19,7 +19,7 @@
 - Python 代码理解：用 AST 查找 class、function、method，生成文件 outline，查看符号签名/上下文，并查找 Name/Attribute 可能引用
 - 上下文摘要：本地 JSONL 保存、搜索和列出短中期项目上下文，并拒绝敏感内容
 - 上下文窗口管理：模型工具调用链路会自动压缩过长工具结果，只保留头尾和统计信息；完整结果可用 `result_id` 缓存在 `data/tool_results.jsonl` 后分段读取
-- 轻量 RAG：基于项目文本文件做综合排序检索，不依赖向量数据库
+- 轻量 RAG：按行 chunk 检索项目文本文件，返回 path、line range、score 和 snippet，不依赖向量数据库
 - 联网搜索和网页读取：只读 HTTP/HTTPS 页面
 - 工具调用日志：记录到 `logs/tool_calls.jsonl`，会脱敏工具参数和敏感结果预览，并可通过工具查看最近日志
 - 后台进程管理：只允许内置 profile 启动本地后台进程，支持查看状态、读取输出、等待输出和停止进程
@@ -122,6 +122,13 @@ context_window:
   head_chars: 3000
   tail_chars: 2000
 
+rag:
+  include_paths: []
+  exclude_dirs: []
+  max_file_bytes: 65536
+  chunk_size: 80
+  chunk_overlap: 20
+
 tools:
   disabled: []
 
@@ -138,6 +145,7 @@ processes:
 ```
 
 如果要关闭某些工具，把工具名放进 `tools.disabled`，例如 `disabled: ["fetch_url", "browser_click"]`。被禁用的工具不会注册，也不会暴露给模型。
+`rag.include_paths` 可限制只检索指定文件或目录，`rag.exclude_dirs` 可额外跳过目录；`chunk_size` 和 `chunk_overlap` 控制按行切分粒度，检索结果会带来源路径、行号范围、分数和片段。
 如果要彻底禁止某些工具，把工具名放进 `permissions.deny`；如果要覆盖某个工具是否需要确认，可以在 `permissions.confirmation_overrides` 里按工具名设置 `true` 或 `false`。
 
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
@@ -272,7 +280,7 @@ python3 main.py
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，不会自动无限执行工具；完成步骤后需要调用 `update_task_step` 更新状态并填写步骤总结。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
-轻量 RAG 只索引 `.py`、`.md`、`.txt`、`.json`、`.toml`、`.yaml`、`.yml` 等文本文件，并跳过 `.env`、`data/`、`.git/`、`logs/`；排序会综合考虑命中词覆盖、短语、路径和频次。
+轻量 RAG 只索引 `.py`、`.md`、`.txt`、`.json`、`.toml`、`.yaml`、`.yml` 等文本文件，并跳过 `.env`、`data/`、`.git/`、`logs/`、`evals/.tmp/`；它按行 chunk 返回 path、line range、score、snippet，排序会综合考虑命中词覆盖、短语、路径和频次，`answer_with_project_context` 会要求模型只基于来源片段回答。
 联网工具只执行 GET 请求，不提交表单，不执行网页脚本，并限制返回文本长度。
 浏览器工具只允许打开 HTTP/HTTPS URL；等待元素、读取页面摘要和提取链接/按钮/输入框是只读操作；点击和输入会走统一确认；截图只能保存到项目目录内的非敏感路径。
 如果要使用真实浏览器操作，需要安装可选依赖：

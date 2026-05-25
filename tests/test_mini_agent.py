@@ -956,6 +956,12 @@ class AgentConfigTests(unittest.TestCase):
                         "  max_tool_result_chars: 40",
                         "  head_chars: 12",
                         "  tail_chars: 8",
+                        "rag:",
+                        "  include_paths: [\"mini_agent\", \"README.md\"]",
+                        "  exclude_dirs: [\"vendor\"]",
+                        "  max_file_bytes: 4096",
+                        "  chunk_size: 20",
+                        "  chunk_overlap: 5",
                         "tools:",
                         "  disabled: [\"fetch_url\", \"browser_click\"]",
                         "permissions:",
@@ -981,6 +987,11 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.context_window.max_tool_result_chars, 40)
         self.assertEqual(config.context_window.head_chars, 12)
         self.assertEqual(config.context_window.tail_chars, 8)
+        self.assertEqual(config.rag.include_paths, ["mini_agent", "README.md"])
+        self.assertEqual(config.rag.exclude_dirs, ["vendor"])
+        self.assertEqual(config.rag.max_file_bytes, 4096)
+        self.assertEqual(config.rag.chunk_size, 20)
+        self.assertEqual(config.rag.chunk_overlap, 5)
         self.assertEqual(config.tools.disabled, {"fetch_url", "browser_click"})
         self.assertEqual(config.permissions.deny, {"run_shell_command"})
         self.assertEqual(
@@ -2240,13 +2251,64 @@ class ProjectRAGTests(unittest.TestCase):
 
             result = rag.search("task runner", max_results=1)
 
-        self.assertIn("task_runner.py:L", result)
+        self.assertIn("path=task_runner.py lines=1-1", result)
+
+    def test_chunks_files_and_reports_line_ranges(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            lines = [f"filler {index}" for index in range(25)]
+            lines[4] = "needle first"
+            lines[16] = "needle second"
+            (root / "notes.md").write_text("\n".join(lines), encoding="utf-8")
+            rag = ProjectRAG(root, chunk_size=10, chunk_overlap=0)
+
+            results = rag.search_results("needle", max_results=5)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].path, "notes.md")
+        self.assertEqual(results[0].line_number, 1)
+        self.assertEqual(results[0].end_line_number, 10)
+        self.assertEqual(f"lines={results[0].line_number}-{results[0].end_line_number}", "lines=1-10")
+
+    def test_include_paths_and_exclude_dirs_filter_rag_sources(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "docs").mkdir()
+            (root / "src" / "app.py").write_text("needle src", encoding="utf-8")
+            (root / "docs" / "guide.md").write_text("needle docs", encoding="utf-8")
+            included = ProjectRAG(root, include_paths=["src"]).search("needle")
+            excluded = ProjectRAG(root, exclude_dirs=["src"]).search("needle")
+
+        self.assertIn("src/app.py", included)
+        self.assertNotIn("docs/guide.md", included)
+        self.assertIn("docs/guide.md", excluded)
+        self.assertNotIn("src/app.py", excluded)
+
+    def test_registry_uses_configured_rag_options(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "docs").mkdir()
+            (root / "src" / "app.py").write_text("needle src", encoding="utf-8")
+            (root / "docs" / "guide.md").write_text("needle docs", encoding="utf-8")
+            registry = build_default_registry(
+                workspace_root=root,
+                rag_include_paths=["src"],
+                rag_chunk_size=10,
+                rag_chunk_overlap=2,
+            )
+
+            result = registry.call("search_project_context", query="needle")
+
+        self.assertIn("src/app.py", result)
+        self.assertNotIn("docs/guide.md", result)
 
     def test_skips_sensitive_rag_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            for dirname in ("data", "logs", ".git"):
-                (root / dirname).mkdir()
+            for dirname in ("data", "logs", ".git", "evals/.tmp"):
+                (root / dirname).mkdir(parents=True)
                 (root / dirname / "secret.md").write_text("needle", encoding="utf-8")
             (root / "public.md").write_text("needle", encoding="utf-8")
             rag = ProjectRAG(root)

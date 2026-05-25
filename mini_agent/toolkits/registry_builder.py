@@ -35,6 +35,11 @@ def build_default_registry(
     disabled_tools: Optional[set[str]] = None,
     permission_overrides: Optional[dict[str, bool]] = None,
     tool_results_path: Optional[Path] = None,
+    rag_include_paths: Optional[list[str]] = None,
+    rag_exclude_dirs: Optional[list[str]] = None,
+    rag_max_file_bytes: int = 64 * 1024,
+    rag_chunk_size: int = 80,
+    rag_chunk_overlap: int = 20,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -44,7 +49,14 @@ def build_default_registry(
     diagnostics = Diagnostics(root)
     repair_loop = RepairLoop(diagnostics)
     symbol_index = PythonSymbolIndex(root)
-    project_rag = ProjectRAG(root)
+    project_rag = ProjectRAG(
+        root,
+        max_file_bytes=rag_max_file_bytes,
+        include_paths=rag_include_paths,
+        exclude_dirs=rag_exclude_dirs,
+        chunk_size=rag_chunk_size,
+        chunk_overlap=rag_chunk_overlap,
+    )
     web_tools = WebTools(fetcher=web_fetch)
     browser_tools = BrowserTools(root=root, backend=browser_backend)
     process_manager = ProcessManager(root, profiles=process_profiles)

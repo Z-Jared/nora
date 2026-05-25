@@ -1,12 +1,15 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 TEXT_EXTENSIONS = {".py", ".md", ".txt", ".json", ".toml", ".yaml", ".yml"}
 MAX_FILE_BYTES = 64 * 1024
+DEFAULT_CHUNK_SIZE = 80
+DEFAULT_CHUNK_OVERLAP = 20
 DENIED_FILE_NAMES = {".env", ".env.local", ".env.production"}
-DENIED_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", "data"}
+DENIED_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", "data", "logs", ".tmp"}
 
 
 @dataclass(frozen=True)
@@ -15,12 +18,25 @@ class SearchResult:
     score: int
     snippet: str
     line_number: int
+    end_line_number: int
 
 
 class ProjectRAG:
-    def __init__(self, root: Path, max_file_bytes: int = MAX_FILE_BYTES):
+    def __init__(
+        self,
+        root: Path,
+        max_file_bytes: int = MAX_FILE_BYTES,
+        include_paths: Optional[list[str]] = None,
+        exclude_dirs: Optional[list[str]] = None,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    ):
         self.root = root.resolve()
-        self.max_file_bytes = max_file_bytes
+        self.max_file_bytes = max(1024, min(max_file_bytes, 1024 * 1024))
+        self.include_paths = [path.strip().strip("/") for path in include_paths or [] if path.strip()]
+        self.exclude_dirs = set(DENIED_DIR_NAMES) | {item.strip() for item in exclude_dirs or [] if item.strip()}
+        self.chunk_size = max(10, min(chunk_size, 400))
+        self.chunk_overlap = max(0, min(chunk_overlap, self.chunk_size - 1))
 
     def search(self, query: str, max_results: int = 5) -> str:
         terms = _terms(query)
@@ -31,10 +47,7 @@ class ProjectRAG:
         if not results:
             return "没有找到相关项目上下文。"
 
-        return "\n\n".join(
-            f"[{index}] {result.path}:L{result.line_number} (score={result.score})\n{result.snippet}"
-            for index, result in enumerate(results, 1)
-        )
+        return "\n\n".join(_format_result(index, result) for index, result in enumerate(results, 1))
 
     def search_results(self, query: str, max_results: int = 5) -> list[SearchResult]:
         terms = _terms(query)
@@ -50,25 +63,48 @@ class ProjectRAG:
                 continue
 
             relative_path = path.relative_to(self.root).as_posix()
-            score = _score(text, relative_path, terms, phrase)
-            if score <= 0:
-                continue
-
-            snippet, line_number = _snippet(text, terms)
-            results.append(
-                SearchResult(
-                    path=relative_path,
-                    score=score,
-                    snippet=snippet,
-                    line_number=line_number,
+            for start_line, end_line, chunk in self._chunks(text):
+                score = _score(chunk, relative_path, terms, phrase)
+                if score <= 0:
+                    continue
+                results.append(
+                    SearchResult(
+                        path=relative_path,
+                        score=score,
+                        snippet=_trim_snippet(chunk),
+                        line_number=start_line,
+                        end_line_number=end_line,
+                    )
                 )
-            )
 
-        results.sort(key=lambda result: (-result.score, result.path))
+        results.sort(key=lambda result: (-result.score, result.path, result.line_number))
         return results[:max_results]
 
     def context_for_question(self, question: str, max_results: int = 5) -> str:
-        return f"问题: {question}\n\n相关项目上下文:\n{self.search(question, max_results)}"
+        return "\n".join(
+            [
+                f"问题: {question}",
+                "请只基于下面的来源片段回答；如果片段不足，请说明缺少依据。",
+                "",
+                "相关项目上下文:",
+                self.search(question, max_results),
+            ]
+        )
+
+    def _chunks(self, text: str):
+        lines = text.splitlines()
+        if not lines:
+            return
+        step = max(1, self.chunk_size - self.chunk_overlap)
+        start = 0
+        while start < len(lines):
+            end = min(len(lines), start + self.chunk_size)
+            chunk = "\n".join(lines[start:end]).strip()
+            if chunk:
+                yield start + 1, end, chunk
+            if end == len(lines):
+                break
+            start += step
 
     def _iter_text_files(self):
         for path in sorted(self.root.rglob("*")):
@@ -88,8 +124,12 @@ class ProjectRAG:
 
         if path.name in DENIED_FILE_NAMES:
             return False
-
-        return not any(part in DENIED_DIR_NAMES or part == "logs" for part in relative.parts)
+        if any(part in self.exclude_dirs for part in relative.parts):
+            return False
+        if self.include_paths:
+            relative_text = relative.as_posix()
+            return any(relative_text == prefix or relative_text.startswith(prefix + "/") for prefix in self.include_paths)
+        return True
 
     def _read_text(self, path: Path) -> str:
         try:
@@ -116,29 +156,15 @@ def _score(text: str, path: str, terms: list[str], phrase: str) -> int:
     return coverage_score + phrase_score + path_score + frequency_score
 
 
-def _snippet(text: str, terms: list[str], max_chars: int = 500) -> tuple[str, int]:
-    lines = text.splitlines()
-    if not lines:
-        return "", 1
+def _trim_snippet(text: str, max_chars: int = 700) -> str:
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n..."
 
-    best_index = 0
-    best_score = -1
-    for index, line in enumerate(lines):
-        lower_line = line.lower()
-        score = len({term for term in terms if term in lower_line}) * 10
-        score += sum(lower_line.count(term) for term in terms)
-        if score > best_score:
-            best_index = index
-            best_score = score
 
-    start_line = max(0, best_index - 2)
-    selected = []
-    current_chars = 0
-    for line in lines[start_line:]:
-        if selected and current_chars + len(line) + 1 > max_chars:
-            break
-        selected.append(line)
-        current_chars += len(line) + 1
-
-    snippet = "\n".join(selected).strip()
-    return re.sub(r"\n{3,}", "\n\n", snippet), start_line + 1
+def _format_result(index: int, result: SearchResult) -> str:
+    return (
+        f"[{index}] path={result.path} lines={result.line_number}-{result.end_line_number} "
+        f"score={result.score}\n{result.snippet}"
+    )

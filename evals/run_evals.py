@@ -60,6 +60,8 @@ def main() -> int:
         EvalCase("registry_cancels_unconfirmed_browser_click", eval_registry_cancels_unconfirmed_browser_click),
         EvalCase("rag_finds_project_context", eval_rag_finds_project_context),
         EvalCase("rag_ranks_relevant_context_first", eval_rag_ranks_relevant_context_first),
+        EvalCase("rag_reports_chunk_line_ranges", eval_rag_reports_chunk_line_ranges),
+        EvalCase("rag_respects_include_paths", eval_rag_respects_include_paths),
         EvalCase("rag_skips_sensitive_paths", eval_rag_skips_sensitive_paths),
         EvalCase("tool_logs_can_be_viewed", eval_tool_logs_can_be_viewed),
         EvalCase("git_status_readonly", eval_git_status_readonly),
@@ -367,6 +369,30 @@ def eval_rag_ranks_relevant_context_first():
         (root / "complete.md").write_text("tool architecture", encoding="utf-8")
         results = ProjectRAG(root).search_results("tool architecture", max_results=2)
         assert results[0].path == "complete.md", results
+
+
+def eval_rag_reports_chunk_line_ranges():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        lines = [f"filler {index}" for index in range(25)]
+        lines[4] = "needle first"
+        lines[16] = "needle second"
+        (root / "guide.md").write_text("\n".join(lines), encoding="utf-8")
+        result = ProjectRAG(root, chunk_size=10, chunk_overlap=0).search("needle", max_results=2)
+        assert "path=guide.md lines=1-10" in result, result
+        assert "score=" in result, result
+
+
+def eval_rag_respects_include_paths():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "src").mkdir()
+        (root / "docs").mkdir()
+        (root / "src" / "app.py").write_text("needle src", encoding="utf-8")
+        (root / "docs" / "guide.md").write_text("needle docs", encoding="utf-8")
+        result = ProjectRAG(root, include_paths=["src"]).search("needle")
+        assert "src/app.py" in result, result
+        assert "docs/guide.md" not in result, result
 
 
 def eval_rag_skips_sensitive_paths():

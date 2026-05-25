@@ -32,6 +32,15 @@ class ContextWindowConfig:
 
 
 @dataclass(frozen=True)
+class RAGConfig:
+    include_paths: list[str]
+    exclude_dirs: list[str]
+    max_file_bytes: int = 64 * 1024
+    chunk_size: int = 80
+    chunk_overlap: int = 20
+
+
+@dataclass(frozen=True)
 class ProcessesConfig:
     profiles: dict[str, list[str]]
 
@@ -52,6 +61,7 @@ class AgentConfig:
     llm: LLMConfig
     paths: PathsConfig
     context_window: ContextWindowConfig
+    rag: RAGConfig
     processes: ProcessesConfig
     tools: ToolsConfig
     permissions: PermissionsConfig
@@ -62,6 +72,7 @@ class AgentConfig:
             llm=LLMConfig(),
             paths=PathsConfig(),
             context_window=ContextWindowConfig(),
+            rag=RAGConfig(include_paths=[], exclude_dirs=[]),
             processes=ProcessesConfig(profiles=dict(DEFAULT_PROFILES)),
             tools=ToolsConfig(disabled=set()),
             permissions=PermissionsConfig(deny=set(), confirmation_overrides={}),
@@ -73,6 +84,7 @@ class AgentConfig:
         llm_data = _as_dict(data.get("llm"))
         paths_data = _as_dict(data.get("paths"))
         context_data = _as_dict(data.get("context_window"))
+        rag_data = _as_dict(data.get("rag"))
         process_data = _as_dict(data.get("processes"))
         profile_data = _as_dict(process_data.get("profiles"))
         tools_data = _as_dict(data.get("tools"))
@@ -99,6 +111,13 @@ class AgentConfig:
                 ),
                 head_chars=_int(context_data.get("head_chars"), defaults.context_window.head_chars),
                 tail_chars=_int(context_data.get("tail_chars"), defaults.context_window.tail_chars),
+            ),
+            rag=RAGConfig(
+                include_paths=_string_list(rag_data.get("include_paths")),
+                exclude_dirs=_string_list(rag_data.get("exclude_dirs")),
+                max_file_bytes=_int(rag_data.get("max_file_bytes"), defaults.rag.max_file_bytes),
+                chunk_size=_int(rag_data.get("chunk_size"), defaults.rag.chunk_size),
+                chunk_overlap=_int(rag_data.get("chunk_overlap"), defaults.rag.chunk_overlap),
             ),
             processes=ProcessesConfig(profiles=_profiles(profile_data, defaults.processes.profiles)),
             tools=ToolsConfig(disabled=_string_set(tools_data.get("disabled"))),
@@ -214,6 +233,12 @@ def _string_set(value) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {str(item).strip() for item in value if str(item).strip()}
+
+
+def _string_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _bool_map(value) -> dict[str, bool]:
