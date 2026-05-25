@@ -89,6 +89,10 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("data path:", result)
         self.assertIn("logs path:", result)
         self.assertIn("nora command:", result)
+        self.assertIn("suggestions:", result)
+        self.assertIn("进入 Git 项目目录", result)
+        self.assertIn("LLM_PROVIDER", result)
+        self.assertIn("data/ 缺失通常没关系", result)
 
     def test_symbol_commands_call_registry(self):
         registry = FakeCLIRegistry()

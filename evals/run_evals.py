@@ -189,6 +189,8 @@ def eval_cli_doctor_reports_runtime_status():
     assert "llm:" in result
     assert "tools: 1" in result
     assert "nora command:" in result
+    assert "suggestions:" in result
+    assert "LLM_PROVIDER" in result
 
 
 def eval_cli_multiline_input():

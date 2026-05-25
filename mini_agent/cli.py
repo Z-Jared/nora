@@ -229,23 +229,37 @@ class MiniAgentCLI:
             "Nora doctor",
             f"workspace: {self.root}",
         ]
+        suggestions = []
         git_status = GitTools(self.root).status()
         if "not a git repository" in git_status.lower() or git_status.startswith(("Git 命令失败", "Git 命令超时")):
             lines.append("git: unavailable")
+            suggestions.append("进入 Git 项目目录后再启动 Nora，或先运行 git init。")
         else:
             lines.append("git: available")
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             lines.append(f"llm: enabled ({self.settings.provider} / {self.settings.model})")
         else:
             lines.append("llm: disabled")
+            suggestions.append("如需模型能力，请检查 .env 中的 LLM_PROVIDER、LLM_API_KEY 和 LLM_MODEL。")
         try:
             lines.append(f"tools: {len(self.registry.to_openai_tools())}")
         except AttributeError:
             lines.append("tools: unknown")
-        lines.append(f"data path: {self.root / 'data'} ({'exists' if (self.root / 'data').exists() else 'missing'})")
-        lines.append(f"logs path: {self.root / 'logs'} ({'exists' if (self.root / 'logs').exists() else 'missing'})")
+        data_path = self.root / "data"
+        logs_path = self.root / "logs"
+        lines.append(f"data path: {data_path} ({'exists' if data_path.exists() else 'missing'})")
+        if not data_path.exists():
+            suggestions.append("data/ 缺失通常没关系，首次保存记忆、任务或工具结果时会生成。")
+        lines.append(f"logs path: {logs_path} ({'exists' if logs_path.exists() else 'missing'})")
+        if not logs_path.exists():
+            suggestions.append("logs/ 缺失通常没关系，首次记录工具调用日志时会生成。")
         nora_path = shutil.which("nora")
         lines.append(f"nora command: {nora_path if nora_path else 'not found on PATH'}")
+        if not nora_path:
+            suggestions.append('将 Python user scripts 加入 PATH，例如 export PATH="$HOME/Library/Python/3.9/bin:$PATH"。')
+        if suggestions:
+            lines.append("suggestions:")
+            lines.extend(f"- {suggestion}" for suggestion in suggestions)
         return "\n".join(lines)
 
     def _optional_int(self, args: list[str], default: int, name: str):
