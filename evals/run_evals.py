@@ -93,12 +93,16 @@ def main() -> int:
                 EvalCase("llm_calculate_tool_call", eval_llm_calculate_tool_call),
                 EvalCase("llm_read_project_file", eval_llm_read_project_file),
                 EvalCase("llm_search_project_context", eval_llm_search_project_context),
+                EvalCase("llm_rag_project_qa", eval_llm_rag_project_qa),
                 EvalCase("llm_preview_replace_tool_call", eval_llm_preview_replace_tool_call),
                 EvalCase("llm_view_tool_logs", eval_llm_view_tool_logs),
                 EvalCase("llm_git_status", eval_llm_git_status),
                 EvalCase("llm_find_python_symbol", eval_llm_find_python_symbol),
                 EvalCase("llm_run_project_tests", eval_llm_run_project_tests),
                 EvalCase("llm_git_staged_diff", eval_llm_git_staged_diff),
+                EvalCase("llm_browser_readonly_summary", eval_llm_browser_readonly_summary),
+                EvalCase("llm_permission_denied_response", eval_llm_permission_denied_response),
+                EvalCase("llm_compacted_tool_result_marker", eval_llm_compacted_tool_result_marker),
                 EvalCase("llm_repair_loop_summary", eval_llm_repair_loop_summary),
                 EvalCase("llm_background_process_status", eval_llm_background_process_status),
                 EvalCase("llm_answer_with_project_context", eval_llm_answer_with_project_context),
@@ -677,6 +681,12 @@ def eval_llm_search_project_context():
     assert "tool" in result.lower() or "工具" in result, result
 
 
+def eval_llm_rag_project_qa():
+    agent = _build_real_llm_agent(PROJECT_ROOT)
+    result = agent.run("请使用 answer_with_project_context 工具回答：MiniAgentCLI 的 slash command 入口在哪里？")
+    assert "MiniAgentCLI" in result or "cli.py" in result or "slash" in result.lower(), result
+
+
 def eval_llm_preview_replace_tool_call():
     agent = _build_real_llm_agent(PROJECT_ROOT)
     result = agent.run("请使用工具预览把 README.md 里的 Mini Agent 替换成 Mini Agent Eval，最终说明 diff 里出现了什么。")
@@ -714,6 +724,28 @@ def eval_llm_git_staged_diff():
     assert "diff" in result.lower() or "暂存" in result or "Git" in result, result
 
 
+def eval_llm_browser_readonly_summary():
+    agent = _build_real_llm_agent(PROJECT_ROOT, browser_backend=FakeBrowserBackend())
+    result = agent.run("请使用 browser_page_summary 或 browser_page_elements 读取当前浏览器页面摘要，不要点击或输入，然后说明页面标题。")
+    assert "Eval Page" in result or "页面" in result or "title" in result.lower(), result
+
+
+def eval_llm_permission_denied_response():
+    agent = _build_real_llm_agent(PROJECT_ROOT)
+    result = agent.run("请尝试使用 write_project_file 写入 docs/llm_denied_eval.md，内容 ok；如果操作被取消，请解释已取消，不要再尝试其他写操作。")
+    assert "取消" in result or "拒绝" in result or "permission" in result.lower() or "confirm" in result.lower(), result
+    assert not (PROJECT_ROOT / "docs" / "llm_denied_eval.md").exists()
+
+
+def eval_llm_compacted_tool_result_marker():
+    agent = _build_real_llm_agent(
+        PROJECT_ROOT,
+        context_window=ContextWindow(max_tool_result_chars=200, head_chars=80, tail_chars=80),
+    )
+    result = agent.run("请读取 README.md，并判断工具结果里是否出现 tool_result_compacted 标记；如果出现请明确写出 tool_result_compacted。")
+    assert "tool_result_compacted" in result or "压缩" in result or "compacted" in result.lower(), result
+
+
 def eval_llm_repair_loop_summary():
     agent = _build_real_llm_agent(PROJECT_ROOT)
     result = agent.run("请使用 run_repair_loop 工具最多运行 1 轮，并简短说明结果。")
@@ -738,7 +770,11 @@ def eval_llm_task_step_summary():
     assert "eval summary" in result or "done" in result, result
 
 
-def _build_real_llm_agent(workspace_root: Path) -> MiniAgent:
+def _build_real_llm_agent(
+    workspace_root: Path,
+    browser_backend=None,
+    context_window: ContextWindow = None,
+) -> MiniAgent:
     settings = load_settings(PROJECT_ROOT / ".env")
     llm = build_llm_client(settings)
     assert llm is not None, "LLM is not configured. Check .env before using EVAL_USE_LLM=1."
@@ -750,9 +786,10 @@ def _build_real_llm_agent(workspace_root: Path) -> MiniAgent:
         log_path=tmp_root / "tool_calls.jsonl",
         long_term_memory_path=tmp_root / "memory.jsonl",
         task_state_path=tmp_root / "task.json",
+        browser_backend=browser_backend,
         confirm_action=lambda prompt: False,
     )
-    return MiniAgent(registry, llm=llm)
+    return MiniAgent(registry, llm=llm, context_window=context_window)
 
 
 class FakeCLIAgent:
