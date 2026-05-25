@@ -5,7 +5,7 @@
 ## 当前能力
 
 - 本地工具：计算、当前时间、保存笔记、读取笔记、读取项目文件、列项目文件、生成任务计划、预览文件 diff、应用单文件或多文件 unified diff patch、写入项目文件、精确替换项目文件文本、安全终端命令执行
-- 浏览器操作：打开页面、读取标题和正文、点击、输入、截图；真实浏览器 backend 使用可选 Playwright
+- 浏览器操作：打开页面、读取标题和正文、等待元素、提取链接/按钮/输入框、生成页面摘要、点击、输入、截图；真实浏览器 backend 使用可选 Playwright
 - Toolkits 架构：工具实现拆在 `mini_agent/toolkits/`，`mini_agent/tools.py` 保留兼容导出
 - Provider 架构：模型接入位于 `mini_agent/providers/`
 - 模型接入：OpenAI-compatible、Anthropic Claude 原生 API、Google Gemini 原生 API
@@ -228,6 +228,9 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 查看后台进程输出 proc_1
 停止后台进程 proc_1
 用浏览器打开 https://example.com 并读取页面文本
+等待页面里的 #submit 出现
+提取当前页面的链接、按钮和输入框
+总结当前浏览器页面状态
 点击页面里的 button[type=submit]
 给 input[name=q] 输入 agent framework
 保存当前浏览器截图到 screenshots/page.png
@@ -268,7 +271,7 @@ python3 main.py
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
 轻量 RAG 只索引 `.py`、`.md`、`.txt`、`.json`、`.toml`、`.yaml`、`.yml` 等文本文件，并跳过 `.env`、`data/`、`.git/`、`logs/`；排序会综合考虑命中词覆盖、短语、路径和频次。
 联网工具只执行 GET 请求，不提交表单，不执行网页脚本，并限制返回文本长度。
-浏览器工具只允许打开 HTTP/HTTPS URL；点击和输入会走统一确认；截图只能保存到项目目录内的非敏感路径。
+浏览器工具只允许打开 HTTP/HTTPS URL；等待元素、读取页面摘要和提取链接/按钮/输入框是只读操作；点击和输入会走统一确认；截图只能保存到项目目录内的非敏感路径。
 如果要使用真实浏览器操作，需要安装可选依赖：
 
 ```bash

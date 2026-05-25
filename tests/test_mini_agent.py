@@ -2243,6 +2243,25 @@ class BrowserToolsTests(unittest.TestCase):
         self.assertEqual(backend.clicked, ["#submit"])
         self.assertEqual(backend.filled, [("#q", "hello")])
 
+    def test_wait_for_selector_and_page_elements(self):
+        backend = FakeBrowserBackend()
+        tools = BrowserTools(backend=backend)
+
+        waited = tools.wait_for_selector("#submit", timeout_seconds=3)
+        elements = tools.page_elements(max_items=10)
+        summary = tools.page_summary(max_text_chars=50, max_elements=10)
+
+        self.assertEqual(waited, "已找到元素: #submit")
+        self.assertEqual(backend.waited, [("#submit", 3000)])
+        self.assertIn("links:", elements)
+        self.assertIn("Example - https://example.com/docs", elements)
+        self.assertIn("buttons:", elements)
+        self.assertIn("#submit text=Submit", elements)
+        self.assertIn("inputs:", elements)
+        self.assertIn("#q type=text", elements)
+        self.assertIn("title: Demo Page", summary)
+        self.assertIn("Hello browser page", summary)
+
     def test_screenshot_writes_inside_workspace(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2269,6 +2288,9 @@ class BrowserToolsTests(unittest.TestCase):
         self.assertIn("browser_open_url", tool_names)
         self.assertIn("browser_page_text", tool_names)
         self.assertIn("browser_click", tool_names)
+        self.assertIn("browser_wait_for_selector", tool_names)
+        self.assertIn("browser_page_elements", tool_names)
+        self.assertIn("browser_page_summary", tool_names)
 
 
 class FakeBrowserBackend:
@@ -2276,6 +2298,7 @@ class FakeBrowserBackend:
         self.opened_url = ""
         self.clicked = []
         self.filled = []
+        self.waited = []
 
     def open_url(self, url: str) -> None:
         self.opened_url = url
@@ -2291,6 +2314,16 @@ class FakeBrowserBackend:
 
     def fill(self, selector: str, text: str) -> None:
         self.filled.append((selector, text))
+
+    def wait_for_selector(self, selector: str, timeout_ms: int) -> None:
+        self.waited.append((selector, timeout_ms))
+
+    def page_elements(self, max_items: int):
+        return {
+            "links": [{"text": "Example", "href": "https://example.com/docs"}],
+            "buttons": [{"text": "Submit", "selector": "#submit"}],
+            "inputs": [{"selector": "#q", "type": "text", "name": "q", "placeholder": "Search"}],
+        }
 
     def screenshot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

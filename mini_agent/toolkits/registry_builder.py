@@ -1018,6 +1018,60 @@ def build_default_registry(
         ),
     )
     registry.register(
+        "browser_wait_for_selector",
+        "等待当前浏览器页面出现指定 CSS selector。只读，有超时上限。",
+        browser_tools.wait_for_selector,
+        parameters={
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "要等待出现的 CSS selector，例如 #submit",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "最多等待多少秒，默认 5，最大 30",
+                },
+            },
+            "required": ["selector"],
+        },
+        permission=ToolPermission(category="browser", risk="read"),
+    )
+    registry.register(
+        "browser_page_elements",
+        "提取当前页面的链接、按钮和输入框摘要，便于选择下一步操作。",
+        browser_tools.page_elements,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_items": {
+                    "type": "integer",
+                    "description": "每类最多返回多少个元素，默认 30，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="browser", risk="read"),
+    )
+    registry.register(
+        "browser_page_summary",
+        "读取当前浏览器页面标题、正文摘要和可交互元素摘要。",
+        browser_tools.page_summary,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_text_chars": {
+                    "type": "integer",
+                    "description": "页面正文最多返回多少字符，默认 1000，最大 12000",
+                },
+                "max_elements": {
+                    "type": "integer",
+                    "description": "每类最多返回多少个元素，默认 20，最大 100",
+                },
+            },
+        },
+        permission=ToolPermission(category="browser", risk="read"),
+    )
+    registry.register(
         "browser_screenshot",
         "保存当前浏览器页面截图到项目目录内的非敏感路径。",
         browser_tools.screenshot,

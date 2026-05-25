@@ -55,6 +55,7 @@ def main() -> int:
         EvalCase("registry_cancels_unconfirmed_write", eval_registry_cancels_unconfirmed_write),
         EvalCase("registry_cancels_unconfirmed_shell", eval_registry_cancels_unconfirmed_shell),
         EvalCase("browser_tools_read_page", eval_browser_tools_read_page),
+        EvalCase("browser_tools_page_elements", eval_browser_tools_page_elements),
         EvalCase("registry_cancels_unconfirmed_browser_click", eval_registry_cancels_unconfirmed_browser_click),
         EvalCase("rag_finds_project_context", eval_rag_finds_project_context),
         EvalCase("rag_ranks_relevant_context_first", eval_rag_ranks_relevant_context_first),
@@ -318,6 +319,18 @@ def eval_browser_tools_read_page():
     assert registry.call("browser_open_url", url="https://example.com") == "已打开页面: https://example.com"
     assert registry.call("browser_page_title") == "页面标题: Eval Page"
     assert "Eval browser text" in registry.call("browser_page_text", max_chars=1000)
+
+
+def eval_browser_tools_page_elements():
+    backend = FakeBrowserBackend()
+    registry = build_default_registry(browser_backend=backend)
+    assert registry.call("browser_wait_for_selector", selector="#submit") == "已找到元素: #submit"
+    elements = registry.call("browser_page_elements", max_items=5)
+    summary = registry.call("browser_page_summary", max_text_chars=500, max_elements=5)
+    assert "Eval Docs - https://example.com/docs" in elements
+    assert "#submit text=Submit" in elements
+    assert "#q type=text" in elements
+    assert "title: Eval Page" in summary
 
 
 def eval_registry_cancels_unconfirmed_browser_click():
@@ -782,6 +795,7 @@ class FakeBrowserBackend:
     def __init__(self):
         self.opened_url = ""
         self.clicked = []
+        self.waited = []
 
     def open_url(self, url: str) -> None:
         self.opened_url = url
@@ -797,6 +811,16 @@ class FakeBrowserBackend:
 
     def fill(self, selector: str, text: str) -> None:
         pass
+
+    def wait_for_selector(self, selector: str, timeout_ms: int) -> None:
+        self.waited.append((selector, timeout_ms))
+
+    def page_elements(self, max_items: int):
+        return {
+            "links": [{"text": "Eval Docs", "href": "https://example.com/docs"}],
+            "buttons": [{"text": "Submit", "selector": "#submit"}],
+            "inputs": [{"selector": "#q", "type": "text", "name": "q", "placeholder": "Search"}],
+        }
 
     def screenshot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

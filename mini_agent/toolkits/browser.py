@@ -24,6 +24,12 @@ class BrowserBackend(Protocol):
     def fill(self, selector: str, text: str) -> None:
         ...
 
+    def wait_for_selector(self, selector: str, timeout_ms: int) -> None:
+        ...
+
+    def page_elements(self, max_items: int) -> dict:
+        ...
+
     def screenshot(self, path: Path) -> None:
         ...
 
@@ -87,6 +93,41 @@ class BrowserTools:
 
         return f"已输入文本: {selector}"
 
+    def wait_for_selector(self, selector: str, timeout_seconds: int = 5) -> str:
+        selector = selector.strip()
+        if not selector:
+            return "请提供 CSS selector。"
+
+        timeout_ms = max(1, min(timeout_seconds, 30)) * 1000
+        try:
+            self.backend.wait_for_selector(selector, timeout_ms)
+        except Exception as error:
+            return f"等待元素失败: {error}"
+
+        return f"已找到元素: {selector}"
+
+    def page_elements(self, max_items: int = 30) -> str:
+        max_items = max(1, min(max_items, 100))
+        try:
+            elements = self.backend.page_elements(max_items)
+        except Exception as error:
+            return f"读取页面元素失败: {error}"
+
+        return _format_elements(elements)
+
+    def page_summary(self, max_text_chars: int = 1000, max_elements: int = 20) -> str:
+        max_text_chars = max(200, min(max_text_chars, MAX_PAGE_TEXT_CHARS))
+        sections = []
+        title = self.page_title()
+        if title.startswith("页面标题: "):
+            sections.append("title: " + title.removeprefix("页面标题: "))
+        else:
+            sections.append(title)
+        text = self.page_text(max_chars=max_text_chars)
+        sections.append("text:\n" + text)
+        sections.append("elements:\n" + self.page_elements(max_items=max_elements))
+        return "\n\n".join(sections)
+
     def screenshot(self, path: str = "screenshots/browser.png") -> str:
         target = self._resolve_screenshot_path(path)
         if not target:
@@ -139,6 +180,42 @@ class PlaywrightBrowserBackend:
     def fill(self, selector: str, text: str) -> None:
         self._ensure_page().fill(selector, text, timeout=5000)
 
+    def wait_for_selector(self, selector: str, timeout_ms: int) -> None:
+        self._ensure_page().wait_for_selector(selector, timeout=timeout_ms)
+
+    def page_elements(self, max_items: int) -> dict:
+        page = self._ensure_page()
+        return page.evaluate(
+            """
+            (maxItems) => {
+              const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+              const selectorFor = (el) => {
+                if (el.id) return '#' + CSS.escape(el.id);
+                const name = el.getAttribute('name');
+                if (name) return el.tagName.toLowerCase() + '[name="' + name.replace(/"/g, '\\\\"') + '"]';
+                return el.tagName.toLowerCase();
+              };
+              return {
+                links: Array.from(document.querySelectorAll('a[href]')).slice(0, maxItems).map((el) => ({
+                  text: clean(el.innerText || el.textContent),
+                  href: el.href,
+                })),
+                buttons: Array.from(document.querySelectorAll('button, input[type=button], input[type=submit], [role=button]')).slice(0, maxItems).map((el) => ({
+                  text: clean(el.innerText || el.value || el.getAttribute('aria-label')),
+                  selector: selectorFor(el),
+                })),
+                inputs: Array.from(document.querySelectorAll('input, textarea, select')).slice(0, maxItems).map((el) => ({
+                  selector: selectorFor(el),
+                  type: el.getAttribute('type') || el.tagName.toLowerCase(),
+                  name: el.getAttribute('name') || '',
+                  placeholder: el.getAttribute('placeholder') || '',
+                })),
+              };
+            }
+            """,
+            max_items,
+        )
+
     def screenshot(self, path: Path) -> None:
         self._ensure_page().screenshot(path=str(path), full_page=True)
 
@@ -162,3 +239,31 @@ class PlaywrightBrowserBackend:
 def _is_allowed_url(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _format_elements(elements: dict) -> str:
+    lines = ["links:"]
+    for item in elements.get("links", []):
+        lines.append(f"- {_clean(item.get('text'))} - {_clean(item.get('href'))}")
+    lines.append("buttons:")
+    for item in elements.get("buttons", []):
+        text = _clean(item.get("text"))
+        selector = _clean(item.get("selector"))
+        lines.append(f"- {selector} text={text}")
+    lines.append("inputs:")
+    for item in elements.get("inputs", []):
+        selector = _clean(item.get("selector"))
+        input_type = _clean(item.get("type"))
+        name = _clean(item.get("name"))
+        placeholder = _clean(item.get("placeholder"))
+        details = f"{selector} type={input_type}"
+        if name:
+            details += f" name={name}"
+        if placeholder:
+            details += f" placeholder={placeholder}"
+        lines.append(f"- {details}")
+    return "\n".join(lines)
+
+
+def _clean(value) -> str:
+    return " ".join(str(value or "").split())
