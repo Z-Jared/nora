@@ -16,6 +16,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
+from mini_agent.llm import LLMResponse, ToolCall
 from mini_agent.memory import LongTermMemory
 from mini_agent.process_manager import ProcessManager
 from mini_agent.providers.anthropic import AnthropicClient
@@ -90,6 +91,10 @@ def main() -> int:
         EvalCase("task_update_step_records_summary", eval_task_update_step_records_summary),
         EvalCase("task_run_once_suggests_tool_type", eval_task_run_once_suggests_tool_type),
         EvalCase("task_blocked_requires_reason", eval_task_blocked_requires_reason),
+        EvalCase("autonomous_loop_calculates_and_stops", eval_autonomous_loop_calculates_and_stops),
+        EvalCase("autonomous_loop_respects_max_steps", eval_autonomous_loop_respects_max_steps),
+        EvalCase("autonomous_loop_cancels_unconfirmed_write", eval_autonomous_loop_cancels_unconfirmed_write),
+        EvalCase("cli_auto_command", eval_cli_auto_command),
         EvalCase("provider_factory_openai", eval_provider_factory_openai),
         EvalCase("provider_factory_anthropic", eval_provider_factory_anthropic),
         EvalCase("provider_factory_gemini", eval_provider_factory_gemini),
@@ -693,6 +698,75 @@ def eval_task_blocked_requires_reason():
         assert "阻塞原因" in result, result
 
 
+def eval_autonomous_loop_calculates_and_stops():
+    class FakeToolCallingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, tools=None):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(call_id="call_1", name="calculate", arguments={"expression": "2 + 3"})],
+                )
+            return LLMResponse(content="done: 5")
+
+    agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM())
+    result = agent.run_autonomous("计算 2 + 3", max_steps=3)
+    assert "受控自主执行已停止: done" in result, result
+    assert "tool:calculate" in result, result
+    assert "5" in result, result
+
+
+def eval_autonomous_loop_respects_max_steps():
+    class FakeToolCallingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, tools=None):
+            self.calls.append(messages)
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(call_id=f"call_{len(self.calls)}", name="calculate", arguments={"expression": "1 + 1"})],
+            )
+
+    llm = FakeToolCallingLLM()
+    result = MiniAgent(build_default_registry(), llm=llm).run_autonomous("持续计算", max_steps=2)
+    assert "max_steps_reached" in result, result
+    assert len(llm.calls) == 2
+
+
+def eval_autonomous_loop_cancels_unconfirmed_write():
+    class FakeToolCallingLLM:
+        def chat(self, messages, tools=None):
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        call_id="call_1",
+                        name="write_project_file",
+                        arguments={"path": "docs/auto.md", "content": "hello", "reason": "eval"},
+                    )
+                ],
+            )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        registry = build_default_registry(workspace_root=root, confirm_action=lambda prompt: False)
+        result = MiniAgent(registry, llm=FakeToolCallingLLM()).run_autonomous("写文件", max_steps=3)
+        assert "blocked" in result, result
+        assert "已取消操作" in result, result
+        assert not (root / "docs" / "auto.md").exists()
+
+
+def eval_cli_auto_command():
+    agent = FakeCLIAgent()
+    result = MiniAgentCLI(agent, FakeCLIRegistry()).handle_slash_command("/auto 3 inspect project")
+    assert agent.autonomous_calls == [("inspect project", 3)]
+    assert "Agent: auto reply: inspect project / 3" in result, result
+
+
 def eval_provider_factory_openai():
     settings = load_settings(
         environ={
@@ -873,10 +947,15 @@ def _build_real_llm_agent(
 class FakeCLIAgent:
     def __init__(self):
         self.inputs = []
+        self.autonomous_calls = []
 
     def run(self, text):
         self.inputs.append(text)
         return f"reply: {text}"
+
+    def run_autonomous(self, goal, max_steps=None):
+        self.autonomous_calls.append((goal, max_steps))
+        return f"auto reply: {goal} / {max_steps}"
 
 
 class FakeCLIRegistry:

@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from mini_agent.context_window import ContextWindow
@@ -13,8 +14,17 @@ class LLMClient(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class AutonomousStepRecord:
+    step: int
+    action: str
+    status: str
+    result: str
+
+
 class MiniAgent:
     max_tool_rounds = 4
+    max_autonomous_steps = 6
 
     def __init__(
         self,
@@ -54,6 +64,65 @@ class MiniAgent:
 
         return self._record_turn(text, self._help_message())
 
+    def run_autonomous(self, goal: str, max_steps: Optional[int] = None) -> str:
+        goal = goal.strip()
+        if not goal:
+            return "请提供自主执行目标。"
+        if not self.llm or not hasattr(self.llm, "chat"):
+            return "受控自主执行需要配置支持工具调用的模型。"
+
+        step_limit = self._autonomous_step_limit(max_steps)
+        messages = self.memory.messages() + [{"role": "user", "content": self._autonomous_instruction(goal)}]
+        tools = self.tools.to_openai_tools()
+        records = []
+        final_status = "max_steps_reached"
+
+        for step in range(1, step_limit + 1):
+            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            if not response.tool_calls:
+                final_status = self._autonomous_status_from_final(response.content)
+                records.append(
+                    AutonomousStepRecord(
+                        step=step,
+                        action="final_response",
+                        status=final_status,
+                        result=self._shorten_trace_result(response.content or self._help_message()),
+                    )
+                )
+                break
+
+            messages.append(response.to_assistant_message())
+            tool_call = response.tool_calls[0]
+            raw_result = self._call_tool(tool_call.name, tool_call.arguments)
+            result = self._compact_tool_result(tool_call.name, raw_result)
+            status = self._autonomous_status_from_result(raw_result)
+            if len(response.tool_calls) > 1:
+                result = result + "\n[自主模式每步只允许一个工具调用，其余 tool calls 已忽略。]"
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.call_id,
+                    "name": tool_call.name,
+                    "content": result,
+                }
+            )
+            records.append(
+                AutonomousStepRecord(
+                    step=step,
+                    action=f"tool:{tool_call.name}",
+                    status=status,
+                    result=self._shorten_trace_result(result),
+                )
+            )
+            if status == "blocked":
+                final_status = "blocked"
+                break
+        else:
+            final_status = "max_steps_reached"
+
+        answer = self._format_autonomous_report(goal, final_status, records)
+        return self._record_turn(f"/auto {goal}", answer)
+
     def _run_with_llm_tools(self, text: str) -> str:
         messages = self.memory.messages() + [{"role": "user", "content": text}]
         tools = self.tools.to_openai_tools()
@@ -77,6 +146,61 @@ class MiniAgent:
                 )
 
         raise LLMError("Tool call loop exceeded max rounds.")
+
+    def _autonomous_step_limit(self, max_steps: Optional[int]) -> int:
+        if max_steps is None:
+            return self.max_autonomous_steps
+        try:
+            requested = int(max_steps)
+        except (TypeError, ValueError):
+            requested = self.max_autonomous_steps
+        return max(1, min(requested, self.max_autonomous_steps))
+
+    def _autonomous_instruction(self, goal: str) -> str:
+        return "\n".join(
+            [
+                "受控自主执行请求。",
+                f"目标: {goal}",
+                "规则:",
+                "- 在有限步骤内推进目标；每步最多调用一个必要工具，或直接给出最终结论。",
+                "- 优先使用只读、预览和检查工具，再考虑写入、执行、Git、浏览器交互或进程工具。",
+                "- 高风险工具可能需要用户确认；如果被取消、拒绝或失败，请停止并说明阻塞原因。",
+                "- 不要尝试绕过权限确认，不要无限循环。",
+                "- 完成时给出 done 总结；无法继续时给出 blocked 原因。",
+            ]
+        )
+
+    def _autonomous_status_from_result(self, result: str) -> str:
+        if result == "已取消操作。" or "工具调用失败" in result or "拒绝" in result:
+            return "blocked"
+        return "continue"
+
+    def _autonomous_status_from_final(self, content: str) -> str:
+        content = content or ""
+        lowered = content.lower()
+        if "blocked" in lowered or "阻塞" in content or "无法继续" in content:
+            return "blocked"
+        return "done"
+
+    def _format_autonomous_report(self, goal: str, status: str, records: list[AutonomousStepRecord]) -> str:
+        lines = [f"受控自主执行已停止: {status}", f"目标: {goal}", "步骤:"]
+        if not records:
+            lines.append("- 未执行任何步骤。")
+            return "\n".join(lines)
+        for record in records:
+            lines.extend(
+                [
+                    f"{record.step}. action={record.action} status={record.status}",
+                    f"   result: {record.result}",
+                ]
+            )
+        return "\n".join(lines)
+
+    def _shorten_trace_result(self, text: str, limit: int = 500) -> str:
+        text = (text or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "\n..."
 
     def _record_turn(self, user_input: str, answer: str) -> str:
         self.memory.add_user(user_input)

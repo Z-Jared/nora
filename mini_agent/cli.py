@@ -142,6 +142,19 @@ class MiniAgentCLI:
             if isinstance(attempts, str):
                 return attempts
             return self.registry.call("run_repair_loop", max_attempts=attempts)
+        if command == "/auto":
+            if not args:
+                return "用法: /auto [n] <goal>"
+            max_steps = None
+            goal_parts = args
+            try:
+                max_steps = int(args[0])
+                goal_parts = args[1:]
+            except ValueError:
+                pass
+            if not goal_parts:
+                return "用法: /auto [n] <goal>"
+            return self._format_agent_response(self.agent.run_autonomous(" ".join(goal_parts), max_steps=max_steps))
         if command == "/task":
             return self.registry.call("list_task")
         if command == "/task-next":
@@ -231,6 +244,7 @@ class MiniAgentCLI:
                 "/outline <path> - 生成 Python 文件 outline",
                 "/test - 运行项目测试",
                 "/repair [n] - 运行受控修复测试循环",
+                "/auto [n] <goal> - 受控自主执行，最多 n 步，高风险工具仍需确认",
                 "/task - 查看当前任务",
                 "/task-next - 推进当前任务一步",
                 "/logs [n] - 查看工具日志",

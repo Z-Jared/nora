@@ -926,6 +926,143 @@ class MiniAgentTests(unittest.TestCase):
             ],
         )
 
+    def test_autonomous_loop_runs_tool_then_final_response(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": messages, "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="calculate", arguments={"expression": "2 + 3"})],
+                    )
+                return LLMResponse(content="done: 结果是 5")
+
+        agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM())
+
+        answer = agent.run_autonomous("计算 2 + 3", max_steps=3)
+
+        self.assertIn("目标: 计算 2 + 3", answer)
+        self.assertIn("受控自主执行已停止: done", answer)
+        self.assertIn("tool:calculate", answer)
+        self.assertIn("result: 5", answer)
+
+    def test_autonomous_loop_respects_max_steps(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append(messages)
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(call_id=f"call_{len(self.calls)}", name="calculate", arguments={"expression": "1 + 1"})],
+                )
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm)
+
+        answer = agent.run_autonomous("持续计算", max_steps=2)
+
+        self.assertIn("max_steps_reached", answer)
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(answer.count("tool:calculate"), 2)
+
+    def test_autonomous_loop_blocks_on_cancelled_write(self):
+        class FakeToolCallingLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            call_id="call_1",
+                            name="write_project_file",
+                            arguments={"path": "docs/auto.md", "content": "hello", "reason": "test"},
+                        )
+                    ],
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            registry = build_default_registry(workspace_root=root, confirm_action=lambda prompt: False)
+            agent = MiniAgent(registry, llm=FakeToolCallingLLM())
+
+            answer = agent.run_autonomous("写文件", max_steps=3)
+
+            self.assertIn("blocked", answer)
+            self.assertIn("已取消操作。", answer)
+            self.assertFalse((root / "docs" / "auto.md").exists())
+
+    def test_autonomous_loop_requires_chat_llm(self):
+        class FakeLLM:
+            def complete(self, user_input):
+                return "complete only"
+
+        self.assertIn("需要配置支持工具调用的模型", MiniAgent(build_default_registry()).run_autonomous("目标"))
+        self.assertIn("需要配置支持工具调用的模型", MiniAgent(build_default_registry(), llm=FakeLLM()).run_autonomous("目标"))
+
+    def test_autonomous_loop_executes_one_tool_call_per_step(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(call_id="call_1", name="first", arguments={}),
+                            ToolCall(call_id="call_2", name="second", arguments={}),
+                        ],
+                    )
+                return LLMResponse(content="done")
+
+        called = []
+        registry = ToolRegistry()
+        registry.register("first", "First", lambda: called.append("first") or "first result")
+        registry.register("second", "Second", lambda: called.append("second") or "second result")
+        agent = MiniAgent(registry, llm=FakeToolCallingLLM())
+
+        answer = agent.run_autonomous("只执行一个工具", max_steps=2)
+
+        self.assertEqual(called, ["first"])
+        self.assertIn("每步只允许一个工具调用", answer)
+        self.assertNotIn("second result", answer)
+
+    def test_autonomous_loop_compacts_tool_results(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="large_output", arguments={})],
+                    )
+                return LLMResponse(content="done")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            registry = ToolRegistry()
+            registry.register("large_output", "Large output", lambda: "A" * 30 + "MIDDLE" + "Z" * 30)
+            store = ToolResultStore(root / "tool_results.jsonl")
+            agent = MiniAgent(
+                registry,
+                llm=FakeToolCallingLLM(),
+                context_window=ContextWindow(max_tool_result_chars=30, head_chars=10, tail_chars=10),
+                tool_result_store=store,
+            )
+
+            answer = agent.run_autonomous("读取大结果", max_steps=2)
+
+        self.assertIn("tool_result_compacted", answer)
+        self.assertIn("result_id=tr_1", answer)
+
 
 class ContextWindowTests(unittest.TestCase):
     def test_keeps_small_tool_results_unchanged(self):
@@ -1201,6 +1338,23 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(registry.calls[-1], ("generate_audit_report", {"max_entries": 7}))
 
+    def test_auto_command_calls_agent_autonomous_loop(self):
+        agent = FakeCLIAgent()
+        cli = MiniAgentCLI(agent, FakeCLIRegistry())
+
+        result = cli.handle_slash_command("/auto 3 inspect project")
+
+        self.assertEqual(agent.autonomous_calls, [("inspect project", 3)])
+        self.assertIn("Agent: auto reply: inspect project / 3", result)
+
+    def test_auto_command_requires_goal(self):
+        agent = FakeCLIAgent()
+        cli = MiniAgentCLI(agent, FakeCLIRegistry())
+
+        self.assertIn("用法", cli.handle_slash_command("/auto"))
+        self.assertIn("用法", cli.handle_slash_command("/auto 3"))
+        self.assertEqual(agent.autonomous_calls, [])
+
     def test_symbol_commands_require_arguments(self):
         registry = FakeCLIRegistry()
         cli = MiniAgentCLI(FakeCLIAgent(), registry)
@@ -1241,10 +1395,15 @@ class MiniAgentCLITests(unittest.TestCase):
 class FakeCLIAgent:
     def __init__(self):
         self.inputs = []
+        self.autonomous_calls = []
 
     def run(self, text):
         self.inputs.append(text)
         return f"reply: {text}"
+
+    def run_autonomous(self, goal, max_steps=None):
+        self.autonomous_calls.append((goal, max_steps))
+        return f"auto reply: {goal} / {max_steps}"
 
 
 class FakeCLIRegistry:
