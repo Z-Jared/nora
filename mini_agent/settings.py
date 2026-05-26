@@ -35,7 +35,7 @@ def load_settings(
             base_url=get("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
             api_key=get("ANTHROPIC_API_KEY"),
             model=get("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
-            timeout_seconds=int(get("LLM_TIMEOUT_SECONDS", "60")),
+            timeout_seconds=_safe_int(get("LLM_TIMEOUT_SECONDS"), 60),
         )
 
     if provider == "gemini":
@@ -44,7 +44,7 @@ def load_settings(
             base_url=get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
             api_key=get("GEMINI_API_KEY"),
             model=get("GEMINI_MODEL", "gemini-2.5-pro"),
-            timeout_seconds=int(get("LLM_TIMEOUT_SECONDS", "60")),
+            timeout_seconds=_safe_int(get("LLM_TIMEOUT_SECONDS"), 60),
         )
 
     return LLMSettings(
@@ -52,7 +52,7 @@ def load_settings(
         base_url=get("LLM_BASE_URL", "https://api.openai.com/v1"),
         api_key=get("LLM_API_KEY") or get("OPENAI_API_KEY"),
         model=get("LLM_MODEL", "gpt-4.1-mini"),
-        timeout_seconds=int(get("LLM_TIMEOUT_SECONDS", "60")),
+        timeout_seconds=_safe_int(get("LLM_TIMEOUT_SECONDS"), 60),
     )
 
 
@@ -70,6 +70,13 @@ def _read_env_file(path: Path) -> dict[str, str]:
         values[key.strip()] = _strip_quotes(value.strip())
 
     return values
+
+
+def _safe_int(value: str, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _strip_quotes(value: str) -> str:

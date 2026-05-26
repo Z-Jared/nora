@@ -259,7 +259,9 @@ def _parse_yaml_subset(text: str) -> dict[str, Any]:
     stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
 
     for raw_line in text.splitlines():
-        line_without_comment = raw_line.split("#", 1)[0].rstrip()
+        line_without_comment = raw_line
+        if " #" in raw_line:
+            line_without_comment = raw_line.split(" #", 1)[0].rstrip()
         if not line_without_comment.strip():
             continue
         indent = len(line_without_comment) - len(line_without_comment.lstrip(" "))

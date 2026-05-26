@@ -45,6 +45,16 @@ class WebTools:
         return "\n".join(f"{title} - {link}" for title, link in results)
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_public_http_url(newurl, resolve_host=True):
+            raise ValueError(f"redirect to non-public URL blocked: {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_SafeRedirectHandler)
+
+
 def _fetch_url(url: str, timeout: int) -> str:
     if not is_public_http_url(url, resolve_host=True):
         raise ValueError("refusing private or local network URL")
@@ -54,7 +64,7 @@ def _fetch_url(url: str, timeout: int) -> str:
         headers={"User-Agent": "Nora/1.0"},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _opener.open(request, timeout=timeout) as response:
         content_type = response.headers.get("Content-Type", "")
         if "text/" not in content_type and "html" not in content_type and "json" not in content_type:
             raise ValueError(f"unsupported content type: {content_type}")

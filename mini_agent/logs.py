@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from mini_agent.memory import is_sensitive_text
+from mini_agent.tools_common import read_jsonl
 
 MAX_LOG_PREVIEW_CHARS = 500
 REDACTED = "[redacted]"
@@ -122,23 +125,13 @@ class JsonlToolLogger:
         return "\n".join(lines)
 
     def _records(self, tool: str = "", status: str = "") -> list[dict]:
-        if not self.path.exists():
-            return []
         tool = tool.strip()
         status = status.strip()
-        records = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if tool and record.get("tool") != tool:
-                continue
-            if status and record.get("status") != status:
-                continue
-            records.append(record)
+        records = read_jsonl(self.path)
+        if tool:
+            records = [r for r in records if r.get("tool") == tool]
+        if status:
+            records = [r for r in records if r.get("status") == status]
         return records
 
 

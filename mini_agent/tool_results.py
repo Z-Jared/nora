@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
 from mini_agent.memory import is_sensitive_text
+from mini_agent.tools_common import read_jsonl
 
 
 MAX_STORED_RESULT_CHARS = 200_000
@@ -20,7 +23,7 @@ class ToolResultStore:
             return ""
         result = result[:MAX_STORED_RESULT_CHARS]
         records = self._read_records()
-        result_id = f"tr_{len(records) + 1}"
+        result_id = f"tr_{_next_id(records, 'tr_')}"
         record = {
             "id": result_id,
             "tool": tool,
@@ -87,19 +90,20 @@ class ToolResultStore:
                 return record
         return None
 
-    def _read_records(self) -> List[dict]:
-        if not self.path.exists():
-            return []
-        records = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
+    def _read_records(self) -> list[dict]:
+        return read_jsonl(self.path)
+
+
+def _next_id(records: list[dict], prefix: str) -> int:
+    max_id = 0
+    for record in records:
+        raw = str(record.get("id", ""))
+        if raw.startswith(prefix):
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            records.append(record)
-        return records
+                max_id = max(max_id, int(raw[len(prefix):]))
+            except ValueError:
+                pass
+    return max_id + 1
 
 
 def _format_matches(matches: list[tuple[dict, int, str]]) -> str:

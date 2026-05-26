@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+
+from mini_agent.tools_common import read_jsonl
 
 
 SENSITIVE_MARKERS = (
@@ -65,7 +69,7 @@ class LongTermMemory:
             return "拒绝保存: 内容看起来包含敏感信息。"
 
         records = self._read_records()
-        memory_id = f"mem_{len(records) + 1}"
+        memory_id = f"mem_{_next_id(records, 'mem_')}"
         record = {
             "id": memory_id,
             "text": text,
@@ -120,25 +124,26 @@ class LongTermMemory:
 
         return f"已删除记忆: {memory_id}"
 
-    def _read_records(self) -> List[dict]:
-        if not self.path.exists():
-            return []
-
-        records = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return records
+    def _read_records(self) -> list[dict]:
+        return read_jsonl(self.path)
 
 
 def is_sensitive_text(text: str) -> bool:
     return any(marker in text for marker in SENSITIVE_MARKERS) or any(
         pattern.search(text) for pattern in SENSITIVE_PATTERNS
     )
+
+
+def _next_id(records: list[dict], prefix: str) -> int:
+    max_id = 0
+    for record in records:
+        raw = str(record.get("id", ""))
+        if raw.startswith(prefix):
+            try:
+                max_id = max(max_id, int(raw[len(prefix):]))
+            except ValueError:
+                pass
+    return max_id + 1
 
 
 def _parse_tags(tags: str) -> list[str]:

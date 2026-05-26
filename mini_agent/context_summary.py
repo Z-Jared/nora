@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from mini_agent.memory import is_sensitive_text
+from mini_agent.tools_common import read_jsonl
 
 
 class ContextSummaryStore:
@@ -19,7 +22,7 @@ class ContextSummaryStore:
             return "拒绝保存上下文摘要: 内容看起来包含敏感信息。"
 
         records = self._read_records()
-        summary_id = f"ctx_{len(records) + 1}"
+        summary_id = f"ctx_{_next_id(records, 'ctx_')}"
         record = {
             "id": summary_id,
             "topic": topic,
@@ -56,17 +59,19 @@ class ContextSummaryStore:
         return "\n".join(_format_record(record) for record in records)
 
     def _read_records(self) -> list[dict]:
-        if not self.path.exists():
-            return []
-        records = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
+        return read_jsonl(self.path)
+
+
+def _next_id(records: list[dict], prefix: str) -> int:
+    max_id = 0
+    for record in records:
+        raw = str(record.get("id", ""))
+        if raw.startswith(prefix):
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return records
+                max_id = max(max_id, int(raw[len(prefix):]))
+            except ValueError:
+                pass
+    return max_id + 1
 
 
 def _format_record(record: dict) -> str:

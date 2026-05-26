@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from mini_agent.tools_common import read_jsonl
+
 
 VALID_STEP_STATUSES = {"pending", "in_progress", "done", "blocked"}
 
@@ -166,7 +168,7 @@ class TaskManager:
         self.path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _append_history(self, task: dict) -> str:
-        history_id = f"task_{len(self._read_history()) + 1}"
+        history_id = f"task_{_next_history_id(self._read_history())}"
         record = dict(task)
         record["id"] = history_id
         self.history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,17 +177,7 @@ class TaskManager:
         return history_id
 
     def _read_history(self) -> list[dict]:
-        if not self.history_path.exists():
-            return []
-        records = []
-        for line in self.history_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return records
+        return read_jsonl(self.history_path)
 
     def _find_history(self, history_id: str) -> dict:
         for record in self._read_history():
@@ -211,6 +203,18 @@ class TaskManager:
         if task.get("summary"):
             lines.append(f"总结: {task['summary']}")
         return "\n".join(lines)
+
+
+def _next_history_id(records: list[dict]) -> int:
+    max_id = 0
+    for record in records:
+        raw = str(record.get("id", ""))
+        if raw.startswith("task_"):
+            try:
+                max_id = max(max_id, int(raw[5:]))
+            except ValueError:
+                pass
+    return max_id + 1
 
 
 def _suggest_tool_type(step_text: str) -> str:

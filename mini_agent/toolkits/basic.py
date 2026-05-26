@@ -17,9 +17,20 @@ _OPERATORS = {
 }
 
 
+MAX_RESULT_DIGITS = 1000
+
+
 def calculate(expression: str) -> str:
-    node = ast.parse(expression, mode="eval")
-    return str(_eval_math_node(node.body))
+    try:
+        node = ast.parse(expression, mode="eval")
+    except SyntaxError as error:
+        return f"表达式语法错误: {error}"
+
+    result = _eval_math_node(node.body)
+    result_str = str(result)
+    if len(result_str) > MAX_RESULT_DIGITS:
+        return f"结果过大（{len(result_str)} 位），已拒绝。请缩小运算范围。"
+    return result_str
 
 
 def _eval_math_node(node):

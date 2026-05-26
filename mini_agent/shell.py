@@ -71,6 +71,9 @@ class ShellRunner:
         )
 
     def _parse_allowed_command(self, command: str) -> Optional[list[str]]:
+        if any(ord(c) < 32 for c in command if c not in ("\t",)):
+            return None
+
         if any(operator in command for operator in SHELL_OPERATORS):
             return None
 

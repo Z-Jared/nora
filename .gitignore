@@ -8,3 +8,4 @@ __pycache__/
 evals/.tmp/
 *.egg-info/
 .venv
+.coverage
