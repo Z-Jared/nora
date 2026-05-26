@@ -11,6 +11,7 @@ from mini_agent.controller import MiniAgent
 from mini_agent.metrics import RequestMetrics
 from mini_agent.rate_limit import TokenBucketRateLimiter
 from mini_agent.session import SessionStore
+from mini_agent.websocket_handler import WebSocketConnection
 
 STREAM_CHUNK_SIZE = 20
 
@@ -34,6 +35,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         start = time.monotonic()
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            self._handle_websocket()
+            return
 
         if path == "/health":
             self._handle_health()
@@ -79,6 +84,113 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(404, {"error": "not found"})
 
         self.metrics.record(path, self._last_status, time.monotonic() - start)
+
+    def _handle_websocket(self) -> None:
+        ws = WebSocketConnection.accept_upgrade(self)
+        if not ws:
+            self._json_response(400, {"error": "WebSocket upgrade failed"})
+            return
+
+        # Check auth via query param or first message
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        token_param = qs.get("token", [None])[0]
+        if self.api_token and token_param != self.api_token:
+            # Will check auth on first message instead
+            auth_pending = True
+        else:
+            auth_pending = False
+
+        try:
+            self._ws_message_loop(ws, auth_pending)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            ws.close()
+
+    def _ws_message_loop(self, ws: WebSocketConnection, auth_pending: bool) -> None:
+        while not ws.closed:
+            message = ws.read_frame()
+            if message is None:
+                break
+
+            try:
+                body = json.loads(message)
+            except json.JSONDecodeError:
+                ws.write_frame(json.dumps({"error": "invalid JSON"}))
+                continue
+
+            # Auth check on first message
+            if auth_pending:
+                token = body.get("token", "")
+                if token != self.api_token:
+                    ws.write_frame(json.dumps({"error": "unauthorized"}))
+                    break
+                auth_pending = False
+                ws.write_frame(json.dumps({"type": "auth_ok"}))
+                continue
+
+            msg_type = body.get("type", "chat")
+
+            if msg_type == "chat":
+                self._ws_handle_chat(ws, body)
+            elif msg_type == "ping":
+                ws.write_frame(json.dumps({"type": "pong"}))
+            elif msg_type == "session_save":
+                self._ws_handle_session_save(ws, body)
+            elif msg_type == "session_load":
+                self._ws_handle_session_load(ws, body)
+            else:
+                ws.write_frame(json.dumps({"error": f"unknown type: {msg_type}"}))
+
+    def _ws_handle_chat(self, ws: WebSocketConnection, body: dict) -> None:
+        message = body.get("message", "").strip()
+        if not message:
+            ws.write_frame(json.dumps({"error": "message is required"}))
+            return
+
+        ws.write_frame(json.dumps({"type": "typing"}))
+
+        try:
+            llm = getattr(self.agent, "llm", None)
+            if llm and hasattr(llm, "stream_chat"):
+                messages = self.agent._messages_for_user_input(message)
+                tools = self.agent.tools.to_openai_tools()
+                for chunk in llm.stream_chat(messages, tools=tools):
+                    ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
+            else:
+                response = self.agent.run(message)
+                for i in range(0, len(response), STREAM_CHUNK_SIZE):
+                    chunk = response[i:i + STREAM_CHUNK_SIZE]
+                    ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
+
+            report = getattr(self.agent, "last_run_report", None)
+            meta: dict[str, Any] = {}
+            if report and hasattr(report, "status"):
+                meta["status"] = report.status
+                meta["tool_calls"] = len(report.tool_calls)
+            ws.write_frame(json.dumps({"type": "done", **meta}))
+        except Exception as error:
+            ws.write_frame(json.dumps({"type": "error", "error": str(error)[:500]}))
+
+    def _ws_handle_session_save(self, ws: WebSocketConnection, body: dict) -> None:
+        if not self.session_store:
+            ws.write_frame(json.dumps({"error": "session store not configured"}))
+            return
+        name = body.get("name", "")
+        result = self.session_store.save(self.agent.memory, name=name)
+        ws.write_frame(json.dumps({"type": "session_saved", "result": result}))
+
+    def _ws_handle_session_load(self, ws: WebSocketConnection, body: dict) -> None:
+        if not self.session_store:
+            ws.write_frame(json.dumps({"error": "session store not configured"}))
+            return
+        name = body.get("name", "").strip()
+        if not name:
+            ws.write_frame(json.dumps({"error": "name is required"}))
+            return
+        result = self.session_store.load(name, self.agent.memory)
+        ws.write_frame(json.dumps({"type": "session_loaded", "result": result}))
 
     def _handle_chat(self, body: dict) -> None:
         message = body.get("message", "").strip()
@@ -233,7 +345,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     def _handle_docs(self) -> None:
         spec = {
             "openapi": "3.0.0",
-            "info": {"title": "Nora API", "version": "0.1.0", "description": "Nora local AI assistant HTTP API"},
+            "info": {"title": "Nora API", "version": "0.2.0", "description": "Nora local AI assistant HTTP API"},
             "paths": {
                 "/health": {"get": {"summary": "Health check with metrics", "responses": {"200": {"description": "OK"}}}},
                 "/chat": {"post": {"summary": "Send a message", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "Response"}}}},
@@ -242,6 +354,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/session/save": {"post": {"summary": "Save current session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}, "responses": {"200": {"description": "Saved"}}}},
                 "/session/load": {"post": {"summary": "Load a session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}}}, "responses": {"200": {"description": "Loaded"}}}},
                 "/session/list": {"get": {"summary": "List saved sessions", "responses": {"200": {"description": "Session list"}}}},
+                "/ws": {"get": {"summary": "WebSocket endpoint for bidirectional real-time chat", "description": "Upgrade to WebSocket. Send JSON messages with type=chat, ping, session_save, session_load."}},
                 "/docs": {"get": {"summary": "This endpoint", "responses": {"200": {"description": "OpenAPI spec"}}}},
             },
         }

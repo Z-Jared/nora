@@ -22,11 +22,11 @@ SENSITIVE_ARGUMENT_KEYS = {
 
 
 class JsonlToolLogger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path = None, db=None):
         self.path = path
+        self.db = db
 
     def record(self, tool: str, arguments: dict, status: str, result: str = "") -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tool": tool,
@@ -34,6 +34,26 @@ class JsonlToolLogger:
             "status": status,
             "result_preview": _redact_text(result)[:MAX_LOG_PREVIEW_CHARS],
         }
+        if self.db:
+            self._record_db(entry)
+        else:
+            self._record_jsonl(entry)
+
+    def _record_db(self, entry: dict) -> None:
+        self.db.conn.execute(
+            "INSERT INTO tool_logs (timestamp, tool, arguments_json, status, result_preview) VALUES (?, ?, ?, ?, ?)",
+            (
+                entry["timestamp"],
+                entry["tool"],
+                json.dumps(entry["arguments"], ensure_ascii=False) if isinstance(entry["arguments"], dict) else str(entry["arguments"]),
+                entry["status"],
+                entry["result_preview"],
+            ),
+        )
+        self.db.conn.commit()
+
+    def _record_jsonl(self, entry: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -44,10 +64,41 @@ class JsonlToolLogger:
         status: str = "",
         include_arguments: bool = False,
     ) -> str:
+        if self.db:
+            return self._list_recent_db(max_entries, tool, status, include_arguments)
+        return self._list_recent_jsonl(max_entries, tool, status, include_arguments)
+
+    def _list_recent_db(self, max_entries: int, tool: str, status: str, include_arguments: bool) -> str:
+        tool = tool.strip()
+        status = status.strip()
+        conditions = []
+        params = []
+        if tool:
+            conditions.append("tool = ?")
+            params.append(tool)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        max_entries = max(1, min(max_entries, 100))
+        rows = self.db.conn.execute(
+            f"SELECT timestamp, tool, status, result_preview, arguments_json FROM tool_logs {where} ORDER BY id DESC LIMIT ?",
+            params + [max_entries],
+        ).fetchall()
+        if not rows:
+            return "没有工具调用日志。" if not tool and not status else "没有匹配的工具调用日志。"
+        lines = []
+        for row in rows:
+            line = " | ".join([str(row[0]), str(row[1]), str(row[2]), str(row[3])])
+            if include_arguments:
+                line = f"{line} | args={str(row[4])[:MAX_LOG_PREVIEW_CHARS]}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _list_recent_jsonl(self, max_entries: int, tool: str, status: str, include_arguments: bool) -> str:
         records = self._records(tool=tool, status=status)
         if not records:
-            return "没有工具调用日志。" if not self.path.exists() else "没有匹配的工具调用日志。"
-
+            return "没有工具调用日志。" if not tool and not status else "没有匹配的工具调用日志。"
         max_entries = max(1, min(max_entries, 100))
         lines = []
         for record in records[-max_entries:]:
@@ -66,12 +117,31 @@ class JsonlToolLogger:
         return "\n".join(lines)
 
     def generate_audit_report(self, max_entries: int = 50) -> str:
+        if self.db:
+            return self._audit_report_db(max_entries)
+        return self._audit_report_jsonl(max_entries)
+
+    def _audit_report_db(self, max_entries: int) -> str:
+        max_entries = max(1, min(max_entries, 200))
+        total = self.db.conn.execute("SELECT COUNT(*) FROM tool_logs").fetchone()[0]
+        if total == 0:
+            return "没有工具调用日志。"
+        rows = self.db.conn.execute(
+            "SELECT timestamp, tool, status, result_preview, arguments_json FROM tool_logs ORDER BY id DESC LIMIT ?",
+            (max_entries,),
+        ).fetchall()
+        return self._build_audit_report(rows, max_entries)
+
+    def _audit_report_jsonl(self, max_entries: int) -> str:
         records = self._records()
         if not records:
             return "没有工具调用日志。"
-
         max_entries = max(1, min(max_entries, 200))
         selected = records[-max_entries:]
+        rows = [(r.get("timestamp", ""), r.get("tool", ""), r.get("status", ""), r.get("result_preview", ""), json.dumps(r.get("arguments", {}), ensure_ascii=False)) for r in selected]
+        return self._build_audit_report(rows, max_entries)
+
+    def _build_audit_report(self, rows: list, max_entries: int) -> str:
         status_counts = {"ok": 0, "error": 0, "cancelled": 0}
         tool_counts = {}
         category_counts = {"write": 0, "terminal": 0, "git": 0, "browser_interact": 0, "process": 0}
@@ -79,25 +149,26 @@ class JsonlToolLogger:
         rejected_hits = []
         last_high_risk = None
 
-        for record in selected:
-            tool = str(record.get("tool", ""))
-            status = str(record.get("status", ""))
+        for row in rows:
+            tool = str(row[1])
+            status = str(row[2])
+            result_preview = str(row[3])
             status_counts[status] = status_counts.get(status, 0) + 1
             tool_counts[tool] = tool_counts.get(tool, 0) + 1
             categories = _audit_categories(tool)
             for category in categories:
                 category_counts[category] = category_counts.get(category, 0) + 1
             if categories:
-                last_high_risk = record
-            record_text = json.dumps(record, ensure_ascii=False)
+                last_high_risk = row
+            record_text = f"{row[0]} {row[1]} {row[2]} {row[3]} {row[4]}"
             if _mentions_sensitive_path(record_text):
                 sensitive_hits.append(tool)
-            if status == "cancelled" or "拒绝" in str(record.get("result_preview", "")):
+            if status == "cancelled" or "拒绝" in result_preview:
                 rejected_hits.append(tool)
 
         tool_lines = [f"- {tool}: {count}" for tool, count in sorted(tool_counts.items())]
         lines = [
-            f"审计范围: 最近 {len(selected)} 条工具调用",
+            f"审计范围: 最近 {len(rows)} 条工具调用",
             "",
             "## 工具调用",
             *(tool_lines or ["- 无"]),
@@ -157,15 +228,15 @@ def _format_unique(items: list[str]) -> str:
     return ", ".join(sorted(set(items)))
 
 
-def _format_high_risk(record: Optional[dict]) -> str:
+def _format_high_risk(record) -> str:
     if not record:
         return "无"
     return " | ".join(
         [
-            str(record.get("timestamp", "")),
-            str(record.get("tool", "")),
-            str(record.get("status", "")),
-            str(record.get("result_preview", ""))[:200],
+            str(record[0] if isinstance(record, (list, tuple)) else record.get("timestamp", ""))[:200],
+            str(record[1] if isinstance(record, (list, tuple)) else record.get("tool", "")),
+            str(record[2] if isinstance(record, (list, tuple)) else record.get("status", "")),
+            str(record[3] if isinstance(record, (list, tuple)) else record.get("result_preview", ""))[:200],
         ]
     )
 

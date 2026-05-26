@@ -1,7 +1,9 @@
 from pathlib import Path
 from typing import Callable, Optional
 
+from mini_agent.code_quality import CodeQualityTools
 from mini_agent.context_summary import ContextSummaryStore
+from mini_agent.database import NoraDB
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
 from mini_agent.logs import JsonlToolLogger
@@ -45,6 +47,7 @@ def build_default_registry(
     rag_max_file_bytes: int = 64 * 1024,
     rag_chunk_size: int = 80,
     rag_chunk_overlap: int = 20,
+    db: Optional[NoraDB] = None,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -65,14 +68,16 @@ def build_default_registry(
     web_tools = WebTools(fetcher=web_fetch)
     browser_tools = BrowserTools(root=root, backend=browser_backend)
     process_manager = ProcessManager(root, profiles=process_profiles)
-    long_term_memory = LongTermMemory(long_term_memory_path or Path("data/long_term_memory.jsonl"))
+    code_quality = CodeQualityTools(root)
+    long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
     task_manager = TaskManager(
-        task_state_path or Path("data/current_task.json"),
-        task_history_path or Path("data/task_history.jsonl"),
+        path=task_state_path or Path("data/current_task.json"),
+        history_path=task_history_path or Path("data/task_history.jsonl"),
+        db=db,
     )
-    context_summaries = ContextSummaryStore(context_summary_path or Path("data/context_summaries.jsonl"))
-    tool_results = ToolResultStore(tool_results_path or Path("data/tool_results.jsonl"))
-    logger = JsonlToolLogger(log_path or Path("logs/tool_calls.jsonl"))
+    context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
+    tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)
+    logger = JsonlToolLogger(path=log_path or Path("logs/tool_calls.jsonl"), db=db)
     registry = ToolRegistry(
         logger=logger,
         confirm_action=confirm_action,
@@ -90,6 +95,7 @@ def build_default_registry(
         symbol_index,
         shell_runner,
         process_manager,
+        code_quality=code_quality,
     )
     register_external_tools(registry, project_rag, web_tools, browser_tools)
     register_state_tools(

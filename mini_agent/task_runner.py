@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from mini_agent.tools_common import read_jsonl
 
@@ -11,9 +12,10 @@ VALID_STEP_STATUSES = {"pending", "in_progress", "done", "blocked"}
 
 
 class TaskManager:
-    def __init__(self, path: Path, history_path: Path = Path("data/task_history.jsonl")):
+    def __init__(self, path: Path = None, history_path: Path = None, db=None):
         self.path = path
-        self.history_path = history_path
+        self.history_path = history_path or Path("data/task_history.jsonl")
+        self.db = db
 
     def start(self, goal: str, steps: str) -> str:
         goal = goal.strip()
@@ -67,7 +69,6 @@ class TaskManager:
         task = self._read()
         if not task:
             return "暂无任务。"
-
         return self._format(task)
 
     def finish(self, summary: str) -> str:
@@ -94,6 +95,34 @@ class TaskManager:
         if not terms:
             return "请提供搜索关键词。"
         max_results = max(1, min(max_results, 50))
+        if self.db:
+            return self._search_history_db(terms, max_results)
+        return self._search_history_jsonl(terms, max_results)
+
+    def _search_history_db(self, terms: list[str], max_results: int) -> str:
+        conditions = " OR ".join(["goal LIKE ? OR summary LIKE ? OR steps_json LIKE ?"] * len(terms))
+        params = []
+        for term in terms:
+            params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+        rows = self.db.conn.execute(
+            f"SELECT id, goal, status, created_at, finished_at, summary, steps_json FROM task_history WHERE {conditions} ORDER BY created_at DESC",
+            params,
+        ).fetchall()
+        if not rows:
+            return "没有找到匹配的任务历史。"
+        matches = []
+        for row in rows:
+            record = _row_to_history_record(row)
+            haystack = json.dumps(record, ensure_ascii=False).lower()
+            score = sum(haystack.count(term) for term in terms)
+            if score > 0:
+                matches.append((score, record))
+        if not matches:
+            return "没有找到匹配的任务历史。"
+        matches.sort(key=lambda item: (-item[0], item[1].get("id", "")))
+        return "\n".join(_format_history_record(record) for _, record in matches[:max_results])
+
+    def _search_history_jsonl(self, terms: list[str], max_results: int) -> str:
         matches = []
         for record in self._read_history():
             haystack = json.dumps(record, ensure_ascii=False).lower()
@@ -155,19 +184,91 @@ class TaskManager:
         return "没有待执行步骤。可以调用 finish_task 完成任务。"
 
     def _read(self) -> dict:
-        if not self.path.exists():
-            return {}
+        if self.db:
+            return self._read_db()
+        return self._read_json()
 
+    def _read_db(self) -> dict:
+        row = self.db.conn.execute(
+            "SELECT goal, status, created_at, finished_at, summary, steps_json, restored_from, restored_at FROM current_task WHERE id = 1"
+        ).fetchone()
+        if not row or not row[0]:
+            return {}
+        steps = json.loads(row[5]) if row[5] else []
+        return {
+            "goal": row[0],
+            "status": row[1],
+            "created_at": row[2],
+            "finished_at": row[3],
+            "summary": row[4] or "",
+            "steps": steps,
+            "restored_from": row[6],
+            "restored_at": row[7],
+        }
+
+    def _read_json(self) -> dict:
+        if not self.path or not self.path.exists():
+            return {}
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
 
     def _write(self, task: dict) -> None:
+        if self.db:
+            self._write_db(task)
+        else:
+            self._write_json(task)
+
+    def _write_db(self, task: dict) -> None:
+        self.db.conn.execute(
+            "INSERT OR REPLACE INTO current_task (id, goal, status, created_at, finished_at, summary, steps_json, restored_from, restored_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                task.get("goal", ""),
+                task.get("status", ""),
+                task.get("created_at", ""),
+                task.get("finished_at"),
+                task.get("summary", ""),
+                json.dumps(task.get("steps", []), ensure_ascii=False),
+                task.get("restored_from"),
+                task.get("restored_at"),
+            ),
+        )
+        self.db.conn.commit()
+
+    def _write_json(self, task: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _append_history(self, task: dict) -> str:
+        if self.db:
+            return self._append_history_db(task)
+        return self._append_history_jsonl(task)
+
+    def _append_history_db(self, task: dict) -> str:
+        row = self.db.conn.execute(
+            "SELECT MAX(CAST(SUBSTR(id, 6) AS INTEGER)) FROM task_history WHERE id LIKE 'task_%'"
+        ).fetchone()
+        next_num = (row[0] or 0) + 1
+        history_id = f"task_{next_num}"
+        self.db.conn.execute(
+            "INSERT INTO task_history (id, goal, status, created_at, finished_at, summary, steps_json, restored_from, restored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                history_id,
+                task.get("goal", ""),
+                task.get("status", ""),
+                task.get("created_at", ""),
+                task.get("finished_at"),
+                task.get("summary", ""),
+                json.dumps(task.get("steps", []), ensure_ascii=False),
+                task.get("restored_from"),
+                task.get("restored_at"),
+            ),
+        )
+        self.db.conn.commit()
+        return history_id
+
+    def _append_history_jsonl(self, task: dict) -> str:
         history_id = f"task_{_next_history_id(self._read_history())}"
         record = dict(task)
         record["id"] = history_id
@@ -177,9 +278,23 @@ class TaskManager:
         return history_id
 
     def _read_history(self) -> list[dict]:
+        if self.db:
+            return self._read_history_db()
         return read_jsonl(self.history_path)
 
+    def _read_history_db(self) -> list[dict]:
+        rows = self.db.conn.execute(
+            "SELECT id, goal, status, created_at, finished_at, summary, steps_json FROM task_history ORDER BY created_at"
+        ).fetchall()
+        return [_row_to_history_record(row) for row in rows]
+
     def _find_history(self, history_id: str) -> dict:
+        if self.db:
+            row = self.db.conn.execute(
+                "SELECT id, goal, status, created_at, finished_at, summary, steps_json FROM task_history WHERE id = ?",
+                (history_id,),
+            ).fetchone()
+            return _row_to_history_record(row) if row else {}
         for record in self._read_history():
             if record.get("id") == history_id:
                 return record
@@ -203,6 +318,19 @@ class TaskManager:
         if task.get("summary"):
             lines.append(f"总结: {task['summary']}")
         return "\n".join(lines)
+
+
+def _row_to_history_record(row) -> dict:
+    steps = json.loads(row[6]) if row[6] else []
+    return {
+        "id": row[0],
+        "goal": row[1],
+        "status": row[2],
+        "created_at": row[3],
+        "finished_at": row[4],
+        "summary": row[5] or "",
+        "steps": steps,
+    }
 
 
 def _next_history_id(records: list[dict]) -> int:

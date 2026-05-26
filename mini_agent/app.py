@@ -6,7 +6,9 @@ from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_system import ContextSystem
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
+from mini_agent.database import NoraDB
 from mini_agent.memory import LongTermMemory
+from mini_agent.migration import migrate_jsonl_to_sqlite
 from mini_agent.providers.factory import build_llm_client
 from mini_agent.rag import ProjectRAG
 from mini_agent.plugins import load_plugins
@@ -21,6 +23,16 @@ def build_agent(root: Path = None):
     config = load_agent_config(root / "agent.yaml")
     settings = config.apply_to_llm_settings(load_settings())
     llm = build_llm_client(settings)
+
+    # Create database and run migration
+    db_path = config.resolve_path(root, config.paths.database)
+    db = NoraDB(db_path)
+    data_dir = root / "data"
+    logs_dir = root / "logs"
+    migrated = migrate_jsonl_to_sqlite(db, data_dir, logs_dir)
+    if migrated:
+        print(f"Migrated to SQLite: {', '.join(migrated)}")
+
     registry = build_default_registry(
         workspace_root=root,
         notes_path=config.resolve_path(root, config.paths.notes),
@@ -37,11 +49,12 @@ def build_agent(root: Path = None):
         rag_max_file_bytes=config.rag.max_file_bytes,
         rag_chunk_size=config.rag.chunk_size,
         rag_chunk_overlap=config.rag.chunk_overlap,
+        db=db,
     )
     plugin_names = load_plugins(registry, root / "plugins")
     if plugin_names:
         print(f"Loaded plugins: {', '.join(plugin_names)}")
-    tool_result_store = ToolResultStore(root / "data" / "tool_results.jsonl")
+    tool_result_store = ToolResultStore(db=db)
     context_window = ContextWindow(
         max_tool_result_chars=config.context_window.max_tool_result_chars,
         head_chars=config.context_window.head_chars,
@@ -56,8 +69,8 @@ def build_agent(root: Path = None):
             chunk_size=config.rag.chunk_size,
             chunk_overlap=config.rag.chunk_overlap,
         ),
-        long_term_memory=LongTermMemory(config.resolve_path(root, config.paths.long_term_memory)),
-        context_summaries=ContextSummaryStore(config.resolve_path(root, config.paths.context_summaries)),
+        long_term_memory=LongTermMemory(db=db),
+        context_summaries=ContextSummaryStore(db=db),
         context_window=context_window,
     )
     agent = MiniAgent(
@@ -70,7 +83,7 @@ def build_agent(root: Path = None):
         max_tool_calls_per_turn=config.budgets.max_tool_calls_per_turn,
         system_prompt=config.system_prompt,
     )
-    session_store = SessionStore(root / "data" / "sessions")
+    session_store = SessionStore(db=db)
     return agent, registry, settings, session_store, root
 
 
@@ -95,7 +108,7 @@ def serve(host: str = "", port: int = 0, api_token: str = "") -> None:
         print("Auth: Bearer token required")
     else:
         print("Auth: disabled (set NORA_API_TOKEN to enable)")
-    print("Endpoints: /health /chat /tools /session/save /session/load /session/list")
+    print("Endpoints: /health /chat /chat/stream /tools /session/save /session/load /session/list /ws")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

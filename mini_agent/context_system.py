@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_window import ContextWindow
+from mini_agent.file_watcher import FileWatcher
 from mini_agent.memory import LongTermMemory, is_sensitive_text
 from mini_agent.rag import ProjectRAG, SearchResult
 
@@ -13,9 +14,22 @@ class ContextSystem:
     long_term_memory: Optional[LongTermMemory] = None
     context_summaries: Optional[ContextSummaryStore] = None
     context_window: Optional[ContextWindow] = None
+    file_watcher: Optional[FileWatcher] = None
     max_project_results: int = 3
     max_memory_results: int = 3
     max_summary_results: int = 3
+
+    def start_watching(self) -> None:
+        if self.file_watcher:
+            self.file_watcher.callback = self._on_files_changed
+            self.file_watcher.start()
+
+    def stop_watching(self) -> None:
+        if self.file_watcher:
+            self.file_watcher.stop()
+
+    def _on_files_changed(self, changed_files: list) -> None:
+        pass
 
     def context_pack(self, query: str) -> str:
         query = query.strip()

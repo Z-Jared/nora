@@ -154,6 +154,26 @@ class ProjectRAG:
         except UnicodeDecodeError:
             return ""
 
+    def file_snapshot(self) -> dict[str, float]:
+        """Return {relative_path: st_mtime} for all tracked files."""
+        snapshot: dict[str, float] = {}
+        for path in self._iter_text_files():
+            try:
+                snapshot[path.relative_to(self.root).as_posix()] = path.stat().st_mtime
+            except OSError:
+                pass
+        return snapshot
+
+    def is_stale(self, snapshot: dict[str, float]) -> bool:
+        """Check if any tracked files have changed since snapshot."""
+        current = self.file_snapshot()
+        if set(current.keys()) != set(snapshot.keys()):
+            return True
+        for key, mtime in current.items():
+            if snapshot.get(key) != mtime:
+                return True
+        return False
+
 
 def _terms(query: str) -> list[str]:
     return [term.lower() for term in re.findall(r"[\w.-]+", query) if len(term) > 1]

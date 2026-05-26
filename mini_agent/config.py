@@ -54,6 +54,7 @@ class PathsConfig:
     task_history: Path = Path("data/task_history.jsonl")
     context_summaries: Path = Path("data/context_summaries.jsonl")
     tool_logs: Path = Path("logs/tool_calls.jsonl")
+    database: Path = Path("data/nora.db")
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ class AgentConfig:
                 task_history=Path(str(paths_data.get("task_history") or defaults.paths.task_history)),
                 context_summaries=Path(str(paths_data.get("context_summaries") or defaults.paths.context_summaries)),
                 tool_logs=Path(str(paths_data.get("tool_logs") or defaults.paths.tool_logs)),
+                database=Path(str(paths_data.get("database") or defaults.paths.database)),
             ),
             context_window=ContextWindowConfig(
                 max_tool_result_chars=_int(
@@ -252,7 +254,7 @@ class AgentConfig:
 
 KNOWN_TOP_KEYS = {"llm", "paths", "context_window", "budgets", "rag", "processes", "tools", "permissions", "safety", "system_prompt"}
 KNOWN_LLM_KEYS = {"provider", "base_url", "model", "timeout_seconds"}
-KNOWN_PATHS_KEYS = {"notes", "long_term_memory", "task_state", "task_history", "context_summaries", "tool_logs"}
+KNOWN_PATHS_KEYS = {"notes", "long_term_memory", "task_state", "task_history", "context_summaries", "tool_logs", "database"}
 KNOWN_CONTEXT_KEYS = {"max_tool_result_chars", "head_chars", "tail_chars"}
 KNOWN_BUDGETS_KEYS = {"max_tool_calls_per_turn"}
 KNOWN_RAG_KEYS = {"include_paths", "exclude_dirs", "max_file_bytes", "chunk_size", "chunk_overlap"}

@@ -103,10 +103,21 @@ class ShellRunner:
         if parts[:3] == ["python3", "-m", "py_compile"]:
             return parts if len(parts) > 3 and self._paths_are_safe(parts[3:]) else None
 
+        if parts[0] == "ruff":
+            return self._safe_ruff(parts)
+
         if parts == ["python3", "main.py"]:
             return parts
 
         return None
+
+    def _safe_ruff(self, parts: list[str]) -> Optional[list[str]]:
+        allowed_subcommands = {"check", "format", "--version", "--help"}
+        if len(parts) < 2 or parts[1] not in allowed_subcommands:
+            return None
+        if not self._paths_are_safe(parts[2:]):
+            return None
+        return parts
 
     def _safe_rg(self, parts: list[str]) -> Optional[list[str]]:
         rejected_flags = {"-uu", "--hidden", "--no-ignore", "--files"}

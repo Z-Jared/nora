@@ -9,6 +9,7 @@ def register_developer_tools(
     symbol_index,
     shell_runner,
     process_manager,
+    code_quality=None,
 ) -> None:
     registry.register(
         "preview_write_project_file",
@@ -381,7 +382,7 @@ def register_developer_tools(
     )
     registry.register(
         "run_shell_command",
-        "在项目目录内执行安全白名单命令。需要用户确认；支持 pwd、ls、find、rg、python3 -m unittest、python3 -m py_compile、python3 main.py。",
+        "在项目目录内执行安全白名单命令。需要用户确认；支持 pwd、ls、find、rg、ruff、python3 -m unittest、python3 -m py_compile、python3 main.py。",
         shell_runner.run,
         parameters={
             "type": "object",
@@ -510,3 +511,61 @@ def register_developer_tools(
         },
         permission=ToolPermission(category="process", risk="execute", requires_confirmation=True),
     )
+    if code_quality:
+        registry.register(
+            "lint_project_code",
+            "使用 ruff 检查 Python 代码质量，返回 lint 诊断。只读，不会修改文件。",
+            code_quality.lint,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "相对于项目根目录的文件或目录路径，留空检查整个项目",
+                    },
+                    "max_output_chars": {
+                        "type": "integer",
+                        "description": "最多返回多少字符，默认 8000",
+                    },
+                },
+            },
+            permission=ToolPermission(category="test", risk="read"),
+        )
+        registry.register(
+            "format_project_code",
+            "使用 ruff 格式化 Python 代码。check_only=True 只报告差异，check_only=False 会修改文件。",
+            code_quality.format_code,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "相对于项目根目录的文件或目录路径，留空格式化整个项目",
+                    },
+                    "check_only": {
+                        "type": "boolean",
+                        "description": "True 只检查不修改，False 实际格式化。默认 True",
+                    },
+                },
+            },
+            permission=ToolPermission(category="workspace", risk="read"),
+        )
+        registry.register(
+            "lint_and_fix_code",
+            "使用 ruff check --fix 自动修复安全的 lint 问题。会修改文件，需要确认。",
+            code_quality.lint_and_fix,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "相对于项目根目录的文件或目录路径，留空修复整个项目",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "说明为什么需要自动修复 lint 问题",
+                    },
+                },
+            },
+            permission=ToolPermission(category="workspace", risk="write", requires_confirmation=True),
+        )
