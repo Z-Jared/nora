@@ -253,6 +253,36 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 
 输入 `<<<` 后可进入多行输入，单独一行 `>>>` 结束。
 
+## HTTP API
+
+Nora 也可以作为 HTTP 服务器运行，提供 JSON API 供外部集成：
+
+```bash
+nora-serve
+# 或指定端口和 token
+NORA_PORT=9090 NORA_API_TOKEN=my-secret nora-serve
+```
+
+端点：
+
+```text
+GET  /health              健康检查（无需认证）
+POST /chat                发送消息 {"message": "..."}
+GET  /tools               列出可用工具
+POST /session/save        保存会话 {"name": "..."}
+POST /session/load        恢复会话 {"name": "..."}
+GET  /session/list        列出已保存会话
+```
+
+设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。
+
+示例：
+
+```bash
+curl http://localhost:8080/chat -d '{"message": "计算 2 + 3"}'
+curl -H "Authorization: Bearer my-secret" http://localhost:8080/chat -d '{"message": "hello"}'
+```
+
 配置 key 后，模型也可以调用本地工具。例如：
 
 ```text
@@ -372,6 +402,7 @@ python3 -m playwright install chromium
 main.py                         # 兼容 CLI 入口
 mini_agent/app.py               # Nora console script 入口
 mini_agent/cli.py               # CLI 交互、slash commands 和多行输入
+mini_agent/http_server.py       # HTTP JSON API 服务器
 mini_agent/controller.py        # agent 主循环和工具调用流程
 mini_agent/config.py            # agent.yaml 配置读取
 mini_agent/settings.py          # .env 加载和 LLMSettings
@@ -398,6 +429,7 @@ mini_agent/tools.py             # 兼容导出层，旧 import 仍可用
 mini_agent/tools_common.py      # 确认提示和 JSONL 读取公共函数
 mini_agent/rag.py               # 项目上下文检索
 mini_agent/memory.py            # 短期会话记忆和长期记忆
+mini_agent/session.py           # 会话保存/恢复（JSONL 持久化）
 mini_agent/context_system.py    # 自动上下文注入和不可信参考资料边界
 mini_agent/context_summary.py   # 上下文摘要存储和检索
 mini_agent/context_window.py    # 工具结果压缩和上下文窗口控制

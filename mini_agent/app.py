@@ -15,8 +15,8 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import build_default_registry
 
 
-def main() -> None:
-    root = Path.cwd()
+def build_agent(root: Path = None):
+    root = root or Path.cwd()
     config = load_agent_config(root / "agent.yaml")
     settings = config.apply_to_llm_settings(load_settings())
     llm = build_llm_client(settings)
@@ -67,4 +67,33 @@ def main() -> None:
         system_prompt=config.system_prompt,
     )
     session_store = SessionStore(root / "data" / "sessions")
+    return agent, registry, settings, session_store, root
+
+
+def main() -> None:
+    agent, registry, settings, session_store, root = build_agent()
     MiniAgentCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()
+
+
+def serve(host: str = "", port: int = 0, api_token: str = "") -> None:
+    import os
+    from mini_agent.http_server import create_server
+
+    host = host or os.environ.get("NORA_HOST", "127.0.0.1")
+    port = port or int(os.environ.get("NORA_PORT", "8080"))
+    api_token = api_token or os.environ.get("NORA_API_TOKEN", "")
+
+    agent, _registry, _settings, session_store, root = build_agent()
+    server = create_server(agent, host=host, port=port, session_store=session_store, api_token=api_token)
+    print(f"Nora HTTP server started on http://{host}:{port}")
+    print(f"Workspace: {root}")
+    if api_token:
+        print("Auth: Bearer token required")
+    else:
+        print("Auth: disabled (set NORA_API_TOKEN to enable)")
+    print("Endpoints: /health /chat /tools /session/save /session/load /session/list")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.server_close()
