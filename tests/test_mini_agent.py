@@ -428,6 +428,66 @@ class MiniAgentTests(unittest.TestCase):
         self.assertEqual(llm.calls[1]["messages"][-1]["role"], "tool")
         self.assertEqual(llm.calls[1]["messages"][-1]["content"], "14")
 
+    def test_records_run_report_for_tool_calling_turn(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="calculate", arguments={"expression": "6 * 7"})],
+                    )
+                return LLMResponse(content="结果是 42。")
+
+        agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM())
+
+        self.assertEqual(agent.run("用工具计算 6*7"), "结果是 42。")
+
+        report = agent.last_run_report
+        self.assertEqual(report.status, "done")
+        self.assertEqual(report.steps_used, 1)
+        self.assertEqual(report.tool_calls[0].name, "calculate")
+        self.assertEqual(report.tool_calls[0].status, "ok")
+        formatted = report.format()
+        self.assertIn("运行报告", formatted)
+        self.assertIn("工具: calculate(ok)", formatted)
+        self.assertIn("下一步: 无", formatted)
+
+    def test_run_report_marks_cancelled_tool_as_blocked(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="call_1",
+                                name="write_project_file",
+                                arguments={"path": "docs/x.md", "content": "x", "reason": "test"},
+                            )
+                        ],
+                    )
+                return LLMResponse(content="已取消。")
+
+        agent = MiniAgent(
+            build_default_registry(confirm_action=lambda prompt: False),
+            llm=FakeToolCallingLLM(),
+        )
+
+        agent.run("写文件")
+
+        report = agent.last_run_report
+        self.assertEqual(report.status, "blocked")
+        self.assertEqual(report.failure, "write_project_file: 已取消操作。")
+        self.assertIn("下一步: 检查失败工具并决定是否调整请求、权限或参数。", report.format())
+
     def test_llm_can_read_project_file(self):
         class FakeToolCallingLLM:
             def __init__(self):

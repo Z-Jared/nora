@@ -24,6 +24,37 @@ class AutonomousStepRecord:
 
 
 @dataclass(frozen=True)
+class ToolRunRecord:
+    name: str
+    status: str
+    result_preview: str
+
+
+@dataclass(frozen=True)
+class RunReport:
+    status: str
+    steps_used: int
+    tool_calls: list[ToolRunRecord]
+    failure: str = ""
+    next_step: str = ""
+
+    def format(self) -> str:
+        tools = ", ".join(f"{record.name}({record.status})" for record in self.tool_calls) or "无"
+        failure = self.failure or "无"
+        next_step = self.next_step or "无"
+        return "\n".join(
+            [
+                "运行报告:",
+                f"- 状态: {self.status}",
+                f"- 步骤: {self.steps_used}",
+                f"- 工具: {tools}",
+                f"- 失败: {failure}",
+                f"- 下一步: {next_step}",
+            ]
+        )
+
+
+@dataclass(frozen=True)
 class AutonomousPreflight:
     goal: str
     max_steps: int
@@ -53,30 +84,33 @@ class MiniAgent:
         self.tool_result_store = tool_result_store
         self.autonomous_disabled_tools = autonomous_disabled_tools or set()
         self.context_system = context_system
+        self.last_run_report = RunReport(status="idle", steps_used=0, tool_calls=[])
+        self._active_tool_records: list[ToolRunRecord] = []
 
     def run(self, user_input: str) -> str:
         text = user_input.strip()
+        self._start_run_report()
 
         if self.llm and hasattr(self.llm, "chat"):
             try:
-                return self._record_turn(text, self._run_with_llm_tools(text))
+                return self._finish_turn(text, self._run_with_llm_tools(text))
             except LLMError as error:
                 local_answer = self._run_local(text)
                 if local_answer:
-                    return self._record_turn(text, local_answer)
-                return self._record_turn(text, f"模型调用失败: {error}")
+                    return self._finish_turn(text, local_answer)
+                return self._finish_turn(text, f"模型调用失败: {error}", status="blocked", failure=f"模型调用失败: {error}")
 
         local_answer = self._run_local(text)
         if local_answer:
-            return self._record_turn(text, local_answer)
+            return self._finish_turn(text, local_answer)
 
         if self.llm:
             try:
-                return self._record_turn(text, self.llm.complete(text))
+                return self._finish_turn(text, self.llm.complete(text))
             except LLMError as error:
-                return self._record_turn(text, f"模型调用失败: {error}")
+                return self._finish_turn(text, f"模型调用失败: {error}", status="blocked", failure=f"模型调用失败: {error}")
 
-        return self._record_turn(text, self._help_message())
+        return self._finish_turn(text, self._help_message())
 
     def run_autonomous(self, goal: str, max_steps: Optional[int] = None) -> str:
         goal = goal.strip()
@@ -84,6 +118,7 @@ class MiniAgent:
             return "请提供自主执行目标。"
         if not self.llm or not hasattr(self.llm, "chat"):
             return "受控自主执行需要配置支持工具调用的模型。"
+        self._start_run_report()
 
         step_limit = self._autonomous_step_limit(max_steps)
         tools = self._autonomous_tools()
@@ -148,6 +183,23 @@ class MiniAgent:
             final_status = "max_steps_reached"
 
         answer = self._format_autonomous_report(goal, final_status, records, preflight)
+        tool_records = [
+            ToolRunRecord(
+                name=record.action.removeprefix("tool:"),
+                status="ok" if record.status == "continue" else record.status,
+                result_preview=record.result,
+            )
+            for record in records
+            if record.action.startswith("tool:")
+        ]
+        failure = "" if final_status == "done" else _first_non_ok_tool_failure(tool_records) or final_status
+        self.last_run_report = RunReport(
+            status="done" if final_status == "done" else "blocked",
+            steps_used=len(records),
+            tool_calls=tool_records,
+            failure=failure,
+            next_step=_next_step_for_status("done" if final_status == "done" else "blocked"),
+        )
         return self._record_turn(f"/auto {goal}", answer)
 
     def _run_with_llm_tools(self, text: str) -> str:
@@ -312,6 +364,30 @@ class MiniAgent:
         self.memory.add_assistant(answer)
         return answer
 
+    def _start_run_report(self) -> None:
+        self._active_tool_records = []
+        self.last_run_report = RunReport(status="running", steps_used=0, tool_calls=[])
+
+    def _finish_turn(
+        self,
+        user_input: str,
+        answer: str,
+        status: str = "done",
+        failure: str = "",
+    ) -> str:
+        if status == "done":
+            failure = failure or _first_non_ok_tool_failure(self._active_tool_records)
+            if failure:
+                status = "blocked"
+        self.last_run_report = RunReport(
+            status=status,
+            steps_used=len(self._active_tool_records),
+            tool_calls=list(self._active_tool_records),
+            failure=failure,
+            next_step=_next_step_for_status(status),
+        )
+        return self._record_turn(user_input, answer)
+
     def _compact_tool_result(self, tool_name: str, result: str) -> str:
         compacted = self.context_window.compact_tool_result(tool_name, result)
         if compacted == result or not self.tool_result_store:
@@ -323,26 +399,37 @@ class MiniAgent:
 
     def _call_tool(self, name: str, arguments: dict) -> str:
         try:
-            return self.tools.call(name, **arguments)
+            result = self.tools.call(name, **arguments)
         except Exception as error:
-            return f"工具调用失败: {error}"
+            result = f"工具调用失败: {error}"
+            self._active_tool_records.append(ToolRunRecord(name=name, status="error", result_preview=result))
+            return result
+
+        self._active_tool_records.append(
+            ToolRunRecord(
+                name=name,
+                status=_tool_status_from_result(result),
+                result_preview=self._shorten_trace_result(result, limit=120),
+            )
+        )
+        return result
 
     def _run_local(self, text: str) -> Optional[str]:
         if self._looks_like_calculation(text):
             expression = self._extract_expression(text)
-            return f"计算结果: {self.tools.call('calculate', expression=expression)}"
+            return f"计算结果: {self._call_tool('calculate', {'expression': expression})}"
 
         if any(keyword in text for keyword in ("现在几点", "当前时间", "时间")):
-            return f"当前时间: {self.tools.call('current_time')}"
+            return f"当前时间: {self._call_tool('current_time', {})}"
 
         if text.startswith("保存笔记"):
             note = text.removeprefix("保存笔记").strip()
             if not note:
                 return "请提供要保存的笔记内容。"
-            return self.tools.call("save_note", text=note)
+            return self._call_tool("save_note", {"text": note})
 
         if text in ("读取笔记", "查看笔记", "笔记"):
-            return self.tools.call("read_notes")
+            return self._call_tool("read_notes", {})
 
         return None
 
@@ -389,3 +476,26 @@ def _is_high_risk_autonomous_tool(name: str) -> bool:
             "task",
         ]
     )
+
+
+def _tool_status_from_result(result: str) -> str:
+    if result == "已取消操作。":
+        return "cancelled"
+    if "工具调用失败" in result:
+        return "error"
+    if "拒绝" in result:
+        return "blocked"
+    return "ok"
+
+
+def _first_non_ok_tool_failure(records: list[ToolRunRecord]) -> str:
+    for record in records:
+        if record.status != "ok":
+            return f"{record.name}: {record.result_preview}"
+    return ""
+
+
+def _next_step_for_status(status: str) -> str:
+    if status == "blocked":
+        return "检查失败工具并决定是否调整请求、权限或参数。"
+    return ""

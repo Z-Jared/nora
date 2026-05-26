@@ -334,6 +334,7 @@ python3 main.py
 模型工具调用链路会压缩过长工具结果，默认保留结果头尾和字符/行数统计，避免大 diff、网页正文、测试输出直接占满模型上下文；如果完整结果不含敏感标记，会缓存到 `data/tool_results.jsonl` 并在压缩内容里返回 `result_id`，模型可用 `list_tool_results`、`read_tool_result`、`search_tool_results` 分段回看；CLI slash commands 仍会直接显示工具返回。
 任务状态保存在 `data/current_task.json`。`run_task_once` 每次只选择一个待执行步骤并标记为 `in_progress`，返回当前步骤和建议工具类型，但不会自动执行工具或无限循环；完成步骤后需要调用 `update_task_step` 更新状态，`done` 会建议填写 summary，`blocked` 必须填写 note 或 summary 说明阻塞原因，`list_task` 会突出显示当前 in_progress 步骤；`finish_task` 会把完成后的任务追加到 `data/task_history.jsonl`，可用 `/task-history` 和 `/task-search` 回看，也可用 `/task-restore task_1` 恢复为当前 active 任务继续推进。
 受控自主执行只能通过显式 `/auto` 进入，有最大步数硬上限；执行前会生成本地计划和确认摘要，列出最大步数、可用工具数、隐藏工具和仍需确认的高风险工具；每步最多执行一个工具调用，所有工具仍经过 `ToolRegistry` 权限确认和日志记录，取消、拒绝或失败会停止为 blocked，不会绕过 `run_task_once` 的一步一推进语义。
+每次普通对话和 `/auto` 结束后，CLI 会附加运行报告，包含状态、步骤数、本轮工具调用、失败位置和下一步建议；报告不写入模型记忆，避免污染后续上下文。
 安全模式默认是 `normal`，保持现有行为；`strict` 适合真实项目或不想让模型触碰高风险动作的场景。`allow_autonomous_write: false` 只影响 `/auto` 暴露给模型的工具，不会移除 CLI 手动命令。
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。

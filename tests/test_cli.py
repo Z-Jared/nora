@@ -20,6 +20,8 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("Workspace:", outputs[0])
         self.assertIn("Tools:", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
+        self.assertTrue(any("运行报告:" in output for output in outputs))
+        self.assertTrue(any("工具: fake_tool(ok)" in output for output in outputs))
 
     def test_quit_exits_without_agent_call(self):
         agent = FakeCLIAgent()
@@ -198,6 +200,7 @@ class FakeCLIAgent:
     def __init__(self):
         self.inputs = []
         self.autonomous_calls = []
+        self.last_run_report = FakeRunReport()
 
     def run(self, text):
         self.inputs.append(text)
@@ -206,6 +209,20 @@ class FakeCLIAgent:
     def run_autonomous(self, goal, max_steps=None):
         self.autonomous_calls.append((goal, max_steps))
         return f"auto reply: {goal} / {max_steps}"
+
+
+class FakeRunReport:
+    def format(self):
+        return "\n".join(
+            [
+                "运行报告:",
+                "- 状态: done",
+                "- 步骤: 1",
+                "- 工具: fake_tool(ok)",
+                "- 失败: 无",
+                "- 下一步: 无",
+            ]
+        )
 
 
 class FakeCLIRegistry:

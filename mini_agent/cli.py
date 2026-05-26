@@ -273,6 +273,10 @@ class MiniAgentCLI:
             return f"参数错误: {name} 必须是整数。"
 
     def _format_agent_response(self, response: str) -> str:
+        report = getattr(self.agent, "last_run_report", None)
+        report_text = report.format() if report and hasattr(report, "format") else ""
+        if report_text:
+            response = f"{response}\n\n{report_text}"
         if "\n" not in response:
             return f"Agent: {response}"
         first, rest = response.split("\n", 1)
