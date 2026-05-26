@@ -207,6 +207,29 @@ system_prompt: 你是一个 Python 专家，帮助用户编写和调试代码。
 如果要彻底禁止某些工具，把工具名放进 `permissions.deny`；如果要覆盖某个工具是否需要确认，可以在 `permissions.confirmation_overrides` 里按工具名设置 `true` 或 `false`。
 `system_prompt` 设置自定义系统提示词，会作为每轮对话的第一条 system message 发送给模型；留空则不添加。可用于定义助手的角色、专业领域或回答风格。
 
+启动时会校验 `agent.yaml`，对未知配置键和无效值打印警告（不会阻止启动）。
+
+## 插件系统
+
+在项目根目录创建 `plugins/` 目录，放入 `.py` 文件即可扩展工具。每个插件需导出 `register(registry)` 函数：
+
+```python
+# plugins/my_tool.py
+def register(registry):
+    registry.register(
+        "my_tool",
+        "我的自定义工具",
+        lambda text: f"结果: {text}",
+        parameters={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    )
+```
+
+以 `_` 开头的文件会被跳过。插件加载失败会打印警告，不影响启动。
+
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
 
 ```text
@@ -432,6 +455,10 @@ mini_agent/tools_common.py      # 确认提示和 JSONL 读取公共函数
 mini_agent/rag.py               # 项目上下文检索
 mini_agent/memory.py            # 短期会话记忆和长期记忆
 mini_agent/session.py           # 会话保存/恢复（JSONL 持久化）
+mini_agent/plugins.py           # 插件系统：从 plugins/ 动态加载工具
+mini_agent/metrics.py           # HTTP 请求指标收集
+mini_agent/rate_limit.py        # 令牌桶速率限制
+mini_agent/tool_cache.py        # 只读工具结果 LRU 缓存
 mini_agent/context_system.py    # 自动上下文注入和不可信参考资料边界
 mini_agent/context_summary.py   # 上下文摘要存储和检索
 mini_agent/context_window.py    # 工具结果压缩和上下文窗口控制
