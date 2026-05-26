@@ -1753,6 +1753,86 @@ class ShellRunnerTests(unittest.TestCase):
         self.assertIn("exit_code: 0", result)
         self.assertIn("OK", result)
 
+    def test_rejects_control_characters(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = ShellRunner(Path(tmpdir), confirm_action=lambda prompt: True)
+
+            result = runner.run("ls\nrm -rf /", reason="test")
+
+        self.assertIn("拒绝执行", result)
+
+    def test_runs_ls_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "file.txt").write_text("x", encoding="utf-8")
+            runner = ShellRunner(root, confirm_action=lambda prompt: True)
+
+            result = runner.run("ls", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+
+    def test_rejects_ls_outside_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = ShellRunner(Path(tmpdir), confirm_action=lambda prompt: True)
+
+            result = runner.run("ls /etc", reason="test")
+
+        self.assertIn("拒绝执行", result)
+
+    def test_runs_find_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "test.py").write_text("x", encoding="utf-8")
+            runner = ShellRunner(root, confirm_action=lambda prompt: True)
+
+            result = runner.run("find . -name *.py", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+
+    def test_rejects_find_with_exec(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = ShellRunner(Path(tmpdir), confirm_action=lambda prompt: True)
+
+            result = runner.run("find . -exec rm {} ;", reason="test")
+
+        self.assertIn("拒绝执行", result)
+
+    def test_runs_rg_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "code.py").write_text("hello world", encoding="utf-8")
+            runner = ShellRunner(root, confirm_action=lambda prompt: True)
+
+            result = runner.run("rg hello", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+
+    def test_rejects_rg_with_hidden_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = ShellRunner(Path(tmpdir), confirm_action=lambda prompt: True)
+
+            result = runner.run("rg --hidden secret", reason="test")
+
+        self.assertIn("拒绝执行", result)
+
+    def test_runs_py_compile_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "ok.py").write_text("x = 1\n", encoding="utf-8")
+            runner = ShellRunner(root, confirm_action=lambda prompt: True)
+
+            result = runner.run("python3 -m py_compile ok.py", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+
+    def test_rejects_unknown_command(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = ShellRunner(Path(tmpdir), confirm_action=lambda prompt: True)
+
+            result = runner.run("whoami", reason="test")
+
+        self.assertIn("拒绝执行", result)
+
 
 class WebToolsTests(unittest.TestCase):
     def test_fetch_url_returns_plain_text(self):

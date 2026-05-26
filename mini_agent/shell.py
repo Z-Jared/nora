@@ -129,7 +129,7 @@ class ShellRunner:
         if len(parts) < 2 or not self._path_is_safe(parts[1]):
             return False
 
-        allowed = {".", "-maxdepth", "-type", "f", "d", "-name", "-not", "-path", "-print"}
+        allowed = {"find", ".", "-maxdepth", "-type", "f", "d", "-name", "-not", "-path", "-print"}
         return all(part in allowed or part.isdigit() or "*" in part for part in parts)
 
     def _paths_are_safe(self, parts: list[str]) -> bool:

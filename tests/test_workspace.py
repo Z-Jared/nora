@@ -260,6 +260,57 @@ class WorkspaceFilesTests(unittest.TestCase):
             self.assertIn("已取消", result)
             self.assertEqual((root / "a.txt").read_text(encoding="utf-8"), "old\n")
 
+    def test_replace_in_file_replaces_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "code.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+            files = WorkspaceFiles(root, require_confirmation=False)
+
+            result = files.replace("code.py", "pass", "return 42")
+
+            self.assertIn("已修改文件", result)
+            self.assertEqual((root / "code.py").read_text(encoding="utf-8"), "def foo():\n    return 42\n")
+
+    def test_replace_rejects_missing_old_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "code.py").write_text("hello", encoding="utf-8")
+            files = WorkspaceFiles(root, require_confirmation=False)
+
+            result = files.replace("code.py", "nonexistent", "world")
+
+            self.assertIn("没有找到要替换的文本", result)
+
+    def test_list_excludes_sensitive_dirs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "src" / "main.py").write_text("x = 1", encoding="utf-8")
+            (root / ".env").write_text("SECRET=1", encoding="utf-8")
+            (root / "data").mkdir()
+            (root / "data" / "state.json").write_text("{}", encoding="utf-8")
+            (root / ".git").mkdir()
+            (root / "logs").mkdir()
+            files = WorkspaceFiles(root)
+
+            result = files.list()
+
+            self.assertIn("src/main.py", result)
+            self.assertNotIn(".env", result)
+            self.assertNotIn("data/", result)
+            self.assertNotIn(".git/", result)
+            self.assertNotIn("logs/", result)
+
+    def test_preview_write_does_not_create_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            files = WorkspaceFiles(root, require_confirmation=False)
+
+            result = files.preview_write("new.txt", "content")
+
+            self.assertIn("new.txt", result)
+            self.assertFalse((root / "new.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

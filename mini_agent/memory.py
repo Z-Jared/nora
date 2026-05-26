@@ -23,6 +23,10 @@ SENSITIVE_PATTERNS = (
     re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\b(sk_live|pk_live|sk_test|pk_test)_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\b(postgres|mysql|mongodb)://\S+", re.IGNORECASE),
 )
 
 

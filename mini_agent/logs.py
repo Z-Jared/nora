@@ -14,12 +14,9 @@ SENSITIVE_ARGUMENT_KEYS = {
     "api_key",
     "apikey",
     "authorization",
-    "content",
     "key",
     "password",
-    "patch",
     "secret",
-    "text",
     "token",
 }
 
