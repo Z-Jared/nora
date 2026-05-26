@@ -9,6 +9,7 @@ from mini_agent.controller import MiniAgent
 from mini_agent.memory import LongTermMemory
 from mini_agent.providers.factory import build_llm_client
 from mini_agent.rag import ProjectRAG
+from mini_agent.session import SessionStore
 from mini_agent.settings import load_settings
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import build_default_registry
@@ -63,5 +64,7 @@ def main() -> None:
         autonomous_disabled_tools=config.autonomous_disabled_tools(),
         context_system=context_system,
         max_tool_calls_per_turn=config.budgets.max_tool_calls_per_turn,
+        system_prompt=config.system_prompt,
     )
-    MiniAgentCLI(agent, registry, settings=settings, root=root).run()
+    session_store = SessionStore(root / "data" / "sessions")
+    MiniAgentCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()

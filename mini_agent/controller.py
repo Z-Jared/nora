@@ -81,6 +81,7 @@ class MiniAgent:
         autonomous_disabled_tools: Optional[set[str]] = None,
         context_system: Optional[ContextSystem] = None,
         max_tool_calls_per_turn: int = default_max_tool_calls_per_turn,
+        system_prompt: str = "",
     ):
         self.tools = tools
         self.llm = llm
@@ -89,6 +90,7 @@ class MiniAgent:
         self.tool_result_store = tool_result_store
         self.autonomous_disabled_tools = autonomous_disabled_tools or set()
         self.context_system = context_system
+        self.system_prompt = system_prompt
         self.max_tool_calls_per_turn = max(1, int(max_tool_calls_per_turn or self.default_max_tool_calls_per_turn))
         self.last_run_report = RunReport(
             status="idle",
@@ -251,6 +253,8 @@ class MiniAgent:
 
     def _messages_for_user_input(self, text: str, user_content: Optional[str] = None) -> list[dict]:
         messages = self.memory.messages()
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
         content = user_content or text
         if self.context_system:
             context_pack = self.context_system.context_pack(text)

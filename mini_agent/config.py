@@ -113,6 +113,7 @@ class AgentConfig:
     tools: ToolsConfig
     permissions: PermissionsConfig
     safety: SafetyConfig
+    system_prompt: str = ""
 
     @classmethod
     def defaults(cls) -> "AgentConfig":
@@ -205,6 +206,7 @@ class AgentConfig:
                     defaults.safety.allow_browser_interact and not strict_mode,
                 ),
             ),
+            system_prompt=str(data.get("system_prompt") or defaults.system_prompt),
         )
 
     def apply_to_llm_settings(self, settings: LLMSettings) -> LLMSettings:

@@ -401,6 +401,74 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertEqual(agent.run("hello"), "ok")
 
+    def test_system_prompt_included_as_first_system_message(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                return LLMResponse(content="done")
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, system_prompt="你是一个 Python 专家。")
+
+        agent.run("解释装饰器")
+
+        messages = llm.calls[0]["messages"]
+        system_messages = [m for m in messages if m["role"] == "system"]
+        self.assertEqual(len(system_messages), 1)
+        self.assertEqual(system_messages[0]["content"], "你是一个 Python 专家。")
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertEqual(messages[-1]["content"], "解释装饰器")
+
+    def test_system_prompt_before_context_pack(self):
+        class FakeContextSystem:
+            def context_pack(self, query):
+                return "项目上下文信息"
+
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                return LLMResponse(content="done")
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(
+            build_default_registry(),
+            llm=llm,
+            system_prompt="你是一个 Python 专家。",
+            context_system=FakeContextSystem(),
+        )
+
+        agent.run("解释装饰器")
+
+        messages = llm.calls[0]["messages"]
+        system_messages = [m for m in messages if m["role"] == "system"]
+        self.assertEqual(len(system_messages), 2)
+        self.assertEqual(system_messages[0]["content"], "你是一个 Python 专家。")
+        self.assertIn("项目上下文信息", system_messages[1]["content"])
+
+    def test_no_system_message_when_prompt_empty(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                return LLMResponse(content="done")
+
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, system_prompt="")
+
+        agent.run("hello")
+
+        messages = llm.calls[0]["messages"]
+        system_messages = [m for m in messages if m["role"] == "system"]
+        self.assertEqual(len(system_messages), 0)
+
     def test_llm_can_call_tools(self):
         class FakeToolCallingLLM:
             def __init__(self):

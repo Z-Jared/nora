@@ -196,6 +196,8 @@ processes:
   profiles:
     static_server_8000:
       command: ["python3", "-m", "http.server", "8000"]
+
+system_prompt: 你是一个 Python 专家，帮助用户编写和调试代码。
 ```
 
 如果要关闭某些工具，把工具名放进 `tools.disabled`，例如 `disabled: ["fetch_url", "browser_click"]`。被禁用的工具不会注册，也不会暴露给模型。
@@ -203,6 +205,7 @@ processes:
 `budgets.max_tool_calls_per_turn` 控制一次普通对话最多允许模型调用多少个工具；超过后本轮会 blocked，并在运行报告里显示已用/上限/剩余。
 `safety.mode: strict` 会默认禁用终端执行、测试/修复循环、后台进程、Git 写操作和浏览器点击/输入，并让 `/auto` 隐藏写入、执行、Git、浏览器交互和本地持久化工具；如果确实需要，可以把对应 `allow_*` 设置为 `true`。
 如果要彻底禁止某些工具，把工具名放进 `permissions.deny`；如果要覆盖某个工具是否需要确认，可以在 `permissions.confirmation_overrides` 里按工具名设置 `true` 或 `false`。
+`system_prompt` 设置自定义系统提示词，会作为每轮对话的第一条 system message 发送给模型；留空则不添加。可用于定义助手的角色、专业领域或回答风格。
 
 CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试、Git 写操作和后台进程控制仍会走统一确认。常用命令：
 
@@ -237,6 +240,9 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 /audit [n]                    生成工具调用安全审计摘要
 /context [n]                  列出上下文摘要
 /context-search <query>       搜索上下文摘要
+/session-save [name]          保存当前会话
+/session-load <name>          恢复已保存的会话
+/session-list                 列出已保存的会话
 /processes                    列出后台进程
 /git-stage <path...>          暂存路径，需要确认
 /git-unstage <path...>        取消暂存路径，需要确认

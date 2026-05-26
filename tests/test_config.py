@@ -263,6 +263,23 @@ class AgentConfigTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
+    def test_system_prompt_parsed_from_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "agent.yaml"
+            path.write_text(
+                "system_prompt: 你是一个 Python 专家，帮助用户编写代码。\n",
+                encoding="utf-8",
+            )
+            config = load_agent_config(path)
+
+        self.assertEqual(config.system_prompt, "你是一个 Python 专家，帮助用户编写代码。")
+
+    def test_system_prompt_defaults_to_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_agent_config(Path(tmpdir) / "agent.yaml")
+
+        self.assertEqual(config.system_prompt, "")
+
     def test_loads_provider_settings_from_env_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env"

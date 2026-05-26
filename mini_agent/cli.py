@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from mini_agent.git_tools import GitTools
+from mini_agent.session import SessionStore
 
 
 class MiniAgentCLI:
@@ -15,6 +16,7 @@ class MiniAgentCLI:
         root: Optional[Path] = None,
         input_func: Callable[[str], str] = input,
         output_func: Callable[[str], None] = print,
+        session_store: Optional[SessionStore] = None,
     ):
         self.agent = agent
         self.registry = registry
@@ -23,6 +25,7 @@ class MiniAgentCLI:
         self.input_func = input_func
         self.output_func = output_func
         self.should_exit = False
+        self.session_store = session_store
 
     def run(self) -> None:
         self.output_func(self.banner())
@@ -221,6 +224,21 @@ class MiniAgentCLI:
             if len(args) != 1:
                 return "用法: /process-stop <process_id>"
             return self.registry.call("stop_background_process", process_id=args[0], reason="cli slash command")
+        if command == "/session-save":
+            if not self.session_store:
+                return "会话存储未配置。"
+            name = args[0] if args else ""
+            return self.session_store.save(self.agent.memory, name=name)
+        if command == "/session-load":
+            if not self.session_store:
+                return "会话存储未配置。"
+            if not args:
+                return "用法: /session-load <name>"
+            return self.session_store.load(args[0], self.agent.memory)
+        if command == "/session-list":
+            if not self.session_store:
+                return "会话存储未配置。"
+            return self.session_store.list_sessions()
 
         return f"未知命令: {command}\n输入 /help 查看可用命令。"
 
@@ -330,6 +348,11 @@ class MiniAgentCLI:
                 "  /task-restore <task_id> - 从历史恢复任务为当前任务",
                 "  /context [n] - 列出上下文摘要",
                 "  /context-search <query> - 搜索上下文摘要",
+                "",
+                "会话管理:",
+                "  /session-save [name] - 保存当前会话",
+                "  /session-load <name> - 恢复已保存的会话",
+                "  /session-list - 列出已保存的会话",
                 "",
                 "后台进程与浏览器:",
                 "  /processes - 列出后台进程",
