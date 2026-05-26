@@ -7,6 +7,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.memory import ConversationMemory
 from mini_agent.providers.base import LLMError, LLMResponse
 from mini_agent.registry import ToolRegistry
+from mini_agent.tool_cache import ToolResultCache
 from mini_agent.tool_results import ToolResultStore
 
 
@@ -82,6 +83,7 @@ class MiniAgent:
         context_system: Optional[ContextSystem] = None,
         max_tool_calls_per_turn: int = default_max_tool_calls_per_turn,
         system_prompt: str = "",
+        tool_cache: Optional[ToolResultCache] = None,
     ):
         self.tools = tools
         self.llm = llm
@@ -91,6 +93,7 @@ class MiniAgent:
         self.autonomous_disabled_tools = autonomous_disabled_tools or set()
         self.context_system = context_system
         self.system_prompt = system_prompt
+        self.tool_cache = tool_cache or ToolResultCache()
         self.max_tool_calls_per_turn = max(1, int(max_tool_calls_per_turn or self.default_max_tool_calls_per_turn))
         self.last_run_report = RunReport(
             status="idle",
@@ -437,6 +440,15 @@ class MiniAgent:
             self._active_tool_records.append(ToolRunRecord(name=name, status="blocked", result_preview=result))
             return result
 
+        is_read_only = permission and permission.risk == "read"
+        if is_read_only:
+            cached = self.tool_cache.get(name, arguments)
+            if cached is not None:
+                self._active_tool_records.append(
+                    ToolRunRecord(name=name, status="ok", result_preview=self._shorten_trace_result(cached, limit=120))
+                )
+                return cached
+
         try:
             result = self.tools.call(name, **arguments)
         except Exception as error:
@@ -444,6 +456,9 @@ class MiniAgent:
             result = f"工具调用失败: {safe_error}"
             self._active_tool_records.append(ToolRunRecord(name=name, status="error", result_preview=result))
             return result
+
+        if is_read_only:
+            self.tool_cache.put(name, arguments, result)
 
         self._active_tool_records.append(
             ToolRunRecord(
