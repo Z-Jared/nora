@@ -259,7 +259,7 @@ Nora 也可以作为 HTTP 服务器运行，提供 JSON API 供外部集成：
 
 ```bash
 nora-serve
-# 或指定端口和 token
+# 或指定端口、token 和速率限制
 NORA_PORT=9090 NORA_API_TOKEN=my-secret nora-serve
 ```
 
@@ -268,19 +268,21 @@ NORA_PORT=9090 NORA_API_TOKEN=my-secret nora-serve
 ```text
 GET  /health              健康检查（无需认证）
 POST /chat                发送消息 {"message": "..."}
+POST /chat/stream         SSE 流式响应（返回 text/event-stream）
 GET  /tools               列出可用工具
 POST /session/save        保存会话 {"name": "..."}
 POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
-设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。
+设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。内置令牌桶速率限制（默认 10 req/s，突发 20）。
 
 示例：
 
 ```bash
 curl http://localhost:8080/chat -d '{"message": "计算 2 + 3"}'
 curl -H "Authorization: Bearer my-secret" http://localhost:8080/chat -d '{"message": "hello"}'
+curl http://localhost:8080/chat/stream -d '{"message": "hello"}'  # SSE 流式
 ```
 
 配置 key 后，模型也可以调用本地工具。例如：
