@@ -308,6 +308,17 @@ curl -H "Authorization: Bearer my-secret" http://localhost:8080/chat -d '{"messa
 curl http://localhost:8080/chat/stream -d '{"message": "hello"}'  # SSE 流式
 ```
 
+## Docker 部署
+
+```bash
+docker compose up -d
+# 或单独构建
+docker build -t nora .
+docker run -p 8080:8080 --env-file .env -v ./data:/app/data nora
+```
+
+`docker-compose.yml` 会自动挂载 `data/`、`logs/`、`plugins/`、`agent.yaml` 和 `.env`。环境变量优先于 `.env` 文件。
+
 配置 key 后，模型也可以调用本地工具。例如：
 
 ```text
