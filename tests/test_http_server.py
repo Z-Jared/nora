@@ -111,6 +111,80 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(status, 404)
 
+    def test_chat_stream_returns_sse_events(self):
+        import socket
+        url = f"http://127.0.0.1:{self.port}/chat/stream"
+        data = json.dumps({"message": "计算 2 + 3"}).encode("utf-8")
+        req = Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        with urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            chunks = []
+            while True:
+                try:
+                    line = resp.readline()
+                    if not line:
+                        break
+                    chunks.append(line.decode("utf-8"))
+                except socket.timeout:
+                    break
+
+        raw = "".join(chunks)
+        events = [line.removeprefix("data: ") for line in raw.strip().splitlines() if line.startswith("data: ")]
+        self.assertGreater(len(events), 0)
+        last_event = json.loads(events[-1])
+        self.assertEqual(last_event["type"], "done")
+
+    def test_chat_stream_rejects_empty_message(self):
+        status, body = self._request("POST", "/chat/stream", {"message": ""})
+
+        self.assertEqual(status, 400)
+        self.assertIn("required", body["error"])
+
+
+class HTTPServerRateLimitTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            rate_limit=2,
+            rate_burst=2,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+
+    def _request(self, method, path, body=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_rate_limit_blocks_excessive_requests(self):
+        status1, _ = self._request("POST", "/chat", {"message": "计算 1+1"})
+        status2, _ = self._request("POST", "/chat", {"message": "计算 2+2"})
+        status3, body = self._request("POST", "/chat", {"message": "计算 3+3"})
+
+        self.assertEqual(status1, 200)
+        self.assertEqual(status2, 200)
+        self.assertEqual(status3, 429)
+        self.assertIn("rate limit", body["error"])
+
 
 class HTTPServerAuthTests(unittest.TestCase):
     def setUp(self):

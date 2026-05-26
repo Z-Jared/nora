@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import json
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 from mini_agent.controller import MiniAgent
+from mini_agent.rate_limit import TokenBucketRateLimiter
 from mini_agent.session import SessionStore
+
+STREAM_CHUNK_SIZE = 20
 
 
 class NoraHTTPHandler(BaseHTTPRequestHandler):
     agent: MiniAgent
     session_store: Optional[SessionStore]
     api_token: str
+    rate_limiter: TokenBucketRateLimiter
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -35,12 +40,18 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         if not self._check_auth():
             return
 
+        if not self.rate_limiter.allow():
+            self._json_response(429, {"error": "rate limit exceeded"})
+            return
+
         body = self._read_body()
         if body is None:
             return
 
         if path == "/chat":
             self._handle_chat(body)
+        elif path == "/chat/stream":
+            self._handle_chat_stream(body)
         elif path == "/session/save":
             self._handle_session_save(body)
         elif path == "/session/load":
@@ -64,6 +75,41 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(200, result)
         except Exception as error:
             self._json_response(500, {"error": str(error)[:500]})
+
+    def _handle_chat_stream(self, body: dict) -> None:
+        message = body.get("message", "").strip()
+        if not message:
+            self._json_response(400, {"error": "message is required"})
+            return
+
+        try:
+            response = self.agent.run(message)
+        except Exception as error:
+            self._json_response(500, {"error": str(error)[:500]})
+            return
+
+        report = getattr(self.agent, "last_run_report", None)
+        meta: dict[str, Any] = {}
+        if report and hasattr(report, "status"):
+            meta["status"] = report.status
+            meta["tool_calls"] = len(report.tool_calls)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        for i in range(0, len(response), STREAM_CHUNK_SIZE):
+            chunk = response[i:i + STREAM_CHUNK_SIZE]
+            event = json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False)
+            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        done_event = json.dumps({"type": "done", **meta}, ensure_ascii=False)
+        self.wfile.write(f"data: {done_event}\n\n".encode("utf-8"))
+        self.wfile.flush()
+        self.close_connection = True
 
     def _handle_tools(self) -> None:
         if not self._check_auth():
@@ -147,8 +193,11 @@ def create_server(
     port: int = 8080,
     session_store: Optional[SessionStore] = None,
     api_token: str = "",
+    rate_limit: float = 10.0,
+    rate_burst: int = 20,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
     NoraHTTPHandler.api_token = api_token
+    NoraHTTPHandler.rate_limiter = TokenBucketRateLimiter(rate=rate_limit, burst=rate_burst)
     return HTTPServer((host, port), NoraHTTPHandler)

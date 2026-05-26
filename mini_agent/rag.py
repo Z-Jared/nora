@@ -4,11 +4,27 @@ from pathlib import Path
 from typing import Optional
 
 
-TEXT_EXTENSIONS = {".py", ".md", ".txt", ".json", ".toml", ".yaml", ".yml"}
+TEXT_EXTENSIONS = {
+    ".py", ".pyi",
+    ".md", ".rst", ".txt",
+    ".json", ".toml", ".yaml", ".yml",
+    ".js", ".jsx", ".ts", ".tsx", ".mjs",
+    ".html", ".htm", ".css", ".scss", ".less",
+    ".sh", ".bash", ".zsh",
+    ".c", ".h", ".cpp", ".hpp",
+    ".go", ".rs", ".java", ".kt",
+    ".rb", ".php",
+    ".sql", ".graphql",
+    ".xml", ".svg",
+    ".ini", ".cfg", ".conf",
+    ".dockerfile", ".makefile",
+    ".env.example",
+}
 MAX_FILE_BYTES = 64 * 1024
 DEFAULT_CHUNK_SIZE = 80
 DEFAULT_CHUNK_OVERLAP = 20
 DENIED_FILE_NAMES = {".env", ".env.local", ".env.production"}
+TEXT_FILENAMES = {"Dockerfile", "Makefile", "Justfile", "Procfile"}
 DENIED_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", "data", "logs", ".tmp"}
 
 
@@ -110,7 +126,8 @@ class ProjectRAG:
         for path in sorted(self.root.rglob("*")):
             if not path.is_file() or not self._is_allowed(path):
                 continue
-            if path.suffix.lower() not in TEXT_EXTENSIONS:
+            is_text = path.suffix.lower() in TEXT_EXTENSIONS or path.name in TEXT_FILENAMES
+            if not is_text:
                 continue
             if path.stat().st_size > self.max_file_bytes:
                 continue
