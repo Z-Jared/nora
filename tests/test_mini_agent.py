@@ -375,10 +375,12 @@ class MiniAgentTests(unittest.TestCase):
         answer = agent.run("解释 Nora")
 
         self.assertEqual(context_system.queries, ["解释 Nora"])
+        first_system_message = llm.calls[0]["messages"][-2]
         first_user_message = llm.calls[0]["messages"][-1]
+        self.assertEqual(first_system_message["role"], "system")
+        self.assertIn("自动上下文: README 说明 Nora", first_system_message["content"])
         self.assertEqual(first_user_message["role"], "user")
-        self.assertIn("自动上下文: README 说明 Nora", first_user_message["content"])
-        self.assertIn("用户输入:\n解释 Nora", first_user_message["content"])
+        self.assertEqual(first_user_message["content"], "解释 Nora")
         self.assertEqual(answer, "2")
         self.assertEqual(sum("自动上下文: README 说明 Nora" in message.get("content", "") for message in llm.calls[1]["messages"]), 1)
 
@@ -1195,9 +1197,12 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertIn("done", answer)
         self.assertEqual(context_system.queries, ["检查项目"])
-        first_prompt = llm.calls[0]["messages"][-1]["content"]
-        self.assertIn("自动上下文: 自主执行需要先读上下文", first_prompt)
-        self.assertIn("用户输入:\n受控自主执行请求。", first_prompt)
+        first_system_message = llm.calls[0]["messages"][-2]
+        first_user_message = llm.calls[0]["messages"][-1]
+        self.assertEqual(first_system_message["role"], "system")
+        self.assertIn("自动上下文: 自主执行需要先读上下文", first_system_message["content"])
+        self.assertEqual(first_user_message["role"], "user")
+        self.assertIn("受控自主执行请求。", first_user_message["content"])
         self.assertEqual(sum("自动上下文: 自主执行需要先读上下文" in message.get("content", "") for message in llm.calls[1]["messages"]), 1)
 
     def test_autonomous_loop_includes_preflight_plan_and_confirmation_summary(self):

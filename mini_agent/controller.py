@@ -255,7 +255,7 @@ class MiniAgent:
         if self.context_system:
             context_pack = self.context_system.context_pack(text)
             if context_pack:
-                content = f"{context_pack}\n\n用户输入:\n{content}"
+                messages.append({"role": "system", "content": context_pack})
         messages.append({"role": "user", "content": content})
         return messages
 
@@ -436,7 +436,8 @@ class MiniAgent:
         try:
             result = self.tools.call(name, **arguments)
         except Exception as error:
-            result = f"工具调用失败: {error}"
+            safe_error = str(error)[:500]
+            result = f"工具调用失败: {safe_error}"
             self._active_tool_records.append(ToolRunRecord(name=name, status="error", result_preview=result))
             return result
 

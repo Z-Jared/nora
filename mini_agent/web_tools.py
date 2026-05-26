@@ -24,7 +24,8 @@ class WebTools:
         except Exception as error:
             return f"网页读取失败: {error}"
 
-        return _html_to_text(raw)[:max_chars].strip()
+        text = _html_to_text(raw)[:max_chars].strip()
+        return f"<untrusted_source url={url}>\n{text}\n</untrusted_source>"
 
     def web_search(self, query: str, max_results: int = 5) -> str:
         query = query.strip()
@@ -42,7 +43,8 @@ class WebTools:
         if not results:
             return "没有找到搜索结果。"
 
-        return "\n".join(f"{title} - {link}" for title, link in results)
+        lines = [f"{title} - {link}" for title, link in results]
+        return "<untrusted_source type=web_search>\n" + "\n".join(lines) + "\n</untrusted_source>"
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
