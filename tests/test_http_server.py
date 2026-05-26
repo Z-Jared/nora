@@ -159,18 +159,62 @@ class HTTPServerTests(unittest.TestCase):
 
         raw = "".join(chunks)
         events = [line.removeprefix("data: ") for line in raw.strip().splitlines() if line.startswith("data: ")]
-        self.assertGreater(len(events), 0)
-        last_event = json.loads(events[-1])
-        self.assertEqual(last_event["type"], "done")
-        self.assertEqual(last_event.get("status"), "done")
+        parsed = [json.loads(e) for e in events]
+        types = [e["type"] for e in parsed]
+        self.assertIn("tool_call_start", types)
+        self.assertIn("tool_call_result", types)
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+        last_event = parsed[-1]
+        self.assertEqual(last_event["status"], "done")
         self.assertGreater(last_event.get("tool_calls", 0), 0)
 
         all_content = "".join(
-            json.loads(e).get("content", "")
-            for e in events
-            if json.loads(e).get("type") == "delta"
+            e.get("content", "") for e in parsed if e["type"] == "delta"
         )
         self.assertIn("计算结果", all_content)
+
+    def test_chat_stream_realtime_events(self):
+        import socket
+        url = f"http://127.0.0.1:{self.port}/chat/stream"
+        data = json.dumps({"message": "计算 1 + 1"}).encode("utf-8")
+        req = Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        with urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            chunks = []
+            while True:
+                try:
+                    line = resp.readline()
+                    if not line:
+                        break
+                    chunks.append(line.decode("utf-8"))
+                except socket.timeout:
+                    break
+
+        raw = "".join(chunks)
+        events = [json.loads(line.removeprefix("data: ")) for line in raw.strip().splitlines() if line.startswith("data: ")]
+        types = [e["type"] for e in events]
+
+        self.assertEqual(types[0], "typing")
+        self.assertIn("tool_call_start", types)
+        self.assertIn("tool_call_result", types)
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+        start_idx = types.index("tool_call_start")
+        result_idx = types.index("tool_call_result")
+        delta_idx = types.index("delta")
+        done_idx = types.index("done")
+        self.assertLess(start_idx, result_idx)
+        self.assertLess(result_idx, delta_idx)
+        self.assertLess(delta_idx, done_idx)
+
+        tool_start = events[start_idx]
+        self.assertEqual(tool_start["name"], "calculate")
+        self.assertIn("expression", tool_start["arguments"])
 
     def test_chat_stream_rejects_empty_message(self):
         status, body = self._request("POST", "/chat/stream", {"message": ""})

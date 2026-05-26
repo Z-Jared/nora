@@ -2002,5 +2002,139 @@ def _init_git_repo(root: Path) -> None:
 
 
 
+class RunEventsTests(unittest.TestCase):
+    def test_run_events_yields_typing_delta_done_for_math(self):
+        agent = MiniAgent(build_default_registry())
+        events = list(agent.run_events("计算 2 + 3"))
+
+        types = [e["type"] for e in events]
+        self.assertEqual(types[0], "typing")
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+    def test_run_events_yields_tool_call_start_and_result(self):
+        agent = MiniAgent(build_default_registry())
+        events = list(agent.run_events("计算 2 + 3"))
+
+        tool_starts = [e for e in events if e["type"] == "tool_call_start"]
+        tool_results = [e for e in events if e["type"] == "tool_call_result"]
+        self.assertEqual(len(tool_starts), 1)
+        self.assertEqual(len(tool_results), 1)
+        self.assertEqual(tool_starts[0]["name"], "calculate")
+        self.assertEqual(tool_results[0]["name"], "calculate")
+        self.assertEqual(tool_results[0]["status"], "ok")
+
+    def test_run_events_done_has_status_and_tool_calls(self):
+        agent = MiniAgent(build_default_registry())
+        events = list(agent.run_events("计算 2 + 3"))
+
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["status"], "done")
+        self.assertGreater(done["tool_calls"], 0)
+
+    def test_run_events_for_unknown_task(self):
+        agent = MiniAgent(build_default_registry())
+        events = list(agent.run_events("帮我订机票"))
+
+        types = [e["type"] for e in events]
+        self.assertEqual(types[0], "typing")
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+        delta_content = "".join(e["content"] for e in events if e["type"] == "delta")
+        self.assertIn("我还不会处理这个任务", delta_content)
+
+    def test_run_backward_compatible(self):
+        agent = MiniAgent(build_default_registry())
+        result = agent.run("计算 2 + 3")
+        self.assertEqual(result, "计算结果: 5")
+
+    def test_run_backward_compatible_with_notes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_default_registry(notes_path=Path(tmpdir) / "notes.txt")
+            agent = MiniAgent(registry)
+            self.assertEqual(agent.run("保存笔记 测试"), "笔记已保存。")
+            self.assertEqual(agent.run("读取笔记"), "笔记:\n1. 测试")
+
+    def test_run_events_emits_events_for_notes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_default_registry(notes_path=Path(tmpdir) / "notes.txt")
+            agent = MiniAgent(registry)
+            events = list(agent.run_events("保存笔记 hello"))
+
+            types = [e["type"] for e in events]
+            self.assertIn("tool_call_start", types)
+            self.assertIn("tool_call_result", types)
+            self.assertIn("delta", types)
+            self.assertEqual(types[-1], "done")
+
+    def test_run_events_with_llm_tool_calls(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="结果是 5")
+
+        agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM())
+        events = list(agent.run_events("算一下 2+3"))
+
+        types = [e["type"] for e in events]
+        self.assertEqual(types[0], "typing")
+        self.assertIn("tool_call_start", types)
+        self.assertIn("tool_call_result", types)
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+        tool_start = next(e for e in events if e["type"] == "tool_call_start")
+        self.assertEqual(tool_start["name"], "calculate")
+
+        tool_result = next(e for e in events if e["type"] == "tool_call_result")
+        self.assertEqual(tool_result["name"], "calculate")
+        self.assertEqual(tool_result["status"], "ok")
+
+        done = events[-1]
+        self.assertEqual(done["status"], "done")
+        self.assertGreater(done["tool_calls"], 0)
+
+    def test_run_events_handles_generic_exception(self):
+        class BrokenLLM:
+            def chat(self, messages, tools=None):
+                raise RuntimeError("model exploded")
+
+        agent = MiniAgent(build_default_registry(), llm=BrokenLLM())
+        events = list(agent.run_events("hello"))
+
+        types = [e["type"] for e in events]
+        self.assertIn("error", types)
+        self.assertEqual(types[-1], "done")
+
+        error_event = next(e for e in events if e["type"] == "error")
+        self.assertIn("model exploded", error_event["error"])
+
+        done_event = events[-1]
+        self.assertEqual(done_event["status"], "blocked")
+
+        self.assertEqual(agent.last_run_report.status, "blocked")
+        self.assertIn("model exploded", agent.last_run_report.failure)
+
+    def test_run_returns_error_text_on_generic_exception(self):
+        class BrokenLLM:
+            def chat(self, messages, tools=None):
+                raise RuntimeError("model exploded")
+
+        agent = MiniAgent(build_default_registry(), llm=BrokenLLM())
+        result = agent.run("hello")
+
+        self.assertIn("model exploded", result)
+        self.assertEqual(agent.last_run_report.status, "blocked")
+
+
 if __name__ == "__main__":
     unittest.main()

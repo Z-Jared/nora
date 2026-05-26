@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Generator, Optional, Protocol
 
 from mini_agent.context_system import ContextSystem
 from mini_agent.context_window import ContextWindow
@@ -105,29 +105,161 @@ class MiniAgent:
         self._active_tool_records: list[ToolRunRecord] = []
 
     def run(self, user_input: str) -> str:
+        answer = ""
+        for event in self.run_events(user_input):
+            if event["type"] == "delta":
+                answer += event["content"]
+            elif event["type"] == "error":
+                answer = answer or event["error"]
+        return answer
+
+    def run_events(self, user_input: str) -> Generator[dict, None, None]:
         text = user_input.strip()
         self._start_run_report()
+        yield {"type": "typing"}
 
-        if self.llm and hasattr(self.llm, "chat"):
-            try:
-                return self._finish_turn(text, self._run_with_llm_tools(text))
-            except LLMError as error:
-                local_answer = self._run_local(text)
-                if local_answer:
-                    return self._finish_turn(text, local_answer)
-                return self._finish_turn(text, f"模型调用失败: {error}", status="blocked", failure=f"模型调用失败: {error}")
+        try:
+            if self.llm and hasattr(self.llm, "chat"):
+                try:
+                    yield from self._emit_answer(text, self._run_with_llm_tools_events(text))
+                    return
+                except LLMError as error:
+                    if self._has_local_answer(text):
+                        yield from self._emit_answer(text, self._run_local_events(text))
+                        return
+                    yield from self._emit_blocked(text, f"模型调用失败: {error}")
+                    return
 
-        local_answer = self._run_local(text)
-        if local_answer:
-            return self._finish_turn(text, local_answer)
+            if self._has_local_answer(text):
+                yield from self._emit_answer(text, self._run_local_events(text))
+                return
 
-        if self.llm:
-            try:
-                return self._finish_turn(text, self.llm.complete(text))
-            except LLMError as error:
-                return self._finish_turn(text, f"模型调用失败: {error}", status="blocked", failure=f"模型调用失败: {error}")
+            if self.llm:
+                try:
+                    yield from self._emit_answer(text, self.llm.complete(text))
+                    return
+                except LLMError as error:
+                    yield from self._emit_blocked(text, f"模型调用失败: {error}")
+                    return
 
-        return self._finish_turn(text, self._help_message())
+            yield from self._emit_answer(text, self._help_message())
+        except Exception as error:
+            error_msg = str(error)[:500]
+            yield {"type": "error", "error": error_msg}
+            self._finish_turn(text, error_msg, status="blocked", failure=error_msg)
+            report = self.last_run_report
+            yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+
+    def _emit_answer(self, user_input: str, answer_or_gen) -> Generator[dict, None, None]:
+        if isinstance(answer_or_gen, str):
+            yield {"type": "delta", "content": answer_or_gen}
+            answer = answer_or_gen
+        else:
+            answer = ""
+            for event in answer_or_gen:
+                yield event
+                if event["type"] == "delta":
+                    answer += event["content"]
+        answer = self._finish_turn(user_input, answer)
+        report = self.last_run_report
+        yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+
+    def _has_local_answer(self, text: str) -> bool:
+        if self._looks_like_calculation(text):
+            return True
+        if any(keyword in text for keyword in ("现在几点", "当前时间", "时间")):
+            return True
+        if text.startswith("保存笔记"):
+            return True
+        if text in ("读取笔记", "查看笔记", "笔记"):
+            return True
+        return False
+
+    def _emit_blocked(self, user_input: str, error_msg: str) -> Generator[dict, None, None]:
+        yield {"type": "delta", "content": error_msg}
+        self._finish_turn(user_input, error_msg, status="blocked", failure=error_msg)
+        report = self.last_run_report
+        yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+
+    def _run_with_llm_tools_events(self, text: str) -> Generator[dict, None, None]:
+        messages = self._messages_for_user_input(text)
+        tools = self.tools.to_openai_tools()
+
+        for _ in range(self.max_tool_rounds):
+            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            if not response.tool_calls:
+                yield {"type": "delta", "content": response.content or self._help_message()}
+                return
+
+            messages.append(response.to_assistant_message())
+            for tool_call in response.tool_calls:
+                yield {"type": "tool_call_start", "name": tool_call.name, "arguments": tool_call.arguments}
+                result = self._call_tool(tool_call.name, tool_call.arguments)
+                result = self._compact_tool_result(tool_call.name, result)
+                last_record = self._active_tool_records[-1] if self._active_tool_records else None
+                yield {
+                    "type": "tool_call_result",
+                    "name": tool_call.name,
+                    "status": last_record.status if last_record else "ok",
+                    "result": result,
+                }
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.call_id,
+                        "name": tool_call.name,
+                        "content": result,
+                    }
+                )
+
+        messages.append(
+            {
+                "role": "user",
+                "content": "工具调用轮数已用完。请只基于已有工具结果给出最终回答，不要再调用工具。",
+            }
+        )
+        response = self.llm.chat(messages, tools=[])
+        if response.tool_calls:
+            raise LLMError("Tool call loop exceeded max rounds.")
+        yield {"type": "delta", "content": response.content or self._help_message()}
+
+    def _run_local_events(self, text: str) -> Generator[dict, None, None]:
+        if self._looks_like_calculation(text):
+            expression = self._extract_expression(text)
+            yield {"type": "tool_call_start", "name": "calculate", "arguments": {"expression": expression}}
+            result = self._call_tool("calculate", {"expression": expression})
+            last_record = self._active_tool_records[-1] if self._active_tool_records else None
+            yield {"type": "tool_call_result", "name": "calculate", "status": last_record.status if last_record else "ok", "result": result}
+            yield {"type": "delta", "content": f"计算结果: {result}"}
+            return
+
+        if any(keyword in text for keyword in ("现在几点", "当前时间", "时间")):
+            yield {"type": "tool_call_start", "name": "current_time", "arguments": {}}
+            result = self._call_tool("current_time", {})
+            last_record = self._active_tool_records[-1] if self._active_tool_records else None
+            yield {"type": "tool_call_result", "name": "current_time", "status": last_record.status if last_record else "ok", "result": result}
+            yield {"type": "delta", "content": f"当前时间: {result}"}
+            return
+
+        if text.startswith("保存笔记"):
+            note = text.removeprefix("保存笔记").strip()
+            if not note:
+                yield {"type": "delta", "content": "请提供要保存的笔记内容。"}
+                return
+            yield {"type": "tool_call_start", "name": "save_note", "arguments": {"text": note}}
+            result = self._call_tool("save_note", {"text": note})
+            last_record = self._active_tool_records[-1] if self._active_tool_records else None
+            yield {"type": "tool_call_result", "name": "save_note", "status": last_record.status if last_record else "ok", "result": result}
+            yield {"type": "delta", "content": result}
+            return
+
+        if text in ("读取笔记", "查看笔记", "笔记"):
+            yield {"type": "tool_call_start", "name": "read_notes", "arguments": {}}
+            result = self._call_tool("read_notes", {})
+            last_record = self._active_tool_records[-1] if self._active_tool_records else None
+            yield {"type": "tool_call_result", "name": "read_notes", "status": last_record.status if last_record else "ok", "result": result}
+            yield {"type": "delta", "content": result}
+            return
 
     def run_autonomous(self, goal: str, max_steps: Optional[int] = None) -> str:
         goal = goal.strip()

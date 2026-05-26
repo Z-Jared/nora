@@ -121,6 +121,31 @@ class WebSocketHandshakeTests(unittest.TestCase):
         finally:
             sock.close()
 
+    def test_chat_emits_tool_events(self):
+        sock, _ = _ws_handshake(self.port)
+        try:
+            _ws_send(sock, json.dumps({"type": "chat", "message": "计算 2 + 3"}))
+            messages = []
+            for _ in range(20):
+                msg = _ws_recv(sock, timeout=3.0)
+                if msg is None:
+                    break
+                messages.append(json.loads(msg))
+            types = [m.get("type") for m in messages]
+            self.assertIn("typing", types)
+            self.assertIn("tool_call_start", types)
+            self.assertIn("tool_call_result", types)
+            self.assertIn("delta", types)
+            self.assertIn("done", types)
+
+            tool_start = next(m for m in messages if m.get("type") == "tool_call_start")
+            self.assertEqual(tool_start["name"], "calculate")
+            tool_result = next(m for m in messages if m.get("type") == "tool_call_result")
+            self.assertEqual(tool_result["name"], "calculate")
+            self.assertEqual(tool_result["status"], "ok")
+        finally:
+            sock.close()
+
     def test_ping_pong(self):
         sock, _ = _ws_handshake(self.port)
         try:

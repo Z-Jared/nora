@@ -13,9 +13,6 @@ from mini_agent.rate_limit import TokenBucketRateLimiter
 from mini_agent.session import SessionStore
 from mini_agent.websocket_handler import WebSocketConnection
 
-STREAM_CHUNK_SIZE = 20
-
-
 class NoraHTTPHandler(BaseHTTPRequestHandler):
     agent: MiniAgent
     session_store: Optional[SessionStore]
@@ -149,20 +146,9 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             ws.write_frame(json.dumps({"error": "message is required"}))
             return
 
-        ws.write_frame(json.dumps({"type": "typing"}))
-
         try:
-            response = self.agent.run(message)
-            for i in range(0, len(response), STREAM_CHUNK_SIZE):
-                chunk = response[i:i + STREAM_CHUNK_SIZE]
-                ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
-
-            report = getattr(self.agent, "last_run_report", None)
-            meta: dict[str, Any] = {}
-            if report and hasattr(report, "status"):
-                meta["status"] = report.status
-                meta["tool_calls"] = len(report.tool_calls)
-            ws.write_frame(json.dumps({"type": "done", **meta}))
+            for event in self.agent.run_events(message):
+                ws.write_frame(json.dumps(event))
         except Exception as error:
             ws.write_frame(json.dumps({"type": "error", "error": str(error)[:500]}))
 
@@ -215,33 +201,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
 
-        self._stream_simulated(message)
+        for event in self.agent.run_events(message):
+            payload = json.dumps(event, ensure_ascii=False)
+            self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
 
         self.close_connection = True
-
-    def _stream_simulated(self, message: str) -> None:
-        try:
-            response = self.agent.run(message)
-        except Exception as error:
-            event = json.dumps({"type": "error", "error": str(error)[:500]}, ensure_ascii=False)
-            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
-            self.wfile.flush()
-            return
-
-        for i in range(0, len(response), STREAM_CHUNK_SIZE):
-            chunk = response[i:i + STREAM_CHUNK_SIZE]
-            event = json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False)
-            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
-            self.wfile.flush()
-
-        report = getattr(self.agent, "last_run_report", None)
-        meta: dict[str, Any] = {}
-        if report and hasattr(report, "status"):
-            meta["status"] = report.status
-            meta["tool_calls"] = len(report.tool_calls)
-        done_event = json.dumps({"type": "done", **meta}, ensure_ascii=False)
-        self.wfile.write(f"data: {done_event}\n\n".encode("utf-8"))
-        self.wfile.flush()
 
     def _handle_tools(self) -> None:
         if not self._check_auth():
