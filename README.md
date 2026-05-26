@@ -4,7 +4,7 @@ Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地�
 
 ## 当前能力
 
-- 本地工具：计算、当前时间、保存笔记、读取笔记、读取项目文件、列项目文件、生成任务计划、预览文件 diff、应用单文件或多文件 unified diff patch、写入项目文件、精确替换项目文件文本、安全终端命令执行
+- 本地工具：计算、当前时间、保存笔记、读取笔记、读取项目文件、列项目文件、生成任务计划、预览文件 diff、应用单文件或多文件 unified diff patch、写入项目文件、精确替换项目文件文本、安全终端命令执行、列出 Python 模块导入依赖
 - 浏览器操作：打开页面、读取标题和正文、等待元素、提取链接/按钮/输入框、生成页面摘要、点击、输入、截图；真实浏览器 backend 使用可选 Playwright
 - Toolkits 架构：工具实现拆在 `mini_agent/toolkits/`，`mini_agent/tools.py` 保留兼容导出
 - Provider 架构：模型接入位于 `mini_agent/providers/`
@@ -14,7 +14,7 @@ Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地�
 - 短期会话记忆：当前进程内保留最近对话，退出后清空
 - 长期记忆：本地 JSONL 保存可检索记忆
 - 多步骤任务状态管理：创建任务、更新步骤、记录步骤总结、查看任务、完成任务，并在推进步骤时提示建议工具类型
-- Git 本地工作流：查看 status/diff/log/current branch/staged diff，汇总变更、审查 staged diff、提交前检查，显式暂存/取消暂存路径，创建本地分支，提交已暂存改动；不提供 push/pull/fetch 等远程写操作
+- Git 本地工作流：查看 status/diff/log/current branch/local branches/staged diff，汇总变更、审查 staged diff、提交前检查，显式暂存/取消暂存路径，创建本地分支，提交已暂存改动；不提供 push/pull/fetch 等远程写操作
 - 测试与诊断：运行白名单 unittest 命令，从失败输出中提取 traceback、断言和文件行号，并支持最多 3 轮的受控修复测试循环
 - 受控自主执行：显式 `/auto` 入口，执行前生成计划和确认摘要，有限步数推进目标，每步记录 trace，高风险工具仍需确认
 - Python 代码理解：用 AST 查找 class、function、method，生成文件 outline，查看符号签名/上下文，并查找 Name/Attribute 可能引用
@@ -39,16 +39,16 @@ python3 -m pip install --user .
 python3 -m pip install -e .
 ```
 
-如果安装后提示 `nora: command not found`，通常是 Python user scripts 目录没有加入 `PATH`。macOS 系统 Python 3.9 常见路径是：
+如果安装后提示 `nora: command not found`，通常是 Python user scripts 目录没有加入 `PATH`。macOS 系统 Python 常见路径是：
 
 ```bash
-export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+export PATH="$HOME/Library/Python/3.x/bin:$PATH"
 ```
 
-可写入 `~/.zshrc` 后重新加载：
+其中 `3.x` 替换为你的 Python 版本号（如 `3.11`、`3.12`）。可写入 `~/.zshrc` 后重新加载：
 
 ```bash
-echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$HOME/Library/Python/3.11/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
@@ -126,6 +126,8 @@ ANTHROPIC_API_KEY=你的_anthropic_key
 ANTHROPIC_MODEL=claude-sonnet-4-5
 ```
 
+Anthropic 和 Gemini 都支持通过 `ANTHROPIC_BASE_URL` / `GEMINI_BASE_URL` 覆盖 API 地址。
+
 使用 Google Gemini 原生 API：
 
 ```env
@@ -133,6 +135,8 @@ LLM_PROVIDER=gemini
 GEMINI_API_KEY=你的_gemini_key
 GEMINI_MODEL=gemini-2.5-pro
 ```
+
+OpenAI-compatible 模式也接受 `OPENAI_API_KEY` 作为 `LLM_API_KEY` 的回退。所有 provider 都支持 `LLM_TIMEOUT_SECONDS` 环境变量设置请求超时（默认 60 秒）。
 
 没有配置 key 时，agent 会继续使用本地规则；配置 key 后，本地规则处理不了的问题会交给模型回答。
 
@@ -147,6 +151,7 @@ llm:
   provider: openai-compatible
   base_url: https://api.deepseek.com
   model: deepseek-v4-flash
+  timeout_seconds: 60
 
 paths:
   notes: data/notes.txt
@@ -203,6 +208,7 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 
 ```text
 /help                         查看命令帮助
+/doctor                       检查运行环境状态
 /tools                        查看工具列表
 /permissions                  查看工具权限
 /status                       查看 Git 状态
@@ -212,6 +218,8 @@ CLI slash commands 会绕过 LLM，直接调用已注册工具；写入、测试
 /review-staged                审查 staged diff
 /check-commit                 提交前检查
 /branch                       查看当前分支
+/branches                     列出本地分支
+/git-branch-create <name>     创建本地分支，需要确认
 /log [n]                      查看最近提交
 /symbols [query]              列出 Python 符号
 /symbol <name>                查看 Python 符号详情
@@ -346,10 +354,9 @@ python3 main.py
 配置中的日志、记忆、任务状态和上下文摘要路径必须位于项目目录内，避免把运行数据写到 workspace 外。
 联网工具只执行 GET 请求，不提交表单，不执行网页脚本，并限制返回文本长度；网页读取和浏览器打开只允许公开 HTTP/HTTPS URL，拒绝 localhost、私网、link-local 和解析到内部地址的域名。
 浏览器工具的等待元素、读取页面摘要和提取链接/按钮/输入框是只读操作；点击、输入和截图会走统一确认；截图只能保存到项目目录内的非敏感路径。
-如果要使用真实浏览器操作，需要安装可选依赖：
+Playwright 是包的硬依赖（`pip install .` 会自动安装），但 Chromium 浏览器二进制需要单独安装才能使用真实浏览器操作：
 
 ```bash
-python3 -m pip install playwright
 python3 -m playwright install chromium
 ```
 
@@ -361,20 +368,34 @@ mini_agent/app.py               # Nora console script 入口
 mini_agent/cli.py               # CLI 交互、slash commands 和多行输入
 mini_agent/controller.py        # agent 主循环和工具调用流程
 mini_agent/config.py            # agent.yaml 配置读取
+mini_agent/settings.py          # .env 加载和 LLMSettings
 mini_agent/registry.py          # 工具注册、权限元数据、统一确认和日志入口
 mini_agent/providers/           # OpenAI-compatible、Claude、Gemini 等模型接入
+mini_agent/providers/base.py    # LLMClient 协议和 ToolCall 定义
+mini_agent/providers/factory.py # Provider 工厂
+mini_agent/providers/http.py    # HTTP 工具调用和错误脱敏
+mini_agent/providers/openai_compatible.py # OpenAI-compatible 实现
+mini_agent/providers/anthropic.py # Anthropic Claude 实现
+mini_agent/providers/gemini.py  # Google Gemini 实现
 mini_agent/toolkits/            # 本地工具实现
 mini_agent/toolkits/basic.py    # 计算、时间、计划
-mini_agent/toolkits/browser.py  # 浏览器操作工具和可选 Playwright backend
+mini_agent/toolkits/browser.py  # 浏览器操作工具和 Playwright backend
 mini_agent/toolkits/workspace.py # 项目文件读取、写入、替换、列目录
 mini_agent/toolkits/notes.py    # 本地笔记工具
 mini_agent/toolkits/registry_builder.py # 默认工具注册
+mini_agent/toolkits/register_core.py # 核心工具注册
+mini_agent/toolkits/register_developer.py # 开发工具注册
+mini_agent/toolkits/register_external.py # 外部/RAG/浏览器工具注册
+mini_agent/toolkits/register_git.py # Git 工具注册
+mini_agent/toolkits/register_state.py # 状态/任务/记忆工具注册
 mini_agent/tools.py             # 兼容导出层，旧 import 仍可用
+mini_agent/tools_common.py      # 确认提示和 JSONL 读取公共函数
 mini_agent/rag.py               # 项目上下文检索
 mini_agent/memory.py            # 短期会话记忆和长期记忆
 mini_agent/context_system.py    # 自动上下文注入和不可信参考资料边界
 mini_agent/context_summary.py   # 上下文摘要存储和检索
 mini_agent/context_window.py    # 工具结果压缩和上下文窗口控制
+mini_agent/tool_results.py      # 工具结果缓存和分段读取
 mini_agent/task_runner.py       # 多步骤任务状态管理
 mini_agent/git_tools.py         # Git 本地 status/diff/log/stage/commit
 mini_agent/diagnostics.py       # 测试运行和失败诊断
@@ -382,8 +403,10 @@ mini_agent/repair_loop.py       # 受控修复测试循环
 mini_agent/process_manager.py   # 后台进程 profile 管理
 mini_agent/symbols.py           # Python AST 符号索引
 mini_agent/shell.py             # 安全终端命令执行
+mini_agent/logs.py              # 工具调用日志和安全审计
 mini_agent/web_tools.py         # 联网搜索和网页读取
 mini_agent/url_safety.py        # 公开 URL 校验和 SSRF 防护
+mini_agent/llm.py               # Provider 兼容导出层
 tests/                          # 单元测试
 evals/                          # 离线和真实模型 eval
 ```
