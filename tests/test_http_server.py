@@ -138,6 +138,40 @@ class HTTPServerTests(unittest.TestCase):
         last_event = json.loads(events[-1])
         self.assertEqual(last_event["type"], "done")
 
+    def test_chat_stream_executes_tools_and_reports(self):
+        import socket
+        url = f"http://127.0.0.1:{self.port}/chat/stream"
+        data = json.dumps({"message": "计算 2 + 3"}).encode("utf-8")
+        req = Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        with urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            chunks = []
+            while True:
+                try:
+                    line = resp.readline()
+                    if not line:
+                        break
+                    chunks.append(line.decode("utf-8"))
+                except socket.timeout:
+                    break
+
+        raw = "".join(chunks)
+        events = [line.removeprefix("data: ") for line in raw.strip().splitlines() if line.startswith("data: ")]
+        self.assertGreater(len(events), 0)
+        last_event = json.loads(events[-1])
+        self.assertEqual(last_event["type"], "done")
+        self.assertEqual(last_event.get("status"), "done")
+        self.assertGreater(last_event.get("tool_calls", 0), 0)
+
+        all_content = "".join(
+            json.loads(e).get("content", "")
+            for e in events
+            if json.loads(e).get("type") == "delta"
+        )
+        self.assertIn("计算结果", all_content)
+
     def test_chat_stream_rejects_empty_message(self):
         status, body = self._request("POST", "/chat/stream", {"message": ""})
 

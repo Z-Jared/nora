@@ -152,17 +152,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         ws.write_frame(json.dumps({"type": "typing"}))
 
         try:
-            llm = getattr(self.agent, "llm", None)
-            if llm and hasattr(llm, "stream_chat"):
-                messages = self.agent._messages_for_user_input(message)
-                tools = self.agent.tools.to_openai_tools()
-                for chunk in llm.stream_chat(messages, tools=tools):
-                    ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
-            else:
-                response = self.agent.run(message)
-                for i in range(0, len(response), STREAM_CHUNK_SIZE):
-                    chunk = response[i:i + STREAM_CHUNK_SIZE]
-                    ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
+            response = self.agent.run(message)
+            for i in range(0, len(response), STREAM_CHUNK_SIZE):
+                chunk = response[i:i + STREAM_CHUNK_SIZE]
+                ws.write_frame(json.dumps({"type": "delta", "content": chunk}))
 
             report = getattr(self.agent, "last_run_report", None)
             meta: dict[str, Any] = {}
@@ -222,34 +215,9 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
 
-        llm = getattr(self.agent, "llm", None)
-        if llm and hasattr(llm, "stream_chat"):
-            self._stream_from_provider(message, llm)
-        else:
-            self._stream_simulated(message)
+        self._stream_simulated(message)
 
         self.close_connection = True
-
-    def _stream_from_provider(self, message: str, llm) -> None:
-        try:
-            messages = self.agent._messages_for_user_input(message)
-            tools = self.agent.tools.to_openai_tools()
-            for chunk in llm.stream_chat(messages, tools=tools):
-                event = json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False)
-                self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
-                self.wfile.flush()
-        except Exception as error:
-            event = json.dumps({"type": "error", "error": str(error)[:500]}, ensure_ascii=False)
-            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
-            self.wfile.flush()
-
-        report = getattr(self.agent, "last_run_report", None)
-        meta: dict[str, Any] = {}
-        if report and hasattr(report, "status"):
-            meta["status"] = report.status
-        done_event = json.dumps({"type": "done", **meta}, ensure_ascii=False)
-        self.wfile.write(f"data: {done_event}\n\n".encode("utf-8"))
-        self.wfile.flush()
 
     def _stream_simulated(self, message: str) -> None:
         try:
