@@ -9,6 +9,7 @@ from mini_agent.controller import MiniAgent
 from mini_agent.memory import LongTermMemory
 from mini_agent.providers.factory import build_llm_client
 from mini_agent.rag import ProjectRAG
+from mini_agent.plugins import load_plugins
 from mini_agent.session import SessionStore
 from mini_agent.settings import load_settings
 from mini_agent.tool_results import ToolResultStore
@@ -37,6 +38,9 @@ def build_agent(root: Path = None):
         rag_chunk_size=config.rag.chunk_size,
         rag_chunk_overlap=config.rag.chunk_overlap,
     )
+    plugin_names = load_plugins(registry, root / "plugins")
+    if plugin_names:
+        print(f"Loaded plugins: {', '.join(plugin_names)}")
     tool_result_store = ToolResultStore(root / "data" / "tool_results.jsonl")
     context_window = ContextWindow(
         max_tool_result_chars=config.context_window.max_tool_result_chars,

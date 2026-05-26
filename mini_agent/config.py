@@ -250,10 +250,57 @@ class AgentConfig:
         return set(AUTONOMOUS_WRITE_TOOLS)
 
 
+KNOWN_TOP_KEYS = {"llm", "paths", "context_window", "budgets", "rag", "processes", "tools", "permissions", "safety", "system_prompt"}
+KNOWN_LLM_KEYS = {"provider", "base_url", "model", "timeout_seconds"}
+KNOWN_PATHS_KEYS = {"notes", "long_term_memory", "task_state", "task_history", "context_summaries", "tool_logs"}
+KNOWN_CONTEXT_KEYS = {"max_tool_result_chars", "head_chars", "tail_chars"}
+KNOWN_BUDGETS_KEYS = {"max_tool_calls_per_turn"}
+KNOWN_RAG_KEYS = {"include_paths", "exclude_dirs", "max_file_bytes", "chunk_size", "chunk_overlap"}
+KNOWN_SAFETY_KEYS = {"mode", "allow_autonomous_write", "allow_shell_execute", "allow_git_write", "allow_browser_interact"}
+KNOWN_TOOLS_KEYS = {"disabled"}
+KNOWN_PERMISSIONS_KEYS = {"deny", "confirmation_overrides"}
+
+
+def validate_agent_config(data: dict[str, Any]) -> list[str]:
+    warnings = []
+    for key in data:
+        if key not in KNOWN_TOP_KEYS:
+            warnings.append(f"未知配置键: {key}")
+
+    section_validators = {
+        "llm": KNOWN_LLM_KEYS,
+        "paths": KNOWN_PATHS_KEYS,
+        "context_window": KNOWN_CONTEXT_KEYS,
+        "budgets": KNOWN_BUDGETS_KEYS,
+        "rag": KNOWN_RAG_KEYS,
+        "safety": KNOWN_SAFETY_KEYS,
+        "tools": KNOWN_TOOLS_KEYS,
+        "permissions": KNOWN_PERMISSIONS_KEYS,
+    }
+    for section, known_keys in section_validators.items():
+        section_data = data.get(section)
+        if isinstance(section_data, dict):
+            for key in section_data:
+                if key not in known_keys:
+                    warnings.append(f"未知配置键: {section}.{key}")
+
+    safety = data.get("safety")
+    if isinstance(safety, dict):
+        mode = safety.get("mode")
+        if mode and mode not in ("normal", "strict"):
+            warnings.append(f"无效的 safety.mode: {mode}，应为 normal 或 strict")
+
+    return warnings
+
+
 def load_agent_config(path: Path = Path("agent.yaml")) -> AgentConfig:
     if not path.exists():
         return AgentConfig.defaults()
-    return AgentConfig.from_dict(_parse_yaml_subset(path.read_text(encoding="utf-8")))
+    data = _parse_yaml_subset(path.read_text(encoding="utf-8"))
+    warnings = validate_agent_config(data)
+    for warning in warnings:
+        print(f"Config warning: {warning}")
+    return AgentConfig.from_dict(data)
 
 
 def _parse_yaml_subset(text: str) -> dict[str, Any]:

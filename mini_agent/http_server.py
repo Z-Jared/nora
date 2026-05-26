@@ -8,6 +8,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 from mini_agent.controller import MiniAgent
+from mini_agent.metrics import RequestMetrics
 from mini_agent.rate_limit import TokenBucketRateLimiter
 from mini_agent.session import SessionStore
 
@@ -19,13 +20,15 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     session_store: Optional[SessionStore]
     api_token: str
     rate_limiter: TokenBucketRateLimiter
+    metrics: RequestMetrics
 
     def do_GET(self):
+        start = time.monotonic()
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
         if path == "/health":
-            self._json_response(200, {"status": "ok"})
+            self._handle_health()
         elif path == "/tools":
             self._handle_tools()
         elif path == "/session/list":
@@ -33,19 +36,25 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         else:
             self._json_response(404, {"error": "not found"})
 
+        self.metrics.record(path, self._last_status, time.monotonic() - start)
+
     def do_POST(self):
+        start = time.monotonic()
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
         if not self._check_auth():
+            self.metrics.record(path, 401, time.monotonic() - start)
             return
 
         if not self.rate_limiter.allow():
             self._json_response(429, {"error": "rate limit exceeded"})
+            self.metrics.record(path, 429, time.monotonic() - start)
             return
 
         body = self._read_body()
         if body is None:
+            self.metrics.record(path, self._last_status, time.monotonic() - start)
             return
 
         if path == "/chat":
@@ -58,6 +67,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_session_load(body)
         else:
             self._json_response(404, {"error": "not found"})
+
+        self.metrics.record(path, self._last_status, time.monotonic() - start)
 
     def _handle_chat(self, body: dict) -> None:
         message = body.get("message", "").strip()
@@ -82,23 +93,49 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "message is required"})
             return
 
-        try:
-            response = self.agent.run(message)
-        except Exception as error:
-            self._json_response(500, {"error": str(error)[:500]})
-            return
-
-        report = getattr(self.agent, "last_run_report", None)
-        meta: dict[str, Any] = {}
-        if report and hasattr(report, "status"):
-            meta["status"] = report.status
-            meta["tool_calls"] = len(report.tool_calls)
-
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+
+        llm = getattr(self.agent, "llm", None)
+        if llm and hasattr(llm, "stream_chat"):
+            self._stream_from_provider(message, llm)
+        else:
+            self._stream_simulated(message)
+
+        self.close_connection = True
+
+    def _stream_from_provider(self, message: str, llm) -> None:
+        try:
+            messages = self.agent._messages_for_user_input(message)
+            tools = self.agent.tools.to_openai_tools()
+            for chunk in llm.stream_chat(messages, tools=tools):
+                event = json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False)
+                self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
+                self.wfile.flush()
+        except Exception as error:
+            event = json.dumps({"type": "error", "error": str(error)[:500]}, ensure_ascii=False)
+            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        report = getattr(self.agent, "last_run_report", None)
+        meta: dict[str, Any] = {}
+        if report and hasattr(report, "status"):
+            meta["status"] = report.status
+        done_event = json.dumps({"type": "done", **meta}, ensure_ascii=False)
+        self.wfile.write(f"data: {done_event}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+    def _stream_simulated(self, message: str) -> None:
+        try:
+            response = self.agent.run(message)
+        except Exception as error:
+            event = json.dumps({"type": "error", "error": str(error)[:500]}, ensure_ascii=False)
+            self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            return
 
         for i in range(0, len(response), STREAM_CHUNK_SIZE):
             chunk = response[i:i + STREAM_CHUNK_SIZE]
@@ -106,10 +143,14 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {event}\n\n".encode("utf-8"))
             self.wfile.flush()
 
+        report = getattr(self.agent, "last_run_report", None)
+        meta: dict[str, Any] = {}
+        if report and hasattr(report, "status"):
+            meta["status"] = report.status
+            meta["tool_calls"] = len(report.tool_calls)
         done_event = json.dumps({"type": "done", **meta}, ensure_ascii=False)
         self.wfile.write(f"data: {done_event}\n\n".encode("utf-8"))
         self.wfile.flush()
-        self.close_connection = True
 
     def _handle_tools(self) -> None:
         if not self._check_auth():
@@ -175,7 +216,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": f"invalid JSON: {error}"})
             return None
 
+    def _handle_health(self) -> None:
+        data = {"status": "ok", "metrics": self.metrics.summary()}
+        self._json_response(200, data)
+
     def _json_response(self, status: int, data: dict) -> None:
+        self._last_status = status
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -200,4 +246,5 @@ def create_server(
     NoraHTTPHandler.session_store = session_store
     NoraHTTPHandler.api_token = api_token
     NoraHTTPHandler.rate_limiter = TokenBucketRateLimiter(rate=rate_limit, burst=rate_burst)
+    NoraHTTPHandler.metrics = RequestMetrics()
     return HTTPServer((host, port), NoraHTTPHandler)
