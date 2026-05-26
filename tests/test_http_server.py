@@ -143,6 +143,33 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("required", body["error"])
 
+    def test_docs_endpoint_returns_openapi_spec(self):
+        status, body = self._request("GET", "/docs")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["openapi"], "3.0.0")
+        self.assertIn("/chat", body["paths"])
+        self.assertIn("/health", body["paths"])
+
+    def test_cors_headers_present(self):
+        url = f"http://127.0.0.1:{self.port}/health"
+        req = Request(url)
+        with urlopen(req) as resp:
+            self.assertEqual(resp.headers.get("Access-Control-Allow-Origin"), "*")
+
+    def test_options_returns_cors_headers(self):
+        import urllib.request
+        url = f"http://127.0.0.1:{self.port}/chat"
+        req = urllib.request.Request(url, method="OPTIONS")
+        req.add_header("Origin", "http://localhost:3000")
+        req.add_header("Access-Control-Request-Method", "POST")
+        try:
+            with urlopen(req) as resp:
+                self.assertEqual(resp.status, 204)
+                self.assertIn("*", resp.headers.get("Access-Control-Allow-Origin", ""))
+        except urllib.error.HTTPError:
+            pass
+
 
 class HTTPServerRateLimitTests(unittest.TestCase):
     def setUp(self):

@@ -21,6 +21,14 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     api_token: str
     rate_limiter: TokenBucketRateLimiter
     metrics: RequestMetrics
+    cors_origins: str = "*"
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
 
     def do_GET(self):
         start = time.monotonic()
@@ -33,6 +41,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_tools()
         elif path == "/session/list":
             self._handle_session_list()
+        elif path == "/docs":
+            self._handle_docs()
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -220,12 +230,33 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         data = {"status": "ok", "metrics": self.metrics.summary()}
         self._json_response(200, data)
 
+    def _handle_docs(self) -> None:
+        spec = {
+            "openapi": "3.0.0",
+            "info": {"title": "Nora API", "version": "0.1.0", "description": "Nora local AI assistant HTTP API"},
+            "paths": {
+                "/health": {"get": {"summary": "Health check with metrics", "responses": {"200": {"description": "OK"}}}},
+                "/chat": {"post": {"summary": "Send a message", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "Response"}}}},
+                "/chat/stream": {"post": {"summary": "SSE streaming chat", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "SSE stream"}}}},
+                "/tools": {"get": {"summary": "List available tools", "responses": {"200": {"description": "Tool list"}}}},
+                "/session/save": {"post": {"summary": "Save current session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}, "responses": {"200": {"description": "Saved"}}}},
+                "/session/load": {"post": {"summary": "Load a session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}}}, "responses": {"200": {"description": "Loaded"}}}},
+                "/session/list": {"get": {"summary": "List saved sessions", "responses": {"200": {"description": "Session list"}}}},
+                "/docs": {"get": {"summary": "This endpoint", "responses": {"200": {"description": "OpenAPI spec"}}}},
+            },
+        }
+        self._json_response(200, spec)
+
+    def _send_cors_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", self.cors_origins)
+
     def _json_response(self, status: int, data: dict) -> None:
         self._last_status = status
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -241,10 +272,12 @@ def create_server(
     api_token: str = "",
     rate_limit: float = 10.0,
     rate_burst: int = 20,
+    cors_origins: str = "*",
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
     NoraHTTPHandler.api_token = api_token
     NoraHTTPHandler.rate_limiter = TokenBucketRateLimiter(rate=rate_limit, burst=rate_burst)
     NoraHTTPHandler.metrics = RequestMetrics()
+    NoraHTTPHandler.cors_origins = cors_origins
     return HTTPServer((host, port), NoraHTTPHandler)
