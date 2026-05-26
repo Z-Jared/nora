@@ -228,7 +228,7 @@ def register_external_tools(registry: ToolRegistry, project_rag, web_tools, brow
     )
     registry.register(
         "browser_screenshot",
-        "保存当前浏览器页面截图到项目目录内的非敏感路径。",
+        "保存当前浏览器页面截图到项目目录内的非敏感路径。需要用户确认。",
         browser_tools.screenshot,
         parameters={
             "type": "object",
@@ -239,5 +239,5 @@ def register_external_tools(registry: ToolRegistry, project_rag, web_tools, brow
                 }
             },
         },
-        permission=ToolPermission(category="browser", risk="read"),
+        permission=ToolPermission(category="browser", risk="write", requires_confirmation=True),
     )

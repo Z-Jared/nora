@@ -3,6 +3,8 @@ import re
 import urllib.parse
 import urllib.request
 
+from mini_agent.url_safety import is_public_http_url
+
 
 MAX_WEB_CHARS = 12000
 
@@ -13,8 +15,8 @@ class WebTools:
         self.timeout_seconds = timeout_seconds
 
     def fetch_url(self, url: str, max_chars: int = MAX_WEB_CHARS) -> str:
-        if not _is_allowed_url(url):
-            return "拒绝访问: 只允许 HTTP/HTTPS URL。"
+        if not is_public_http_url(url):
+            return "拒绝访问: 只允许公开 HTTP/HTTPS URL。"
 
         max_chars = max(200, min(max_chars, MAX_WEB_CHARS))
         try:
@@ -44,6 +46,9 @@ class WebTools:
 
 
 def _fetch_url(url: str, timeout: int) -> str:
+    if not is_public_http_url(url, resolve_host=True):
+        raise ValueError("refusing private or local network URL")
+
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "Nora/1.0"},
@@ -56,11 +61,6 @@ def _fetch_url(url: str, timeout: int) -> str:
 
         data = response.read(MAX_WEB_CHARS * 4)
         return data.decode("utf-8", errors="replace")
-
-
-def _is_allowed_url(url: str) -> bool:
-    parsed = urllib.parse.urlparse(url)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _html_to_text(raw: str) -> str:

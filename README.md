@@ -338,8 +338,9 @@ python3 main.py
 受控修复测试循环最多运行 3 轮白名单 unittest 命令，只返回测试摘要、失败诊断和下一步建议；它不会自动生成 patch、不会自动应用 patch、不会自动提交。
 后台进程管理只支持内置 profile，例如 `static_server_8000`；不支持任意 shell、不持久化 pid，输出读取和等待都有上限，启动/停止需要确认；后台进程 stdin 会关闭，避免交互式进程抢占当前终端输入。
 轻量 RAG 只索引 `.py`、`.md`、`.txt`、`.json`、`.toml`、`.yaml`、`.yml` 等文本文件，并跳过 `.env`、`data/`、`.git/`、`logs/`、`evals/.tmp/`；它按行 chunk 返回 path、line range、score、snippet，排序会综合考虑命中词覆盖、短语、路径和频次，`answer_with_project_context` 会要求模型只基于来源片段回答。
-联网工具只执行 GET 请求，不提交表单，不执行网页脚本，并限制返回文本长度。
-浏览器工具只允许打开 HTTP/HTTPS URL；等待元素、读取页面摘要和提取链接/按钮/输入框是只读操作；点击和输入会走统一确认；截图只能保存到项目目录内的非敏感路径。
+配置中的日志、记忆、任务状态和上下文摘要路径必须位于项目目录内，避免把运行数据写到 workspace 外。
+联网工具只执行 GET 请求，不提交表单，不执行网页脚本，并限制返回文本长度；网页读取和浏览器打开只允许公开 HTTP/HTTPS URL，拒绝 localhost、私网、link-local 和解析到内部地址的域名。
+浏览器工具的等待元素、读取页面摘要和提取链接/按钮/输入框是只读操作；点击、输入和截图会走统一确认；截图只能保存到项目目录内的非敏感路径。
 如果要使用真实浏览器操作，需要安装可选依赖：
 
 ```bash
@@ -366,6 +367,7 @@ mini_agent/toolkits/registry_builder.py # 默认工具注册
 mini_agent/tools.py             # 兼容导出层，旧 import 仍可用
 mini_agent/rag.py               # 项目上下文检索
 mini_agent/memory.py            # 短期会话记忆和长期记忆
+mini_agent/context_system.py    # 自动上下文注入和不可信参考资料边界
 mini_agent/context_summary.py   # 上下文摘要存储和检索
 mini_agent/context_window.py    # 工具结果压缩和上下文窗口控制
 mini_agent/task_runner.py       # 多步骤任务状态管理
@@ -376,6 +378,7 @@ mini_agent/process_manager.py   # 后台进程 profile 管理
 mini_agent/symbols.py           # Python AST 符号索引
 mini_agent/shell.py             # 安全终端命令执行
 mini_agent/web_tools.py         # 联网搜索和网页读取
+mini_agent/url_safety.py        # 公开 URL 校验和 SSRF 防护
 tests/                          # 单元测试
 evals/                          # 离线和真实模型 eval
 ```

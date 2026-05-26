@@ -198,6 +198,20 @@ class AgentConfigTests(unittest.TestCase):
         self.assertIn("browser_fill", disabled_tools)
         self.assertIn("write_project_file", config.autonomous_disabled_tools())
         self.assertIn("apply_project_patch", config.autonomous_disabled_tools())
+        self.assertIn("browser_screenshot", config.autonomous_disabled_tools())
+
+    def test_resolve_path_rejects_paths_outside_workspace_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = AgentConfig.defaults()
+
+            with self.assertRaises(ValueError):
+                config.resolve_path(root, Path("/tmp/nora-memory.jsonl"))
+
+            with self.assertRaises(ValueError):
+                config.resolve_path(root, Path("../outside.jsonl"))
+
+            self.assertEqual(config.resolve_path(root, Path("data/notes.txt")), root / "data" / "notes.txt")
 
     def test_safety_flags_can_allow_specific_risky_tool_groups(self):
         config = AgentConfig.from_dict(

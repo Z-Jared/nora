@@ -12,6 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from mini_agent.cli import MiniAgentCLI
 from mini_agent.config import AgentConfig, load_agent_config
 from mini_agent.context_summary import ContextSummaryStore
+from mini_agent.context_system import ContextSystem
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
@@ -81,6 +82,7 @@ def main() -> int:
         EvalCase("symbols_find_references", eval_symbols_find_references),
         EvalCase("cli_symbol_and_refs_commands", eval_cli_symbol_and_refs_commands),
         EvalCase("context_summary_round_trip", eval_context_summary_round_trip),
+        EvalCase("context_system_injects_auto_context", eval_context_system_injects_auto_context),
         EvalCase("agent_config_loads_yaml", eval_agent_config_loads_yaml),
         EvalCase("agent_config_disables_tools", eval_agent_config_disables_tools),
         EvalCase("agent_config_permission_policy", eval_agent_config_permission_policy),
@@ -597,6 +599,31 @@ def eval_context_summary_round_trip():
         assert "已保存上下文摘要" in store.save_summary("eval topic", "eval summary", source="eval")
         assert "eval topic" in store.search_summaries("summary")
         assert "eval summary" in store.list_summaries()
+
+
+def eval_context_system_injects_auto_context():
+    class FakeContextAwareLLM:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, tools=None):
+            self.calls.append(messages)
+            content = messages[-1]["content"]
+            if "Nora 自动上下文" in content and "context packs" in content:
+                return LLMResponse(content="saw automatic context")
+            return LLMResponse(content="missing context")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "README.md").write_text("Nora can inject context packs automatically", encoding="utf-8")
+        context_system = ContextSystem(rag=ProjectRAG(root), context_window=ContextWindow(max_context_pack_chars=1000))
+        llm = FakeContextAwareLLM()
+        agent = MiniAgent(build_default_registry(workspace_root=root), llm=llm, context_system=context_system)
+
+        result = agent.run("How do context packs work?")
+
+    assert result == "saw automatic context", result
+    assert len(llm.calls) == 1
 
 
 def eval_agent_config_loads_yaml():

@@ -21,6 +21,7 @@ GIT_WRITE_TOOLS = {
     "git_commit_staged",
 }
 BROWSER_INTERACT_TOOLS = {"browser_click", "browser_fill"}
+BROWSER_WRITE_TOOLS = {"browser_screenshot"}
 AUTONOMOUS_WRITE_TOOLS = {
     "save_note",
     "write_project_file",
@@ -34,7 +35,7 @@ AUTONOMOUS_WRITE_TOOLS = {
     "update_task_step",
     "finish_task",
     "run_task_once",
-} | SHELL_EXECUTE_TOOLS | GIT_WRITE_TOOLS | BROWSER_INTERACT_TOOLS
+} | SHELL_EXECUTE_TOOLS | GIT_WRITE_TOOLS | BROWSER_INTERACT_TOOLS | BROWSER_WRITE_TOOLS
 
 
 @dataclass(frozen=True)
@@ -205,7 +206,14 @@ class AgentConfig:
         return replace(settings, **updates) if updates else settings
 
     def resolve_path(self, root: Path, path: Path) -> Path:
-        return path if path.is_absolute() else root / path
+        resolved_root = root.resolve()
+        raw_target = path if path.is_absolute() else root / path
+        target = raw_target.resolve()
+        try:
+            target.relative_to(resolved_root)
+        except ValueError as error:
+            raise ValueError(f"配置路径必须位于项目目录内: {path}") from error
+        return raw_target
 
     def disabled_tools(self) -> set[str]:
         disabled = set(self.tools.disabled) | set(self.permissions.deny)

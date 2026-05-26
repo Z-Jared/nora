@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional, Protocol
-import urllib.parse
+
+from mini_agent.url_safety import is_public_http_url
 
 
 MAX_PAGE_TEXT_CHARS = 12000
@@ -42,10 +43,11 @@ class BrowserTools:
     ):
         self.root = (root or Path.cwd()).resolve()
         self.backend = backend or PlaywrightBrowserBackend()
+        self._validate_dns = backend is None
 
     def open_url(self, url: str) -> str:
-        if not _is_allowed_url(url):
-            return "拒绝打开: 只允许 HTTP/HTTPS URL。"
+        if not is_public_http_url(url, resolve_host=self._validate_dns):
+            return "拒绝打开: 只允许公开 HTTP/HTTPS URL。"
 
         try:
             self.backend.open_url(url)
@@ -234,11 +236,6 @@ class PlaywrightBrowserBackend:
         self._browser = self._playwright.chromium.launch(headless=self.headless)
         self._page = self._browser.new_page()
         return self._page
-
-
-def _is_allowed_url(url: str) -> bool:
-    parsed = urllib.parse.urlparse(url)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _format_elements(elements: dict) -> str:

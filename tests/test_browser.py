@@ -12,6 +12,23 @@ class BrowserToolsTests(unittest.TestCase):
 
         self.assertIn("拒绝打开", tools.open_url("file:///etc/passwd"))
 
+    def test_rejects_private_and_local_network_urls(self):
+        backend = FakeBrowserBackend()
+        tools = BrowserTools(backend=backend)
+
+        for url in [
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://10.0.0.1",
+            "http://172.16.0.1",
+            "http://192.168.1.1",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]:8000",
+        ]:
+            self.assertIn("拒绝打开", tools.open_url(url), url)
+
+        self.assertEqual(backend.opened_url, "")
+
     def test_opens_url_and_reads_page_state(self):
         backend = FakeBrowserBackend()
         tools = BrowserTools(backend=backend)
@@ -84,6 +101,14 @@ class BrowserToolsTests(unittest.TestCase):
         self.assertIn("browser_wait_for_selector", tool_names)
         self.assertIn("browser_page_elements", tool_names)
         self.assertIn("browser_page_summary", tool_names)
+
+    def test_default_registry_requires_confirmation_for_browser_screenshot(self):
+        registry = build_default_registry(confirm_action=lambda prompt: False)
+
+        result = registry.call("browser_screenshot", path="screenshots/page.png")
+
+        self.assertEqual(result, "已取消操作。")
+        self.assertIn("browser_screenshot: browser/write, 需要确认", registry.describe_permissions())
 
 
 class FakeBrowserBackend:

@@ -346,6 +346,59 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertEqual(agent.run("解释一下 agent 架构"), "LLM: 解释一下 agent 架构")
 
+    def test_llm_receives_auto_context_once_in_user_message(self):
+        class FakeContextSystem:
+            def __init__(self):
+                self.queries = []
+
+            def context_pack(self, query):
+                self.queries.append(query)
+                return "自动上下文: README 说明 Nora"
+
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="calculate", arguments={"expression": "1 + 1"})],
+                    )
+                return LLMResponse(content=messages[-1]["content"])
+
+        context_system = FakeContextSystem()
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, context_system=context_system)
+
+        answer = agent.run("解释 Nora")
+
+        self.assertEqual(context_system.queries, ["解释 Nora"])
+        first_user_message = llm.calls[0]["messages"][-1]
+        self.assertEqual(first_user_message["role"], "user")
+        self.assertIn("自动上下文: README 说明 Nora", first_user_message["content"])
+        self.assertIn("用户输入:\n解释 Nora", first_user_message["content"])
+        self.assertEqual(answer, "2")
+        self.assertEqual(sum("自动上下文: README 说明 Nora" in message.get("content", "") for message in llm.calls[1]["messages"]), 1)
+
+    def test_llm_skips_empty_auto_context(self):
+        class FakeContextSystem:
+            def context_pack(self, query):
+                return ""
+
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append(messages)
+                return LLMResponse(content="ok")
+
+        agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM(), context_system=FakeContextSystem())
+
+        self.assertEqual(agent.run("hello"), "ok")
+
     def test_llm_can_call_tools(self):
         class FakeToolCallingLLM:
             def __init__(self):
@@ -985,6 +1038,41 @@ class MiniAgentTests(unittest.TestCase):
         self.assertIn("tool:calculate", answer)
         self.assertIn("result: 5", answer)
 
+    def test_autonomous_loop_receives_auto_context_once_in_initial_prompt(self):
+        class FakeContextSystem:
+            def __init__(self):
+                self.queries = []
+
+            def context_pack(self, query):
+                self.queries.append(query)
+                return "自动上下文: 自主执行需要先读上下文"
+
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="calculate", arguments={"expression": "1 + 1"})],
+                    )
+                return LLMResponse(content="done")
+
+        context_system = FakeContextSystem()
+        llm = FakeToolCallingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, context_system=context_system)
+
+        answer = agent.run_autonomous("检查项目", max_steps=2)
+
+        self.assertIn("done", answer)
+        self.assertEqual(context_system.queries, ["检查项目"])
+        first_prompt = llm.calls[0]["messages"][-1]["content"]
+        self.assertIn("自动上下文: 自主执行需要先读上下文", first_prompt)
+        self.assertIn("用户输入:\n受控自主执行请求。", first_prompt)
+        self.assertEqual(sum("自动上下文: 自主执行需要先读上下文" in message.get("content", "") for message in llm.calls[1]["messages"]), 1)
+
     def test_autonomous_loop_includes_preflight_plan_and_confirmation_summary(self):
         class FakeToolCallingLLM:
             def __init__(self):
@@ -1548,6 +1636,25 @@ class WebToolsTests(unittest.TestCase):
         tools = WebTools(fetcher=lambda url, timeout: "ignored")
 
         self.assertIn("拒绝访问", tools.fetch_url("file:///etc/passwd"))
+
+    def test_fetch_url_rejects_private_and_local_networks(self):
+        calls = []
+        tools = WebTools(fetcher=lambda url, timeout: calls.append(url) or "private")
+
+        rejected_urls = [
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://10.0.0.1",
+            "http://172.16.0.1",
+            "http://192.168.1.1",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]:8000",
+        ]
+
+        for url in rejected_urls:
+            self.assertIn("拒绝访问", tools.fetch_url(url), url)
+
+        self.assertEqual(calls, [])
 
     def test_web_search_uses_duckduckgo_html(self):
         requested = []

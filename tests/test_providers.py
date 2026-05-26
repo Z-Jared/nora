@@ -1,11 +1,14 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from mini_agent.llm import ChatMessage
 from mini_agent.providers.anthropic import AnthropicClient
 from mini_agent.providers.factory import build_llm_client
 from mini_agent.providers.gemini import GeminiClient
+from mini_agent.providers.http import post_json
 from mini_agent.providers.openai_compatible import OpenAICompatibleClient
 from mini_agent.settings import load_settings
 
@@ -283,6 +286,24 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertEqual(result.reasoning_content, "需要计算。")
         self.assertEqual(result.to_assistant_message()["reasoning_content"], "需要计算。")
         self.assertEqual(result.to_assistant_message()["content"], "")
+
+    def test_http_error_details_are_redacted(self):
+        class FakeHTTPError(HTTPError):
+            def read(self):
+                return b'{"error":"bad","prompt":"OPENAI_API_KEY=secret","token":"sk-secret"}'
+
+        def fake_urlopen(request, timeout):
+            raise FakeHTTPError(request.full_url, 400, "Bad Request", {}, None)
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(Exception) as context:
+                post_json("https://relay.example.com/v1/messages", {}, {"prompt": "hello"}, 10)
+
+        message = str(context.exception)
+        self.assertIn("LLM HTTP 400", message)
+        self.assertIn("[redacted]", message)
+        self.assertNotIn("OPENAI_API_KEY", message)
+        self.assertNotIn("sk-secret", message)
 
 
 if __name__ == "__main__":
