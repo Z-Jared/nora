@@ -312,7 +312,7 @@ class MiniAgent:
         )
 
     def _autonomous_status_from_result(self, result: str) -> str:
-        if result == "已取消操作。" or "工具调用失败" in result or "拒绝" in result:
+        if result == "已取消操作。" or "工具调用失败" in result or "拒绝" in result or "预算已用完" in result:
             return "blocked"
         return "continue"
 
