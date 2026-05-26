@@ -5,7 +5,7 @@ class RepairLoop:
     def __init__(self, diagnostics: Diagnostics):
         self.diagnostics = diagnostics
 
-    def run(self, max_attempts: int = 2, test_command: str = ALLOWED_TEST_COMMAND) -> str:
+    def run(self, max_attempts: int = 2, test_command: str = ALLOWED_TEST_COMMAND, reason: str = "") -> str:
         command = test_command.strip() or ALLOWED_TEST_COMMAND
         if command != ALLOWED_TEST_COMMAND:
             return "拒绝运行修复循环: 命令不在测试白名单内。"

@@ -62,5 +62,6 @@ def main() -> None:
         tool_result_store=tool_result_store,
         autonomous_disabled_tools=config.autonomous_disabled_tools(),
         context_system=context_system,
+        max_tool_calls_per_turn=config.budgets.max_tool_calls_per_turn,
     )
     MiniAgentCLI(agent, registry, settings=settings, root=root).run()

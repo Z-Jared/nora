@@ -130,7 +130,7 @@ class BrowserTools:
         sections.append("elements:\n" + self.page_elements(max_items=max_elements))
         return "\n\n".join(sections)
 
-    def screenshot(self, path: str = "screenshots/browser.png") -> str:
+    def screenshot(self, path: str = "screenshots/browser.png", reason: str = "") -> str:
         target = self._resolve_screenshot_path(path)
         if not target:
             return "拒绝截图: 只能保存到项目目录内的非敏感路径。"

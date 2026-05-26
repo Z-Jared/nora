@@ -107,6 +107,10 @@ class ToolRegistry:
             for tool in self._tools.values()
         )
 
+    def permission_for(self, tool_name: str) -> Optional[ToolPermission]:
+        tool = self._tools.get(tool_name)
+        return tool.permission if tool else None
+
     def to_openai_tools(self) -> list[dict]:
         return [
             {

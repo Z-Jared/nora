@@ -11,7 +11,7 @@ class Diagnostics:
         self.root = root.resolve()
         self.timeout_seconds = timeout_seconds
 
-    def run_tests(self, command: str = ALLOWED_TEST_COMMAND, max_output_chars: int = 12000) -> str:
+    def run_tests(self, command: str = ALLOWED_TEST_COMMAND, max_output_chars: int = 12000, reason: str = "") -> str:
         command = command.strip() or ALLOWED_TEST_COMMAND
         if command != ALLOWED_TEST_COMMAND:
             return "拒绝执行测试: 命令不在测试白名单内。"

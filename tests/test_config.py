@@ -40,6 +40,8 @@ class AgentConfigTests(unittest.TestCase):
                         "  max_file_bytes: 4096",
                         "  chunk_size: 20",
                         "  chunk_overlap: 5",
+                        "budgets:",
+                        "  max_tool_calls_per_turn: 3",
                         "safety:",
                         "  mode: strict",
                         "  allow_shell_execute: true",
@@ -77,6 +79,7 @@ class AgentConfigTests(unittest.TestCase):
         self.assertEqual(config.rag.max_file_bytes, 4096)
         self.assertEqual(config.rag.chunk_size, 20)
         self.assertEqual(config.rag.chunk_overlap, 5)
+        self.assertEqual(config.budgets.max_tool_calls_per_turn, 3)
         self.assertEqual(config.safety.mode, "strict")
         self.assertTrue(config.safety.allow_shell_execute)
         self.assertFalse(config.safety.allow_git_write)

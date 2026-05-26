@@ -35,6 +35,8 @@ class RunReport:
     status: str
     steps_used: int
     tool_calls: list[ToolRunRecord]
+    tool_call_limit: int = 0
+    remaining_tool_calls: int = 0
     failure: str = ""
     next_step: str = ""
 
@@ -47,6 +49,7 @@ class RunReport:
                 "运行报告:",
                 f"- 状态: {self.status}",
                 f"- 步骤: {self.steps_used}",
+                f"- 工具预算: {len(self.tool_calls)}/{self.tool_call_limit}，剩余 {self.remaining_tool_calls}",
                 f"- 工具: {tools}",
                 f"- 失败: {failure}",
                 f"- 下一步: {next_step}",
@@ -66,6 +69,7 @@ class AutonomousPreflight:
 class MiniAgent:
     max_tool_rounds = 4
     max_autonomous_steps = 6
+    default_max_tool_calls_per_turn = 8
 
     def __init__(
         self,
@@ -76,6 +80,7 @@ class MiniAgent:
         tool_result_store: Optional[ToolResultStore] = None,
         autonomous_disabled_tools: Optional[set[str]] = None,
         context_system: Optional[ContextSystem] = None,
+        max_tool_calls_per_turn: int = default_max_tool_calls_per_turn,
     ):
         self.tools = tools
         self.llm = llm
@@ -84,7 +89,14 @@ class MiniAgent:
         self.tool_result_store = tool_result_store
         self.autonomous_disabled_tools = autonomous_disabled_tools or set()
         self.context_system = context_system
-        self.last_run_report = RunReport(status="idle", steps_used=0, tool_calls=[])
+        self.max_tool_calls_per_turn = max(1, int(max_tool_calls_per_turn or self.default_max_tool_calls_per_turn))
+        self.last_run_report = RunReport(
+            status="idle",
+            steps_used=0,
+            tool_calls=[],
+            tool_call_limit=self.max_tool_calls_per_turn,
+            remaining_tool_calls=self.max_tool_calls_per_turn,
+        )
         self._active_tool_records: list[ToolRunRecord] = []
 
     def run(self, user_input: str) -> str:
@@ -197,6 +209,8 @@ class MiniAgent:
             status="done" if final_status == "done" else "blocked",
             steps_used=len(records),
             tool_calls=tool_records,
+            tool_call_limit=self.max_tool_calls_per_turn,
+            remaining_tool_calls=max(0, self.max_tool_calls_per_turn - len(tool_records)),
             failure=failure,
             next_step=_next_step_for_status("done" if final_status == "done" else "blocked"),
         )
@@ -366,7 +380,13 @@ class MiniAgent:
 
     def _start_run_report(self) -> None:
         self._active_tool_records = []
-        self.last_run_report = RunReport(status="running", steps_used=0, tool_calls=[])
+        self.last_run_report = RunReport(
+            status="running",
+            steps_used=0,
+            tool_calls=[],
+            tool_call_limit=self.max_tool_calls_per_turn,
+            remaining_tool_calls=self.max_tool_calls_per_turn,
+        )
 
     def _finish_turn(
         self,
@@ -383,6 +403,8 @@ class MiniAgent:
             status=status,
             steps_used=len(self._active_tool_records),
             tool_calls=list(self._active_tool_records),
+            tool_call_limit=self.max_tool_calls_per_turn,
+            remaining_tool_calls=max(0, self.max_tool_calls_per_turn - len(self._active_tool_records)),
             failure=failure,
             next_step=_next_step_for_status(status),
         )
@@ -398,6 +420,19 @@ class MiniAgent:
         return compacted + f"\n[result_id={result_id} use read_tool_result to inspect more]"
 
     def _call_tool(self, name: str, arguments: dict) -> str:
+        if len(self._active_tool_records) >= self.max_tool_calls_per_turn:
+            result = f"工具调用预算已用完: 本轮最多允许 {self.max_tool_calls_per_turn} 次工具调用。"
+            self._active_tool_records.append(
+                ToolRunRecord(name=name, status="budget_exceeded", result_preview=result)
+            )
+            return result
+
+        permission = self.tools.permission_for(name) if hasattr(self.tools, "permission_for") else None
+        if permission and permission.requires_confirmation and not str(arguments.get("reason") or "").strip():
+            result = f"拒绝调用: 高风险工具需要提供 reason: {name}"
+            self._active_tool_records.append(ToolRunRecord(name=name, status="blocked", result_preview=result))
+            return result
+
         try:
             result = self.tools.call(name, **arguments)
         except Exception as error:

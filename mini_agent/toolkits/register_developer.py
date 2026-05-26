@@ -205,6 +205,10 @@ def register_developer_tools(
                     "type": "integer",
                     "description": "最多返回多少字符，默认 12000",
                 },
+                "reason": {
+                    "type": "string",
+                    "description": "说明为什么需要运行项目测试",
+                },
             },
         },
         permission=ToolPermission(
@@ -247,6 +251,10 @@ def register_developer_tools(
                 "test_command": {
                     "type": "string",
                     "description": "测试命令，当前只允许 python3 -m unittest discover -s tests",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "说明为什么需要运行受控修复测试循环",
                 },
             },
         },

@@ -64,6 +64,11 @@ class ContextWindowConfig:
 
 
 @dataclass(frozen=True)
+class BudgetsConfig:
+    max_tool_calls_per_turn: int = 8
+
+
+@dataclass(frozen=True)
 class RAGConfig:
     include_paths: list[str]
     exclude_dirs: list[str]
@@ -102,6 +107,7 @@ class AgentConfig:
     llm: LLMConfig
     paths: PathsConfig
     context_window: ContextWindowConfig
+    budgets: BudgetsConfig
     rag: RAGConfig
     processes: ProcessesConfig
     tools: ToolsConfig
@@ -114,6 +120,7 @@ class AgentConfig:
             llm=LLMConfig(),
             paths=PathsConfig(),
             context_window=ContextWindowConfig(),
+            budgets=BudgetsConfig(),
             rag=RAGConfig(include_paths=[], exclude_dirs=[]),
             processes=ProcessesConfig(profiles=dict(DEFAULT_PROFILES)),
             tools=ToolsConfig(disabled=set()),
@@ -127,6 +134,7 @@ class AgentConfig:
         llm_data = _as_dict(data.get("llm"))
         paths_data = _as_dict(data.get("paths"))
         context_data = _as_dict(data.get("context_window"))
+        budgets_data = _as_dict(data.get("budgets"))
         rag_data = _as_dict(data.get("rag"))
         process_data = _as_dict(data.get("processes"))
         profile_data = _as_dict(process_data.get("profiles"))
@@ -158,6 +166,12 @@ class AgentConfig:
                 ),
                 head_chars=_int(context_data.get("head_chars"), defaults.context_window.head_chars),
                 tail_chars=_int(context_data.get("tail_chars"), defaults.context_window.tail_chars),
+            ),
+            budgets=BudgetsConfig(
+                max_tool_calls_per_turn=_int(
+                    budgets_data.get("max_tool_calls_per_turn"),
+                    defaults.budgets.max_tool_calls_per_turn,
+                ),
             ),
             rag=RAGConfig(
                 include_paths=_string_list(rag_data.get("include_paths")),

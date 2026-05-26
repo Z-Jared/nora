@@ -236,7 +236,11 @@ def register_external_tools(registry: ToolRegistry, project_rag, web_tools, brow
                 "path": {
                     "type": "string",
                     "description": "相对于项目根目录的截图路径，例如 screenshots/page.png",
-                }
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "说明为什么需要保存当前浏览器截图",
+                },
             },
         },
         permission=ToolPermission(category="browser", risk="write", requires_confirmation=True),

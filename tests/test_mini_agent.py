@@ -488,6 +488,73 @@ class MiniAgentTests(unittest.TestCase):
         self.assertEqual(report.failure, "write_project_file: 已取消操作。")
         self.assertIn("下一步: 检查失败工具并决定是否调整请求、权限或参数。", report.format())
 
+    def test_tool_budget_blocks_extra_tool_calls_in_one_turn(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(call_id="call_1", name="calculate", arguments={"expression": "1 + 1"}),
+                            ToolCall(call_id="call_2", name="current_time", arguments={}),
+                        ],
+                    )
+                return LLMResponse(content=messages[-1]["content"])
+
+        agent = MiniAgent(build_default_registry(), llm=FakeToolCallingLLM(), max_tool_calls_per_turn=1)
+
+        answer = agent.run("先计算再看时间")
+
+        self.assertIn("工具调用预算已用完", answer)
+        report = agent.last_run_report
+        self.assertEqual(report.status, "blocked")
+        self.assertEqual(report.tool_call_limit, 1)
+        self.assertEqual(report.remaining_tool_calls, 0)
+        self.assertEqual([record.status for record in report.tool_calls], ["ok", "budget_exceeded"])
+        self.assertIn("工具预算: 2/1，剩余 0", report.format())
+
+    def test_model_high_risk_tool_call_requires_reason_before_confirmation(self):
+        class FakeToolCallingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if len(self.calls) == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="call_1",
+                                name="write_project_file",
+                                arguments={"path": "docs/no_reason.md", "content": "x"},
+                            )
+                        ],
+                    )
+                return LLMResponse(content=messages[-1]["content"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            confirmations = []
+            agent = MiniAgent(
+                build_default_registry(
+                    workspace_root=root,
+                    confirm_action=lambda prompt: confirmations.append(prompt) or True,
+                ),
+                llm=FakeToolCallingLLM(),
+            )
+
+            answer = agent.run("写文件但不说明原因")
+
+            self.assertIn("高风险工具需要提供 reason", answer)
+            self.assertFalse((root / "docs" / "no_reason.md").exists())
+            self.assertEqual(confirmations, [])
+            self.assertEqual(agent.last_run_report.status, "blocked")
+
     def test_llm_can_read_project_file(self):
         class FakeToolCallingLLM:
             def __init__(self):
