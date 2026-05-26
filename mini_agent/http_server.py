@@ -215,6 +215,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "message is required"})
             return
 
+        self._last_status = 200
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")

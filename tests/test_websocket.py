@@ -94,6 +94,7 @@ class WebSocketHandshakeTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=2)
+        self.server.server_close()
 
     def test_handshake_succeeds(self):
         sock, response = _ws_handshake(self.port)
@@ -175,6 +176,7 @@ class WebSocketAuthTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=2)
+        self.server.server_close()
 
     def test_auth_via_query_param(self):
         sock, response = _ws_handshake(self.port, token="secret")
@@ -227,6 +229,7 @@ class WebSocketSessionTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=2)
+        self.server.server_close()
 
     def test_session_save_no_store_msg(self):
         """With session store configured, save should work."""

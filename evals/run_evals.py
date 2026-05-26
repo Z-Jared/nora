@@ -608,8 +608,8 @@ def eval_context_system_injects_auto_context():
 
         def chat(self, messages, tools=None):
             self.calls.append(messages)
-            content = messages[-1]["content"]
-            if "Nora 自动上下文" in content and "context packs" in content:
+            all_content = " ".join(m.get("content", "") for m in messages)
+            if "Nora 自动上下文" in all_content and "context packs" in all_content:
                 return LLMResponse(content="saw automatic context")
             return LLMResponse(content="missing context")
 

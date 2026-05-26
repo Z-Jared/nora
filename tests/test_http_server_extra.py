@@ -36,6 +36,7 @@ class HTTPServerEdgeCaseTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=2)
+        self.server.server_close()
 
     def _request(self, method, path, body=None, headers=None):
         url = f"http://127.0.0.1:{self.port}{path}"
@@ -114,6 +115,7 @@ class HTTPServerEdgeCaseTests(unittest.TestCase):
         finally:
             server_with_auth.shutdown()
             thread.join(timeout=2)
+            server_with_auth.server_close()
 
 
 class HTTPServerNoSessionStoreTests(unittest.TestCase):
@@ -134,6 +136,7 @@ class HTTPServerNoSessionStoreTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=2)
+        self.server.server_close()
 
     def _request(self, method, path, body=None):
         url = f"http://127.0.0.1:{self.port}{path}"

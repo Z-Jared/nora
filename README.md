@@ -213,6 +213,8 @@ system_prompt: 你是一个 Python 专家，帮助用户编写和调试代码。
 
 在项目根目录创建 `plugins/` 目录，放入 `.py` 文件即可扩展工具。每个插件需导出 `register(registry)` 函数：
 
+> **安全提示：** 插件是受信任的本地代码，启动时会直接执行 `plugins/*.py` 的顶层代码。请只加载你自己编写或审查过的插件，不要加载不受信任来源的插件。
+
 ```python
 # plugins/my_tool.py
 def register(registry):
