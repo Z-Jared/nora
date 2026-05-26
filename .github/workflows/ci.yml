@@ -7,6 +7,14 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uvx ruff check mini_agent/ tests/
+      - run: uvx ruff format --check mini_agent/ tests/
+
   test:
     runs-on: macos-latest
     strategy:
@@ -24,8 +32,8 @@ jobs:
       - name: Create venv and install deps
         run: |
           uv venv --python ${{ matrix.python-version }} .venv
-          uv pip install --python .venv/bin/python pytest
+          uv pip install --python .venv/bin/python pytest pytest-cov
           uv pip install --python .venv/bin/python -e .
 
-      - name: Run tests
-        run: .venv/bin/python -m pytest tests/ -v --tb=short
+      - name: Run tests with coverage
+        run: .venv/bin/python -m pytest tests/ -v --tb=short --cov=mini_agent --cov-report=term-missing

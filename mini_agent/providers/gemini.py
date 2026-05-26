@@ -1,8 +1,11 @@
+import json
+import urllib.error
 import urllib.parse
-from typing import Callable, Optional
+import urllib.request
+from typing import Callable, Generator, Optional
 
 from mini_agent.providers.base import ChatMessage, LLMError, LLMResponse, ToolCall
-from mini_agent.providers.http import post_json
+from mini_agent.providers.http import post_json, sanitize_error_detail
 from mini_agent.providers.openai_compatible import DEFAULT_SYSTEM_PROMPT
 
 
@@ -49,6 +52,56 @@ class GeminiClient:
             self.timeout_seconds,
         )
         return _parse_gemini_response(response)
+
+    def stream_chat(self, messages: list[dict], tools: Optional[list[dict]] = None) -> Generator[str, None, None]:
+        payload = {
+            "systemInstruction": {"parts": [{"text": self.system_prompt}]},
+            "contents": _to_gemini_contents(messages),
+        }
+        converted_tools = _to_gemini_tools(tools or [])
+        if converted_tools:
+            payload["tools"] = converted_tools
+
+        model = urllib.parse.quote(self.model, safe="")
+        headers = {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse",
+            data=data,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                buffer = ""
+                while True:
+                    chunk = response.read(1024)
+                    if not chunk:
+                        break
+                    buffer += chunk.decode("utf-8")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        try:
+                            event = json.loads(data_str)
+                            parts = event.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                            for part in parts:
+                                if "text" in part:
+                                    yield part["text"]
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise LLMError(f"Gemini HTTP {error.code}: {sanitize_error_detail(detail)}") from error
+        except urllib.error.URLError as error:
+            raise LLMError(f"Gemini request failed: {error}") from error
 
 
 def _to_gemini_contents(messages: list[dict]) -> list[dict]:

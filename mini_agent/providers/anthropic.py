@@ -1,7 +1,10 @@
-from typing import Callable, Optional
+import json
+import urllib.error
+import urllib.request
+from typing import Callable, Generator, Optional
 
 from mini_agent.providers.base import ChatMessage, LLMError, LLMResponse, ToolCall
-from mini_agent.providers.http import post_json
+from mini_agent.providers.http import post_json, sanitize_error_detail
 from mini_agent.providers.openai_compatible import DEFAULT_SYSTEM_PROMPT
 
 
@@ -51,6 +54,61 @@ class AnthropicClient:
             self.timeout_seconds,
         )
         return _parse_anthropic_response(response)
+
+    def stream_chat(self, messages: list[dict], tools: Optional[list[dict]] = None) -> Generator[str, None, None]:
+        payload = {
+            "model": self.model,
+            "max_tokens": 2048,
+            "system": self.system_prompt,
+            "messages": _to_anthropic_messages(messages),
+            "stream": True,
+        }
+        converted_tools = _to_anthropic_tools(tools or [])
+        if converted_tools:
+            payload["tools"] = converted_tools
+
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "Content-Type": "application/json",
+        }
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/messages",
+            data=data,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                buffer = ""
+                while True:
+                    chunk = response.read(1024)
+                    if not chunk:
+                        break
+                    buffer += chunk.decode("utf-8")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line or line.startswith("event:"):
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        try:
+                            event = json.loads(data_str)
+                            if event.get("type") == "content_block_delta":
+                                delta = event.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    yield delta.get("text", "")
+                        except json.JSONDecodeError:
+                            continue
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise LLMError(f"Anthropic HTTP {error.code}: {sanitize_error_detail(detail)}") from error
+        except urllib.error.URLError as error:
+            raise LLMError(f"Anthropic request failed: {error}") from error
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
