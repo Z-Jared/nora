@@ -289,16 +289,17 @@ NORA_PORT=9090 NORA_API_TOKEN=my-secret nora-serve
 端点：
 
 ```text
-GET  /health              健康检查（无需认证）
+GET  /health              健康检查 + 指标（无需认证）
 POST /chat                发送消息 {"message": "..."}
 POST /chat/stream         SSE 流式响应（返回 text/event-stream）
 GET  /tools               列出可用工具
+GET  /docs                OpenAPI 3.0 API 文档
 POST /session/save        保存会话 {"name": "..."}
 POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
-设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。内置令牌桶速率限制（默认 10 req/s，突发 20）。
+设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
 示例：
 
