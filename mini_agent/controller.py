@@ -184,13 +184,18 @@ class MiniAgent:
     def _run_with_llm_tools_events(self, text: str) -> Generator[dict, None, None]:
         messages = self._messages_for_user_input(text)
         tools = self.tools.to_openai_tools()
+        tool_calls_seen = False
 
         for _ in range(self.max_tool_rounds):
             response: LLMResponse = self.llm.chat(messages, tools=tools)
             if not response.tool_calls:
+                if tool_calls_seen and hasattr(self.llm, "stream_chat"):
+                    yield from self._stream_answer(messages, [])
+                    return
                 yield {"type": "delta", "content": response.content or self._help_message()}
                 return
 
+            tool_calls_seen = True
             messages.append(response.to_assistant_message())
             for tool_call in response.tool_calls:
                 yield {"type": "tool_call_start", "name": tool_call.name, "arguments": tool_call.arguments}
@@ -218,10 +223,22 @@ class MiniAgent:
                 "content": "工具调用轮数已用完。请只基于已有工具结果给出最终回答，不要再调用工具。",
             }
         )
-        response = self.llm.chat(messages, tools=[])
-        if response.tool_calls:
-            raise LLMError("Tool call loop exceeded max rounds.")
-        yield {"type": "delta", "content": response.content or self._help_message()}
+        _has_stream = hasattr(self.llm, "stream_chat")
+        if _has_stream:
+            yield from self._stream_answer(messages, [])
+        else:
+            response = self.llm.chat(messages, tools=[])
+            if response.tool_calls:
+                raise LLMError("Tool call loop exceeded max rounds.")
+            yield {"type": "delta", "content": response.content or self._help_message()}
+
+    def _stream_answer(self, messages: list[dict], tools: list[dict]) -> Generator[dict, None, None]:
+        full_content = ""
+        for chunk in self.llm.stream_chat(messages, tools=tools or None):
+            yield {"type": "delta", "content": chunk}
+            full_content += chunk
+        if not full_content.strip():
+            yield {"type": "delta", "content": self._help_message()}
 
     def _run_local_events(self, text: str) -> Generator[dict, None, None]:
         if self._looks_like_calculation(text):

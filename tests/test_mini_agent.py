@@ -2135,6 +2135,241 @@ class RunEventsTests(unittest.TestCase):
         self.assertIn("model exploded", result)
         self.assertEqual(agent.last_run_report.status, "blocked")
 
+    def test_non_tool_path_returns_correct_content(self):
+        class FakeDualLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="hello world")
+
+            def stream_chat(self, messages, tools=None):
+                yield "hello world"
+
+        agent = MiniAgent(build_default_registry(), llm=FakeDualLLM())
+        result = agent.run("hi")
+
+        self.assertEqual(result, "hello world")
+
+    def test_post_tool_final_answer_uses_stream_chat(self):
+        class FakeStreamingToolLLM:
+            def __init__(self):
+                self.call_count = 0
+                self.stream_calls = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                self.stream_calls += 1
+                yield "the "
+                yield "answer "
+                yield "is 5"
+
+        agent = MiniAgent(build_default_registry(), llm=FakeStreamingToolLLM())
+        events = list(agent.run_events("请帮我计算"))
+
+        deltas = [e for e in events if e["type"] == "delta"]
+        self.assertGreater(len(deltas), 1)
+        full = "".join(d["content"] for d in deltas)
+        self.assertEqual(full, "the answer is 5")
+        self.assertEqual(agent.llm.call_count, 2)
+        self.assertEqual(agent.llm.stream_calls, 1)
+
+    def test_post_tool_no_extra_chat_for_final_text(self):
+        class TrackingLLM:
+            def __init__(self):
+                self.chat_calls = 0
+                self.stream_calls = 0
+
+            def chat(self, messages, tools=None):
+                self.chat_calls += 1
+                if self.chat_calls == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                self.stream_calls += 1
+                yield "final answer"
+
+        agent = MiniAgent(build_default_registry(), llm=TrackingLLM())
+        result = agent.run("请帮我计算")
+
+        self.assertEqual(result, "final answer")
+        self.assertEqual(agent.llm.chat_calls, 2)
+        self.assertEqual(agent.llm.stream_calls, 1)
+
+    def test_run_concatenates_streamed_deltas_after_tools(self):
+        class FakeStreamingToolLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                yield "the "
+                yield "answer "
+                yield "is 5"
+
+        agent = MiniAgent(build_default_registry(), llm=FakeStreamingToolLLM())
+        result = agent.run("计算 2+3")
+
+        self.assertEqual(result, "the answer is 5")
+
+    def test_run_events_streams_after_tool_calls(self):
+        class FakeStreamingToolLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                yield "the "
+                yield "answer "
+                yield "is 2"
+
+        agent = MiniAgent(build_default_registry(), llm=FakeStreamingToolLLM())
+        events = list(agent.run_events("计算 1+1"))
+
+        types = [e["type"] for e in events]
+        self.assertIn("tool_call_start", types)
+        self.assertIn("tool_call_result", types)
+
+        deltas = [e for e in events if e["type"] == "delta"]
+        self.assertEqual(len(deltas), 3)
+        full = "".join(d["content"] for d in deltas)
+        self.assertEqual(full, "the answer is 2")
+
+    def test_stream_chat_error_after_tools_yields_blocked(self):
+        class FakeBrokenStreamToolLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                raise LLMError("stream failed")
+                yield
+
+        agent = MiniAgent(build_default_registry(), llm=FakeBrokenStreamToolLLM())
+        events = list(agent.run_events("hello world"))
+
+        types = [e["type"] for e in events]
+        self.assertIn("tool_call_start", types)
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+        delta_content = "".join(e["content"] for e in events if e["type"] == "delta")
+        self.assertIn("stream failed", delta_content)
+
+        done = events[-1]
+        self.assertEqual(done["status"], "blocked")
+        self.assertEqual(agent.last_run_report.status, "blocked")
+
+    def test_stream_chat_error_after_tools_run_returns_error(self):
+        class FakeBrokenStreamToolLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                raise LLMError("stream failed")
+                yield
+
+        agent = MiniAgent(build_default_registry(), llm=FakeBrokenStreamToolLLM())
+        result = agent.run("hello world")
+
+        self.assertIn("stream failed", result)
+        self.assertEqual(agent.last_run_report.status, "blocked")
+
+    def test_post_tool_answer_no_double_llm_call(self):
+        class TrackingLLM:
+            def __init__(self):
+                self.chat_calls = 0
+                self.stream_calls = 0
+
+            def chat(self, messages, tools=None):
+                self.chat_calls += 1
+                if self.chat_calls == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                self.stream_calls += 1
+                yield "answer "
+                yield "is 5"
+
+        agent = MiniAgent(build_default_registry(), llm=TrackingLLM())
+        result = agent.run("计算 2+3")
+
+        self.assertEqual(result, "answer is 5")
+        self.assertEqual(agent.llm.chat_calls, 2)
+        self.assertEqual(agent.llm.stream_calls, 1)
+
+    def test_tool_calling_path_still_works_with_streaming_llm(self):
+        class FakeStreamingToolLLM:
+            def __init__(self):
+                self.call_count = 0
+
+            def chat(self, messages, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "2+3"})],
+                    )
+                return LLMResponse(content="unused final text")
+
+            def stream_chat(self, messages, tools=None):
+                yield "result "
+                yield "is 5"
+
+        agent = MiniAgent(build_default_registry(), llm=FakeStreamingToolLLM())
+        result = agent.run("计算 2+3")
+
+        self.assertEqual(result, "result is 5")
+        self.assertEqual(agent.last_run_report.status, "done")
+        self.assertEqual(len(agent.last_run_report.tool_calls), 1)
+        self.assertEqual(agent.last_run_report.tool_calls[0].name, "calculate")
+
 
 if __name__ == "__main__":
     unittest.main()
