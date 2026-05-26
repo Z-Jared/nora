@@ -350,5 +350,146 @@ class HTTPServerAuthTests(unittest.TestCase):
         self.assertEqual(body["status"], "ok")
 
 
+class HTTPServerStaticTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        static_dir = Path(__file__).resolve().parent.parent / "mini_agent" / "static"
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            static_dir=static_dir,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _get(self, path):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        req = Request(url)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+        except urllib.error.HTTPError as error:
+            return error.code, "", error.read()
+
+    def test_root_returns_html(self):
+        status, content_type, body = self._get("/")
+
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"Nora", body)
+
+    def test_root_contains_event_stream_js(self):
+        _, _, body = self._get("/")
+
+        self.assertIn(b"/chat/stream", body)
+        self.assertIn(b"tool_call_start", body)
+        self.assertIn(b"tool_call_result", body)
+        self.assertIn(b"Authorization", body)
+        self.assertIn(b"nora_token", body)
+
+    def test_missing_static_returns_404(self):
+        status, _, _ = self._get("/static/nonexistent.txt")
+
+        self.assertEqual(status, 404)
+
+    def test_path_traversal_dot_dot_returns_404(self):
+        status, _, _ = self._get("/static/../settings.py")
+
+        self.assertEqual(status, 404)
+
+    def test_path_traversal_encoded_returns_404(self):
+        status, _, _ = self._get("/static/%2e%2e/settings.py")
+
+        self.assertEqual(status, 404)
+
+    def test_static_index_html_accessible(self):
+        status, content_type, body = self._get("/static/index.html")
+
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"Nora", body)
+
+    def test_without_static_dir_root_returns_404(self):
+        port = _find_free_port()
+        agent = MiniAgent(build_default_registry())
+        server = create_server(agent, host="127.0.0.1", port=port)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{port}/"
+            req = Request(url)
+            try:
+                with urlopen(req) as resp:
+                    status = resp.status
+            except urllib.error.HTTPError as error:
+                status = error.code
+            self.assertEqual(status, 404)
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+
+
+class HTTPServerStreamFormatTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def test_chat_stream_sse_format_preserved(self):
+        import socket
+        url = f"http://127.0.0.1:{self.port}/chat/stream"
+        data = json.dumps({"message": "计算 2 + 3"}).encode("utf-8")
+        req = Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        with urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            chunks = []
+            while True:
+                try:
+                    line = resp.readline()
+                    if not line:
+                        break
+                    chunks.append(line.decode("utf-8"))
+                except socket.timeout:
+                    break
+
+        raw = "".join(chunks)
+        events = [line.removeprefix("data: ") for line in raw.strip().splitlines() if line.startswith("data: ")]
+        parsed = [json.loads(e) for e in events]
+        types = [e["type"] for e in parsed]
+
+        self.assertEqual(types[0], "typing")
+        self.assertIn("tool_call_start", types)
+        self.assertIn("tool_call_result", types)
+        self.assertIn("delta", types)
+        self.assertEqual(types[-1], "done")
+
+
 if __name__ == "__main__":
     unittest.main()

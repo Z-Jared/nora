@@ -101,7 +101,8 @@ def serve(host: str = "", port: int = 0, api_token: str = "") -> None:
     api_token = api_token or os.environ.get("NORA_API_TOKEN", "")
 
     agent, _registry, _settings, session_store, root = build_agent()
-    server = create_server(agent, host=host, port=port, session_store=session_store, api_token=api_token)
+    static_dir = Path(__file__).resolve().parent / "static"
+    server = create_server(agent, host=host, port=port, session_store=session_store, api_token=api_token, static_dir=static_dir)
     print(f"Nora HTTP server started on http://{host}:{port}")
     print(f"Workspace: {root}")
     if api_token:

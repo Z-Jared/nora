@@ -18,3 +18,6 @@ nora-serve = "mini_agent.app:serve"
 
 [tool.setuptools]
 packages = ["mini_agent", "mini_agent.providers", "mini_agent.toolkits"]
+
+[tool.setuptools.package-data]
+mini_agent = ["static/*.html"]

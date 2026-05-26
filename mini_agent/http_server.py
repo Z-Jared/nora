@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -20,6 +21,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     rate_limiter: TokenBucketRateLimiter
     metrics: RequestMetrics
     cors_origins: str = "*"
+    static_dir: Optional[Path] = None
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -35,6 +37,16 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
 
         if self.headers.get("Upgrade", "").lower() == "websocket":
             self._handle_websocket()
+            return
+
+        if path in ("", "/") and self.static_dir:
+            self._serve_file(self.static_dir / "index.html")
+            self.metrics.record(path, self._last_status, time.monotonic() - start)
+            return
+        if path.startswith("/static/") and self.static_dir:
+            rel = path[len("/static/"):]
+            self._serve_file(self.static_dir / rel)
+            self.metrics.record(path, self._last_status, time.monotonic() - start)
             return
 
         if path == "/health":
@@ -297,6 +309,25 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", self.cors_origins)
 
+    def _serve_file(self, file_path: Path) -> None:
+        static_root = self.static_dir.resolve()
+        target = file_path.resolve()
+        if not (target == static_root or str(target).startswith(str(static_root) + "/")):
+            self._json_response(404, {"error": "not found"})
+            return
+        if not target.is_file():
+            self._json_response(404, {"error": "not found"})
+            return
+        content_type, _ = mimetypes.guess_type(str(target))
+        data = target.read_bytes()
+        self._last_status = 200
+        self.send_response(200)
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(data)
+
     def _json_response(self, status: int, data: dict) -> None:
         self._last_status = status
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -320,6 +351,7 @@ def create_server(
     rate_limit: float = 10.0,
     rate_burst: int = 20,
     cors_origins: str = "*",
+    static_dir: Optional[Path] = None,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -327,4 +359,5 @@ def create_server(
     NoraHTTPHandler.rate_limiter = TokenBucketRateLimiter(rate=rate_limit, burst=rate_burst)
     NoraHTTPHandler.metrics = RequestMetrics()
     NoraHTTPHandler.cors_origins = cors_origins
+    NoraHTTPHandler.static_dir = static_dir
     return HTTPServer((host, port), NoraHTTPHandler)
