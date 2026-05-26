@@ -27,17 +27,53 @@ Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地�
 
 ## 运行
 
-首次安装本地命令：
+一行安装（macOS / Linux）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Z-Jared/nora/main/install.sh | bash
+```
+
+一行安装（Windows PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/Z-Jared/nora/main/install.ps1 | iex
+```
+
+安装后启动 CLI：
+
+```bash
+nora
+```
+
+启动 HTTP 服务器（含 Web UI）：
+
+```bash
+nora-serve
+```
+
+浏览器访问 `http://127.0.0.1:8080` 即可使用 Web UI。
+
+### 开发者安装
+
+克隆仓库后本地安装：
 
 ```bash
 python3 -m pip install --user .
 ```
 
-如果使用较新的 pip，也可以用 editable 安装：
+或 editable 安装：
 
 ```bash
 python3 -m pip install -e .
 ```
+
+也可以直接运行：
+
+```bash
+python3 main.py
+```
+
+### PATH 配置
 
 如果安装后提示 `nora: command not found`，通常是 Python user scripts 目录没有加入 `PATH`。macOS 系统 Python 常见路径是：
 
@@ -50,18 +86,6 @@ export PATH="$HOME/Library/Python/3.x/bin:$PATH"
 ```bash
 echo 'export PATH="$HOME/Library/Python/3.11/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
-```
-
-之后可以在任意项目目录启动 Nora：
-
-```bash
-nora
-```
-
-也可以继续使用兼容入口：
-
-```bash
-python3 main.py
 ```
 
 启动后可输入 `/doctor` 检查 workspace、LLM、Git、工具数量和 PATH；如果启动或安装异常，优先运行 `/doctor`。也可以输入 `/help` 查看 CLI 命令。
