@@ -199,6 +199,56 @@ class LongTermMemory:
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
         return f"已删除记忆: {memory_id}"
 
+    def list_records(self, max_results: int = 20) -> list[dict]:
+        max_results = max(1, min(max_results, 100))
+        if self.db:
+            rows = self.db.conn.execute(
+                "SELECT id, text, tags, created_at FROM long_term_memory ORDER BY created_at DESC LIMIT ?",
+                (max_results,),
+            ).fetchall()
+            return [{"id": r[0], "text": r[1], "tags": r[2].split(",") if r[2] else [], "created_at": r[3]} for r in rows]
+        return self._read_records()[:max_results]
+
+    def search_records(self, query: str, max_results: int = 5) -> list[dict]:
+        terms = [term.lower() for term in query.split() if term.strip()]
+        if not terms:
+            return []
+        max_results = max(1, min(max_results, 20))
+        if self.db:
+            return self._search_records_db(terms, max_results)
+        return self._search_records_jsonl(terms, max_results)
+
+    def _search_records_db(self, terms: list[str], max_results: int) -> list[dict]:
+        conditions = " OR ".join(["text LIKE ? OR tags LIKE ?"] * len(terms))
+        params = []
+        for term in terms:
+            params.extend([f"%{term}%", f"%{term}%"])
+        rows = self.db.conn.execute(
+            f"SELECT id, text, tags, created_at FROM long_term_memory WHERE {conditions} ORDER BY created_at DESC",
+            params,
+        ).fetchall()
+        scored = []
+        for row in rows:
+            record = {"id": row[0], "text": row[1], "tags": row[2].split(",") if row[2] else [], "created_at": row[3]}
+            haystack = f"{row[1]} {row[2]}".lower()
+            score = sum(haystack.count(term) for term in terms)
+            if score > 0:
+                scored.append((score, record))
+        scored.sort(key=lambda item: (-item[0], item[1]["id"]))
+        return [record for _, record in scored[:max_results]]
+
+    def _search_records_jsonl(self, terms: list[str], max_results: int) -> list[dict]:
+        scored = []
+        for record in self._read_records():
+            haystack = " ".join(
+                [record.get("text", ""), " ".join(record.get("tags", []))]
+            ).lower()
+            score = sum(haystack.count(term) for term in terms)
+            if score > 0:
+                scored.append((score, record))
+        scored.sort(key=lambda item: (-item[0], item[1]["id"]))
+        return [record for _, record in scored[:max_results]]
+
     def _read_records(self) -> list[dict]:
         return read_jsonl(self.path)
 

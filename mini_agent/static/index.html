@@ -118,6 +118,38 @@ button{border:0;cursor:pointer}
 .mobile-token{display:none}
 .mobile-token.auth-error{border-color:#efb3a8;background:#fff4f2;box-shadow:0 0 0 2px rgba(239,179,168,.35)}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.task-section{margin-top:8px}
+.task-section .side-title{margin-bottom:6px}
+.task-empty{border:1px dashed var(--line-strong);border-radius:6px;padding:10px;color:var(--muted);font-size:12px;background:rgba(255,254,250,.55);line-height:1.45}
+.task-goal{font-size:13px;font-weight:800;margin-bottom:6px;line-height:1.35}
+.task-status{display:inline-block;font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;margin-bottom:8px}
+.task-status.active{background:var(--accent-soft);border:1px solid #b7d2bd;color:#173f27}
+.task-status.finished{background:#f0ede8;border:1px solid var(--line);color:var(--muted)}
+.step-list{display:grid;gap:4px;margin-bottom:10px}
+.step-item{display:flex;align-items:flex-start;gap:8px;padding:5px 6px;border-radius:5px;font-size:12px;line-height:1.4}
+.step-item.in_progress{background:var(--warn)}
+.step-item.blocked{background:#fff4f2}
+.step-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;margin-top:4px}
+.step-dot.pending{background:#c9c0b1}
+.step-dot.in_progress{background:#c47c26;animation:pulse 1.4s infinite}
+.step-dot.done{background:#51a46b}
+.step-dot.blocked{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.step-text{flex:1;min-width:0}
+.step-note{font-size:11px;color:var(--muted);margin-top:2px}
+.task-actions{display:flex;gap:6px;flex-wrap:wrap}
+.task-btn{height:26px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;font-size:11px;font-weight:800;color:#4c4a44}
+.task-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
+.task-btn:disabled{opacity:.5;cursor:not-allowed}
+.task-form{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px;margin-bottom:10px;display:none}
+.task-form.open{display:block}
+.task-form input,.task-form textarea{width:100%;border:1px solid var(--line);border-radius:5px;background:#fff;padding:6px 8px;font-size:12px;outline:none;margin-bottom:6px}
+.task-form textarea{resize:vertical;min-height:52px;font-family:inherit}
+.task-form-actions{display:flex;gap:6px;justify-content:flex-end}
+.mobile-task{border:1px solid var(--line-strong);border-radius:7px;background:var(--card);padding:14px 12px;margin-top:18px}
+.mobile-task .task-goal{font-size:14px}
+.mobile-task .step-item{font-size:13px}
+.mobile-task .task-actions{margin-top:10px}
 @media (max-width:1100px){
   .workspace{grid-template-columns:220px minmax(0,1fr) 280px}
   .topbar{grid-template-columns:220px 1fr auto;padding:10px 16px;gap:14px}
@@ -186,6 +218,10 @@ button{border:0;cursor:pointer}
           <div class="recent-state">Loading sessions…</div>
         </div>
       </div>
+      <div class="task-section">
+        <div class="side-title">Task</div>
+        <div id="task-panel"><div class="task-empty">No active task.</div></div>
+      </div>
     </aside>
     <main class="main">
       <div class="thread-head">
@@ -209,6 +245,7 @@ button{border:0;cursor:pointer}
             <input class="token-input" id="mobile-token" type="password" placeholder="Token" autocomplete="off">
           </div>
           <div class="mobile-runtime-container" id="mobile-runtime-container"></div>
+          <div id="mobile-task-container"></div>
         </div>
       </div>
       <form class="composer" id="composer">
@@ -266,6 +303,7 @@ button{border:0;cursor:pointer}
   var stopBtn = document.getElementById('stop-btn');
   var mobileStopBtn = document.getElementById('mobile-stop-btn');
   var mobileRuntimeContainer = document.getElementById('mobile-runtime-container');
+  var taskPanelEl = document.getElementById('task-panel');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
@@ -283,6 +321,8 @@ button{border:0;cursor:pointer}
   var activeAbortController = null;
   var authFailed = false;
   var mobileAuthPending = false;
+  var currentTask = null;
+  var taskFormOpen = false;
 
   function handleAuthError(resp){
     if(resp.status === 401){
@@ -308,13 +348,19 @@ button{border:0;cursor:pointer}
   }
 
   syncTokenInputs(localStorage.getItem('nora_token') || '');
+  function recoverAfterAuthInput(){
+    if(!authFailed) return;
+    authFailed = false;
+    loadSessions();
+    fetchTask();
+  }
   tokenInput.addEventListener('input', function(){
     syncTokenInputs(tokenInput.value, tokenInput);
-    if(authFailed){ authFailed = false; loadSessions(); }
+    recoverAfterAuthInput();
   });
   if(mobileTokenInput) mobileTokenInput.addEventListener('input', function(){
     syncTokenInputs(mobileTokenInput.value, mobileTokenInput);
-    if(authFailed){ authFailed = false; loadSessions(); }
+    recoverAfterAuthInput();
   });
 
   function hideEmpty(){
@@ -762,6 +808,265 @@ button{border:0;cursor:pointer}
     }
   }
 
+  function fetchTask(){
+    return fetch('/task', {
+      method: 'GET',
+      headers: authHeaders()
+    }).then(function(resp){
+      if(!resp.ok){
+        if(resp.status === 404){
+          currentTask = null;
+          renderTaskPanel();
+          return;
+        }
+        if(handleAuthError(resp)) return;
+        throw new Error('HTTP ' + resp.status);
+      }
+      return resp.json();
+    }).then(function(data){
+      if(data){
+        currentTask = data.task || data;
+        renderTaskPanel();
+      }
+    }).catch(function(){
+      currentTask = null;
+      renderTaskPanel();
+    });
+  }
+
+  function startTask(goal, steps){
+    fetch('/task/start', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({goal: goal, steps: steps})
+    }).then(function(resp){
+      if(!resp.ok){
+        if(handleAuthError(resp)) return;
+        return parseErrorResponse(resp);
+      }
+      return resp.json();
+    }).then(function(){
+      taskFormOpen = false;
+      return fetchTask();
+    }).catch(function(e){
+      setState('error', 'Failed to start task: ' + e.message);
+    });
+  }
+
+  function nextStep(){
+    fetch('/task/next', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    }).then(function(resp){
+      if(!resp.ok){
+        if(handleAuthError(resp)) return;
+        return parseErrorResponse(resp);
+      }
+      return resp.json();
+    }).then(function(){
+      return fetchTask();
+    }).catch(function(e){
+      setState('error', 'Failed to advance task: ' + e.message);
+    });
+  }
+
+  function finishTask(summary){
+    fetch('/task/finish', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({summary: summary || ''})
+    }).then(function(resp){
+      if(!resp.ok){
+        if(handleAuthError(resp)) return;
+        return parseErrorResponse(resp);
+      }
+      return resp.json();
+    }).then(function(){
+      return fetchTask();
+    }).catch(function(e){
+      setState('error', 'Failed to finish task: ' + e.message);
+    });
+  }
+
+  function renderTaskPanel(){
+    if(!taskPanelEl) return;
+    var hasTask = currentTask && currentTask.goal;
+    var task = hasTask ? currentTask : {};
+    var steps = task.steps || [];
+    var doneCount = steps.filter(function(s){ return s.status === 'done'; }).length;
+    var isFinished = hasTask && task.status === 'finished';
+    var statusCls = isFinished ? 'finished' : hasTask ? 'active' : '';
+    var statusLabel = isFinished ? 'finished' : hasTask ? (task.status || 'active') : '';
+
+    var html = '';
+    if(hasTask){
+      html += '<div class="task-goal">' + escapeHtml(task.goal) + '</div>';
+      html += '<span class="task-status ' + statusCls + '">' + escapeHtml(statusLabel) + '</span>';
+    } else {
+      html += '<div class="task-empty">No active task.</div>';
+    }
+
+    if(hasTask && steps.length > 0){
+      html += '<div class="step-list">';
+      steps.forEach(function(step){
+        var st = step.status || 'pending';
+        html += '<div class="step-item ' + escapeHtml(st) + '">';
+        html += '<span class="step-dot ' + escapeHtml(st) + '"></span>';
+        html += '<div class="step-text"><strong>' + escapeHtml(String(step.id)) + '.</strong> ' + escapeHtml(step.text);
+        if(step.note) html += '<div class="step-note">' + escapeHtml(step.note) + '</div>';
+        if(step.summary) html += '<div class="step-note">' + escapeHtml(step.summary) + '</div>';
+        html += '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    if(hasTask && task.summary){
+      html += '<div class="step-note" style="margin-bottom:8px">Summary: ' + escapeHtml(task.summary) + '</div>';
+    }
+
+    html += '<div class="task-actions">';
+    if(!hasTask || isFinished){
+      html += '<button class="task-btn primary" id="task-start-btn" type="button">' + (isFinished ? 'Start new task' : 'Start task') + '</button>';
+    } else {
+      var hasNext = steps.some(function(s){ return s.status === 'pending' || s.status === 'blocked'; });
+      html += '<button class="task-btn" id="task-next-btn" type="button"' + (hasNext ? '' : ' disabled') + '>Next</button>';
+      html += '<button class="task-btn" id="task-finish-btn" type="button">Finish</button>';
+    }
+    html += '</div>';
+
+    html += '<div class="task-form' + (taskFormOpen ? ' open' : '') + '" id="task-form">';
+    html += '<input type="text" id="task-goal-input" placeholder="Task goal">';
+    html += '<textarea id="task-steps-input" placeholder="Steps (one per line)"></textarea>';
+    html += '<div class="task-form-actions">';
+    html += '<button class="task-btn" id="task-form-cancel" type="button">Cancel</button>';
+    html += '<button class="task-btn primary" id="task-form-submit" type="button">Start</button>';
+    html += '</div></div>';
+
+    taskPanelEl.innerHTML = html;
+
+    var startBtn = document.getElementById('task-start-btn');
+    var nextBtn = document.getElementById('task-next-btn');
+    var finishBtn = document.getElementById('task-finish-btn');
+    var formSubmit = document.getElementById('task-form-submit');
+    var formCancel = document.getElementById('task-form-cancel');
+
+    if(startBtn) startBtn.addEventListener('click', function(){
+      taskFormOpen = true;
+      renderTaskPanel();
+      var gi = document.getElementById('task-goal-input');
+      if(gi) gi.focus();
+    });
+    if(nextBtn) nextBtn.addEventListener('click', nextStep);
+    if(finishBtn) finishBtn.addEventListener('click', function(){
+      var summary = prompt('Task summary (optional):');
+      if(summary !== null) finishTask(summary);
+    });
+    if(formSubmit) formSubmit.addEventListener('click', function(){
+      var goal = (document.getElementById('task-goal-input') || {}).value || '';
+      var stepsText = (document.getElementById('task-steps-input') || {}).value || '';
+      if(!goal.trim()) return;
+      startTask(goal.trim(), stepsText);
+    });
+    if(formCancel) formCancel.addEventListener('click', function(){
+      taskFormOpen = false;
+      renderTaskPanel();
+    });
+
+    renderMobileTask();
+  }
+
+  function renderMobileTask(){
+    var container = document.getElementById('mobile-task-container');
+    if(!container) return;
+    var hasTask = currentTask && currentTask.goal;
+    var task = hasTask ? currentTask : {};
+    var steps = task.steps || [];
+    var doneCount = steps.filter(function(s){ return s.status === 'done'; }).length;
+    var isFinished = hasTask && task.status === 'finished';
+
+    var html = '<div class="mobile-task">';
+    html += '<div class="inspector-title"><span>Task</span>';
+    if(hasTask) html += '<span>' + doneCount + '/' + steps.length + ' steps</span>';
+    html += '</div>';
+
+    if(!hasTask){
+      html += '<div class="task-empty">No active task.</div>';
+      html += '<div class="task-actions" style="margin-top:10px">';
+      html += '<button class="task-btn primary" id="mobile-task-start" type="button">Start task</button>';
+      html += '</div>';
+      html += '<div class="task-form' + (taskFormOpen ? ' open' : '') + '" id="mobile-task-form">';
+      html += '<input type="text" id="mobile-task-goal-input" placeholder="Task goal">';
+      html += '<textarea id="mobile-task-steps-input" placeholder="Steps (one per line)"></textarea>';
+      html += '<div class="task-form-actions">';
+      html += '<button class="task-btn" id="mobile-task-form-cancel" type="button">Cancel</button>';
+      html += '<button class="task-btn primary" id="mobile-task-form-submit" type="button">Start</button>';
+      html += '</div></div>';
+    } else {
+      html += '<div class="task-goal">' + escapeHtml(task.goal) + '</div>';
+      if(steps.length > 0){
+        html += '<div class="step-list">';
+        steps.forEach(function(step){
+          var st = step.status || 'pending';
+          html += '<div class="step-item ' + escapeHtml(st) + '">';
+          html += '<span class="step-dot ' + escapeHtml(st) + '"></span>';
+          html += '<div class="step-text"><strong>' + escapeHtml(String(step.id)) + '.</strong> ' + escapeHtml(step.text);
+          if(step.note) html += '<div class="step-note">' + escapeHtml(step.note) + '</div>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
+      if(isFinished){
+        html += '<div class="task-actions">';
+        html += '<button class="task-btn primary" id="mobile-task-start" type="button">Start new task</button>';
+        html += '</div>';
+        html += '<div class="task-form' + (taskFormOpen ? ' open' : '') + '" id="mobile-task-form">';
+        html += '<input type="text" id="mobile-task-goal-input" placeholder="Task goal">';
+        html += '<textarea id="mobile-task-steps-input" placeholder="Steps (one per line)"></textarea>';
+        html += '<div class="task-form-actions">';
+        html += '<button class="task-btn" id="mobile-task-form-cancel" type="button">Cancel</button>';
+        html += '<button class="task-btn primary" id="mobile-task-form-submit" type="button">Start</button>';
+        html += '</div></div>';
+      } else {
+        html += '<div class="task-actions">';
+        var hasNext = steps.some(function(s){ return s.status === 'pending' || s.status === 'blocked'; });
+        html += '<button class="task-btn" id="mobile-task-next" type="button"' + (hasNext ? '' : ' disabled') + '>Next</button>';
+        html += '<button class="task-btn" id="mobile-task-finish" type="button">Finish</button>';
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+    container.innerHTML = html;
+
+    var mStart = document.getElementById('mobile-task-start');
+    var mNext = document.getElementById('mobile-task-next');
+    var mFinish = document.getElementById('mobile-task-finish');
+    var mFormSubmit = document.getElementById('mobile-task-form-submit');
+    var mFormCancel = document.getElementById('mobile-task-form-cancel');
+
+    if(mStart) mStart.addEventListener('click', function(){
+      taskFormOpen = true;
+      renderMobileTask();
+      var gi = document.getElementById('mobile-task-goal-input');
+      if(gi) gi.focus();
+    });
+    if(mNext) mNext.addEventListener('click', nextStep);
+    if(mFinish) mFinish.addEventListener('click', function(){
+      var summary = prompt('Task summary (optional):');
+      if(summary !== null) finishTask(summary);
+    });
+    if(mFormSubmit) mFormSubmit.addEventListener('click', function(){
+      var goal = (document.getElementById('mobile-task-goal-input') || {}).value || '';
+      var stepsText = (document.getElementById('mobile-task-steps-input') || {}).value || '';
+      if(!goal.trim()) return;
+      startTask(goal.trim(), stepsText);
+    });
+    if(mFormCancel) mFormCancel.addEventListener('click', function(){
+      taskFormOpen = false;
+      renderMobileTask();
+    });
+  }
+
   composer.addEventListener('submit', function(e){
     e.preventDefault();
     sendMessage();
@@ -781,6 +1086,7 @@ button{border:0;cursor:pointer}
   setState('ready', 'Nora is ready.');
   renderToolEvents();
   loadSessions();
+  fetchTask();
   input.focus();
 })();
 </script>

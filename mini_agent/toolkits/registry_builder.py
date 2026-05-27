@@ -106,6 +106,8 @@ def build_default_registry(
         long_term_memory,
         task_manager,
     )
+    registry.task_manager = task_manager
+    registry.long_term_memory = long_term_memory
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

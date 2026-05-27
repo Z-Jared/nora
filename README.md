@@ -343,13 +343,18 @@ POST /chat                发送消息 {"message": "..."}
 POST /chat/stream         SSE 流式响应（返回 text/event-stream）
 POST /chat/clear          清空当前对话记忆（需与其他 POST 一致的 Authorization）
 GET  /tools               列出可用工具
+GET  /task                 获取当前任务（无任务返回 null）
+POST /task/start          创建任务 {"goal": "...", "steps": "步骤一\n步骤二"}
+POST /task/next           推进到下一个待执行步骤
+POST /task/update         更新步骤 {"step_id": 1, "status": "done", "summary": "..."}
+POST /task/finish         完成任务 {"summary": "..."}
 GET  /docs                OpenAPI 3.0 API 文档
 POST /session/save        保存会话 {"name": "..."}
 POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
-设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
+设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/task`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
 示例：
 

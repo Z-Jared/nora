@@ -9,14 +9,18 @@ from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 from mini_agent.controller import MiniAgent
+from mini_agent.memory import LongTermMemory
 from mini_agent.metrics import RequestMetrics
 from mini_agent.rate_limit import TokenBucketRateLimiter
 from mini_agent.session import SessionStore
+from mini_agent.task_runner import TaskManager
 from mini_agent.websocket_handler import WebSocketConnection
 
 class NoraHTTPHandler(BaseHTTPRequestHandler):
     agent: MiniAgent
     session_store: Optional[SessionStore]
+    task_manager: Optional[TaskManager]
+    long_term_memory: Optional[LongTermMemory]
     api_token: str
     rate_limiter: TokenBucketRateLimiter
     metrics: RequestMetrics
@@ -53,6 +57,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_health()
         elif path == "/tools":
             self._handle_tools()
+        elif path == "/task":
+            self._handle_task_get()
+        elif path == "/memory/list":
+            self._handle_memory_list(parsed)
+        elif path == "/memory/search":
+            self._handle_memory_search(parsed)
         elif path == "/session/list":
             self._handle_session_list()
         elif path == "/docs":
@@ -87,6 +97,18 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_chat_stream(body)
         elif path == "/chat/clear":
             self._handle_chat_clear()
+        elif path == "/task/start":
+            self._handle_task_start(body)
+        elif path == "/task/update":
+            self._handle_task_update(body)
+        elif path == "/task/finish":
+            self._handle_task_finish(body)
+        elif path == "/task/next":
+            self._handle_task_next()
+        elif path == "/memory/save":
+            self._handle_memory_save(body)
+        elif path == "/memory/delete":
+            self._handle_memory_delete(body)
         elif path == "/session/save":
             self._handle_session_save(body)
         elif path == "/session/load":
@@ -229,6 +251,141 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         self.agent.memory.clear()
         self._json_response(200, {"result": "cleared"})
 
+    def _handle_task_get(self) -> None:
+        if not self._check_auth():
+            return
+        if not self.task_manager:
+            self._json_response(500, {"error": "task manager not configured"})
+            return
+        task = self.task_manager.get_current_task()
+        if not task or task.get("status") == "finished":
+            self._json_response(200, {"task": None})
+            return
+        self._json_response(200, {"task": task})
+
+    def _handle_task_start(self, body: dict) -> None:
+        if not self.task_manager:
+            self._json_response(500, {"error": "task manager not configured"})
+            return
+        goal = body.get("goal", "").strip()
+        steps = body.get("steps", "")
+        if isinstance(steps, list):
+            steps = "\n".join(str(s) for s in steps)
+        if not goal:
+            self._json_response(400, {"error": "goal is required"})
+            return
+        if not steps.strip():
+            self._json_response(400, {"error": "steps is required"})
+            return
+        result = self.task_manager.start(goal, steps)
+        task = self.task_manager.get_current_task()
+        self._json_response(200, {"result": result, "task": task})
+
+    def _handle_task_update(self, body: dict) -> None:
+        if not self.task_manager:
+            self._json_response(500, {"error": "task manager not configured"})
+            return
+        step_id = body.get("step_id")
+        status = body.get("status", "").strip()
+        if step_id is None or not status:
+            self._json_response(400, {"error": "step_id and status are required"})
+            return
+        try:
+            step_id = int(step_id)
+        except (ValueError, TypeError):
+            self._json_response(400, {"error": "step_id must be an integer"})
+            return
+        note = body.get("note", "")
+        summary = body.get("summary", "")
+        result = self.task_manager.update_step(step_id, status, note=note, summary=summary)
+        task = self.task_manager.get_current_task()
+        self._json_response(200, {"result": result, "task": task})
+
+    def _handle_task_finish(self, body: dict) -> None:
+        if not self.task_manager:
+            self._json_response(500, {"error": "task manager not configured"})
+            return
+        summary = body.get("summary", "").strip()
+        if not summary:
+            self._json_response(400, {"error": "summary is required"})
+            return
+        result = self.task_manager.finish(summary)
+        self._json_response(200, {"result": result, "task": None})
+
+    def _handle_task_next(self) -> None:
+        if not self.task_manager:
+            self._json_response(500, {"error": "task manager not configured"})
+            return
+        result = self.task_manager.run_once()
+        task = self.task_manager.get_current_task()
+        self._json_response(200, {"result": result, "task": task})
+
+    def _handle_memory_list(self, parsed) -> None:
+        if not self._check_auth():
+            return
+        if not self.long_term_memory:
+            self._json_response(500, {"error": "memory not configured"})
+            return
+        qs = parse_qs(parsed.query)
+        max_results = 20
+        if "max" in qs:
+            try:
+                max_results = int(qs["max"][0])
+            except (ValueError, IndexError):
+                pass
+        records = self.long_term_memory.list_records(max_results=max_results)
+        self._json_response(200, {"memories": records})
+
+    def _handle_memory_search(self, parsed) -> None:
+        if not self._check_auth():
+            return
+        if not self.long_term_memory:
+            self._json_response(500, {"error": "memory not configured"})
+            return
+        qs = parse_qs(parsed.query)
+        query = qs.get("q", [""])[0].strip()
+        if not query:
+            self._json_response(400, {"error": "q parameter is required"})
+            return
+        max_results = 5
+        if "max" in qs:
+            try:
+                max_results = int(qs["max"][0])
+            except (ValueError, IndexError):
+                pass
+        records = self.long_term_memory.search_records(query, max_results=max_results)
+        self._json_response(200, {"memories": records})
+
+    def _handle_memory_save(self, body: dict) -> None:
+        if not self.long_term_memory:
+            self._json_response(500, {"error": "memory not configured"})
+            return
+        text = body.get("text", "").strip()
+        if not text:
+            self._json_response(400, {"error": "text is required"})
+            return
+        tags = body.get("tags", "")
+        result = self.long_term_memory.save(text, tags=tags)
+        if "拒绝" in result:
+            self._json_response(400, {"error": result})
+            return
+        records = self.long_term_memory.list_records(max_results=1)
+        self._json_response(200, {"result": result, "memory": records[0] if records else None})
+
+    def _handle_memory_delete(self, body: dict) -> None:
+        if not self.long_term_memory:
+            self._json_response(500, {"error": "memory not configured"})
+            return
+        memory_id = body.get("memory_id", "").strip()
+        if not memory_id:
+            self._json_response(400, {"error": "memory_id is required"})
+            return
+        result = self.long_term_memory.delete(memory_id)
+        if "没有找到" in result:
+            self._json_response(404, {"error": result})
+            return
+        self._json_response(200, {"result": result})
+
     def _handle_tools(self) -> None:
         if not self._check_auth():
             return
@@ -310,6 +467,15 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/session/save": {"post": {"summary": "Save current session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}, "responses": {"200": {"description": "Saved"}}}},
                 "/session/load": {"post": {"summary": "Load a session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}}}, "responses": {"200": {"description": "Loaded"}}}},
                 "/session/list": {"get": {"summary": "List saved sessions", "responses": {"200": {"description": "Session list"}}}},
+                "/task": {"get": {"summary": "Get current task", "responses": {"200": {"description": "Current task or null"}}}},
+                "/task/start": {"post": {"summary": "Create a new task", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"goal": {"type": "string"}, "steps": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}}, "required": ["goal", "steps"]}}}}, "responses": {"200": {"description": "Created"}}}},
+                "/task/update": {"post": {"summary": "Update a task step", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"step_id": {"type": "integer"}, "status": {"type": "string"}, "note": {"type": "string"}, "summary": {"type": "string"}}, "required": ["step_id", "status"]}}}}, "responses": {"200": {"description": "Updated"}}}},
+                "/task/finish": {"post": {"summary": "Finish current task", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}}}}, "responses": {"200": {"description": "Finished"}}}},
+                "/task/next": {"post": {"summary": "Advance to next step", "responses": {"200": {"description": "Next step"}}}},
+                "/memory/list": {"get": {"summary": "List long-term memories", "responses": {"200": {"description": "Memory list"}}}},
+                "/memory/search": {"get": {"summary": "Search long-term memories", "responses": {"200": {"description": "Search results"}}}},
+                "/memory/save": {"post": {"summary": "Save a long-term memory", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string"}, "tags": {"type": "string"}}, "required": ["text"]}}}}, "responses": {"200": {"description": "Saved"}}}},
+                "/memory/delete": {"post": {"summary": "Delete a long-term memory", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]}}}}, "responses": {"200": {"description": "Deleted"}}}},
                 "/ws": {"get": {"summary": "WebSocket endpoint for bidirectional real-time chat", "description": "Upgrade to WebSocket. Send JSON messages with type=chat, ping, session_save, session_load."}},
                 "/docs": {"get": {"summary": "This endpoint", "responses": {"200": {"description": "OpenAPI spec"}}}},
             },
@@ -357,6 +523,8 @@ def create_server(
     host: str = "127.0.0.1",
     port: int = 8080,
     session_store: Optional[SessionStore] = None,
+    task_manager: Optional[TaskManager] = None,
+    long_term_memory: Optional[LongTermMemory] = None,
     api_token: str = "",
     rate_limit: float = 10.0,
     rate_burst: int = 20,
@@ -365,6 +533,8 @@ def create_server(
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
+    NoraHTTPHandler.task_manager = task_manager
+    NoraHTTPHandler.long_term_memory = long_term_memory
     NoraHTTPHandler.api_token = api_token
     NoraHTTPHandler.rate_limiter = TokenBucketRateLimiter(rate=rate_limit, burst=rate_burst)
     NoraHTTPHandler.metrics = RequestMetrics()

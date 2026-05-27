@@ -455,6 +455,12 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"mobile-stop-btn", body)
         self.assertIn(b"mobile-token-area", body)
         self.assertIn(b"mobile-runtime-container", body)
+        self.assertIn(b"task-panel", body)
+        self.assertIn(b"mobile-task-container", body)
+        self.assertIn(b"fetchTask", body)
+        self.assertIn(b"/task/start", body)
+        self.assertIn(b"/task/next", body)
+        self.assertIn(b"/task/finish", body)
         self.assertIn(b"AbortController", body)
 
     def test_stop_buttons_initially_disabled(self):
@@ -483,6 +489,21 @@ class HTTPServerStaticTests(unittest.TestCase):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         self.assertIn('id="mobile-runtime-container"', html)
+
+    def test_task_panel_and_mobile_container_exist(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="task-panel"', html)
+        self.assertIn('id="mobile-task-container"', html)
+        self.assertIn("task-section", html)
+        self.assertIn("No active task", html)
+        self.assertIn("Start task", html)
+
+    def test_auth_recovery_retries_task_fetch(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("function recoverAfterAuthInput", html)
+        self.assertIn("loadSessions();\n    fetchTask();", html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")
@@ -577,6 +598,416 @@ class HTTPServerStreamFormatTests(unittest.TestCase):
         self.assertIn("tool_call_result", types)
         self.assertIn("delta", types)
         self.assertEqual(types[-1], "done")
+
+
+class HTTPTaskTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        registry = build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            task_state_path=Path(self.tmpdir) / "task.json",
+            task_history_path=Path(self.tmpdir) / "history.jsonl",
+        )
+        self.agent = MiniAgent(registry)
+        self.task_manager = registry.task_manager
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            task_manager=self.task_manager,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_get_task_empty(self):
+        status, body = self._request("GET", "/task")
+
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["task"])
+
+    def test_start_task(self):
+        status, body = self._request("POST", "/task/start", {
+            "goal": "测试任务",
+            "steps": "步骤一\n步骤二",
+        })
+
+        self.assertEqual(status, 200)
+        self.assertIn("已创建", body["result"])
+        self.assertEqual(body["task"]["goal"], "测试任务")
+        self.assertEqual(body["task"]["status"], "active")
+        self.assertEqual(len(body["task"]["steps"]), 2)
+
+    def test_start_task_steps_as_list(self):
+        status, body = self._request("POST", "/task/start", {
+            "goal": "列表步骤",
+            "steps": ["第一步", "第二步", "第三步"],
+        })
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["task"]["steps"]), 3)
+
+    def test_start_task_missing_goal(self):
+        status, body = self._request("POST", "/task/start", {"steps": "步骤一"})
+
+        self.assertEqual(status, 400)
+        self.assertIn("goal", body["error"])
+
+    def test_start_task_missing_steps(self):
+        status, body = self._request("POST", "/task/start", {"goal": "目标"})
+
+        self.assertEqual(status, 400)
+        self.assertIn("steps", body["error"])
+
+    def test_task_next(self):
+        self._request("POST", "/task/start", {"goal": "测试", "steps": "步骤一\n步骤二"})
+
+        status, body = self._request("POST", "/task/next")
+
+        self.assertEqual(status, 200)
+        self.assertIn("下一步", body["result"])
+        self.assertEqual(body["task"]["steps"][0]["status"], "in_progress")
+
+    def test_task_update(self):
+        self._request("POST", "/task/start", {"goal": "测试", "steps": "步骤一\n步骤二"})
+
+        status, body = self._request("POST", "/task/update", {
+            "step_id": 1,
+            "status": "done",
+            "summary": "已完成",
+        })
+
+        self.assertEqual(status, 200)
+        self.assertIn("已更新", body["result"])
+        self.assertEqual(body["task"]["steps"][0]["status"], "done")
+        self.assertEqual(body["task"]["steps"][0]["summary"], "已完成")
+
+    def test_task_update_missing_fields(self):
+        status, body = self._request("POST", "/task/update", {"step_id": 1})
+
+        self.assertEqual(status, 400)
+        self.assertIn("status", body["error"])
+
+    def test_task_finish(self):
+        self._request("POST", "/task/start", {"goal": "测试", "steps": "步骤一"})
+        self._request("POST", "/task/update", {"step_id": 1, "status": "done", "summary": "完成"})
+
+        status, body = self._request("POST", "/task/finish", {"summary": "全部完成"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已完成", body["result"])
+        self.assertIsNone(body["task"])
+
+    def test_task_finish_missing_summary(self):
+        self._request("POST", "/task/start", {"goal": "测试", "steps": "步骤一"})
+
+        status, body = self._request("POST", "/task/finish", {})
+
+        self.assertEqual(status, 400)
+        self.assertIn("summary", body["error"])
+
+    def test_full_task_lifecycle(self):
+        self._request("POST", "/task/start", {"goal": "完整流程", "steps": "步骤一\n步骤二"})
+
+        self._request("POST", "/task/next")
+        self._request("POST", "/task/update", {"step_id": 1, "status": "done", "summary": "ok"})
+        self._request("POST", "/task/next")
+        self._request("POST", "/task/update", {"step_id": 2, "status": "done", "summary": "ok"})
+
+        status, body = self._request("POST", "/task/finish", {"summary": "流程结束"})
+        self.assertEqual(status, 200)
+
+        status, body = self._request("GET", "/task")
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["task"])
+
+
+class HTTPTaskAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        registry = build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            task_state_path=Path(self.tmpdir) / "task.json",
+            task_history_path=Path(self.tmpdir) / "history.jsonl",
+        )
+        self.agent = MiniAgent(registry)
+        self.task_manager = registry.task_manager
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            task_manager=self.task_manager,
+            api_token="test-secret",
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_task_start_rejected_without_auth(self):
+        status, body = self._request("POST", "/task/start", {
+            "goal": "测试", "steps": "步骤一",
+        })
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
+
+    def test_task_start_accepted_with_auth(self):
+        status, body = self._request(
+            "POST", "/task/start",
+            {"goal": "测试", "steps": "步骤一"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["task"]["goal"], "测试")
+
+    def test_get_task_rejected_without_auth(self):
+        status, body = self._request("GET", "/task")
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
+
+
+class HTTPMemoryTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        registry = build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            long_term_memory_path=Path(self.tmpdir) / "memory.jsonl",
+        )
+        self.agent = MiniAgent(registry)
+        self.long_term_memory = registry.long_term_memory
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            long_term_memory=self.long_term_memory,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_memory_list_empty(self):
+        status, body = self._request("GET", "/memory/list")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["memories"], [])
+
+    def test_memory_save(self):
+        status, body = self._request("POST", "/memory/save", {
+            "text": "测试记忆内容",
+            "tags": "test,important",
+        })
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertEqual(body["memory"]["text"], "测试记忆内容")
+        self.assertIn("test", body["memory"]["tags"])
+        self.assertIn("important", body["memory"]["tags"])
+
+    def test_memory_save_missing_text(self):
+        status, body = self._request("POST", "/memory/save", {})
+
+        self.assertEqual(status, 400)
+        self.assertIn("text", body["error"])
+
+    def test_memory_save_rejects_sensitive(self):
+        status, body = self._request("POST", "/memory/save", {
+            "text": "my API_KEY is sk-abc123",
+        })
+
+        self.assertEqual(status, 400)
+        self.assertIn("拒绝", body["error"])
+
+    def test_memory_list_after_save(self):
+        self._request("POST", "/memory/save", {"text": "第一条", "tags": "a"})
+        self._request("POST", "/memory/save", {"text": "第二条", "tags": "b"})
+
+        status, body = self._request("GET", "/memory/list")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["memories"]), 2)
+        texts = [m["text"] for m in body["memories"]]
+        self.assertIn("第一条", texts)
+        self.assertIn("第二条", texts)
+
+    def test_memory_search(self):
+        self._request("POST", "/memory/save", {"text": "Python 编程技巧", "tags": "python"})
+        self._request("POST", "/memory/save", {"text": "JavaScript 框架", "tags": "js"})
+
+        status, body = self._request("GET", "/memory/search?q=Python")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["memories"]), 1)
+        self.assertEqual(body["memories"][0]["text"], "Python 编程技巧")
+
+    def test_memory_search_empty_query(self):
+        status, body = self._request("GET", "/memory/search")
+
+        self.assertEqual(status, 400)
+        self.assertIn("q", body["error"])
+
+    def test_memory_search_no_results(self):
+        self._request("POST", "/memory/save", {"text": "Python 编程", "tags": ""})
+
+        status, body = self._request("GET", "/memory/search?q=JavaScript")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["memories"], [])
+
+    def test_memory_delete(self):
+        self._request("POST", "/memory/save", {"text": "要删除的记忆", "tags": ""})
+        list_status, list_body = self._request("GET", "/memory/list")
+        memory_id = list_body["memories"][0]["id"]
+
+        status, body = self._request("POST", "/memory/delete", {"memory_id": memory_id})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已删除", body["result"])
+
+        list_status, list_body = self._request("GET", "/memory/list")
+        self.assertEqual(len(list_body["memories"]), 0)
+
+    def test_memory_delete_not_found(self):
+        status, body = self._request("POST", "/memory/delete", {"memory_id": "mem_999"})
+
+        self.assertEqual(status, 404)
+        self.assertIn("没有找到", body["error"])
+
+    def test_memory_delete_missing_id(self):
+        status, body = self._request("POST", "/memory/delete", {})
+
+        self.assertEqual(status, 400)
+        self.assertIn("memory_id", body["error"])
+
+
+class HTTPMemoryAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        registry = build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            long_term_memory_path=Path(self.tmpdir) / "memory.jsonl",
+        )
+        self.agent = MiniAgent(registry)
+        self.long_term_memory = registry.long_term_memory
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            long_term_memory=self.long_term_memory,
+            api_token="test-secret",
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_memory_save_rejected_without_auth(self):
+        status, body = self._request("POST", "/memory/save", {"text": "test"})
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
+
+    def test_memory_save_accepted_with_auth(self):
+        status, body = self._request(
+            "POST", "/memory/save",
+            {"text": "authenticated save", "tags": "auth"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+
+    def test_memory_list_rejected_without_auth(self):
+        status, body = self._request("GET", "/memory/list")
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
+
+    def test_memory_search_rejected_without_auth(self):
+        status, body = self._request("GET", "/memory/search?q=test")
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
 
 
 if __name__ == "__main__":

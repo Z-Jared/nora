@@ -65,6 +65,9 @@ class TaskManager:
 
         return f"没有找到步骤: {step_id}"
 
+    def get_current_task(self) -> dict:
+        return self._read()
+
     def list(self) -> str:
         task = self._read()
         if not task:
