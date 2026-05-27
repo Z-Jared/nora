@@ -480,14 +480,15 @@ button{border:0;cursor:pointer}
   }
 
   function setState(next, detail){
-    state = next;
-    var pillText = next;
-    if(next === 'error' && authFailed) pillText = 'auth required';
+    var effective = (next !== 'error' && authFailed) ? 'error' : next;
+    state = effective;
+    var pillText = effective;
+    if(effective === 'error' && authFailed) pillText = 'auth required';
     topState.textContent = pillText;
-    metricState.textContent = next;
-    metricRisk.textContent = next === 'error' ? 'high' : 'normal';
-    topState.className = next === 'error' ? 'pill ready error' : 'pill ready';
-    renderStatePanel(next, detail);
+    metricState.textContent = effective;
+    metricRisk.textContent = effective === 'error' ? 'high' : 'normal';
+    topState.className = effective === 'error' ? 'pill ready error' : 'pill ready';
+    renderStatePanel(effective, detail);
   }
 
   function renderStatePanel(type, detail){

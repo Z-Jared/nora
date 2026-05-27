@@ -69,6 +69,12 @@ const document = {
           if (!_listeners[id][evt]) _listeners[id][evt] = [];
           _listeners[id][evt].push(fn);
         },
+        dispatchEvent(evt) {
+          var self = this;
+          if (_listeners[id] && _listeners[id][evt.type]) {
+            _listeners[id][evt.type].forEach(function(fn) { fn(evt); });
+          }
+        },
         remove() {},
         scrollIntoView() {},
         focus() {},
@@ -96,6 +102,7 @@ const document = {
       },
       querySelectorAll() { return []; },
       addEventListener() {},
+      dispatchEvent() {},
       remove() {},
       focus() {},
       blur() {},
@@ -340,6 +347,98 @@ result = {
         self.assertFalse(result["cachedLlmConfigured"], "cached llm_configured should be false")
         self.assertTrue(result["sendDisabled"], "Send should stay disabled when cached llm_configured=false")
         self.assertEqual(result["composerText"], "Model not configured")
+
+    def test_mobile_token_recovery_enables_buttons(self):
+        """Entering token via mobile input should enable Send/Run
+        when llm_configured=true."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: true, llm_configured: true, "
+            "provider: 'openai', model: 'gpt-4', workspace: '/tmp', "
+            "features: { sessions: true, tasks: true, memory: true, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+var mobileInput = _elements['mobile-token'];
+mobileInput.value = 'my-token';
+mobileInput.dispatchEvent(new Event('input'));
+await new Promise(r => setTimeout(r, 50));
+result = {
+  sendDisabled: _elements['send'].disabled,
+  runDisabled: _elements['run-btn'].disabled,
+  composerText: _elements['composer-status'].textContent,
+  desktopToken: _elements['token'].value,
+};
+""")
+        self.assertFalse(result["sendDisabled"], "Send should be enabled after mobile token input")
+        self.assertFalse(result["runDisabled"], "Run should be enabled after mobile token input")
+        self.assertEqual(result["composerText"], "Ready")
+        self.assertEqual(result["desktopToken"], "my-token", "Desktop token should be synced from mobile")
+
+    def test_stop_during_auth_failure_keeps_buttons_disabled(self):
+        """stopStream() during auth failure must not re-enable Send/Run
+        or change pill to 'ready'."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: true, llm_configured: true, "
+            "provider: 'openai', model: 'gpt-4', workspace: '/tmp', "
+            "features: { sessions: true, tasks: true, memory: true, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+_elements['input'].value = 'hello';
+sendMessage();
+await new Promise(r => setTimeout(r, 200));
+stopStream();
+result = {
+  sendDisabled: _elements['send'].disabled,
+  runDisabled: _elements['run-btn'].disabled,
+  stopDisabled: _elements['stop-btn'].disabled,
+  stateText: _elements['top-state'].textContent,
+  metricState: _elements['metric-state'].textContent,
+  metricRisk: _elements['metric-risk'].textContent,
+  statePanelHtml: _elements['state-panel'].innerHTML,
+};
+""")
+        self.assertTrue(result["sendDisabled"], "Send should remain disabled after stop during auth failure")
+        self.assertTrue(result["runDisabled"], "Run should remain disabled after stop during auth failure")
+        self.assertTrue(result["stopDisabled"], "Stop should be disabled after stream ends")
+        self.assertEqual(result["stateText"], "auth required", "Pill should show 'auth required' not 'ready'")
+        self.assertEqual(result["metricState"], "error", "metric-state should show 'error' not 'ready'")
+        self.assertEqual(result["metricRisk"], "high", "metric-risk should show 'high' during auth failure")
+        self.assertIn("Auth required", result["statePanelHtml"], "state-panel should show Auth required")
+        self.assertIn("panel-card error", result["statePanelHtml"], "state-panel should have error styling")
+
+    def test_new_conversation_auth_failure_keeps_buttons_disabled(self):
+        """newConversation() when auth fails must not re-enable Send/Run."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: true, llm_configured: true, "
+            "provider: 'openai', model: 'gpt-4', workspace: '/tmp', "
+            "features: { sessions: true, tasks: true, memory: true, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+newConversation();
+await new Promise(r => setTimeout(r, 200));
+result = {
+  sendDisabled: _elements['send'].disabled,
+  runDisabled: _elements['run-btn'].disabled,
+  stateText: _elements['top-state'].textContent,
+  metricState: _elements['metric-state'].textContent,
+  metricRisk: _elements['metric-risk'].textContent,
+  statePanelHtml: _elements['state-panel'].innerHTML,
+  composerText: _elements['composer-status'].textContent,
+};
+""")
+        self.assertTrue(result["sendDisabled"], "Send should remain disabled after auth failure in newConversation")
+        self.assertTrue(result["runDisabled"], "Run should remain disabled after auth failure in newConversation")
+        self.assertEqual(result["stateText"], "auth required")
+        self.assertEqual(result["metricState"], "error", "metric-state should show 'error' not 'ready'")
+        self.assertEqual(result["metricRisk"], "high", "metric-risk should show 'high' during auth failure")
+        self.assertIn("Auth required", result["statePanelHtml"], "state-panel should show Auth required")
+        self.assertIn("panel-card error", result["statePanelHtml"], "state-panel should have error styling")
+        self.assertEqual(result["composerText"], "Token required")
 
 
 if __name__ == "__main__":
