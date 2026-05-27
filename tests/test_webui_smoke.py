@@ -41,6 +41,7 @@ def _run_node(setup_js: str = "", test_body: str = "") -> dict:
 const _elements = {};
 const _listeners = {};
 const document = {
+  body: { scrollHeight: 0 },
   getElementById(id) {
     if (!_elements[id]) {
       _elements[id] = {
@@ -52,6 +53,8 @@ const document = {
         innerHTML: '',
         textContent: '',
         style: {},
+        scrollTop: 0,
+        scrollHeight: 0,
         classList: {
           _classes: new Set(),
           add(cls) { this._classes.add(cls); },
@@ -60,6 +63,7 @@ const document = {
         },
         querySelector() { return null; },
         querySelectorAll() { return []; },
+        appendChild() {},
         addEventListener(evt, fn) {
           if (!_listeners[id]) _listeners[id] = {};
           if (!_listeners[id][evt]) _listeners[id][evt] = [];
@@ -78,6 +82,7 @@ const document = {
   querySelectorAll() { return []; },
   addEventListener() {},
   createElement() {
+    const children = {};
     return {
       className: '',
       innerHTML: '',
@@ -85,7 +90,10 @@ const document = {
       style: {},
       classList: { _classes: new Set(), add() {}, remove() {}, contains() { return false; } },
       appendChild() {},
-      querySelector() { return null; },
+      querySelector(selector) {
+        if (!children[selector]) children[selector] = { textContent: '', className: '', style: {} };
+        return children[selector];
+      },
       querySelectorAll() { return []; },
       addEventListener() {},
       remove() {},
@@ -181,6 +189,32 @@ result = {
         self.assertTrue(result["sendDisabled"], "Send should be disabled when auth_required and no token")
         self.assertTrue(result["runDisabled"], "Run should be disabled when auth_required and no token")
         self.assertEqual(result["composerText"], "Token required")
+
+    def test_failed_send_keeps_buttons_disabled_without_token(self):
+        """A failed authenticated send must not re-enable Send/Run
+        while auth is still unresolved."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: true, llm_configured: true, "
+            "provider: 'openai', model: 'gpt-4', workspace: '/tmp', "
+            "features: { sessions: true, tasks: true, memory: true, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+_elements['input'].value = 'hello';
+sendMessage();
+await new Promise(r => setTimeout(r, 100));
+result = {
+  sendDisabled: _elements['send'].disabled,
+  runDisabled: _elements['run-btn'].disabled,
+  composerText: _elements['composer-status'].textContent,
+  stateText: _elements['top-state'].textContent,
+};
+""")
+        self.assertTrue(result["sendDisabled"], "Send should remain disabled after auth failure")
+        self.assertTrue(result["runDisabled"], "Run should remain disabled after auth failure")
+        self.assertEqual(result["composerText"], "Token required")
+        self.assertEqual(result["stateText"], "auth required")
 
     def test_llm_not_configured_keeps_buttons_disabled_after_token(self):
         """When llm_configured=false, entering a token should NOT enable Send/Run."""

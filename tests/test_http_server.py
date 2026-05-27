@@ -807,7 +807,7 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIsNotNone(match, "sendMessage function not found")
         body_text = match.group(1)
         self.assertIn("sendBtn.disabled = true", body_text)
-        self.assertIn("sendBtn.disabled = false", body_text)
+        self.assertIn("applyReadinessState()", body_text)
         self.assertIn("runBtn", body_text)
 
     def test_token_recovery_refreshes_session_task_memory(self):
@@ -886,11 +886,12 @@ class HTTPServerStaticTests(unittest.TestCase):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         import re
-        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
-        self.assertIsNotNone(match, "fetchStatus function not found")
+        match = re.search(r"function applyReadinessState\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "applyReadinessState function not found")
         fn_body = match.group(1)
-        self.assertIn("sendBtn.disabled = true", fn_body)
+        self.assertIn("sendBtn.disabled = !next.enabled", fn_body)
         self.assertIn("runBtn", fn_body)
+        self.assertIn("updateComposerStatus(next.message", fn_body)
 
     def test_token_input_restores_send_run(self):
         _, _, body = self._get("/")
@@ -899,8 +900,8 @@ class HTTPServerStaticTests(unittest.TestCase):
         match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
         self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
         fn_body = match.group(1)
-        self.assertIn("sendBtn.disabled = false", fn_body)
-        self.assertIn("runBtn", fn_body)
+        self.assertIn("authFailed = false", fn_body)
+        self.assertIn("applyReadinessState()", fn_body)
 
     def test_composer_status_element_exists(self):
         _, _, body = self._get("/")
@@ -913,11 +914,11 @@ class HTTPServerStaticTests(unittest.TestCase):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         import re
-        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
-        self.assertIsNotNone(match, "fetchStatus function not found")
+        match = re.search(r"function readinessState\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "readinessState function not found")
         fn_body = match.group(1)
         self.assertIn("Server unreachable", fn_body)
-        self.assertIn("updateComposerStatus", fn_body)
+        self.assertIn("enabled:false", fn_body)
 
     def test_token_required_composer_status(self):
         _, _, body = self._get("/")
@@ -929,11 +930,12 @@ class HTTPServerStaticTests(unittest.TestCase):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         import re
-        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
-        self.assertIsNotNone(match, "fetchStatus function not found")
+        match = re.search(r"function readinessState\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "readinessState function not found")
         fn_body = match.group(1)
-        self.assertIn("data.llm_configured", fn_body)
-        self.assertIn("sendBtn.disabled = true", fn_body)
+        self.assertIn("serverStatus.llm_configured", fn_body)
+        self.assertIn("Model not configured", fn_body)
+        self.assertIn("enabled:false", fn_body)
 
     def test_llm_configured_shows_model_not_configured(self):
         _, _, body = self._get("/")
@@ -944,11 +946,11 @@ class HTTPServerStaticTests(unittest.TestCase):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         import re
-        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
-        self.assertIsNotNone(match, "fetchStatus function not found")
+        match = re.search(r"function readinessState\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "readinessState function not found")
         fn_body = match.group(1)
-        self.assertIn("sendBtn.disabled = false", fn_body)
-        self.assertIn("updateComposerStatus('Ready'", fn_body)
+        self.assertIn("enabled:true", fn_body)
+        self.assertIn("message:'Ready'", fn_body)
 
     def test_server_panel_shows_model_config_missing(self):
         _, _, body = self._get("/")
@@ -978,8 +980,8 @@ class HTTPServerStaticTests(unittest.TestCase):
         match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
         self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
         fn_body = match.group(1)
-        self.assertIn("sendBtn.disabled = true", fn_body)
-        self.assertIn("Model not configured", fn_body)
+        self.assertIn("applyReadinessState()", fn_body)
+        self.assertIn("serverStatus && !serverStatus.llm_configured", fn_body)
 
     def test_fetch_status_saves_server_status(self):
         _, _, body = self._get("/")

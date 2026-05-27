@@ -399,9 +399,31 @@ button{border:0;cursor:pointer}
       authFailed = true;
       mobileAuthPending = true;
       setState('error', 'Authorization token required or invalid.');
+      applyReadinessState();
       return true;
     }
     return false;
+  }
+
+  function readinessState(){
+    if(!serverStatus){
+      return {enabled:false, message:'Server unreachable', type:'error'};
+    }
+    if(serverStatus.auth_required && (authFailed || !tokenInput.value.trim())){
+      return {enabled:false, message:'Token required', type:'warning'};
+    }
+    if(!serverStatus.llm_configured){
+      return {enabled:false, message:'Model not configured', type:'warning'};
+    }
+    return {enabled:true, message:'Ready', type:'ready'};
+  }
+
+  function applyReadinessState(){
+    var next = readinessState();
+    sendBtn.disabled = !next.enabled;
+    if(runBtn) runBtn.disabled = !next.enabled;
+    updateComposerStatus(next.message, next.type);
+    return next;
   }
 
   function syncTokenInputs(value, source){
@@ -421,16 +443,11 @@ button{border:0;cursor:pointer}
   function recoverAfterAuthInput(){
     if(!authFailed) return;
     authFailed = false;
-    if(serverStatus && !serverStatus.llm_configured){
-      sendBtn.disabled = true;
-      if(runBtn) runBtn.disabled = true;
+    var next = applyReadinessState();
+    if(!next.enabled && serverStatus && !serverStatus.llm_configured){
       setState('ready', 'Token accepted.');
-      updateComposerStatus('Model not configured', 'warning');
     } else {
-      sendBtn.disabled = false;
-      if(runBtn) runBtn.disabled = false;
       setState('ready', 'Token accepted. Recovering sessions.');
-      updateComposerStatus('Ready', 'ready');
     }
     loadSessions();
     fetchTask();
@@ -653,8 +670,7 @@ button{border:0;cursor:pointer}
     activeAbortController.abort();
     activeAbortController = null;
     if(assistantEl) assistantEl.className = 'msg assistant';
-    sendBtn.disabled = false;
-    if(runBtn) runBtn.disabled = false;
+    applyReadinessState();
     if(stopBtn) stopBtn.disabled = true;
     if(mobileStopBtn) mobileStopBtn.disabled = true;
     setState('ready', 'Stream stopped by user.');
@@ -880,8 +896,7 @@ button{border:0;cursor:pointer}
       setState('error', e.message);
     }).finally(function(){
       activeAbortController = null;
-      sendBtn.disabled = false;
-      if(runBtn) runBtn.disabled = false;
+      applyReadinessState();
       if(stopBtn) stopBtn.disabled = true;
       if(mobileStopBtn) mobileStopBtn.disabled = true;
       input.focus();
@@ -917,8 +932,7 @@ button{border:0;cursor:pointer}
           if(evt.tool_calls != null) doneDetail += ' · ' + evt.tool_calls + ' server tool calls';
           addToolEvent('done', 'done', doneDetail);
           setState('done', 'Status ' + (evt.status || 'done') + '. Tool calls: ' + toolCallCount);
-          sendBtn.disabled = false;
-          if(runBtn) runBtn.disabled = false;
+          applyReadinessState();
           break;
         case 'error':
           addMsg(evt.error, 'error');
@@ -1238,25 +1252,14 @@ button{border:0;cursor:pointer}
       if(data.auth_required && !tokenInput.value.trim()){
         authFailed = true;
         mobileAuthPending = true;
-        sendBtn.disabled = true;
-        if(runBtn) runBtn.disabled = true;
         setState('error', 'Authorization token required or invalid.');
-        updateComposerStatus('Token required', 'warning');
-      } else if(!data.llm_configured){
-        sendBtn.disabled = true;
-        if(runBtn) runBtn.disabled = true;
-        updateComposerStatus('Model not configured', 'warning');
-      } else {
-        sendBtn.disabled = false;
-        if(runBtn) runBtn.disabled = false;
-        updateComposerStatus('Ready', 'ready');
       }
+      applyReadinessState();
     }).catch(function(e){
+      serverStatus = null;
       renderServerPanel(null);
-      sendBtn.disabled = true;
-      if(runBtn) runBtn.disabled = true;
       setState('error', 'Failed to connect to server: ' + e.message);
-      updateComposerStatus('Server unreachable', 'error');
+      applyReadinessState();
     });
   }
 
