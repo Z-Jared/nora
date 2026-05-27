@@ -461,6 +461,14 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"/task/start", body)
         self.assertIn(b"/task/next", body)
         self.assertIn(b"/task/finish", body)
+        self.assertIn(b"memory-panel", body)
+        self.assertIn(b"mobile-memory-container", body)
+        self.assertIn(b"fetchMemories", body)
+        self.assertIn(b"/memory/list", body)
+        self.assertIn(b"/memory/save", body)
+        self.assertIn(b"/memory/delete", body)
+        self.assertIn(b"memory_id", body)
+        self.assertIn(b"JSON.stringify({memory_id: memoryId})", body)
         self.assertIn(b"AbortController", body)
 
     def test_stop_buttons_initially_disabled(self):
@@ -499,11 +507,22 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("No active task", html)
         self.assertIn("Start task", html)
 
+    def test_memory_panel_and_mobile_container_exist(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="memory-panel"', html)
+        self.assertIn('id="mobile-memory-container"', html)
+        self.assertIn("memory-section", html)
+        self.assertIn("No memories yet", html)
+        self.assertIn("Save memory", html)
+
     def test_auth_recovery_retries_task_fetch(self):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
         self.assertIn("function recoverAfterAuthInput", html)
-        self.assertIn("loadSessions();\n    fetchTask();", html)
+        self.assertIn("loadSessions();", html)
+        self.assertIn("fetchTask();", html)
+        self.assertIn("fetchMemories();", html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

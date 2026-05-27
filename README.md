@@ -348,13 +348,17 @@ POST /task/start          创建任务 {"goal": "...", "steps": "步骤一\n步�
 POST /task/next           推进到下一个待执行步骤
 POST /task/update         更新步骤 {"step_id": 1, "status": "done", "summary": "..."}
 POST /task/finish         完成任务 {"summary": "..."}
+GET  /memory/list         列出长期记忆
+GET  /memory/search?q=... 搜索长期记忆
+POST /memory/save         保存记忆 {"text": "...", "tags": "..."}
+POST /memory/delete       删除记忆 {"memory_id": "mem_1"}
 GET  /docs                OpenAPI 3.0 API 文档
 POST /session/save        保存会话 {"name": "..."}
 POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
-设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/task`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
+设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/task`、`/memory/list`、`/memory/search`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
 示例：
 

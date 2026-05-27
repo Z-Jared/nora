@@ -150,6 +150,32 @@ button{border:0;cursor:pointer}
 .mobile-task .task-goal{font-size:14px}
 .mobile-task .step-item{font-size:13px}
 .mobile-task .task-actions{margin-top:10px}
+.memory-section{margin-top:8px}
+.memory-section .side-title{margin-bottom:6px}
+.memory-empty{border:1px dashed var(--line-strong);border-radius:6px;padding:10px;color:var(--muted);font-size:12px;background:rgba(255,254,250,.55);line-height:1.45}
+.memory-search{display:flex;gap:6px;margin-bottom:8px}
+.memory-search input{flex:1;height:28px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 8px;font-size:12px;outline:none}
+.memory-search button{height:28px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 8px;font-size:11px;font-weight:800;color:#4c4a44}
+.memory-list{display:grid;gap:6px;margin-bottom:8px;max-height:240px;overflow:auto}
+.memory-item{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:8px 10px;font-size:12px;line-height:1.4;position:relative}
+.memory-item:hover{border-color:#b9cbbd}
+.memory-text{margin-bottom:4px;word-break:break-word}
+.memory-meta{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.memory-tags{font-size:10px;color:var(--muted)}
+.memory-id{font-size:10px;color:var(--muted);font-weight:800}
+.memory-delete{height:20px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:0 6px;font-size:10px;color:var(--danger);cursor:pointer}
+.memory-delete:hover{background:#fff4f2;border-color:#efb3a8}
+.memory-form{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px;margin-bottom:8px;display:none}
+.memory-form.open{display:block}
+.memory-form textarea{width:100%;border:1px solid var(--line);border-radius:5px;background:#fff;padding:6px 8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:40px;font-family:inherit}
+.memory-form input{width:100%;border:1px solid var(--line);border-radius:5px;background:#fff;padding:6px 8px;font-size:12px;outline:none;margin-bottom:6px}
+.memory-form-actions{display:flex;gap:6px;justify-content:flex-end}
+.memory-btn{height:26px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;font-size:11px;font-weight:800;color:#4c4a44}
+.memory-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
+.memory-btn:disabled{opacity:.5;cursor:not-allowed}
+.mobile-memory{border:1px solid var(--line-strong);border-radius:7px;background:var(--card);padding:14px 12px;margin-top:18px}
+.mobile-memory .memory-list{max-height:none}
+.mobile-memory .memory-item{font-size:13px}
 @media (max-width:1100px){
   .workspace{grid-template-columns:220px minmax(0,1fr) 280px}
   .topbar{grid-template-columns:220px 1fr auto;padding:10px 16px;gap:14px}
@@ -222,6 +248,10 @@ button{border:0;cursor:pointer}
         <div class="side-title">Task</div>
         <div id="task-panel"><div class="task-empty">No active task.</div></div>
       </div>
+      <div class="memory-section">
+        <div class="side-title">Memory</div>
+        <div id="memory-panel"><div class="memory-empty">No memories yet.</div></div>
+      </div>
     </aside>
     <main class="main">
       <div class="thread-head">
@@ -246,6 +276,7 @@ button{border:0;cursor:pointer}
           </div>
           <div class="mobile-runtime-container" id="mobile-runtime-container"></div>
           <div id="mobile-task-container"></div>
+          <div id="mobile-memory-container"></div>
         </div>
       </div>
       <form class="composer" id="composer">
@@ -304,6 +335,7 @@ button{border:0;cursor:pointer}
   var mobileStopBtn = document.getElementById('mobile-stop-btn');
   var mobileRuntimeContainer = document.getElementById('mobile-runtime-container');
   var taskPanelEl = document.getElementById('task-panel');
+  var memoryPanelEl = document.getElementById('memory-panel');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
@@ -323,6 +355,9 @@ button{border:0;cursor:pointer}
   var mobileAuthPending = false;
   var currentTask = null;
   var taskFormOpen = false;
+  var memories = [];
+  var memorySearchQuery = '';
+  var memoryFormOpen = false;
 
   function handleAuthError(resp){
     if(resp.status === 401){
@@ -353,6 +388,7 @@ button{border:0;cursor:pointer}
     authFailed = false;
     loadSessions();
     fetchTask();
+    fetchMemories();
   }
   tokenInput.addEventListener('input', function(){
     syncTokenInputs(tokenInput.value, tokenInput);
@@ -1067,6 +1103,239 @@ button{border:0;cursor:pointer}
     });
   }
 
+  function fetchMemories(){
+    var query = memorySearchQuery.trim();
+    var url = query ? '/memory/search?q=' + encodeURIComponent(query) : '/memory/list';
+    return fetch(url, {
+      method: 'GET',
+      headers: authHeaders()
+    }).then(function(resp){
+      if(!resp.ok){
+        if(resp.status === 404){
+          memories = [];
+          renderMemoryPanel();
+          return;
+        }
+        if(handleAuthError(resp)) return;
+        throw new Error('HTTP ' + resp.status);
+      }
+      return resp.json();
+    }).then(function(data){
+      if(data){
+        memories = data.memories || data || [];
+        renderMemoryPanel();
+      }
+    }).catch(function(){
+      memories = [];
+      renderMemoryPanel();
+    });
+  }
+
+  function saveMemory(text, tags){
+    fetch('/memory/save', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({text: text, tags: tags || ''})
+    }).then(function(resp){
+      if(!resp.ok){
+        if(handleAuthError(resp)) return;
+        return parseErrorResponse(resp);
+      }
+      return resp.json();
+    }).then(function(){
+      memoryFormOpen = false;
+      return fetchMemories();
+    }).catch(function(e){
+      setState('error', 'Failed to save memory: ' + e.message);
+    });
+  }
+
+  function deleteMemory(memoryId){
+    fetch('/memory/delete', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({memory_id: memoryId})
+    }).then(function(resp){
+      if(!resp.ok){
+        if(handleAuthError(resp)) return;
+        return parseErrorResponse(resp);
+      }
+      return resp.json();
+    }).then(function(){
+      return fetchMemories();
+    }).catch(function(e){
+      setState('error', 'Failed to delete memory: ' + e.message);
+    });
+  }
+
+  function renderMemoryPanel(){
+    if(!memoryPanelEl) return;
+    var html = '<div class="memory-search">';
+    html += '<input type="text" id="memory-search-input" placeholder="Search memories…" value="' + escapeHtml(memorySearchQuery) + '">';
+    html += '<button id="memory-search-btn" type="button">Search</button>';
+    html += '</div>';
+
+    html += '<div class="memory-list">';
+    if(memories.length === 0){
+      html += '<div class="memory-empty">' + (memorySearchQuery ? 'No memories match your search.' : 'No memories yet.') + '</div>';
+    } else {
+      memories.forEach(function(mem){
+        html += '<div class="memory-item">';
+        html += '<div class="memory-text">' + escapeHtml(mem.text || '') + '</div>';
+        html += '<div class="memory-meta">';
+        var tags = (mem.tags || []).join(', ');
+        html += '<span class="memory-tags">' + (tags ? 'tags: ' + escapeHtml(tags) : '') + '</span>';
+        html += '<span class="memory-id">' + escapeHtml(mem.id || '') + '</span>';
+        html += '<button class="memory-delete" data-id="' + escapeHtml(mem.id || '') + '" type="button">Delete</button>';
+        html += '</div></div>';
+      });
+    }
+    html += '</div>';
+
+    html += '<div class="task-actions">';
+    html += '<button class="memory-btn primary" id="memory-save-btn" type="button">Save memory</button>';
+    html += '</div>';
+
+    html += '<div class="memory-form' + (memoryFormOpen ? ' open' : '') + '" id="memory-form">';
+    html += '<textarea id="memory-text-input" placeholder="Memory content"></textarea>';
+    html += '<input type="text" id="memory-tags-input" placeholder="Tags (comma separated, optional)">';
+    html += '<div class="memory-form-actions">';
+    html += '<button class="memory-btn" id="memory-form-cancel" type="button">Cancel</button>';
+    html += '<button class="memory-btn primary" id="memory-form-submit" type="button">Save</button>';
+    html += '</div></div>';
+
+    memoryPanelEl.innerHTML = html;
+
+    var searchInput = document.getElementById('memory-search-input');
+    var searchBtn = document.getElementById('memory-search-btn');
+    var saveBtn = document.getElementById('memory-save-btn');
+    var formSubmit = document.getElementById('memory-form-submit');
+    var formCancel = document.getElementById('memory-form-cancel');
+    var deleteBtns = memoryPanelEl.querySelectorAll('.memory-delete');
+
+    if(searchInput) searchInput.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        memorySearchQuery = searchInput.value;
+        fetchMemories();
+      }
+    });
+    if(searchBtn) searchBtn.addEventListener('click', function(){
+      memorySearchQuery = (searchInput || {}).value || '';
+      fetchMemories();
+    });
+    if(saveBtn) saveBtn.addEventListener('click', function(){
+      memoryFormOpen = true;
+      renderMemoryPanel();
+      var ti = document.getElementById('memory-text-input');
+      if(ti) ti.focus();
+    });
+    if(formSubmit) formSubmit.addEventListener('click', function(){
+      var text = (document.getElementById('memory-text-input') || {}).value || '';
+      var tags = (document.getElementById('memory-tags-input') || {}).value || '';
+      if(!text.trim()) return;
+      saveMemory(text.trim(), tags);
+    });
+    if(formCancel) formCancel.addEventListener('click', function(){
+      memoryFormOpen = false;
+      renderMemoryPanel();
+    });
+    deleteBtns.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-id');
+        if(id && confirm('Delete memory ' + id + '?')) deleteMemory(id);
+      });
+    });
+
+    renderMobileMemory();
+  }
+
+  function renderMobileMemory(){
+    var container = document.getElementById('mobile-memory-container');
+    if(!container) return;
+
+    var html = '<div class="mobile-memory">';
+    html += '<div class="inspector-title"><span>Memory</span><span>' + memories.length + ' items</span></div>';
+
+    html += '<div class="memory-search">';
+    html += '<input type="text" id="mobile-memory-search-input" placeholder="Search memories…" value="' + escapeHtml(memorySearchQuery) + '">';
+    html += '<button id="mobile-memory-search-btn" type="button">Search</button>';
+    html += '</div>';
+
+    html += '<div class="memory-list">';
+    if(memories.length === 0){
+      html += '<div class="memory-empty">' + (memorySearchQuery ? 'No memories match your search.' : 'No memories yet.') + '</div>';
+    } else {
+      memories.forEach(function(mem){
+        html += '<div class="memory-item">';
+        html += '<div class="memory-text">' + escapeHtml(mem.text || '') + '</div>';
+        html += '<div class="memory-meta">';
+        var tags = (mem.tags || []).join(', ');
+        html += '<span class="memory-tags">' + (tags ? 'tags: ' + escapeHtml(tags) : '') + '</span>';
+        html += '<span class="memory-id">' + escapeHtml(mem.id || '') + '</span>';
+        html += '<button class="memory-delete" data-id="' + escapeHtml(mem.id || '') + '" type="button">Delete</button>';
+        html += '</div></div>';
+      });
+    }
+    html += '</div>';
+
+    html += '<div class="task-actions">';
+    html += '<button class="memory-btn primary" id="mobile-memory-save-btn" type="button">Save memory</button>';
+    html += '</div>';
+
+    html += '<div class="memory-form' + (memoryFormOpen ? ' open' : '') + '" id="mobile-memory-form">';
+    html += '<textarea id="mobile-memory-text-input" placeholder="Memory content"></textarea>';
+    html += '<input type="text" id="mobile-memory-tags-input" placeholder="Tags (comma separated, optional)">';
+    html += '<div class="memory-form-actions">';
+    html += '<button class="memory-btn" id="mobile-memory-form-cancel" type="button">Cancel</button>';
+    html += '<button class="memory-btn primary" id="mobile-memory-form-submit" type="button">Save</button>';
+    html += '</div></div>';
+
+    html += '</div>';
+    container.innerHTML = html;
+
+    var mSearchInput = document.getElementById('mobile-memory-search-input');
+    var mSearchBtn = document.getElementById('mobile-memory-search-btn');
+    var mSaveBtn = document.getElementById('mobile-memory-save-btn');
+    var mFormSubmit = document.getElementById('mobile-memory-form-submit');
+    var mFormCancel = document.getElementById('mobile-memory-form-cancel');
+    var mDeleteBtns = container.querySelectorAll('.memory-delete');
+
+    if(mSearchInput) mSearchInput.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        memorySearchQuery = mSearchInput.value;
+        fetchMemories();
+      }
+    });
+    if(mSearchBtn) mSearchBtn.addEventListener('click', function(){
+      memorySearchQuery = (mSearchInput || {}).value || '';
+      fetchMemories();
+    });
+    if(mSaveBtn) mSaveBtn.addEventListener('click', function(){
+      memoryFormOpen = true;
+      renderMobileMemory();
+      var ti = document.getElementById('mobile-memory-text-input');
+      if(ti) ti.focus();
+    });
+    if(mFormSubmit) mFormSubmit.addEventListener('click', function(){
+      var text = (document.getElementById('mobile-memory-text-input') || {}).value || '';
+      var tags = (document.getElementById('mobile-memory-tags-input') || {}).value || '';
+      if(!text.trim()) return;
+      saveMemory(text.trim(), tags);
+    });
+    if(mFormCancel) mFormCancel.addEventListener('click', function(){
+      memoryFormOpen = false;
+      renderMobileMemory();
+    });
+    mDeleteBtns.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-id');
+        if(id && confirm('Delete memory ' + id + '?')) deleteMemory(id);
+      });
+    });
+  }
+
   composer.addEventListener('submit', function(e){
     e.preventDefault();
     sendMessage();
@@ -1087,6 +1356,7 @@ button{border:0;cursor:pointer}
   renderToolEvents();
   loadSessions();
   fetchTask();
+  fetchMemories();
   input.focus();
 })();
 </script>
