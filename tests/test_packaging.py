@@ -112,6 +112,11 @@ class PackagingTests(unittest.TestCase):
 
         self.assertIn("nora-serve", readme)
 
+    def test_readme_smoke_section_mentions_webui_url(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("127.0.0.1:8080", readme)
+
     def test_app_main_entrypoint_exists(self):
         import importlib
         mod = importlib.import_module("mini_agent.app")

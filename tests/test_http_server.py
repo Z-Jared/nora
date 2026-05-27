@@ -453,6 +453,9 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"mobile-new-btn", body)
         self.assertIn(b"stop-btn", body)
         self.assertIn(b"mobile-stop-btn", body)
+        self.assertIn(b"mobile-tools-btn", body)
+        self.assertIn(b"mobile-token-area", body)
+        self.assertIn(b"mobile-runtime-container", body)
         self.assertIn(b"AbortController", body)
 
     def test_stop_buttons_initially_disabled(self):
@@ -461,8 +464,21 @@ class HTTPServerStaticTests(unittest.TestCase):
         import re
         desktop = re.search(r'id="stop-btn"[^>]*disabled', html)
         mobile = re.search(r'id="mobile-stop-btn"[^>]*disabled', html)
+        tools = re.search(r'id="mobile-tools-btn"[^>]*disabled', html)
         self.assertIsNotNone(desktop, "desktop stop-btn must be initially disabled")
         self.assertIsNotNone(mobile, "mobile-stop-btn must be initially disabled")
+        self.assertIsNotNone(tools, "mobile-tools-btn must be initially disabled")
+
+    def test_mobile_auth_error_css_class(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("mobile-token.auth-error", html)
+        self.assertIn("mobile-token-area", html)
+
+    def test_mobile_runtime_container_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="mobile-runtime-container"', html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

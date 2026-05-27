@@ -118,6 +118,7 @@ button{border:0;cursor:pointer}
 .context-item{border:1px solid var(--line);border-radius:5px;background:var(--card);padding:8px 9px;font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mobile-status{display:none}
 .mobile-token{display:none}
+.mobile-token.auth-error{border-color:#efb3a8;background:#fff4f2;box-shadow:0 0 0 2px rgba(239,179,168,.35)}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @media (max-width:1100px){
   .workspace{grid-template-columns:220px minmax(0,1fr) 280px}
@@ -211,10 +212,11 @@ button{border:0;cursor:pointer}
           <div class="empty-state" id="empty-state"><strong>Ask Nora to start a task.</strong><span>Messages, streaming deltas, tool calls, errors, and completion state will appear here.</span></div>
         </div>
         <div class="mobile-status" id="mobile-status">
-          <div class="mobile-token">
+          <div class="mobile-token" id="mobile-token-area">
             <label for="mobile-token">Authorization token</label>
             <input class="token-input" id="mobile-token" type="password" placeholder="Token" autocomplete="off">
           </div>
+          <div class="mobile-runtime-container" id="mobile-runtime-container"></div>
         </div>
       </div>
       <form class="composer" id="composer">
@@ -222,7 +224,7 @@ button{border:0;cursor:pointer}
           <div class="quick-actions">
             <button class="quick-btn" type="button" id="mobile-new-btn">New</button>
             <button class="quick-btn" type="button" id="mobile-stop-btn" disabled>Stop</button>
-            <button class="quick-btn" type="button">Tools</button>
+            <button class="quick-btn" type="button" id="mobile-tools-btn" disabled>Tools</button>
           </div>
           <div class="input-row">
             <input class="composer-input" id="input" type="text" placeholder="Ask Nora to inspect files, run tools, or continue a task..." autocomplete="off">
@@ -280,6 +282,8 @@ button{border:0;cursor:pointer}
   var mobileNewBtn = document.getElementById('mobile-new-btn');
   var stopBtn = document.getElementById('stop-btn');
   var mobileStopBtn = document.getElementById('mobile-stop-btn');
+  var mobileToolsBtn = document.getElementById('mobile-tools-btn');
+  var mobileRuntimeContainer = document.getElementById('mobile-runtime-container');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
@@ -296,10 +300,13 @@ button{border:0;cursor:pointer}
   var sessions = [];
   var activeAbortController = null;
   var authFailed = false;
+  var mobileAuthPending = false;
 
   function handleAuthError(resp){
     if(resp.status === 401){
       authFailed = true;
+      mobileAuthPending = true;
+      renderMobileStatus();
       return true;
     }
     return false;
@@ -311,6 +318,11 @@ button{border:0;cursor:pointer}
     localStorage.setItem('nora_token', value);
     if(source && source !== tokenInput) tokenInput.value = value;
     if(mobileTokenInput && source !== mobileTokenInput) mobileTokenInput.value = value;
+    if(value.trim()){
+      mobileAuthPending = false;
+      var area = document.getElementById('mobile-token-area');
+      if(area) area.classList.remove('auth-error');
+    }
   }
 
   syncTokenInputs(localStorage.getItem('nora_token') || '');
@@ -411,11 +423,14 @@ button{border:0;cursor:pointer}
   }
 
   function renderMobileStatus(){
-    if(!mobileStatusEl) return;
+    if(!mobileRuntimeContainer) return;
     var recent = toolEvents.slice(-4);
-    var currentToken = mobileTokenInput ? mobileTokenInput.value : tokenInput.value;
-    var html = '<div class="mobile-token"><label for="mobile-token-rendered">Authorization token</label><input class="token-input" id="mobile-token-rendered" type="password" placeholder="Token" autocomplete="off" value="' + escapeHtml(currentToken) + '"></div>';
-    html += '<div class="mobile-runtime"><div class="inspector-title"><span>Runtime events</span><span>' + escapeHtml(metricTools.textContent) + ' tools</span></div><div class="event-list">';
+    var area = document.getElementById('mobile-token-area');
+    if(area){
+      if(mobileAuthPending) area.classList.add('auth-error');
+      else area.classList.remove('auth-error');
+    }
+    var html = '<div class="mobile-runtime"><div class="inspector-title"><span>Runtime events</span><span>' + escapeHtml(String(toolCallCount)) + ' tools</span></div><div class="event-list">';
     if(recent.length === 0){
       html += '<div class="event-item"><div class="event-name">' + escapeHtml(state) + '</div><div class="event-detail">No tool events yet</div></div>';
     } else {
@@ -433,9 +448,10 @@ button{border:0;cursor:pointer}
     } else if(state === 'streaming'){
       html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is streaming a response from the local runtime.</p></div>';
     }
-    mobileStatusEl.innerHTML = html;
-    mobileTokenInput = document.getElementById('mobile-token-rendered');
-    if(mobileTokenInput) mobileTokenInput.addEventListener('input', function(){ syncTokenInputs(mobileTokenInput.value, mobileTokenInput); });
+    mobileRuntimeContainer.innerHTML = html;
+    if(mobileAuthPending && area){
+      area.scrollIntoView({behavior:'smooth', block:'nearest'});
+    }
   }
 
   function authHeaders(){

@@ -111,6 +111,8 @@ curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8081/chat -d '{"messa
 
 如果 `nora` 提示 `command not found`，参考上方 PATH 配置。`/health` 无需认证，所有 POST 端点在设置了 `NORA_API_TOKEN` 时需要 `Authorization: Bearer <token>` 头。
 
+服务器启动后浏览器访问 `http://127.0.0.1:8080` 可使用 Web UI。默认端口为 8080，可通过 `NORA_PORT` 环境变量修改（例如 `NORA_PORT=9090 nora-serve`）。
+
 可尝试输入：
 
 ```text
