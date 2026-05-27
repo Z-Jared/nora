@@ -85,6 +85,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_chat(body)
         elif path == "/chat/stream":
             self._handle_chat_stream(body)
+        elif path == "/chat/clear":
+            self._handle_chat_clear()
         elif path == "/session/save":
             self._handle_session_save(body)
         elif path == "/session/load":
@@ -149,6 +151,9 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 self._ws_handle_session_save(ws, body)
             elif msg_type == "session_load":
                 self._ws_handle_session_load(ws, body)
+            elif msg_type == "chat_clear":
+                self.agent.memory.clear()
+                ws.write_frame(json.dumps({"type": "cleared", "result": "cleared"}))
             else:
                 ws.write_frame(json.dumps({"error": f"unknown type: {msg_type}"}))
 
@@ -219,6 +224,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         self.close_connection = True
+
+    def _handle_chat_clear(self) -> None:
+        self.agent.memory.clear()
+        self._json_response(200, {"result": "cleared"})
 
     def _handle_tools(self) -> None:
         if not self._check_auth():
@@ -296,6 +305,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/health": {"get": {"summary": "Health check with metrics", "responses": {"200": {"description": "OK"}}}},
                 "/chat": {"post": {"summary": "Send a message", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "Response"}}}},
                 "/chat/stream": {"post": {"summary": "SSE streaming chat", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "SSE stream"}}}},
+                "/chat/clear": {"post": {"summary": "Clear current conversation memory", "responses": {"200": {"description": "Cleared"}}}},
                 "/tools": {"get": {"summary": "List available tools", "responses": {"200": {"description": "Tool list"}}}},
                 "/session/save": {"post": {"summary": "Save current session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}, "responses": {"200": {"description": "Saved"}}}},
                 "/session/load": {"post": {"summary": "Load a session", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}}}, "responses": {"200": {"description": "Loaded"}}}},

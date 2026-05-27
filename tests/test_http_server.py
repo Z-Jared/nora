@@ -72,6 +72,39 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("required", body["error"])
 
+    def test_chat_clear_resets_memory(self):
+        self.agent.run("hello")
+        self.assertGreater(len(self.agent.memory.messages()), 0)
+
+        status, body = self._request("POST", "/chat/clear", {})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"], "cleared")
+        self.assertEqual(len(self.agent.memory.messages()), 0)
+
+    def test_chat_clear_allows_new_save_without_old_messages(self):
+        self.agent.run("first message")
+        self._request("POST", "/chat/clear", {})
+
+        self.agent.run("second message")
+        status, body = self._request("POST", "/session/save", {"name": "after_clear"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+
+        status, body = self._request("POST", "/session/load", {"name": "after_clear"})
+        self.assertEqual(status, 200)
+        contents = [m["content"] for m in body["messages"]]
+        self.assertNotIn("first message", contents)
+        self.assertIn("second message", contents)
+
+    def test_chat_clear_returns_json(self):
+        status, body = self._request("POST", "/chat/clear", {})
+
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, dict)
+        self.assertIn("result", body)
+
     def test_tools_endpoint(self):
         status, body = self._request("GET", "/tools")
 
@@ -230,6 +263,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["openapi"], "3.0.0")
         self.assertIn("/chat", body["paths"])
+        self.assertIn("/chat/clear", body["paths"])
         self.assertIn("/health", body["paths"])
 
     def test_cors_headers_present(self):
@@ -345,6 +379,23 @@ class HTTPServerAuthTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("response", body)
 
+    def test_rejects_unauthenticated_clear(self):
+        status, body = self._request("POST", "/chat/clear", {})
+
+        self.assertEqual(status, 401)
+        self.assertIn("unauthorized", body["error"])
+
+    def test_accepts_authenticated_clear(self):
+        self.agent.run("hello")
+        status, body = self._request(
+            "POST", "/chat/clear",
+            {},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"], "cleared")
+
     def test_health_works_without_auth(self):
         status, body = self._request("GET", "/health")
 
@@ -397,6 +448,9 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"tool_call_result", body)
         self.assertIn(b"Authorization", body)
         self.assertIn(b"nora_token", body)
+        self.assertIn(b"/chat/clear", body)
+        self.assertIn(b"new-chat-btn", body)
+        self.assertIn(b"mobile-new-btn", body)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

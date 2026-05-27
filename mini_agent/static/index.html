@@ -175,7 +175,7 @@ button{border:0;cursor:pointer}
   </header>
   <div class="workspace">
     <aside class="sidebar">
-      <button class="new-chat" type="button">+ &nbsp; New conversation</button>
+      <button class="new-chat" type="button" id="new-chat-btn">+ &nbsp; New conversation</button>
       <div class="side-section">
         <div class="side-title">Workspace</div>
         <div class="nav-item active"><span class="nav-dot"></span>Chat</div>
@@ -218,8 +218,8 @@ button{border:0;cursor:pointer}
       <form class="composer" id="composer">
         <div class="composer-inner">
           <div class="quick-actions">
+            <button class="quick-btn" type="button" id="mobile-new-btn">New</button>
             <button class="quick-btn" type="button">Attach</button>
-            <button class="quick-btn" type="button">Voice</button>
             <button class="quick-btn" type="button">Tools</button>
           </div>
           <div class="input-row">
@@ -274,6 +274,8 @@ button{border:0;cursor:pointer}
   var sendBtn = document.getElementById('send');
   var saveBtn = document.getElementById('save-btn');
   var runBtn = document.getElementById('run-btn');
+  var newChatBtn = document.getElementById('new-chat-btn');
+  var mobileNewBtn = document.getElementById('mobile-new-btn');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
@@ -449,6 +451,38 @@ button{border:0;cursor:pointer}
   function clearMessages(){
     msgEl.innerHTML = '';
     emptyEl = null;
+  }
+
+  function restoreEmptyState(){
+    clearMessages();
+    var d = document.createElement('div');
+    d.className = 'empty-state';
+    d.id = 'empty-state';
+    d.innerHTML = '<strong>Ask Nora to start a task.</strong><span>Messages, streaming deltas, tool calls, errors, and completion state will appear here.</span>';
+    msgEl.appendChild(d);
+    emptyEl = d;
+  }
+
+  function newConversation(){
+    firstUserMessage = '';
+    activeSessionName = '';
+    restoreEmptyState();
+    clearToolEvents();
+    setState('ready', 'Workspace cleared. Starting a new conversation.');
+    renderSessions('ready');
+    fetch('/chat/clear', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    }).then(function(resp){
+      if(!resp.ok) return parseErrorResponse(resp);
+      return resp.json();
+    }).then(function(){
+      setState('ready', 'Ready for a new conversation.');
+    }).catch(function(e){
+      setState('error', 'Failed to clear agent memory: ' + e.message);
+    });
+    input.focus();
   }
 
   function renderLoadedMessages(messages){
@@ -666,6 +700,8 @@ button{border:0;cursor:pointer}
   });
   if(saveBtn) saveBtn.addEventListener('click', saveSession);
   if(runBtn) runBtn.addEventListener('click', sendMessage);
+  if(newChatBtn) newChatBtn.addEventListener('click', newConversation);
+  if(mobileNewBtn) mobileNewBtn.addEventListener('click', newConversation);
   input.addEventListener('keydown', function(e){
     if(e.key === 'Enter' && !e.isComposing){
       e.preventDefault();

@@ -46,6 +46,9 @@ class ConversationMemory:
     def messages(self) -> list[dict]:
         return [dict(message) for message in self._messages]
 
+    def clear(self) -> None:
+        self._messages.clear()
+
     def _add(self, message: dict) -> None:
         if self._is_sensitive(message):
             return
