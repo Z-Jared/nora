@@ -85,6 +85,47 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("pip install", readme)
         self.assertIn("-e .", readme)
 
+    def test_readme_contains_smoke_test_section(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("安装后快速验证", readme)
+
+    def test_readme_smoke_section_covers_health_check(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("/health", readme)
+        self.assertIn("curl", readme)
+
+    def test_readme_smoke_section_covers_auth(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("NORA_API_TOKEN", readme)
+        self.assertIn("Authorization", readme)
+
+    def test_readme_smoke_section_mentions_port_for_auth(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("NORA_PORT", readme)
+
+    def test_readme_smoke_section_covers_nora_serve(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("nora-serve", readme)
+
+    def test_app_main_entrypoint_exists(self):
+        import importlib
+        mod = importlib.import_module("mini_agent.app")
+
+        self.assertTrue(hasattr(mod, "main"))
+        self.assertTrue(callable(mod.main))
+
+    def test_app_serve_entrypoint_exists(self):
+        import importlib
+        mod = importlib.import_module("mini_agent.app")
+
+        self.assertTrue(hasattr(mod, "serve"))
+        self.assertTrue(callable(mod.serve))
+
 
 if __name__ == "__main__":
     unittest.main()

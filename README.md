@@ -90,6 +90,27 @@ source ~/.zshrc
 
 启动后可输入 `/doctor` 检查 workspace、LLM、Git、工具数量和 PATH；如果启动或安装异常，优先运行 `/doctor`。也可以输入 `/help` 查看 CLI 命令。
 
+### 安装后快速验证
+
+安装完成后，按以下步骤确认一切正常：
+
+```bash
+# 1. 启动 CLI（应看到 Nora 启动 banner，输入 exit 退出）
+nora
+
+# 2. 启动 HTTP 服务器（默认 8080，无需 token）
+nora-serve
+
+# 3. 另一个终端验证健康检查
+curl http://127.0.0.1:8080/health
+
+# 4. 如需验证 token 认证，先 Ctrl+C 停掉上面的 nora-serve，再用不同端口启动：
+NORA_PORT=8081 NORA_API_TOKEN=my-secret nora-serve
+curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8081/chat -d '{"message": "hello"}'
+```
+
+如果 `nora` 提示 `command not found`，参考上方 PATH 配置。`/health` 无需认证，所有 POST 端点在设置了 `NORA_API_TOKEN` 时需要 `Authorization: Bearer <token>` 头。
+
 可尝试输入：
 
 ```text
