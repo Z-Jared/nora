@@ -392,6 +392,7 @@ button{border:0;cursor:pointer}
   var memorySearchQuery = '';
   var memoryFormOpen = false;
   var sessionSaveFormOpen = false;
+  var serverStatus = null;
 
   function handleAuthError(resp){
     if(resp.status === 401){
@@ -420,10 +421,17 @@ button{border:0;cursor:pointer}
   function recoverAfterAuthInput(){
     if(!authFailed) return;
     authFailed = false;
-    sendBtn.disabled = false;
-    if(runBtn) runBtn.disabled = false;
-    setState('ready', 'Token accepted. Recovering sessions.');
-    updateComposerStatus('Ready', 'ready');
+    if(serverStatus && !serverStatus.llm_configured){
+      sendBtn.disabled = true;
+      if(runBtn) runBtn.disabled = true;
+      setState('ready', 'Token accepted.');
+      updateComposerStatus('Model not configured', 'warning');
+    } else {
+      sendBtn.disabled = false;
+      if(runBtn) runBtn.disabled = false;
+      setState('ready', 'Token accepted. Recovering sessions.');
+      updateComposerStatus('Ready', 'ready');
+    }
     loadSessions();
     fetchTask();
     fetchMemories();
@@ -1225,6 +1233,7 @@ button{border:0;cursor:pointer}
       if(!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.json();
     }).then(function(data){
+      serverStatus = data;
       renderServerPanel(data);
       if(data.auth_required && !tokenInput.value.trim()){
         authFailed = true;
@@ -1233,7 +1242,13 @@ button{border:0;cursor:pointer}
         if(runBtn) runBtn.disabled = true;
         setState('error', 'Authorization token required or invalid.');
         updateComposerStatus('Token required', 'warning');
+      } else if(!data.llm_configured){
+        sendBtn.disabled = true;
+        if(runBtn) runBtn.disabled = true;
+        updateComposerStatus('Model not configured', 'warning');
       } else {
+        sendBtn.disabled = false;
+        if(runBtn) runBtn.disabled = false;
         updateComposerStatus('Ready', 'ready');
       }
     }).catch(function(e){
@@ -1251,7 +1266,11 @@ button{border:0;cursor:pointer}
       serverPanelEl.innerHTML = '<div class="panel-card error"><h3>Connection error</h3><p>Could not reach /status endpoint.</p></div>';
       return;
     }
-    var html = '<div class="panel-card"><div class="server-info">';
+    var html = '';
+    if(!data.llm_configured){
+      html += '<div class="panel-card warn"><h3>Model not configured</h3><p>Set LLM_API_KEY in .env to enable chat.</p></div>';
+    }
+    html += '<div class="panel-card"><div class="server-info">';
     html += '<div class="server-row"><span class="server-label">provider</span><span class="server-value">' + escapeHtml(data.provider || 'unknown') + '</span></div>';
     html += '<div class="server-row"><span class="server-label">model</span><span class="server-value">' + escapeHtml(data.model || 'unknown') + '</span></div>';
     html += '<div class="server-row"><span class="server-label">workspace</span><span class="server-value">' + escapeHtml(data.workspace || 'unknown') + '</span></div>';

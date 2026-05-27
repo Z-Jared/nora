@@ -325,6 +325,14 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(body["provider"], "")
         self.assertEqual(body["model"], "")
 
+    def test_status_config_warnings_all_missing(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("config_warnings", body)
+        self.assertIn("missing provider", body["config_warnings"])
+        self.assertIn("missing model", body["config_warnings"])
+        self.assertIn("missing api key", body["config_warnings"])
+
 
 class HTTPServerStatusAuthTests(unittest.TestCase):
     def setUp(self):
@@ -424,6 +432,14 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertNotIn("sk-", raw)
         self.assertNotIn("bearer", raw)
 
+    def test_status_config_warnings_missing_api_key(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("config_warnings", body)
+        self.assertIn("missing api key", body["config_warnings"])
+        self.assertNotIn("missing provider", body["config_warnings"])
+        self.assertNotIn("missing model", body["config_warnings"])
+
 
 class HTTPServerStatusConfiguredTests(unittest.TestCase):
     def setUp(self):
@@ -469,6 +485,11 @@ class HTTPServerStatusConfiguredTests(unittest.TestCase):
         self.assertNotIn("api_key", raw)
         self.assertNotIn("sk-", raw)
         self.assertNotIn("key", raw)
+
+    def test_status_config_warnings_empty_when_configured(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertEqual(body["config_warnings"], [])
 
 
 class HTTPServerStatusFeaturesTests(unittest.TestCase):
@@ -929,6 +950,72 @@ class HTTPServerStaticTests(unittest.TestCase):
         html = body.decode("utf-8")
         self.assertIn("Token required", html)
         self.assertIn("'warning'", html)
+
+    def test_llm_configured_false_disables_send(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("data.llm_configured", fn_body)
+        self.assertIn("sendBtn.disabled = true", fn_body)
+
+    def test_llm_configured_shows_model_not_configured(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("Model not configured", html)
+
+    def test_llm_configured_true_enables_send(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("sendBtn.disabled = false", fn_body)
+        self.assertIn("updateComposerStatus('Ready'", fn_body)
+
+    def test_server_panel_shows_model_config_missing(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderServerPanel\(data\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderServerPanel function not found")
+        fn_body = match.group(1)
+        self.assertIn("data.llm_configured", fn_body)
+        self.assertIn("Model not configured", fn_body)
+        self.assertIn("LLM_API_KEY", fn_body)
+
+    def test_recover_auth_checks_server_status(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
+        fn_body = match.group(1)
+        self.assertIn("serverStatus", fn_body)
+        self.assertIn("llm_configured", fn_body)
+
+    def test_recover_auth_keeps_disabled_when_llm_not_configured(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
+        fn_body = match.group(1)
+        self.assertIn("sendBtn.disabled = true", fn_body)
+        self.assertIn("Model not configured", fn_body)
+
+    def test_fetch_status_saves_server_status(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("var serverStatus = null", html)
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("serverStatus = data", fn_body)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

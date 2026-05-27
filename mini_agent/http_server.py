@@ -32,6 +32,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     llm_model: str = ""
     workspace: str = ""
     llm_configured: bool = False
+    llm_has_api_key: bool = False
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -470,6 +471,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             "model": self.llm_model,
             "workspace": self.workspace,
             "llm_configured": self.llm_configured,
+            "config_warnings": self._build_config_warnings(),
             "features": {
                 "sessions": self.session_store is not None,
                 "tasks": self.task_manager is not None,
@@ -482,6 +484,18 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             },
         }
         self._json_response(200, data)
+
+    def _build_config_warnings(self) -> list[str]:
+        if self.llm_configured:
+            return []
+        warnings = []
+        if not self.llm_provider:
+            warnings.append("missing provider")
+        if not self.llm_model:
+            warnings.append("missing model")
+        if not self.llm_has_api_key:
+            warnings.append("missing api key")
+        return warnings
 
     def _handle_docs(self) -> None:
         spec = {
@@ -564,6 +578,7 @@ def create_server(
     llm_model: str = "",
     workspace: str = "",
     llm_configured: bool = False,
+    llm_has_api_key: bool = False,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -578,4 +593,5 @@ def create_server(
     NoraHTTPHandler.llm_model = llm_model
     NoraHTTPHandler.workspace = workspace
     NoraHTTPHandler.llm_configured = llm_configured
+    NoraHTTPHandler.llm_has_api_key = llm_has_api_key
     return HTTPServer((host, port), NoraHTTPHandler)
