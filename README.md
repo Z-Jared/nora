@@ -109,9 +109,9 @@ NORA_PORT=8081 NORA_API_TOKEN=my-secret nora-serve
 curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8081/chat -d '{"message": "hello"}'
 ```
 
-如果 `nora` 提示 `command not found`，参考上方 PATH 配置。`/health` 无需认证，所有 POST 端点在设置了 `NORA_API_TOKEN` 时需要 `Authorization: Bearer <token>` 头。
+如果 `nora` 提示 `command not found`，参考上方 PATH 配置。`/health` 无需认证，所有 POST 端点以及 `/tools`、`/session/list` 在设置了 `NORA_API_TOKEN` 时需要 `Authorization: Bearer <token>` 头。
 
-服务器启动后浏览器访问 `http://127.0.0.1:8080` 可使用 Web UI。默认端口为 8080，可通过 `NORA_PORT` 环境变量修改（例如 `NORA_PORT=9090 nora-serve`）。
+服务器启动后浏览器访问 `http://127.0.0.1:8080` 可使用 Web UI。默认端口为 8080，可通过 `NORA_PORT` 环境变量修改（例如 `NORA_PORT=9090 nora-serve`，此时 Web UI 地址变为 `http://127.0.0.1:9090`）。如果设置了 `NORA_API_TOKEN`，需要在页面顶部的 Token 输入框中填写同一个 token 才能正常使用。
 
 可尝试输入：
 
@@ -349,7 +349,7 @@ POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
-设置 `NORA_API_TOKEN` 后，所有 POST 端点需要 `Authorization: Bearer <token>` 头。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
+设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
 示例：
 

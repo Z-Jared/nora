@@ -114,8 +114,6 @@ button{border:0;cursor:pointer}
 .panel-card.error{background:#fff4f2;border-color:#efb3a8;color:#8f211b}
 .panel-card h3{font-size:13px;margin-bottom:8px;font-weight:800}
 .panel-card p{font-size:12px;color:#5e4724;line-height:1.5}
-.context-list{display:grid;gap:7px}
-.context-item{border:1px solid var(--line);border-radius:5px;background:var(--card);padding:8px 9px;font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mobile-status{display:none}
 .mobile-token{display:none}
 .mobile-token.auth-error{border-color:#efb3a8;background:#fff4f2;box-shadow:0 0 0 2px rgba(239,179,168,.35)}
@@ -162,13 +160,12 @@ button{border:0;cursor:pointer}
       <span class="logo" aria-hidden="true"></span>
       <div>
         <div class="brand-title">Nora</div>
-        <div class="brand-subtitle">Agent event streaming</div>
+        <div class="brand-subtitle">Local AI assistant</div>
       </div>
     </div>
     <input class="search" type="search" placeholder="Search sessions, files, memories, tasks" aria-label="Search">
     <div class="top-actions">
       <span class="pill ready" id="top-state">ready</span>
-      <span class="pill">DeepSeek</span>
       <span class="pill local">Local</span>
       <div class="token-field">
         <label class="sr-only" for="token">Authorization token</label>
@@ -182,11 +179,6 @@ button{border:0;cursor:pointer}
       <div class="side-section">
         <div class="side-title">Workspace</div>
         <div class="nav-item active"><span class="nav-dot"></span>Chat</div>
-        <div class="nav-item"><span class="nav-dot"></span>Tasks</div>
-        <div class="nav-item"><span class="nav-dot"></span>Memory</div>
-        <div class="nav-item"><span class="nav-dot"></span>Files / RAG</div>
-        <div class="nav-item"><span class="nav-dot"></span>Browser</div>
-        <div class="nav-item"><span class="nav-dot"></span>Settings</div>
       </div>
       <div class="side-section">
         <div class="side-title">Recent</div>
@@ -198,18 +190,18 @@ button{border:0;cursor:pointer}
     <main class="main">
       <div class="thread-head">
         <div class="thread-title">
-          <h1>Agent event streaming</h1>
-          <p>/Users/mac/Documents/agent · main · Web UI connected</p>
+          <h1>Nora</h1>
+          <p>Local AI assistant · Web UI connected</p>
         </div>
         <div class="thread-actions">
-          <button class="action-btn" type="button" id="save-btn">Save</button>
+          <button class="action-btn" type="button" id="save-btn" disabled>Save</button>
           <button class="action-btn primary" type="button" id="run-btn">Run</button>
           <button class="action-btn stop-btn" type="button" id="stop-btn" disabled>Stop</button>
         </div>
       </div>
       <div class="messages-wrap" id="messages-wrap">
         <div class="messages" id="messages">
-          <div class="empty-state" id="empty-state"><strong>Ask Nora to start a task.</strong><span>Messages, streaming deltas, tool calls, errors, and completion state will appear here.</span></div>
+          <div class="empty-state" id="empty-state"><strong>Ask Nora anything.</strong><span>Responses, tool calls, and progress appear here.</span></div>
         </div>
         <div class="mobile-status" id="mobile-status">
           <div class="mobile-token" id="mobile-token-area">
@@ -224,7 +216,6 @@ button{border:0;cursor:pointer}
           <div class="quick-actions">
             <button class="quick-btn" type="button" id="mobile-new-btn">New</button>
             <button class="quick-btn" type="button" id="mobile-stop-btn" disabled>Stop</button>
-            <button class="quick-btn" type="button" id="mobile-tools-btn" disabled>Tools</button>
           </div>
           <div class="input-row">
             <input class="composer-input" id="input" type="text" placeholder="Ask Nora to inspect files, run tools, or continue a task..." autocomplete="off">
@@ -250,15 +241,7 @@ button{border:0;cursor:pointer}
         <section class="inspector-section" id="state-panel">
           <div class="panel-card">
             <h3>Ready</h3>
-            <p>Connect to the local agent and stream events from /chat/stream.</p>
-          </div>
-        </section>
-        <section class="inspector-section">
-          <div class="inspector-title">Context</div>
-          <div class="context-list" id="context-list">
-            <div class="context-item">mini_agent/static/index.html</div>
-            <div class="context-item">Authorization token optional</div>
-            <div class="context-item">/chat/stream SSE</div>
+            <p>Nora is ready.</p>
           </div>
         </section>
       </div>
@@ -282,7 +265,6 @@ button{border:0;cursor:pointer}
   var mobileNewBtn = document.getElementById('mobile-new-btn');
   var stopBtn = document.getElementById('stop-btn');
   var mobileStopBtn = document.getElementById('mobile-stop-btn');
-  var mobileToolsBtn = document.getElementById('mobile-tools-btn');
   var mobileRuntimeContainer = document.getElementById('mobile-runtime-container');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
@@ -363,7 +345,7 @@ button{border:0;cursor:pointer}
 
   function renderStatePanel(type, detail){
     var title = type.charAt(0).toUpperCase() + type.slice(1);
-    var message = detail || 'Nora is ready for a new request.';
+    var message = detail || 'Nora is ready.';
     var cls = type === 'error' ? 'panel-card error' : type === 'loading' ? 'panel-card warn' : 'panel-card';
     statePanel.innerHTML = '<div class="' + cls + '"><h3>' + escapeHtml(title) + '</h3><p>' + escapeHtml(message) + '</p></div>';
     renderMobileStatus();
@@ -432,7 +414,7 @@ button{border:0;cursor:pointer}
     }
     var html = '<div class="mobile-runtime"><div class="inspector-title"><span>Runtime events</span><span>' + escapeHtml(String(toolCallCount)) + ' tools</span></div><div class="event-list">';
     if(recent.length === 0){
-      html += '<div class="event-item"><div class="event-name">' + escapeHtml(state) + '</div><div class="event-detail">No tool events yet</div></div>';
+      html += '<div class="event-item"><div class="event-name">' + escapeHtml(state) + '</div><div class="event-detail">No events yet</div></div>';
     } else {
       recent.forEach(function(evt){
         html += '<div class="event-item ' + escapeHtml(evt.type) + '"><div class="event-name">' + escapeHtml(evt.name) + '</div><div class="event-detail">' + escapeHtml(evt.detail || evt.rawType) + '</div></div>';
@@ -442,11 +424,11 @@ button{border:0;cursor:pointer}
     if(state === 'error'){
       html += '<div class="mobile-context panel-card error"><h3>Error</h3><p>Review the message above and try again.</p></div>';
     } else if(state === 'done'){
-      html += '<div class="mobile-context panel-card"><h3>Done</h3><p>Status done. Nora is ready for the next request.</p></div>';
+      html += '<div class="mobile-context panel-card"><h3>Done</h3><p>Done. Ready for next request.</p></div>';
     } else if(state === 'loading'){
-      html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is loading, saving, or preparing a response.</p></div>';
+      html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is processing your request.</p></div>';
     } else if(state === 'streaming'){
-      html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is streaming a response from the local runtime.</p></div>';
+      html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Streaming response from local runtime.</p></div>';
     }
     mobileRuntimeContainer.innerHTML = html;
     if(mobileAuthPending && area){
@@ -494,7 +476,7 @@ button{border:0;cursor:pointer}
     var d = document.createElement('div');
     d.className = 'empty-state';
     d.id = 'empty-state';
-    d.innerHTML = '<strong>Ask Nora to start a task.</strong><span>Messages, streaming deltas, tool calls, errors, and completion state will appear here.</span>';
+    d.innerHTML = '<strong>Ask Nora anything.</strong><span>Responses, tool calls, and progress appear here.</span>';
     msgEl.appendChild(d);
     emptyEl = d;
   }
@@ -503,6 +485,7 @@ button{border:0;cursor:pointer}
     stopStream();
     firstUserMessage = '';
     activeSessionName = '';
+    if(saveBtn) saveBtn.disabled = true;
     restoreEmptyState();
     clearToolEvents();
     setState('ready', 'Workspace cleared. Starting a new conversation.');
@@ -664,6 +647,7 @@ button{border:0;cursor:pointer}
       return resp.json();
     }).then(function(data){
       renderLoadedMessages(data.messages || []);
+      if(saveBtn) saveBtn.disabled = false;
       setState('done', data.result || ('Loaded session ' + name + '.'));
     }).catch(function(e){
       setState('error', 'Failed to load session: ' + e.message);
@@ -676,6 +660,7 @@ button{border:0;cursor:pointer}
     input.value = '';
     sendBtn.disabled = true;
     if(runBtn) runBtn.disabled = true;
+    if(saveBtn) saveBtn.disabled = false;
     if(stopBtn) stopBtn.disabled = false;
     if(mobileStopBtn) mobileStopBtn.disabled = false;
     if(!firstUserMessage) firstUserMessage = text;
@@ -793,7 +778,7 @@ button{border:0;cursor:pointer}
       sendMessage();
     }
   });
-  setState('ready', 'Nora is ready for a new request.');
+  setState('ready', 'Nora is ready.');
   renderToolEvents();
   loadSessions();
   input.focus();

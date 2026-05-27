@@ -117,6 +117,18 @@ class PackagingTests(unittest.TestCase):
 
         self.assertIn("127.0.0.1:8080", readme)
 
+    def test_readme_mentions_webui_token_input(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Token", readme)
+        self.assertIn("token", readme.lower())
+
+    def test_readme_auth_section_mentions_tools_and_session_list(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("/tools", readme)
+        self.assertIn("/session/list", readme)
+
     def test_app_main_entrypoint_exists(self):
         import importlib
         mod = importlib.import_module("mini_agent.app")

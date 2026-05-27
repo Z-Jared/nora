@@ -453,7 +453,6 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"mobile-new-btn", body)
         self.assertIn(b"stop-btn", body)
         self.assertIn(b"mobile-stop-btn", body)
-        self.assertIn(b"mobile-tools-btn", body)
         self.assertIn(b"mobile-token-area", body)
         self.assertIn(b"mobile-runtime-container", body)
         self.assertIn(b"AbortController", body)
@@ -464,10 +463,15 @@ class HTTPServerStaticTests(unittest.TestCase):
         import re
         desktop = re.search(r'id="stop-btn"[^>]*disabled', html)
         mobile = re.search(r'id="mobile-stop-btn"[^>]*disabled', html)
-        tools = re.search(r'id="mobile-tools-btn"[^>]*disabled', html)
         self.assertIsNotNone(desktop, "desktop stop-btn must be initially disabled")
         self.assertIsNotNone(mobile, "mobile-stop-btn must be initially disabled")
-        self.assertIsNotNone(tools, "mobile-tools-btn must be initially disabled")
+
+    def test_save_button_initially_disabled(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        save = re.search(r'id="save-btn"[^>]*disabled', html)
+        self.assertIsNotNone(save, "save-btn must be initially disabled")
 
     def test_mobile_auth_error_css_class(self):
         _, _, body = self._get("/")
