@@ -295,6 +295,15 @@ button{border:0;cursor:pointer}
   var activeSessionName = '';
   var sessions = [];
   var activeAbortController = null;
+  var authFailed = false;
+
+  function handleAuthError(resp){
+    if(resp.status === 401){
+      authFailed = true;
+      return true;
+    }
+    return false;
+  }
 
   function syncTokenInputs(value, source){
     tokenInput.value = value;
@@ -305,8 +314,14 @@ button{border:0;cursor:pointer}
   }
 
   syncTokenInputs(localStorage.getItem('nora_token') || '');
-  tokenInput.addEventListener('input', function(){ syncTokenInputs(tokenInput.value, tokenInput); });
-  if(mobileTokenInput) mobileTokenInput.addEventListener('input', function(){ syncTokenInputs(mobileTokenInput.value, mobileTokenInput); });
+  tokenInput.addEventListener('input', function(){
+    syncTokenInputs(tokenInput.value, tokenInput);
+    if(authFailed){ authFailed = false; loadSessions(); }
+  });
+  if(mobileTokenInput) mobileTokenInput.addEventListener('input', function(){
+    syncTokenInputs(mobileTokenInput.value, mobileTokenInput);
+    if(authFailed){ authFailed = false; loadSessions(); }
+  });
 
   function hideEmpty(){
     if(emptyEl){ emptyEl.remove(); emptyEl = null; }
@@ -481,7 +496,10 @@ button{border:0;cursor:pointer}
       headers: authHeaders(),
       body: JSON.stringify({})
     }).then(function(resp){
-      if(!resp.ok) return parseErrorResponse(resp);
+      if(!resp.ok){
+        if(handleAuthError(resp)) throw new Error('Authorization token required or invalid.');
+        return parseErrorResponse(resp);
+      }
       return resp.json();
     }).then(function(){
       setState('ready', 'Ready for a new conversation.');
@@ -553,9 +571,13 @@ button{border:0;cursor:pointer}
       method: 'GET',
       headers: authHeaders()
     }).then(function(resp){
-      if(!resp.ok) return parseErrorResponse(resp);
+      if(!resp.ok){
+        if(handleAuthError(resp)) throw new Error('Authorization token required or invalid.');
+        return parseErrorResponse(resp);
+      }
       return resp.json();
     }).then(function(data){
+      authFailed = false;
       sessions = parseSessions(data.sessions);
       renderSessions('ready');
       if(!options.silent){
@@ -564,7 +586,11 @@ button{border:0;cursor:pointer}
     }).catch(function(e){
       sessions = [];
       renderSessions('error', e.message);
-      setState('error', 'Failed to load sessions: ' + e.message);
+      if(authFailed){
+        setState('error', 'Authorization token required or invalid.');
+      } else {
+        setState('error', 'Failed to load sessions: ' + e.message);
+      }
     });
   }
 
@@ -584,7 +610,10 @@ button{border:0;cursor:pointer}
       headers: authHeaders(),
       body: JSON.stringify({name: name})
     }).then(function(resp){
-      if(!resp.ok) return parseErrorResponse(resp);
+      if(!resp.ok){
+        if(handleAuthError(resp)) throw new Error('Authorization token required or invalid.');
+        return parseErrorResponse(resp);
+      }
       return resp.json();
     }).then(function(data){
       var result = data.result || 'Session saved.';
@@ -612,7 +641,10 @@ button{border:0;cursor:pointer}
       headers: authHeaders(),
       body: JSON.stringify({name: name})
     }).then(function(resp){
-      if(!resp.ok) return parseErrorResponse(resp);
+      if(!resp.ok){
+        if(handleAuthError(resp)) throw new Error('Authorization token required or invalid.');
+        return parseErrorResponse(resp);
+      }
       return resp.json();
     }).then(function(data){
       renderLoadedMessages(data.messages || []);
@@ -648,7 +680,10 @@ button{border:0;cursor:pointer}
       body: JSON.stringify({message: text}),
       signal: signal
     }).then(function(resp){
-      if(!resp.ok) return parseErrorResponse(resp);
+      if(!resp.ok){
+        if(handleAuthError(resp)) throw new Error('Authorization token required or invalid.');
+        return parseErrorResponse(resp);
+      }
       var reader = resp.body.getReader();
       var decoder = new TextDecoder();
       var buf = '';
