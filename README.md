@@ -361,6 +361,8 @@ GET  /session/list        列出已保存会话
 
 设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/task`、`/memory/list`、`/memory/search`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health`、`/status` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
+`/status` 返回字段：`auth_required`（是否需要 token）、`provider`/`model`（当前 LLM 配置，可为空）、`workspace`（工作目录）、`features`（sessions/tasks/memory/websocket 是否可用）、`runtime`（Python 版本、平台信息）。不泄露 API key、token 或环境变量。
+
 示例：
 
 ```bash

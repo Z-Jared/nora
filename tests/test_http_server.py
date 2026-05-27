@@ -318,6 +318,13 @@ class HTTPServerTests(unittest.TestCase):
         self.assertNotIn("secret", raw)
         self.assertNotIn("sk-", raw)
 
+    def test_status_empty_provider_model_still_200(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["provider"], "")
+        self.assertEqual(body["model"], "")
+
 
 class HTTPServerStatusAuthTests(unittest.TestCase):
     def setUp(self):
@@ -383,6 +390,25 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertFalse(body["features"]["tasks"])
         self.assertFalse(body["features"]["memory"])
         self.assertTrue(body["features"]["websocket"])
+
+    def test_status_runtime_present(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("runtime", body)
+        self.assertIn("python", body["runtime"])
+        self.assertIn("platform", body["runtime"])
+        self.assertTrue(len(body["runtime"]["python"]) > 0)
+        self.assertTrue(len(body["runtime"]["platform"]) > 0)
+
+    def test_status_runtime_no_sensitive_data(self):
+        _, body = self._request("GET", "/status")
+        raw = json.dumps(body["runtime"]).lower()
+
+        self.assertNotIn("api_key", raw)
+        self.assertNotIn("api_token", raw)
+        self.assertNotIn("token", raw)
+        self.assertNotIn("secret", raw)
+        self.assertNotIn("sk-", raw)
 
 
 class HTTPServerStatusFeaturesTests(unittest.TestCase):
@@ -747,6 +773,59 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("authFailed", html)
         self.assertIn("Auth required", html)
         self.assertIn("Enter a valid token", html)
+
+    def test_fetch_status_on_page_load(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("fetch('/status'", html)
+        self.assertIn("fetchStatus()", html)
+
+    def test_status_renders_provider_model_workspace(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("renderServerPanel", html)
+        self.assertIn("data.provider", html)
+        self.assertIn("data.model", html)
+        self.assertIn("data.workspace", html)
+
+    def test_status_renders_features(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("data.features", html)
+        self.assertIn("sessions", html)
+        self.assertIn("tasks", html)
+        self.assertIn("memory", html)
+        self.assertIn("websocket", html)
+        self.assertIn("feature-tag", html)
+
+    def test_status_failure_sets_error_state(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("setState('error'", fn_body)
+        self.assertIn("Failed to connect to server", fn_body)
+
+    def test_status_auth_required_affects_prompt(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("data.auth_required", fn_body)
+        self.assertIn("Authorization token required or invalid", fn_body)
+
+    def test_server_panel_element_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="server-panel"', html)
+        self.assertIn("server-info", html)
+        self.assertIn("server-row", html)
+        self.assertIn("server-label", html)
+        self.assertIn("server-value", html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

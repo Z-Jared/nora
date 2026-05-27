@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import platform
+import sys
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -471,6 +473,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "tasks": self.task_manager is not None,
                 "memory": self.long_term_memory is not None,
                 "websocket": True,
+            },
+            "runtime": {
+                "python": sys.version.split()[0],
+                "platform": platform.platform(),
             },
         }
         self._json_response(200, data)

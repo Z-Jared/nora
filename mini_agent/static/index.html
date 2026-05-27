@@ -114,6 +114,14 @@ button{border:0;cursor:pointer}
 .panel-card.error{background:#fff4f2;border-color:#efb3a8;color:#8f211b}
 .panel-card h3{font-size:13px;margin-bottom:8px;font-weight:800}
 .panel-card p{font-size:12px;color:#5e4724;line-height:1.5}
+.server-info{display:grid;gap:6px}
+.server-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--line)}
+.server-row:last-child{border-bottom:0}
+.server-label{color:var(--muted);font-weight:800}
+.server-value{color:var(--ink);font-weight:600;text-align:right;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.server-features{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.feature-tag{font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted)}
+.feature-tag.active{background:var(--accent-soft);border-color:#b7d2bd;color:#173f27}
 .mobile-status{display:none}
 .mobile-token{display:none}
 .mobile-token.auth-error{border-color:#efb3a8;background:#fff4f2;box-shadow:0 0 0 2px rgba(239,179,168,.35)}
@@ -317,6 +325,10 @@ button{border:0;cursor:pointer}
           </div>
         </section>
         <section class="inspector-section">
+          <div class="inspector-title">Server</div>
+          <div id="server-panel"><div class="panel-card"><p>Connecting…</p></div></div>
+        </section>
+        <section class="inspector-section">
           <div class="inspector-title"><span>Tool Events</span><span id="tool-count">0 tools</span></div>
           <div class="event-list" id="tool-events"></div>
         </section>
@@ -351,6 +363,7 @@ button{border:0;cursor:pointer}
   var taskPanelEl = document.getElementById('task-panel');
   var memoryPanelEl = document.getElementById('memory-panel');
   var recentListEl = document.getElementById('recent-list');
+  var serverPanelEl = document.getElementById('server-panel');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
   var topState = document.getElementById('top-state');
@@ -1190,6 +1203,47 @@ button{border:0;cursor:pointer}
     });
   }
 
+  function fetchStatus(){
+    return fetch('/status', {
+      method: 'GET'
+    }).then(function(resp){
+      if(!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }).then(function(data){
+      renderServerPanel(data);
+      if(data.auth_required && !tokenInput.value.trim()){
+        authFailed = true;
+        mobileAuthPending = true;
+        setState('error', 'Authorization token required or invalid.');
+      }
+    }).catch(function(e){
+      renderServerPanel(null);
+      setState('error', 'Failed to connect to server: ' + e.message);
+    });
+  }
+
+  function renderServerPanel(data){
+    if(!serverPanelEl) return;
+    if(!data){
+      serverPanelEl.innerHTML = '<div class="panel-card error"><h3>Connection error</h3><p>Could not reach /status endpoint.</p></div>';
+      return;
+    }
+    var html = '<div class="panel-card"><div class="server-info">';
+    html += '<div class="server-row"><span class="server-label">provider</span><span class="server-value">' + escapeHtml(data.provider || 'unknown') + '</span></div>';
+    html += '<div class="server-row"><span class="server-label">model</span><span class="server-value">' + escapeHtml(data.model || 'unknown') + '</span></div>';
+    html += '<div class="server-row"><span class="server-label">workspace</span><span class="server-value">' + escapeHtml(data.workspace || 'unknown') + '</span></div>';
+    html += '</div>';
+    var features = data.features || {};
+    html += '<div class="server-features">';
+    var featureKeys = ['sessions', 'tasks', 'memory', 'websocket'];
+    featureKeys.forEach(function(key){
+      var active = features[key];
+      html += '<span class="feature-tag' + (active ? ' active' : '') + '">' + escapeHtml(key) + (active ? ' ✓' : ' ✗') + '</span>';
+    });
+    html += '</div></div>';
+    serverPanelEl.innerHTML = html;
+  }
+
   function saveMemory(text, tags){
     fetch('/memory/save', {
       method: 'POST',
@@ -1427,6 +1481,7 @@ button{border:0;cursor:pointer}
   });
   setState('ready', 'Nora is ready.');
   renderToolEvents();
+  fetchStatus();
   loadSessions();
   fetchTask();
   fetchMemories();
