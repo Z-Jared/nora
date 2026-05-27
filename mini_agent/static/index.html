@@ -67,6 +67,8 @@ button{border:0;cursor:pointer}
 .action-btn{height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 13px;font-size:12px;font-weight:800;color:var(--ink)}
 .action-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
 .action-btn:disabled{opacity:.55;cursor:not-allowed}
+.stop-btn{background:#b83232;border-color:#b83232;color:#fff}
+.stop-btn:disabled{background:#d99;opacity:.55}
 .messages-wrap{min-height:0;overflow:auto;padding:24px;scroll-behavior:smooth}
 .messages{max-width:760px;margin:0 auto;display:grid;gap:16px}
 .empty-state{border:1px dashed var(--line-strong);border-radius:10px;background:rgba(255,254,250,.55);padding:28px;text-align:center;color:var(--muted)}
@@ -201,7 +203,7 @@ button{border:0;cursor:pointer}
         <div class="thread-actions">
           <button class="action-btn" type="button" id="save-btn">Save</button>
           <button class="action-btn primary" type="button" id="run-btn">Run</button>
-          <button class="action-btn" type="button">Stop</button>
+          <button class="action-btn stop-btn" type="button" id="stop-btn" disabled>Stop</button>
         </div>
       </div>
       <div class="messages-wrap" id="messages-wrap">
@@ -219,7 +221,7 @@ button{border:0;cursor:pointer}
         <div class="composer-inner">
           <div class="quick-actions">
             <button class="quick-btn" type="button" id="mobile-new-btn">New</button>
-            <button class="quick-btn" type="button">Attach</button>
+            <button class="quick-btn" type="button" id="mobile-stop-btn" disabled>Stop</button>
             <button class="quick-btn" type="button">Tools</button>
           </div>
           <div class="input-row">
@@ -276,6 +278,8 @@ button{border:0;cursor:pointer}
   var runBtn = document.getElementById('run-btn');
   var newChatBtn = document.getElementById('new-chat-btn');
   var mobileNewBtn = document.getElementById('mobile-new-btn');
+  var stopBtn = document.getElementById('stop-btn');
+  var mobileStopBtn = document.getElementById('mobile-stop-btn');
   var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
@@ -290,6 +294,7 @@ button{border:0;cursor:pointer}
   var firstUserMessage = '';
   var activeSessionName = '';
   var sessions = [];
+  var activeAbortController = null;
 
   function syncTokenInputs(value, source){
     tokenInput.value = value;
@@ -464,6 +469,7 @@ button{border:0;cursor:pointer}
   }
 
   function newConversation(){
+    stopStream();
     firstUserMessage = '';
     activeSessionName = '';
     restoreEmptyState();
@@ -484,6 +490,22 @@ button{border:0;cursor:pointer}
     });
     input.focus();
   }
+
+  function stopStream(){
+    if(!activeAbortController) return;
+    activeAbortController.abort();
+    activeAbortController = null;
+    if(assistantEl) assistantEl.className = 'msg assistant';
+    sendBtn.disabled = false;
+    if(runBtn) runBtn.disabled = false;
+    if(stopBtn) stopBtn.disabled = true;
+    if(mobileStopBtn) mobileStopBtn.disabled = true;
+    setState('ready', 'Stream stopped by user.');
+    input.focus();
+  }
+
+  var assistantEl = null;
+  var assistantBuf = '';
 
   function renderLoadedMessages(messages){
     clearMessages();
@@ -606,6 +628,8 @@ button{border:0;cursor:pointer}
     input.value = '';
     sendBtn.disabled = true;
     if(runBtn) runBtn.disabled = true;
+    if(stopBtn) stopBtn.disabled = false;
+    if(mobileStopBtn) mobileStopBtn.disabled = false;
     if(!firstUserMessage) firstUserMessage = text;
     activeSessionName = '';
     renderSessions('ready');
@@ -613,13 +637,16 @@ button{border:0;cursor:pointer}
     clearToolEvents();
     setState('loading', 'Connecting to /chat/stream and waiting for events.');
 
-    var assistantBuf = '';
-    var assistantEl = null;
+    assistantBuf = '';
+    assistantEl = null;
+    activeAbortController = new AbortController();
+    var signal = activeAbortController.signal;
 
     fetch('/chat/stream', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({message: text})
+      body: JSON.stringify({message: text}),
+      signal: signal
     }).then(function(resp){
       if(!resp.ok) return parseErrorResponse(resp);
       var reader = resp.body.getReader();
@@ -644,12 +671,16 @@ button{border:0;cursor:pointer}
       }
       return read();
     }).catch(function(e){
+      if(e.name === 'AbortError') return;
       addMsg(e.message, 'error');
       addToolEvent('error', 'error', e.message);
       setState('error', e.message);
     }).finally(function(){
+      activeAbortController = null;
       sendBtn.disabled = false;
       if(runBtn) runBtn.disabled = false;
+      if(stopBtn) stopBtn.disabled = true;
+      if(mobileStopBtn) mobileStopBtn.disabled = true;
       input.focus();
     });
 
@@ -702,6 +733,8 @@ button{border:0;cursor:pointer}
   if(runBtn) runBtn.addEventListener('click', sendMessage);
   if(newChatBtn) newChatBtn.addEventListener('click', newConversation);
   if(mobileNewBtn) mobileNewBtn.addEventListener('click', newConversation);
+  if(stopBtn) stopBtn.addEventListener('click', stopStream);
+  if(mobileStopBtn) mobileStopBtn.addEventListener('click', stopStream);
   input.addEventListener('keydown', function(e){
     if(e.key === 'Enter' && !e.isComposing){
       e.preventDefault();

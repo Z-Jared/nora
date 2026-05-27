@@ -451,6 +451,18 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn(b"/chat/clear", body)
         self.assertIn(b"new-chat-btn", body)
         self.assertIn(b"mobile-new-btn", body)
+        self.assertIn(b"stop-btn", body)
+        self.assertIn(b"mobile-stop-btn", body)
+        self.assertIn(b"AbortController", body)
+
+    def test_stop_buttons_initially_disabled(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        desktop = re.search(r'id="stop-btn"[^>]*disabled', html)
+        mobile = re.search(r'id="mobile-stop-btn"[^>]*disabled', html)
+        self.assertIsNotNone(desktop, "desktop stop-btn must be initially disabled")
+        self.assertIsNotNone(mobile, "mobile-stop-btn must be initially disabled")
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")
