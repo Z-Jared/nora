@@ -100,6 +100,8 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("已恢复", body["result"])
+        self.assertIn("messages", body)
+        self.assertTrue(any(message["role"] == "user" and message["content"] == "hello" for message in body["messages"]))
 
     def test_session_load_requires_name(self):
         status, body = self._request("POST", "/session/load", {})

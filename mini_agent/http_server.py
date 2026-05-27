@@ -259,7 +259,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "name is required"})
             return
         result = self.session_store.load(name, self.agent.memory)
-        self._json_response(200, {"result": result})
+        self._json_response(200, {"result": result, "messages": self.agent.memory.messages()})
 
     def _check_auth(self) -> bool:
         if not self.api_token:

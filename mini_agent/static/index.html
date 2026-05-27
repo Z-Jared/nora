@@ -53,9 +53,12 @@ button{border:0;cursor:pointer}
 .nav-dot{width:8px;height:8px;border-radius:2px;background:#c9c0b1;flex:0 0 auto}
 .nav-item.active .nav-dot{background:var(--accent)}
 .recent-list{display:grid;gap:8px}
-.recent-item{display:block;background:#f8f6f1;border:1px solid var(--line);line-height:1.25}
+.recent-item{display:block;width:100%;text-align:left;background:#f8f6f1;border:1px solid var(--line);line-height:1.25;cursor:pointer}
+.recent-item:hover,.recent-item.active{background:#fff;border-color:#b9cbbd}
+.recent-item:disabled{cursor:default;opacity:.75}
 .recent-item strong{display:block;font-size:12px;color:#2c2b27;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .recent-item span{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.recent-state{border:1px dashed var(--line-strong);border-radius:6px;padding:10px;color:var(--muted);font-size:12px;background:rgba(255,254,250,.55);line-height:1.45}
 .main{min-width:0;display:grid;grid-template-rows:auto 1fr auto;background:var(--bg)}
 .thread-head{height:70px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:var(--panel)}
 .thread-title h1{font-size:17px;font-weight:700;margin-bottom:4px}
@@ -184,11 +187,8 @@ button{border:0;cursor:pointer}
       </div>
       <div class="side-section">
         <div class="side-title">Recent</div>
-        <div class="recent-list">
-          <div class="recent-item"><strong>Agent event streaming</strong><span>Current session</span></div>
-          <div class="recent-item"><strong>Install script notes</strong><span>README · 24m</span></div>
-          <div class="recent-item"><strong>Formal UI pass</strong><span>Workbench</span></div>
-          <div class="recent-item"><strong>Browser tools audit</strong><span>Tests</span></div>
+        <div class="recent-list" id="recent-list">
+          <div class="recent-state">Loading sessions…</div>
         </div>
       </div>
     </aside>
@@ -199,7 +199,7 @@ button{border:0;cursor:pointer}
           <p>/Users/mac/Documents/agent · main · Web UI connected</p>
         </div>
         <div class="thread-actions">
-          <button class="action-btn" type="button">Share</button>
+          <button class="action-btn" type="button" id="save-btn">Save</button>
           <button class="action-btn primary" type="button" id="run-btn">Run</button>
           <button class="action-btn" type="button">Stop</button>
         </div>
@@ -272,7 +272,9 @@ button{border:0;cursor:pointer}
   var input = document.getElementById('input');
   var composer = document.getElementById('composer');
   var sendBtn = document.getElementById('send');
+  var saveBtn = document.getElementById('save-btn');
   var runBtn = document.getElementById('run-btn');
+  var recentListEl = document.getElementById('recent-list');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
   var topState = document.getElementById('top-state');
@@ -283,6 +285,9 @@ button{border:0;cursor:pointer}
   var toolEvents = [];
   var toolCallCount = 0;
   var state = 'ready';
+  var firstUserMessage = '';
+  var activeSessionName = '';
+  var sessions = [];
 
   function syncTokenInputs(value, source){
     tokenInput.value = value;
@@ -401,12 +406,21 @@ button{border:0;cursor:pointer}
       html += '<div class="mobile-context panel-card error"><h3>Error</h3><p>Review the message above and try again.</p></div>';
     } else if(state === 'done'){
       html += '<div class="mobile-context panel-card"><h3>Done</h3><p>Status done. Nora is ready for the next request.</p></div>';
-    } else if(state === 'loading' || state === 'streaming'){
+    } else if(state === 'loading'){
+      html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is loading, saving, or preparing a response.</p></div>';
+    } else if(state === 'streaming'){
       html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Nora is streaming a response from the local runtime.</p></div>';
     }
     mobileStatusEl.innerHTML = html;
     mobileTokenInput = document.getElementById('mobile-token-rendered');
     if(mobileTokenInput) mobileTokenInput.addEventListener('input', function(){ syncTokenInputs(mobileTokenInput.value, mobileTokenInput); });
+  }
+
+  function authHeaders(){
+    var headers = {'Content-Type': 'application/json'};
+    var token = tokenInput.value.trim();
+    if(token) headers['Authorization'] = 'Bearer ' + token;
+    return headers;
   }
 
   function parseErrorResponse(resp){
@@ -422,12 +436,145 @@ button{border:0;cursor:pointer}
     });
   }
 
+  function parseSessions(value){
+    if(Array.isArray(value)) return value.map(function(item){ return typeof item === 'string' ? {name:item, detail:''} : item; });
+    if(!value || typeof value !== 'string' || value.indexOf('暂无保存的会话') !== -1) return [];
+    return value.split('\n').map(function(line){
+      var match = line.match(/^\s*-\s*([^:]+):\s*(.*)$/);
+      if(!match) return null;
+      return {name: match[1].trim(), detail: match[2].trim()};
+    }).filter(Boolean);
+  }
+
+  function clearMessages(){
+    msgEl.innerHTML = '';
+    emptyEl = null;
+  }
+
+  function renderLoadedMessages(messages){
+    clearMessages();
+    firstUserMessage = '';
+    (messages || []).forEach(function(message){
+      if(!message || message.content == null) return;
+      var role = message.role === 'user' ? 'user' : message.role === 'assistant' ? 'assistant' : 'error';
+      if(role === 'user' && !firstUserMessage) firstUserMessage = String(message.content);
+      addMsg(String(message.content), role);
+    });
+    if(!firstUserMessage && messages && messages.length) firstUserMessage = activeSessionName;
+    scrollMessages();
+  }
+
+  function renderSessions(status, detail){
+    recentListEl.innerHTML = '';
+    if(status === 'loading'){
+      recentListEl.innerHTML = '<div class="recent-state">Loading sessions…</div>';
+      return;
+    }
+    if(status === 'error'){
+      recentListEl.innerHTML = '<div class="recent-state">Failed to load sessions.<br>' + escapeHtml(detail || '') + '</div>';
+      return;
+    }
+    if(sessions.length === 0){
+      recentListEl.innerHTML = '<div class="recent-state">No saved sessions yet. Send a message, then save this workbench.</div>';
+      return;
+    }
+    sessions.forEach(function(session){
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'recent-item' + (session.name === activeSessionName ? ' active' : '');
+      button.innerHTML = '<strong></strong><span></span>';
+      button.querySelector('strong').textContent = session.name || 'Untitled session';
+      button.querySelector('span').textContent = session.detail || 'Saved session';
+      button.addEventListener('click', function(){ loadSession(session.name); });
+      recentListEl.appendChild(button);
+    });
+  }
+
+  function loadSessions(options){
+    options = options || {};
+    renderSessions('loading');
+    return fetch('/session/list', {
+      method: 'GET',
+      headers: authHeaders()
+    }).then(function(resp){
+      if(!resp.ok) return parseErrorResponse(resp);
+      return resp.json();
+    }).then(function(data){
+      sessions = parseSessions(data.sessions);
+      renderSessions('ready');
+      if(!options.silent){
+        setState('ready', sessions.length ? 'Loaded ' + sessions.length + ' saved session' + (sessions.length === 1 ? '.' : 's.') : 'No saved sessions yet.');
+      }
+    }).catch(function(e){
+      sessions = [];
+      renderSessions('error', e.message);
+      setState('error', 'Failed to load sessions: ' + e.message);
+    });
+  }
+
+  function safeSessionName(text){
+    var base = (text || '').trim().slice(0, 48);
+    if(!base) base = 'session_' + new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    base = base.replace(/\s+/g, '_').replace(/[^\w\-]/g, '').slice(0, 48);
+    return base || ('session_' + Date.now());
+  }
+
+  function saveSession(){
+    if(saveBtn) saveBtn.disabled = true;
+    var name = safeSessionName(firstUserMessage);
+    setState('loading', 'Saving current session as ' + name + '.');
+    fetch('/session/save', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({name: name})
+    }).then(function(resp){
+      if(!resp.ok) return parseErrorResponse(resp);
+      return resp.json();
+    }).then(function(data){
+      var result = data.result || 'Session saved.';
+      if(result.indexOf('已保存') !== -1 || result.toLowerCase().indexOf('saved') !== -1){
+        activeSessionName = name;
+        setState('done', result);
+        return loadSessions({silent:true});
+      }
+      setState('error', result);
+      return loadSessions();
+    }).catch(function(e){
+      setState('error', 'Failed to save session: ' + e.message);
+    }).finally(function(){
+      if(saveBtn) saveBtn.disabled = false;
+    });
+  }
+
+  function loadSession(name){
+    if(!name) return;
+    activeSessionName = name;
+    renderSessions('ready');
+    setState('loading', 'Loading session ' + name + '.');
+    fetch('/session/load', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({name: name})
+    }).then(function(resp){
+      if(!resp.ok) return parseErrorResponse(resp);
+      return resp.json();
+    }).then(function(data){
+      renderLoadedMessages(data.messages || []);
+      setState('done', data.result || ('Loaded session ' + name + '.'));
+    }).catch(function(e){
+      setState('error', 'Failed to load session: ' + e.message);
+    });
+  }
+
   function sendMessage(){
     var text = input.value.trim();
     if(!text) return;
     input.value = '';
     sendBtn.disabled = true;
     if(runBtn) runBtn.disabled = true;
+    if(!firstUserMessage) firstUserMessage = text;
+    activeSessionName = '';
+    renderSessions('ready');
     addMsg(text, 'user');
     clearToolEvents();
     setState('loading', 'Connecting to /chat/stream and waiting for events.');
@@ -435,13 +582,9 @@ button{border:0;cursor:pointer}
     var assistantBuf = '';
     var assistantEl = null;
 
-    var headers = {'Content-Type': 'application/json'};
-    var token = tokenInput.value.trim();
-    if(token) headers['Authorization'] = 'Bearer ' + token;
-
     fetch('/chat/stream', {
       method: 'POST',
-      headers: headers,
+      headers: authHeaders(),
       body: JSON.stringify({message: text})
     }).then(function(resp){
       if(!resp.ok) return parseErrorResponse(resp);
@@ -521,6 +664,7 @@ button{border:0;cursor:pointer}
     e.preventDefault();
     sendMessage();
   });
+  if(saveBtn) saveBtn.addEventListener('click', saveSession);
   if(runBtn) runBtn.addEventListener('click', sendMessage);
   input.addEventListener('keydown', function(e){
     if(e.key === 'Enter' && !e.isComposing){
@@ -530,6 +674,7 @@ button{border:0;cursor:pointer}
   });
   setState('ready', 'Nora is ready for a new request.');
   renderToolEvents();
+  loadSessions();
   input.focus();
 })();
 </script>
