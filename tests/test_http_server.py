@@ -334,7 +334,9 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn("missing api key", body["config_warnings"])
 
 
-class HTTPServerStatusAuthTests(unittest.TestCase):
+class _StatusServerMixin:
+    server_kwargs: dict = {}
+
     def setUp(self):
         self.port = _find_free_port()
         self.tmpdir = tempfile.mkdtemp()
@@ -343,10 +345,7 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
             self.agent,
             host="127.0.0.1",
             port=self.port,
-            api_token="test-secret",
-            llm_provider="openai-compatible",
-            llm_model="gpt-4.1-mini",
-            workspace="/tmp/test",
+            **self.server_kwargs,
         )
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.daemon = True
@@ -371,14 +370,26 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read().decode("utf-8"))
 
+    def get_status(self):
+        return self._request("GET", "/status")
+
+
+class HTTPServerStatusAuthTests(_StatusServerMixin, unittest.TestCase):
+    server_kwargs = {
+        "api_token": "test-secret",
+        "llm_provider": "openai-compatible",
+        "llm_model": "gpt-4.1-mini",
+        "workspace": "/tmp/test",
+    }
+
     def test_status_auth_required_true_with_token(self):
-        status, body = self._request("GET", "/status")
+        status, body = self.get_status()
 
         self.assertEqual(status, 200)
         self.assertTrue(body["auth_required"])
 
     def test_status_no_auth_needed_even_with_token(self):
-        status, body = self._request("GET", "/status")
+        status, body = self.get_status()
 
         self.assertEqual(status, 200)
         self.assertEqual(body["provider"], "openai-compatible")
@@ -386,13 +397,13 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertEqual(body["workspace"], "/tmp/test")
 
     def test_status_does_not_leak_token(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
         raw = json.dumps(body)
 
         self.assertNotIn("test-secret", raw)
 
     def test_status_features_false_when_unconfigured(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
 
         self.assertFalse(body["features"]["sessions"])
         self.assertFalse(body["features"]["tasks"])
@@ -400,7 +411,7 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertTrue(body["features"]["websocket"])
 
     def test_status_runtime_present(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
 
         self.assertIn("runtime", body)
         self.assertIn("python", body["runtime"])
@@ -409,7 +420,7 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertTrue(len(body["runtime"]["platform"]) > 0)
 
     def test_status_runtime_no_sensitive_data(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
         raw = json.dumps(body["runtime"]).lower()
 
         self.assertNotIn("api_key", raw)
@@ -419,13 +430,13 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertNotIn("sk-", raw)
 
     def test_status_llm_configured_false_without_flag(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
 
         self.assertIn("llm_configured", body)
         self.assertFalse(body["llm_configured"])
 
     def test_status_llm_configured_no_key_leak(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
         raw = json.dumps(body).lower()
 
         self.assertNotIn("api_key", raw)
@@ -433,7 +444,7 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertNotIn("bearer", raw)
 
     def test_status_config_warnings_missing_api_key(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
 
         self.assertIn("config_warnings", body)
         self.assertIn("missing api key", body["config_warnings"])
@@ -441,45 +452,22 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertNotIn("missing model", body["config_warnings"])
 
 
-class HTTPServerStatusConfiguredTests(unittest.TestCase):
-    def setUp(self):
-        self.port = _find_free_port()
-        self.tmpdir = tempfile.mkdtemp()
-        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
-        self.server = create_server(
-            self.agent,
-            host="127.0.0.1",
-            port=self.port,
-            llm_provider="openai-compatible",
-            llm_model="gpt-4.1-mini",
-            llm_configured=True,
-        )
-        self.thread = threading.Thread(target=self.server.serve_forever)
-        self.thread.daemon = True
-        self.thread.start()
-
-    def tearDown(self):
-        self.server.shutdown()
-        self.thread.join(timeout=2)
-        self.server.server_close()
-
-    def _request(self, method, path):
-        url = f"http://127.0.0.1:{self.port}{path}"
-        req = Request(url, method=method)
-        try:
-            with urlopen(req) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read().decode("utf-8"))
+class HTTPServerStatusConfiguredTests(_StatusServerMixin, unittest.TestCase):
+    server_kwargs = {
+        "llm_provider": "openai-compatible",
+        "llm_model": "gpt-4.1-mini",
+        "llm_configured": True,
+        "llm_has_api_key": True,
+    }
 
     def test_status_llm_configured_true(self):
-        status, body = self._request("GET", "/status")
+        status, body = self.get_status()
 
         self.assertEqual(status, 200)
         self.assertTrue(body["llm_configured"])
 
     def test_status_llm_configured_true_no_key_leak(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
         raw = json.dumps(body).lower()
 
         self.assertNotIn("api_key", raw)
@@ -487,12 +475,12 @@ class HTTPServerStatusConfiguredTests(unittest.TestCase):
         self.assertNotIn("key", raw)
 
     def test_status_config_warnings_empty_when_configured(self):
-        _, body = self._request("GET", "/status")
+        _, body = self.get_status()
 
         self.assertEqual(body["config_warnings"], [])
 
 
-class HTTPServerStatusFeaturesTests(unittest.TestCase):
+class HTTPServerStatusFeaturesTests(_StatusServerMixin, unittest.TestCase):
     def setUp(self):
         self.port = _find_free_port()
         self.tmpdir = tempfile.mkdtemp()
@@ -516,22 +504,8 @@ class HTTPServerStatusFeaturesTests(unittest.TestCase):
         self.thread.daemon = True
         self.thread.start()
 
-    def tearDown(self):
-        self.server.shutdown()
-        self.thread.join(timeout=2)
-        self.server.server_close()
-
-    def _request(self, method, path):
-        url = f"http://127.0.0.1:{self.port}{path}"
-        req = Request(url, method=method)
-        try:
-            with urlopen(req) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read().decode("utf-8"))
-
     def test_status_features_true_when_configured(self):
-        status, body = self._request("GET", "/status")
+        status, body = self.get_status()
 
         self.assertEqual(status, 200)
         self.assertTrue(body["features"]["sessions"])
