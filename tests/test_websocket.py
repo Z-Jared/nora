@@ -179,6 +179,27 @@ class WebSocketHandshakeTests(unittest.TestCase):
         finally:
             sock.close()
 
+    def test_chat_clear(self):
+        sock, _ = _ws_handshake(self.port)
+        try:
+            _ws_send(sock, json.dumps({"type": "chat", "message": "hello"}))
+            for _ in range(10):
+                msg = _ws_recv(sock, timeout=3.0)
+                if msg is None:
+                    break
+
+            self.assertGreater(len(self.agent.memory.messages()), 0)
+
+            _ws_send(sock, json.dumps({"type": "chat_clear"}))
+            msg = _ws_recv(sock, timeout=3.0)
+            self.assertIsNotNone(msg)
+            data = json.loads(msg)
+            self.assertEqual(data, {"type": "cleared", "result": "cleared"})
+
+            self.assertEqual(len(self.agent.memory.messages()), 0)
+        finally:
+            sock.close()
+
     def test_close_frame(self):
         sock, _ = _ws_handshake(self.port)
         try:

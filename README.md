@@ -318,6 +318,7 @@ NORA_PORT=9090 NORA_API_TOKEN=my-secret nora-serve
 GET  /health              健康检查 + 指标（无需认证）
 POST /chat                发送消息 {"message": "..."}
 POST /chat/stream         SSE 流式响应（返回 text/event-stream）
+POST /chat/clear          清空当前对话记忆（需与其他 POST 一致的 Authorization）
 GET  /tools               列出可用工具
 GET  /docs                OpenAPI 3.0 API 文档
 POST /session/save        保存会话 {"name": "..."}
