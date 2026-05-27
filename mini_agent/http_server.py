@@ -31,6 +31,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     llm_provider: str = ""
     llm_model: str = ""
     workspace: str = ""
+    llm_configured: bool = False
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -468,6 +469,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             "provider": self.llm_provider,
             "model": self.llm_model,
             "workspace": self.workspace,
+            "llm_configured": self.llm_configured,
             "features": {
                 "sessions": self.session_store is not None,
                 "tasks": self.task_manager is not None,
@@ -561,6 +563,7 @@ def create_server(
     llm_provider: str = "",
     llm_model: str = "",
     workspace: str = "",
+    llm_configured: bool = False,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -574,4 +577,5 @@ def create_server(
     NoraHTTPHandler.llm_provider = llm_provider
     NoraHTTPHandler.llm_model = llm_model
     NoraHTTPHandler.workspace = workspace
+    NoraHTTPHandler.llm_configured = llm_configured
     return HTTPServer((host, port), NoraHTTPHandler)

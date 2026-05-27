@@ -410,6 +410,66 @@ class HTTPServerStatusAuthTests(unittest.TestCase):
         self.assertNotIn("secret", raw)
         self.assertNotIn("sk-", raw)
 
+    def test_status_llm_configured_false_without_flag(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("llm_configured", body)
+        self.assertFalse(body["llm_configured"])
+
+    def test_status_llm_configured_no_key_leak(self):
+        _, body = self._request("GET", "/status")
+        raw = json.dumps(body).lower()
+
+        self.assertNotIn("api_key", raw)
+        self.assertNotIn("sk-", raw)
+        self.assertNotIn("bearer", raw)
+
+
+class HTTPServerStatusConfiguredTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            llm_provider="openai-compatible",
+            llm_model="gpt-4.1-mini",
+            llm_configured=True,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        req = Request(url, method=method)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_status_llm_configured_true(self):
+        status, body = self._request("GET", "/status")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["llm_configured"])
+
+    def test_status_llm_configured_true_no_key_leak(self):
+        _, body = self._request("GET", "/status")
+        raw = json.dumps(body).lower()
+
+        self.assertNotIn("api_key", raw)
+        self.assertNotIn("sk-", raw)
+        self.assertNotIn("key", raw)
+
 
 class HTTPServerStatusFeaturesTests(unittest.TestCase):
     def setUp(self):
@@ -826,6 +886,49 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("server-row", html)
         self.assertIn("server-label", html)
         self.assertIn("server-value", html)
+
+    def test_auth_required_disables_send_run(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("sendBtn.disabled = true", fn_body)
+        self.assertIn("runBtn", fn_body)
+
+    def test_token_input_restores_send_run(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
+        fn_body = match.group(1)
+        self.assertIn("sendBtn.disabled = false", fn_body)
+        self.assertIn("runBtn", fn_body)
+
+    def test_composer_status_element_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="composer-status"', html)
+        self.assertIn("composer-status", html)
+        self.assertIn("updateComposerStatus", html)
+
+    def test_server_unreachable_shows_error(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function fetchStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "fetchStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("Server unreachable", fn_body)
+        self.assertIn("updateComposerStatus", fn_body)
+
+    def test_token_required_composer_status(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("Token required", html)
+        self.assertIn("'warning'", html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

@@ -91,6 +91,10 @@ button{border:0;cursor:pointer}
 .composer-input{height:40px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 14px;outline:none;color:var(--ink)}
 .send-btn{height:40px;border-radius:6px;background:var(--dark);color:#fff;padding:0 20px;font-size:13px;font-weight:900}
 .send-btn:disabled{background:#9d9a91;cursor:not-allowed}
+.composer-status{font-size:11px;font-weight:800;padding:2px 0;text-align:center;min-height:16px}
+.composer-status.ready{color:#173f27}
+.composer-status.warning{color:#8f5f1b}
+.composer-status.error{color:#8f211b}
 .inspector{border-left:1px solid var(--line);background:#f6f2ea;display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0}
 .inspector-scroll{overflow:auto;padding:16px}
 .inspector-section{margin-bottom:22px}
@@ -303,6 +307,7 @@ button{border:0;cursor:pointer}
       </div>
       <form class="composer" id="composer">
         <div class="composer-inner">
+          <div class="composer-status" id="composer-status"></div>
           <div class="quick-actions">
             <button class="quick-btn" type="button" id="mobile-new-btn">New</button>
             <button class="quick-btn" type="button" id="mobile-stop-btn" disabled>Stop</button>
@@ -364,6 +369,7 @@ button{border:0;cursor:pointer}
   var memoryPanelEl = document.getElementById('memory-panel');
   var recentListEl = document.getElementById('recent-list');
   var serverPanelEl = document.getElementById('server-panel');
+  var composerStatusEl = document.getElementById('composer-status');
   var tokenInput = document.getElementById('token');
   var mobileTokenInput = document.getElementById('mobile-token');
   var topState = document.getElementById('top-state');
@@ -414,7 +420,10 @@ button{border:0;cursor:pointer}
   function recoverAfterAuthInput(){
     if(!authFailed) return;
     authFailed = false;
+    sendBtn.disabled = false;
+    if(runBtn) runBtn.disabled = false;
     setState('ready', 'Token accepted. Recovering sessions.');
+    updateComposerStatus('Ready', 'ready');
     loadSessions();
     fetchTask();
     fetchMemories();
@@ -467,6 +476,12 @@ button{border:0;cursor:pointer}
 
   function escapeHtml(text){
     return String(text).replace(/[&<>"]/g, function(ch){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]; });
+  }
+
+  function updateComposerStatus(message, type){
+    if(!composerStatusEl) return;
+    composerStatusEl.textContent = message;
+    composerStatusEl.className = 'composer-status' + (type ? ' ' + type : '');
   }
 
   function addMsg(text, cls){
@@ -1214,11 +1229,19 @@ button{border:0;cursor:pointer}
       if(data.auth_required && !tokenInput.value.trim()){
         authFailed = true;
         mobileAuthPending = true;
+        sendBtn.disabled = true;
+        if(runBtn) runBtn.disabled = true;
         setState('error', 'Authorization token required or invalid.');
+        updateComposerStatus('Token required', 'warning');
+      } else {
+        updateComposerStatus('Ready', 'ready');
       }
     }).catch(function(e){
       renderServerPanel(null);
+      sendBtn.disabled = true;
+      if(runBtn) runBtn.disabled = true;
       setState('error', 'Failed to connect to server: ' + e.message);
+      updateComposerStatus('Server unreachable', 'error');
     });
   }
 
