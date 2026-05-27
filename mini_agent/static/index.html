@@ -745,9 +745,10 @@ button{border:0;cursor:pointer}
           break;
         case 'done':
           if(assistantEl) assistantEl.className = 'msg assistant';
-          if(evt.tool_calls != null) toolCallCount = evt.tool_calls;
-          addToolEvent('done', 'done', 'done · status ' + (evt.status || 'done'));
-          setState('done', 'Status ' + (evt.status || 'done') + '. Tool calls: ' + (evt.tool_calls != null ? evt.tool_calls : '-'));
+          var doneDetail = 'done · status ' + (evt.status || 'done');
+          if(evt.tool_calls != null) doneDetail += ' · ' + evt.tool_calls + ' server tool calls';
+          addToolEvent('done', 'done', doneDetail);
+          setState('done', 'Status ' + (evt.status || 'done') + '. Tool calls: ' + toolCallCount);
           sendBtn.disabled = false;
           if(runBtn) runBtn.disabled = false;
           break;
