@@ -285,6 +285,153 @@ class HTTPServerTests(unittest.TestCase):
         except urllib.error.HTTPError:
             pass
 
+    def test_status_endpoint_returns_200(self):
+        status, body = self._request("GET", "/status")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "ok")
+
+    def test_status_auth_required_false_without_token(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertFalse(body["auth_required"])
+
+    def test_status_contains_expected_keys(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("auth_required", body)
+        self.assertIn("provider", body)
+        self.assertIn("model", body)
+        self.assertIn("workspace", body)
+        self.assertIn("features", body)
+        self.assertIn("sessions", body["features"])
+        self.assertIn("tasks", body["features"])
+        self.assertIn("memory", body["features"])
+        self.assertIn("websocket", body["features"])
+
+    def test_status_no_sensitive_data(self):
+        _, body = self._request("GET", "/status")
+        raw = json.dumps(body).lower()
+
+        self.assertNotIn("api_key", raw)
+        self.assertNotIn("api_token", raw)
+        self.assertNotIn("secret", raw)
+        self.assertNotIn("sk-", raw)
+
+
+class HTTPServerStatusAuthTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            api_token="test-secret",
+            llm_provider="openai-compatible",
+            llm_model="gpt-4.1-mini",
+            workspace="/tmp/test",
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_status_auth_required_true_with_token(self):
+        status, body = self._request("GET", "/status")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["auth_required"])
+
+    def test_status_no_auth_needed_even_with_token(self):
+        status, body = self._request("GET", "/status")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["provider"], "openai-compatible")
+        self.assertEqual(body["model"], "gpt-4.1-mini")
+        self.assertEqual(body["workspace"], "/tmp/test")
+
+    def test_status_does_not_leak_token(self):
+        _, body = self._request("GET", "/status")
+        raw = json.dumps(body)
+
+        self.assertNotIn("test-secret", raw)
+
+    def test_status_features_false_when_unconfigured(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertFalse(body["features"]["sessions"])
+        self.assertFalse(body["features"]["tasks"])
+        self.assertFalse(body["features"]["memory"])
+        self.assertTrue(body["features"]["websocket"])
+
+
+class HTTPServerStatusFeaturesTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        registry = build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            long_term_memory_path=Path(self.tmpdir) / "memory.jsonl",
+            task_state_path=Path(self.tmpdir) / "task.json",
+            task_history_path=Path(self.tmpdir) / "task_history.jsonl",
+        )
+        self.agent = MiniAgent(registry)
+        self.session_store = SessionStore(Path(self.tmpdir) / "sessions")
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            session_store=self.session_store,
+            task_manager=registry.task_manager,
+            long_term_memory=registry.long_term_memory,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        req = Request(url, method=method)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_status_features_true_when_configured(self):
+        status, body = self._request("GET", "/status")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["features"]["sessions"])
+        self.assertTrue(body["features"]["tasks"])
+        self.assertTrue(body["features"]["memory"])
+        self.assertTrue(body["features"]["websocket"])
+
 
 class HTTPServerRateLimitTests(unittest.TestCase):
     def setUp(self):
@@ -559,6 +706,47 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("function confirmSaveSession", html)
         self.assertIn("function loadSession", html)
         self.assertIn("function loadSessions", html)
+
+    def test_handle_auth_error_sets_state(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function handleAuthError\([^)]*\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "handleAuthError function not found")
+        body_text = match.group(1)
+        self.assertIn("setState('error'", body_text)
+        self.assertIn("Authorization token required or invalid", body_text)
+        self.assertIn("authFailed = true", body_text)
+
+    def test_send_btn_recovered_after_auth_error(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function sendMessage\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "sendMessage function not found")
+        body_text = match.group(1)
+        self.assertIn("sendBtn.disabled = true", body_text)
+        self.assertIn("sendBtn.disabled = false", body_text)
+        self.assertIn("runBtn", body_text)
+
+    def test_token_recovery_refreshes_session_task_memory(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function recoverAfterAuthInput\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "recoverAfterAuthInput function not found")
+        body_text = match.group(1)
+        self.assertIn("loadSessions()", body_text)
+        self.assertIn("fetchTask()", body_text)
+        self.assertIn("fetchMemories()", body_text)
+        self.assertIn("setState('ready'", body_text)
+
+    def test_auth_error_shows_in_mobile_status(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("authFailed", html)
+        self.assertIn("Auth required", html)
+        self.assertIn("Enter a valid token", html)
 
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")

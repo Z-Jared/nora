@@ -378,7 +378,7 @@ button{border:0;cursor:pointer}
     if(resp.status === 401){
       authFailed = true;
       mobileAuthPending = true;
-      renderMobileStatus();
+      setState('error', 'Authorization token required or invalid.');
       return true;
     }
     return false;
@@ -401,6 +401,7 @@ button{border:0;cursor:pointer}
   function recoverAfterAuthInput(){
     if(!authFailed) return;
     authFailed = false;
+    setState('ready', 'Token accepted. Recovering sessions.');
     loadSessions();
     fetchTask();
     fetchMemories();
@@ -433,7 +434,9 @@ button{border:0;cursor:pointer}
 
   function setState(next, detail){
     state = next;
-    topState.textContent = next;
+    var pillText = next;
+    if(next === 'error' && authFailed) pillText = 'auth required';
+    topState.textContent = pillText;
     metricState.textContent = next;
     metricRisk.textContent = next === 'error' ? 'high' : 'normal';
     topState.className = next === 'error' ? 'pill ready error' : 'pill ready';
@@ -442,6 +445,7 @@ button{border:0;cursor:pointer}
 
   function renderStatePanel(type, detail){
     var title = type.charAt(0).toUpperCase() + type.slice(1);
+    if(type === 'error' && authFailed) title = 'Auth required';
     var message = detail || 'Nora is ready.';
     var cls = type === 'error' ? 'panel-card error' : type === 'loading' ? 'panel-card warn' : 'panel-card';
     statePanel.innerHTML = '<div class="' + cls + '"><h3>' + escapeHtml(title) + '</h3><p>' + escapeHtml(message) + '</p></div>';
@@ -518,7 +522,9 @@ button{border:0;cursor:pointer}
       });
     }
     html += '</div></div>';
-    if(state === 'error'){
+    if(state === 'error' && authFailed){
+      html += '<div class="mobile-context panel-card error"><h3>Auth required</h3><p>Enter a valid token in the field above to continue.</p></div>';
+    } else if(state === 'error'){
       html += '<div class="mobile-context panel-card error"><h3>Error</h3><p>Review the message above and try again.</p></div>';
     } else if(state === 'done'){
       html += '<div class="mobile-context panel-card"><h3>Done</h3><p>Done. Ready for next request.</p></div>';

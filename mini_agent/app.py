@@ -104,7 +104,7 @@ def serve(host: str = "", port: int = 0, api_token: str = "") -> None:
     static_dir = Path(__file__).resolve().parent / "static"
     task_manager = getattr(_registry, "task_manager", None)
     long_term_memory = getattr(_registry, "long_term_memory", None)
-    server = create_server(agent, host=host, port=port, session_store=session_store, task_manager=task_manager, long_term_memory=long_term_memory, api_token=api_token, static_dir=static_dir)
+    server = create_server(agent, host=host, port=port, session_store=session_store, task_manager=task_manager, long_term_memory=long_term_memory, api_token=api_token, static_dir=static_dir, llm_provider=_settings.provider, llm_model=_settings.model, workspace=str(root))
     print(f"Nora HTTP server started on http://{host}:{port}")
     print(f"Workspace: {root}")
     if api_token:

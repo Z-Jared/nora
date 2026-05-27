@@ -26,6 +26,9 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     metrics: RequestMetrics
     cors_origins: str = "*"
     static_dir: Optional[Path] = None
+    llm_provider: str = ""
+    llm_model: str = ""
+    workspace: str = ""
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -55,6 +58,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
 
         if path == "/health":
             self._handle_health()
+        elif path == "/status":
+            self._handle_status()
         elif path == "/tools":
             self._handle_tools()
         elif path == "/task":
@@ -454,12 +459,29 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         data = {"status": "ok", "metrics": self.metrics.summary()}
         self._json_response(200, data)
 
+    def _handle_status(self) -> None:
+        data = {
+            "status": "ok",
+            "auth_required": bool(self.api_token),
+            "provider": self.llm_provider,
+            "model": self.llm_model,
+            "workspace": self.workspace,
+            "features": {
+                "sessions": self.session_store is not None,
+                "tasks": self.task_manager is not None,
+                "memory": self.long_term_memory is not None,
+                "websocket": True,
+            },
+        }
+        self._json_response(200, data)
+
     def _handle_docs(self) -> None:
         spec = {
             "openapi": "3.0.0",
             "info": {"title": "Nora API", "version": "0.2.0", "description": "Nora local AI assistant HTTP API"},
             "paths": {
                 "/health": {"get": {"summary": "Health check with metrics", "responses": {"200": {"description": "OK"}}}},
+                "/status": {"get": {"summary": "Server status and capabilities (no auth required)", "responses": {"200": {"description": "Status object"}}}},
                 "/chat": {"post": {"summary": "Send a message", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "Response"}}}},
                 "/chat/stream": {"post": {"summary": "SSE streaming chat", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}}}, "responses": {"200": {"description": "SSE stream"}}}},
                 "/chat/clear": {"post": {"summary": "Clear current conversation memory", "description": "Clears all messages in the current conversation memory. Requires the same Authorization: Bearer <token> header as other POST endpoints when NORA_API_TOKEN is set.", "responses": {"200": {"description": "Cleared"}}}},
@@ -530,6 +552,9 @@ def create_server(
     rate_burst: int = 20,
     cors_origins: str = "*",
     static_dir: Optional[Path] = None,
+    llm_provider: str = "",
+    llm_model: str = "",
+    workspace: str = "",
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -540,4 +565,7 @@ def create_server(
     NoraHTTPHandler.metrics = RequestMetrics()
     NoraHTTPHandler.cors_origins = cors_origins
     NoraHTTPHandler.static_dir = static_dir
+    NoraHTTPHandler.llm_provider = llm_provider
+    NoraHTTPHandler.llm_model = llm_model
+    NoraHTTPHandler.workspace = workspace
     return HTTPServer((host, port), NoraHTTPHandler)
