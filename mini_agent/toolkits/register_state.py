@@ -176,7 +176,7 @@ def register_state_tools(
     registry.register(
         "save_memory",
         "保存一条长期记忆到本地 JSONL。不能保存 API key、.env、密钥等敏感内容。",
-        long_term_memory.save,
+        long_term_memory.save_str,
         parameters={
             "type": "object",
             "properties": {

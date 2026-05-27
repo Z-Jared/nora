@@ -524,6 +524,42 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("fetchTask();", html)
         self.assertIn("fetchMemories();", html)
 
+    def test_session_save_form_elements_exist(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn('id="session-save-form"', html)
+        self.assertIn('id="session-name-input"', html)
+        self.assertIn('id="session-save-confirm"', html)
+        self.assertIn('id="session-save-cancel"', html)
+        self.assertIn("session-save-form", html)
+        self.assertIn("confirmSaveSession", html)
+        self.assertIn("cancelSessionSave", html)
+        self.assertIn("renderSessionSaveForm", html)
+        self.assertIn("sessionSaveFormOpen", html)
+
+    def test_session_endpoints_use_auth_headers(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        self.assertIsNotNone(re.search(r"fetch\('/session/list'[\s\S]*?headers:\s*authHeaders\(\)", html))
+        self.assertIsNotNone(re.search(r"fetch\('/session/save'[\s\S]*?headers:\s*authHeaders\(\)", html))
+        self.assertIsNotNone(re.search(r"fetch\('/session/load'[\s\S]*?headers:\s*authHeaders\(\)", html))
+
+    def test_session_endpoints_handle_auth_error(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        self.assertIsNotNone(re.search(r"fetch\('/session/list'[\s\S]*?handleAuthError\(resp\)", html))
+        self.assertIsNotNone(re.search(r"fetch\('/session/save'[\s\S]*?handleAuthError\(resp\)", html))
+        self.assertIsNotNone(re.search(r"fetch\('/session/load'[\s\S]*?handleAuthError\(resp\)", html))
+
+    def test_session_core_functions_exist(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("function confirmSaveSession", html)
+        self.assertIn("function loadSession", html)
+        self.assertIn("function loadSessions", html)
+
     def test_missing_static_returns_404(self):
         status, _, _ = self._get("/static/nonexistent.txt")
 
@@ -958,6 +994,22 @@ class HTTPMemoryTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("memory_id", body["error"])
+
+    def test_memory_save_returns_correct_record_consecutive(self):
+        status1, body1 = self._request("POST", "/memory/save", {
+            "text": "first memory",
+            "tags": "a",
+        })
+        self.assertEqual(status1, 200)
+        self.assertEqual(body1["memory"]["text"], "first memory")
+
+        status2, body2 = self._request("POST", "/memory/save", {
+            "text": "second memory",
+            "tags": "b",
+        })
+        self.assertEqual(status2, 200)
+        self.assertEqual(body2["memory"]["text"], "second memory")
+        self.assertNotEqual(body2["memory"]["id"], body1["memory"]["id"])
 
 
 class HTTPMemoryAuthTests(unittest.TestCase):

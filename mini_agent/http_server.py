@@ -365,12 +365,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "text is required"})
             return
         tags = body.get("tags", "")
-        result = self.long_term_memory.save(text, tags=tags)
+        result, memory_id = self.long_term_memory.save_with_id(text, tags=tags)
         if "拒绝" in result:
             self._json_response(400, {"error": result})
             return
-        records = self.long_term_memory.list_records(max_results=1)
-        self._json_response(200, {"result": result, "memory": records[0] if records else None})
+        record = self.long_term_memory.get_record(memory_id) if memory_id else None
+        self._json_response(200, {"result": result, "memory": record})
 
     def _handle_memory_delete(self, body: dict) -> None:
         if not self.long_term_memory:

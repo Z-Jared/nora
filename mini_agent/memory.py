@@ -68,18 +68,22 @@ class LongTermMemory:
         self.db = db
 
     def save(self, text: str, tags: str = "") -> str:
+        result, _ = self.save_with_id(text, tags=tags)
+        return result
+
+    def save_with_id(self, text: str, tags: str = "") -> tuple[str, str]:
         text = text.strip()
         if not text:
-            return "请提供要保存的记忆内容。"
+            return "请提供要保存的记忆内容。", ""
 
         if is_sensitive_text(text) or is_sensitive_text(tags):
-            return "拒绝保存: 内容看起来包含敏感信息。"
+            return "拒绝保存: 内容看起来包含敏感信息。", ""
 
         if self.db:
             return self._save_db(text, tags)
         return self._save_jsonl(text, tags)
 
-    def _save_db(self, text: str, tags: str) -> str:
+    def _save_db(self, text: str, tags: str) -> tuple[str, str]:
         row = self.db.conn.execute(
             "SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) FROM long_term_memory WHERE id LIKE 'mem_%'"
         ).fetchone()
@@ -90,9 +94,9 @@ class LongTermMemory:
             (memory_id, text, _parse_tags_str(tags), datetime.now(timezone.utc).isoformat()),
         )
         self.db.conn.commit()
-        return f"已保存记忆: {memory_id}"
+        return f"已保存记忆: {memory_id}", memory_id
 
-    def _save_jsonl(self, text: str, tags: str) -> str:
+    def _save_jsonl(self, text: str, tags: str) -> tuple[str, str]:
         records = self._read_records()
         memory_id = f"mem_{_next_id(records, 'mem_')}"
         record = {
@@ -104,7 +108,24 @@ class LongTermMemory:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        return f"已保存记忆: {memory_id}"
+        return f"已保存记忆: {memory_id}", memory_id
+
+    def get_record(self, memory_id: str) -> Optional[dict]:
+        if self.db:
+            row = self.db.conn.execute(
+                "SELECT id, text, tags, created_at FROM long_term_memory WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if row:
+                return {"id": row[0], "text": row[1], "tags": row[2].split(",") if row[2] else [], "created_at": row[3]}
+            return None
+        for record in self._read_records():
+            if record.get("id") == memory_id:
+                return record
+        return None
+
+    def save_str(self, text: str, tags: str = "") -> str:
+        return self.save(text, tags=tags)
 
     def search(self, query: str, max_results: int = 5) -> str:
         terms = [term.lower() for term in query.split() if term.strip()]

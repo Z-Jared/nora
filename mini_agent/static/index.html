@@ -173,6 +173,13 @@ button{border:0;cursor:pointer}
 .memory-btn{height:26px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;font-size:11px;font-weight:800;color:#4c4a44}
 .memory-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
 .memory-btn:disabled{opacity:.5;cursor:not-allowed}
+.session-save-form{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px;margin-bottom:10px;display:none}
+.session-save-form.open{display:block}
+.session-save-form input{width:100%;border:1px solid var(--line);border-radius:5px;background:#fff;padding:6px 8px;font-size:12px;outline:none;margin-bottom:6px}
+.session-save-form-actions{display:flex;gap:6px;justify-content:flex-end}
+.session-save-btn{height:26px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;font-size:11px;font-weight:800;color:#4c4a44}
+.session-save-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
+.session-save-btn:disabled{opacity:.5;cursor:not-allowed}
 .mobile-memory{border:1px solid var(--line-strong);border-radius:7px;background:var(--card);padding:14px 12px;margin-top:18px}
 .mobile-memory .memory-list{max-height:none}
 .mobile-memory .memory-item{font-size:13px}
@@ -242,6 +249,13 @@ button{border:0;cursor:pointer}
         <div class="side-title">Recent</div>
         <div class="recent-list" id="recent-list">
           <div class="recent-state">Loading sessions…</div>
+        </div>
+        <div class="session-save-form" id="session-save-form">
+          <input type="text" id="session-name-input" placeholder="Session name">
+          <div class="session-save-form-actions">
+            <button class="session-save-btn" id="session-save-cancel" type="button">Cancel</button>
+            <button class="session-save-btn primary" id="session-save-confirm" type="button">Save</button>
+          </div>
         </div>
       </div>
       <div class="task-section">
@@ -358,6 +372,7 @@ button{border:0;cursor:pointer}
   var memories = [];
   var memorySearchQuery = '';
   var memoryFormOpen = false;
+  var sessionSaveFormOpen = false;
 
   function handleAuthError(resp){
     if(resp.status === 401){
@@ -567,6 +582,7 @@ button{border:0;cursor:pointer}
     stopStream();
     firstUserMessage = '';
     activeSessionName = '';
+    sessionSaveFormOpen = false;
     if(saveBtn) saveBtn.disabled = true;
     restoreEmptyState();
     clearToolEvents();
@@ -683,8 +699,23 @@ button{border:0;cursor:pointer}
   }
 
   function saveSession(){
+    sessionSaveFormOpen = true;
+    renderSessionSaveForm();
+    var nameInput = document.getElementById('session-name-input');
+    if(nameInput){
+      nameInput.value = safeSessionName(firstUserMessage);
+      nameInput.focus();
+      nameInput.select();
+    }
+  }
+
+  function confirmSaveSession(){
+    var nameInput = document.getElementById('session-name-input');
+    var name = (nameInput ? nameInput.value : '').trim();
+    if(!name) name = safeSessionName(firstUserMessage);
     if(saveBtn) saveBtn.disabled = true;
-    var name = safeSessionName(firstUserMessage);
+    sessionSaveFormOpen = false;
+    renderSessionSaveForm();
     setState('loading', 'Saving current session as ' + name + '.');
     fetch('/session/save', {
       method: 'POST',
@@ -710,6 +741,18 @@ button{border:0;cursor:pointer}
     }).finally(function(){
       if(saveBtn) saveBtn.disabled = false;
     });
+  }
+
+  function cancelSessionSave(){
+    sessionSaveFormOpen = false;
+    renderSessionSaveForm();
+  }
+
+  function renderSessionSaveForm(){
+    var form = document.getElementById('session-save-form');
+    if(!form) return;
+    if(sessionSaveFormOpen) form.classList.add('open');
+    else form.classList.remove('open');
   }
 
   function loadSession(name){
@@ -995,8 +1038,13 @@ button{border:0;cursor:pointer}
     });
     if(nextBtn) nextBtn.addEventListener('click', nextStep);
     if(finishBtn) finishBtn.addEventListener('click', function(){
-      var summary = prompt('Task summary (optional):');
-      if(summary !== null) finishTask(summary);
+      var summary = prompt('Task summary (required):');
+      if(summary === null) return;
+      if(!summary.trim()){
+        setState('error', 'Task summary is required.');
+        return;
+      }
+      finishTask(summary.trim());
     });
     if(formSubmit) formSubmit.addEventListener('click', function(){
       var goal = (document.getElementById('task-goal-input') || {}).value || '';
@@ -1088,8 +1136,13 @@ button{border:0;cursor:pointer}
     });
     if(mNext) mNext.addEventListener('click', nextStep);
     if(mFinish) mFinish.addEventListener('click', function(){
-      var summary = prompt('Task summary (optional):');
-      if(summary !== null) finishTask(summary);
+      var summary = prompt('Task summary (required):');
+      if(summary === null) return;
+      if(!summary.trim()){
+        setState('error', 'Task summary is required.');
+        return;
+      }
+      finishTask(summary.trim());
     });
     if(mFormSubmit) mFormSubmit.addEventListener('click', function(){
       var goal = (document.getElementById('mobile-task-goal-input') || {}).value || '';
@@ -1341,6 +1394,20 @@ button{border:0;cursor:pointer}
     sendMessage();
   });
   if(saveBtn) saveBtn.addEventListener('click', saveSession);
+  var sessionSaveConfirm = document.getElementById('session-save-confirm');
+  var sessionSaveCancel = document.getElementById('session-save-cancel');
+  if(sessionSaveConfirm) sessionSaveConfirm.addEventListener('click', confirmSaveSession);
+  if(sessionSaveCancel) sessionSaveCancel.addEventListener('click', cancelSessionSave);
+  var sessionNameInput = document.getElementById('session-name-input');
+  if(sessionNameInput) sessionNameInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      confirmSaveSession();
+    }
+    if(e.key === 'Escape'){
+      cancelSessionSave();
+    }
+  });
   if(runBtn) runBtn.addEventListener('click', sendMessage);
   if(newChatBtn) newChatBtn.addEventListener('click', newConversation);
   if(mobileNewBtn) mobileNewBtn.addEventListener('click', newConversation);
