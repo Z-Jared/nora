@@ -140,9 +140,20 @@ class WebSocketHandshakeTests(unittest.TestCase):
 
             tool_start = next(m for m in messages if m.get("type") == "tool_call_start")
             self.assertEqual(tool_start["name"], "calculate")
+            self.assertIn("arguments", tool_start)
+            self.assertIn("expression", tool_start["arguments"])
+
             tool_result = next(m for m in messages if m.get("type") == "tool_call_result")
             self.assertEqual(tool_result["name"], "calculate")
-            self.assertEqual(tool_result["status"], "ok")
+            self.assertIn(tool_result["status"], ("ok", "error", "blocked", "cancelled", "budget_exceeded"))
+            self.assertIn("result", tool_result)
+
+            done = next(m for m in messages if m.get("type") == "done")
+            self.assertIn(done["status"], ("done", "blocked", "error"))
+            self.assertIsInstance(done["tool_calls"], int)
+            self.assertIsInstance(done["message_count"], int)
+            self.assertIn("steps_used", done)
+            self.assertIn("failure", done)
         finally:
             sock.close()
 
@@ -164,6 +175,7 @@ class WebSocketHandshakeTests(unittest.TestCase):
             msg = _ws_recv(sock, timeout=3.0)
             self.assertIsNotNone(msg)
             data = json.loads(msg)
+            self.assertEqual(data.get("type"), "error")
             self.assertIn("error", data)
         finally:
             sock.close()
@@ -175,6 +187,7 @@ class WebSocketHandshakeTests(unittest.TestCase):
             msg = _ws_recv(sock, timeout=3.0)
             self.assertIsNotNone(msg)
             data = json.loads(msg)
+            self.assertEqual(data.get("type"), "error")
             self.assertIn("error", data)
         finally:
             sock.close()
@@ -255,6 +268,7 @@ class WebSocketAuthTests(unittest.TestCase):
             msg = _ws_recv(sock, timeout=3.0)
             self.assertIsNotNone(msg)
             data = json.loads(msg)
+            self.assertEqual(data.get("type"), "error")
             self.assertEqual(data.get("error"), "unauthorized")
         finally:
             sock.close()

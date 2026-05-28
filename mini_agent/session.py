@@ -95,6 +95,32 @@ class SessionStore:
             return self._list_sessions_db()
         return self._list_sessions_jsonl()
 
+    def list_sessions_structured(self) -> list[dict]:
+        if self.db:
+            return self._list_sessions_structured_db()
+        return self._list_sessions_structured_jsonl()
+
+    def _list_sessions_structured_db(self) -> list[dict]:
+        rows = self.db.conn.execute(
+            "SELECT name, message_count, saved_at FROM sessions ORDER BY saved_at DESC"
+        ).fetchall()
+        return [{"name": r[0], "message_count": r[1], "saved_at": r[2]} for r in rows]
+
+    def _list_sessions_structured_jsonl(self) -> list[dict]:
+        if not self.directory or not self.directory.exists():
+            return []
+        sessions = []
+        for path in sorted(self.directory.glob("*.jsonl")):
+            records = read_jsonl(path)
+            if records:
+                meta = records[0]
+                sessions.append({
+                    "name": meta.get("name", path.stem),
+                    "message_count": meta.get("message_count", 0),
+                    "saved_at": meta.get("saved_at", ""),
+                })
+        return sessions
+
     def _list_sessions_db(self) -> str:
         rows = self.db.conn.execute(
             "SELECT name, message_count, saved_at FROM sessions ORDER BY saved_at DESC"

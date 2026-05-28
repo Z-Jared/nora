@@ -233,6 +233,14 @@ button{border:0;cursor:pointer}
   .mobile-runtime .event-list{gap:8px}
   .mobile-runtime .event-item{box-shadow:none}
   .mobile-context{margin-top:22px}
+  .mobile-session-active{font-size:12px;color:#2c7a4b;font-weight:600;margin-bottom:8px}
+  .mobile-session-unsaved{font-size:12px;color:#8f5f1b;margin-bottom:8px}
+  .mobile-session-list{display:flex;flex-wrap:wrap;gap:6px}
+  .mobile-session-item{height:28px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 10px;font-size:11px;color:#4c4a44;cursor:pointer}
+  .mobile-session-item.active{background:#e8f5e9;border-color:#a5d6a7;color:#2c7a4b;font-weight:600}
+  .mobile-session-item:hover{background:#f0f0f0}
+  .mobile-session-more{height:28px;border:1px dashed var(--line);border-radius:5px;background:transparent;padding:0 10px;font-size:11px;color:var(--muted);cursor:pointer}
+  .mobile-session-more:hover{background:#f0f0f0}
   .composer{position:fixed;left:0;right:0;bottom:0;z-index:6;padding:10px 12px;background:var(--panel);box-shadow:0 -1px 0 var(--line)}
   .composer-inner{max-width:none}.quick-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.quick-btn{height:29px;text-align:left;padding:0 12px}
   .input-row{grid-template-columns:1fr auto}.composer-input{height:44px}.send-btn{height:36px;align-self:center;padding:0 13px}
@@ -393,6 +401,7 @@ button{border:0;cursor:pointer}
   var firstUserMessage = '';
   var activeSessionName = '';
   var sessions = [];
+  var committedMessageCount = 0;
   var activeAbortController = null;
   var authFailed = false;
   var mobileAuthPending = false;
@@ -586,6 +595,25 @@ button{border:0;cursor:pointer}
       });
     }
     html += '</div></div>';
+    if(sessions.length > 0 || activeSessionName || firstUserMessage){
+      html += '<div class="mobile-context panel-card" id="mobile-sessions-section"><h3>Sessions</h3>';
+      if(activeSessionName){
+        html += '<p class="mobile-session-active">Active: ' + escapeHtml(activeSessionName) + '</p>';
+      } else if(firstUserMessage){
+        html += '<p class="mobile-session-unsaved">Unsaved conversation</p>';
+      }
+      if(sessions.length > 0){
+        html += '<div class="mobile-session-list">';
+        sessions.forEach(function(s, idx){
+          var isActive = s.name === activeSessionName;
+          var hidden = idx >= 3 ? ' style="display:none"' : '';
+          html += '<button type="button" class="mobile-session-item' + (isActive ? ' active' : '') + '" data-session-idx="' + idx + '"' + hidden + '>' + escapeHtml(s.name) + '</button>';
+        });
+        if(sessions.length > 3) html += '<button type="button" class="mobile-session-more" id="mobile-session-expand">+' + (sessions.length - 3) + ' more</button>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
     if(serverStatus && !serverStatus.llm_configured){
       var warnings = serverStatus.config_warnings || [];
       html += '<div class="mobile-context panel-card warn"><h3>Model not configured</h3>';
@@ -614,6 +642,21 @@ button{border:0;cursor:pointer}
       html += '<div class="mobile-context panel-card warn"><h3>Working</h3><p>Streaming response from local runtime.</p></div>';
     }
     mobileRuntimeContainer.innerHTML = html;
+    var mobileSessionBtns = mobileRuntimeContainer.querySelectorAll('.mobile-session-item[data-session-idx]');
+    mobileSessionBtns.forEach(function(btn){
+      var idx = parseInt(btn.getAttribute('data-session-idx'), 10);
+      if(idx >= 0 && idx < sessions.length){
+        btn.addEventListener('click', function(){ loadSession(sessions[idx].name); });
+      }
+    });
+    var expandBtn = mobileRuntimeContainer.querySelector('#mobile-session-expand');
+    if(expandBtn){
+      expandBtn.addEventListener('click', function(){
+        var hidden = mobileRuntimeContainer.querySelectorAll('.mobile-session-item[style]');
+        hidden.forEach(function(btn){ btn.style.display = ''; });
+        expandBtn.style.display = 'none';
+      });
+    }
     if(mobileAuthPending && area){
       area.scrollIntoView({behavior:'smooth', block:'nearest'});
     }
@@ -674,6 +717,7 @@ button{border:0;cursor:pointer}
     clearToolEvents();
     setState('ready', 'Workspace cleared. Starting a new conversation.');
     renderSessions('ready');
+    var prevCommitted = committedMessageCount;
     fetch('/chat/clear', {
       method: 'POST',
       headers: authHeaders(),
@@ -685,8 +729,10 @@ button{border:0;cursor:pointer}
       }
       return resp.json();
     }).then(function(){
+      committedMessageCount = 0;
       setState('ready', 'Ready for a new conversation.');
     }).catch(function(e){
+      committedMessageCount = prevCommitted;
       setState('error', 'Failed to clear agent memory: ' + e.message);
     });
     input.focus();
@@ -720,6 +766,10 @@ button{border:0;cursor:pointer}
     scrollMessages();
   }
 
+  function messageCount(){
+    return committedMessageCount;
+  }
+
   function renderSessions(status, detail){
     recentListEl.innerHTML = '';
     if(status === 'loading'){
@@ -730,17 +780,26 @@ button{border:0;cursor:pointer}
       recentListEl.innerHTML = '<div class="recent-state">Failed to load sessions.<br>' + escapeHtml(detail || '') + '</div>';
       return;
     }
-    if(sessions.length === 0){
+    if(!activeSessionName && firstUserMessage){
+      var newBtn = document.createElement('button');
+      newBtn.type = 'button';
+      newBtn.className = 'recent-item';
+      newBtn.innerHTML = '<strong>Current conversation</strong><span>Unsaved · click Save to keep</span>';
+      newBtn.addEventListener('click', function(){ saveSession(); });
+      recentListEl.appendChild(newBtn);
+    }
+    if(sessions.length === 0 && !firstUserMessage){
       recentListEl.innerHTML = '<div class="recent-state">No saved sessions yet. Send a message, then save this workbench.</div>';
       return;
     }
     sessions.forEach(function(session){
       var button = document.createElement('button');
       button.type = 'button';
-      button.className = 'recent-item' + (session.name === activeSessionName ? ' active' : '');
+      var isActive = session.name === activeSessionName;
+      button.className = 'recent-item' + (isActive ? ' active' : '');
       button.innerHTML = '<strong></strong><span></span>';
       button.querySelector('strong').textContent = session.name || 'Untitled session';
-      button.querySelector('span').textContent = session.detail || 'Saved session';
+      button.querySelector('span').textContent = isActive ? '✓ Active session' : (session.detail || 'Saved session');
       button.addEventListener('click', function(){ loadSession(session.name); });
       recentListEl.appendChild(button);
     });
@@ -787,8 +846,10 @@ button{border:0;cursor:pointer}
     sessionSaveFormOpen = true;
     renderSessionSaveForm();
     var nameInput = document.getElementById('session-name-input');
+    var count = messageCount();
     if(nameInput){
       nameInput.value = safeSessionName(firstUserMessage);
+      nameInput.placeholder = count > 0 ? count + ' message' + (count === 1 ? '' : 's') + ' will be saved' : 'Session name';
       nameInput.focus();
       nameInput.select();
     }
@@ -801,7 +862,8 @@ button{border:0;cursor:pointer}
     if(saveBtn) saveBtn.disabled = true;
     sessionSaveFormOpen = false;
     renderSessionSaveForm();
-    setState('loading', 'Saving current session as ' + name + '.');
+    var count = messageCount();
+    setState('loading', 'Saving "' + name + '" (' + count + ' message' + (count === 1 ? '' : 's') + ')…');
     fetch('/session/save', {
       method: 'POST',
       headers: authHeaders(),
@@ -815,7 +877,8 @@ button{border:0;cursor:pointer}
     }).then(function(data){
       var result = data.result || 'Session saved.';
       if(result.indexOf('已保存') !== -1 || result.toLowerCase().indexOf('saved') !== -1){
-        activeSessionName = name;
+        var match = result.match(/已保存会话:\s*(\S+)/);
+        activeSessionName = match ? match[1] : name;
         setState('done', result);
         return loadSessions({silent:true});
       }
@@ -844,7 +907,7 @@ button{border:0;cursor:pointer}
     if(!name) return;
     activeSessionName = name;
     renderSessions('ready');
-    setState('loading', 'Loading session ' + name + '.');
+    setState('loading', 'Loading "' + name + '"…');
     fetch('/session/load', {
       method: 'POST',
       headers: authHeaders(),
@@ -857,8 +920,11 @@ button{border:0;cursor:pointer}
       return resp.json();
     }).then(function(data){
       renderLoadedMessages(data.messages || []);
+      var msgCount = (data.messages || []).length;
+      committedMessageCount = msgCount;
       if(saveBtn) saveBtn.disabled = false;
-      setState('done', data.result || ('Loaded session ' + name + '.'));
+      var suffix = msgCount > 0 ? ' (' + msgCount + ' message' + (msgCount === 1 ? '' : 's') + ')' : '';
+      setState('done', data.result || ('Loaded "' + name + '"' + suffix + '.'));
     }).catch(function(e){
       setState('error', 'Failed to load session: ' + e.message);
     });
@@ -870,7 +936,6 @@ button{border:0;cursor:pointer}
     input.value = '';
     sendBtn.disabled = true;
     if(runBtn) runBtn.disabled = true;
-    if(saveBtn) saveBtn.disabled = false;
     if(stopBtn) stopBtn.disabled = false;
     if(mobileStopBtn) mobileStopBtn.disabled = false;
     if(!firstUserMessage) firstUserMessage = text;
@@ -924,6 +989,7 @@ button{border:0;cursor:pointer}
     }).finally(function(){
       activeAbortController = null;
       applyReadinessState();
+      if(saveBtn) saveBtn.disabled = false;
       if(stopBtn) stopBtn.disabled = true;
       if(mobileStopBtn) mobileStopBtn.disabled = true;
       input.focus();
@@ -955,6 +1021,7 @@ button{border:0;cursor:pointer}
           break;
         case 'done':
           if(assistantEl) assistantEl.className = 'msg assistant';
+          if(typeof evt.message_count === 'number') committedMessageCount = evt.message_count;
           var doneDetail = 'done · status ' + (evt.status || 'done');
           if(evt.tool_calls != null) doneDetail += ' · ' + evt.tool_calls + ' server tool calls';
           addToolEvent('done', 'done', doneDetail);

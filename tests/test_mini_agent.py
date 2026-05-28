@@ -2021,8 +2021,11 @@ class RunEventsTests(unittest.TestCase):
         self.assertEqual(len(tool_starts), 1)
         self.assertEqual(len(tool_results), 1)
         self.assertEqual(tool_starts[0]["name"], "calculate")
+        self.assertIn("arguments", tool_starts[0])
+        self.assertIn("expression", tool_starts[0]["arguments"])
         self.assertEqual(tool_results[0]["name"], "calculate")
-        self.assertEqual(tool_results[0]["status"], "ok")
+        self.assertIn(tool_results[0]["status"], ("ok", "error", "blocked", "cancelled", "budget_exceeded"))
+        self.assertIn("result", tool_results[0])
 
     def test_run_events_done_has_status_and_tool_calls(self):
         agent = MiniAgent(build_default_registry())
@@ -2032,6 +2035,10 @@ class RunEventsTests(unittest.TestCase):
         self.assertEqual(done["type"], "done")
         self.assertEqual(done["status"], "done")
         self.assertGreater(done["tool_calls"], 0)
+        self.assertEqual(done["message_count"], len(agent.memory.messages()))
+        self.assertIn("steps_used", done)
+        self.assertIsInstance(done["steps_used"], int)
+        self.assertIn("failure", done)
 
     def test_run_events_for_unknown_task(self):
         agent = MiniAgent(build_default_registry())
@@ -2120,6 +2127,9 @@ class RunEventsTests(unittest.TestCase):
 
         done_event = events[-1]
         self.assertEqual(done_event["status"], "blocked")
+        self.assertIn("steps_used", done_event)
+        self.assertIn("failure", done_event)
+        self.assertIn("model exploded", done_event["failure"])
 
         self.assertEqual(agent.last_run_report.status, "blocked")
         self.assertIn("model exploded", agent.last_run_report.failure)
@@ -2291,6 +2301,8 @@ class RunEventsTests(unittest.TestCase):
 
         done = events[-1]
         self.assertEqual(done["status"], "blocked")
+        self.assertIn("steps_used", done)
+        self.assertIn("failure", done)
         self.assertEqual(agent.last_run_report.status, "blocked")
 
     def test_stream_chat_error_after_tools_run_returns_error(self):

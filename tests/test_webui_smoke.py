@@ -112,6 +112,9 @@ const document = {
 };
 
 const localStorage = { _store: {}, getItem(k) { return this._store[k] || null; }, setItem(k, v) { this._store[k] = v; } };
+let _promptHandler = null;
+function prompt(message) { return _promptHandler ? _promptHandler(message) : null; }
+function confirm() { return true; }
 
 let _fetchHandler = null;
 function fetch(url, opts) {
@@ -671,3 +674,542 @@ result = {
         self.assertNotIn("env-alternatives", result["serverHtml"])
         self.assertNotIn("can be replaced by", result["serverHtml"])
         self.assertIn("GEMINI_API_KEY", result["serverHtml"])
+
+    def test_session_name_with_quotes_safe(self):
+        """Session names with quotes should not break the UI."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+sessions = [{name: "it's", detail: "test"}, {name: 'he said "hi"', detail: "test2"}];
+var appended = [];
+var origAppend = _elements['recent-list'].appendChild;
+_elements['recent-list'].appendChild = function(child) { appended.push(child); origAppend.call(this, child); };
+renderSessions('ready');
+var names = appended.map(function(btn){ var s = btn.querySelector('strong'); return s ? s.textContent : ''; });
+result = {
+  count: appended.length,
+  names: names,
+};
+""")
+        self.assertEqual(result["count"], 2)
+        self.assertIn("it's", result["names"])
+        self.assertIn('he said "hi"', result["names"])
+
+    def test_mobile_session_button_uses_addEventListener(self):
+        """Mobile session buttons should use addEventListener, not inline onclick."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+sessions = [{name: 'session1', detail: 'test'}, {name: 'session2', detail: 'test'}];
+renderMobileStatus();
+var container = _elements['mobile-runtime-container'];
+result = {
+  hasSection: container.innerHTML.indexOf('mobile-sessions-section') !== -1,
+  hasDataAttr: container.innerHTML.indexOf('data-session-idx') !== -1,
+  hasOnclick: container.innerHTML.indexOf('onclick') !== -1,
+};
+""")
+        self.assertTrue(result["hasSection"])
+        self.assertTrue(result["hasDataAttr"])
+        self.assertFalse(result["hasOnclick"])
+
+    def test_active_session_marker(self):
+        """Active session should show Active marker."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+sessions = [{name: 'session1', detail: 'test'}, {name: 'session2', detail: 'test'}];
+activeSessionName = 'session1';
+var appended = [];
+var origAppend = _elements['recent-list'].appendChild;
+_elements['recent-list'].appendChild = function(child) { appended.push(child); origAppend.call(this, child); };
+renderSessions('ready');
+var activeButtons = appended.filter(function(btn) { return btn.className.indexOf('active') !== -1; });
+result = {
+  total: appended.length,
+  activeCount: activeButtons.length,
+  activeText: activeButtons.length > 0 ? activeButtons[0].querySelector('span').textContent : '',
+};
+""")
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["activeCount"], 1)
+        self.assertIn("Active", result["activeText"])
+
+    def test_save_session_uses_sanitized_name(self):
+        """After saving, activeSessionName should use backend-sanitized name."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/session/save') return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({result:'已保存会话: hasspaces (2 条消息)'})});
+  if (url === '/session/list') return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({sessions:['hasspaces: saved']})});
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+firstUserMessage = 'has spaces';
+confirmSaveSession();
+await new Promise(r => setTimeout(r, 200));
+result = {
+  activeSessionName: activeSessionName,
+};
+""")
+        self.assertEqual(result["activeSessionName"], "hasspaces")
+
+    def test_save_session_sanitizes_quotes(self):
+        """After saving with quotes, activeSessionName should be sanitized."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/session/save') return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({result:'已保存会话: itsquoted (1 条消息)'})});
+  if (url === '/session/list') return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({sessions:['itsquoted: saved']})});
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+firstUserMessage = 'test';
+var nameInput = _elements['session-name-input'];
+if(nameInput) nameInput.value = "it's \"quoted\"";
+confirmSaveSession();
+await new Promise(r => setTimeout(r, 200));
+result = {
+  activeSessionName: activeSessionName,
+};
+""")
+        self.assertEqual(result["activeSessionName"], "itsquoted")
+
+    def test_mobile_sessions_all_reachable(self):
+        """When more than 3 sessions exist, expand reveals hidden sessions
+        and clicking a later session calls loadSession() with correct name."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+sessions = [
+  {name: 's1', detail: ''}, {name: 's2', detail: ''}, {name: 's3', detail: ''},
+  {name: 's4', detail: ''}, {name: 's5', detail: ''}
+];
+var container = _elements['mobile-runtime-container'];
+container.innerHTML = '';
+renderMobileStatus();
+
+// Verify markup: 5 buttons, expand present, some hidden
+var html = container.innerHTML;
+var totalButtons = (html.match(/data-session-idx/g) || []).length;
+var hasExpand = html.indexOf('mobile-session-expand') !== -1;
+var hasHidden = html.indexOf('display:none') !== -1;
+
+// Override querySelectorAll on container so addEventListener wiring works
+var mockBtns = [];
+for (var i = 0; i < 5; i++) {
+  (function(idx) {
+    mockBtns.push({
+      getAttribute: function(a) { return a === 'data-session-idx' ? String(idx) : null; },
+      style: { display: idx >= 3 ? 'none' : '' },
+      addEventListener: function(evt, fn) { if (evt === 'click') this._click = fn; },
+      _click: null
+    });
+  })(i);
+}
+var mockExpand = {
+  id: 'mobile-session-expand',
+  style: { display: '' },
+  addEventListener: function(evt, fn) { if (evt === 'click') this._click = fn; },
+  _click: null
+};
+container.querySelectorAll = function(sel) {
+  if (sel === '.mobile-session-item[data-session-idx]') return mockBtns;
+  if (sel === '#mobile-session-expand') return mockExpand;
+  if (sel === '.mobile-session-item[style]') return mockBtns.filter(function(b) { return b.style.display === 'none'; });
+  return [];
+};
+container.querySelector = function(sel) {
+  if (sel === '#mobile-session-expand') return mockExpand;
+  return null;
+};
+
+// Re-render to wire up event listeners with the new querySelectorAll
+container.innerHTML = '';
+renderMobileStatus();
+
+// Click expand button to reveal hidden sessions
+mockExpand._click();
+
+// Verify s4 (index 3) is now visible
+var s4Visible = mockBtns[3].style.display === '';
+
+// Click s4 button and verify loadSession is called
+mockBtns[3]._click();
+
+result = {
+  totalButtons: totalButtons,
+  hasExpand: hasExpand,
+  hasHiddenBeforeExpand: hasHidden,
+  s4VisibleAfterExpand: s4Visible,
+  activeSessionName: activeSessionName,
+  stateText: _elements['top-state'].textContent,
+};
+""")
+        self.assertEqual(result["totalButtons"], 5, "Should render 5 session buttons")
+        self.assertTrue(result["hasExpand"], "Should have expand button")
+        self.assertTrue(result["hasHiddenBeforeExpand"], "Sessions after index 2 should be hidden initially")
+        self.assertTrue(result["s4VisibleAfterExpand"], "s4 should be visible after expand click")
+        self.assertEqual(result["activeSessionName"], "s4", "loadSession('s4') should be called")
+        self.assertEqual(result["stateText"], "loading", "State should be loading")
+
+    def test_message_count_returns_committed_count(self):
+        """messageCount() should return committedMessageCount, not DOM count."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+result = {
+  zeroCommitted: messageCount(),
+};
+committedMessageCount = 3;
+result.threeCommitted = messageCount();
+committedMessageCount = 0;
+result.backToZero = messageCount();
+""")
+        self.assertEqual(result["zeroCommitted"], 0)
+        self.assertEqual(result["threeCommitted"], 3)
+        self.assertEqual(result["backToZero"], 0)
+
+    def test_save_btn_disabled_during_streaming(self):
+        """saveBtn must not be enabled while streaming is in flight."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+var _streamResolve = null;
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/chat/stream') {
+    var encoder = new TextEncoder();
+    var chunks = ['data: {"type":"start"}\n', 'data: {"type":"delta","text":"hello"}\n'];
+    var ci = 0;
+    var body = {
+      getReader: function() {
+        return {
+          read: function() {
+            if (ci < chunks.length) {
+              var c = chunks[ci++];
+              return Promise.resolve({ done: false, value: encoder.encode(c) });
+            }
+            return new Promise(function(resolve) { _streamResolve = resolve; });
+          }
+        };
+      }
+    };
+    return Promise.resolve({ ok: true, status: 200, body: body });
+  }
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+// save-btn starts disabled in the real HTML; mock doesn't parse attributes
+_elements['save-btn'].disabled = true;
+_elements['input'].value = 'test message';
+sendMessage();
+// Give the stream a tick to start reading
+await new Promise(function(r) { setTimeout(r, 50); });
+var saveDisabledMidStream = _elements['save-btn'].disabled;
+
+// Now finish the stream
+if (_streamResolve) _streamResolve({ done: true, value: undefined });
+await new Promise(function(r) { setTimeout(r, 100); });
+var saveDisabledAfterStream = _elements['save-btn'].disabled;
+
+result = {
+  saveDisabledMidStream: saveDisabledMidStream,
+  saveDisabledAfterStream: saveDisabledAfterStream,
+};
+""")
+        self.assertTrue(result["saveDisabledMidStream"],
+                        "saveBtn should be disabled during streaming")
+        self.assertFalse(result["saveDisabledAfterStream"],
+                         "saveBtn should be re-enabled after streaming completes")
+
+    def test_save_count_excludes_uncommitted_after_abort(self):
+        """After user aborts a stream, messageCount must not include
+        the uncommitted user message from the aborted turn."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/chat/stream') {
+    var encoder = new TextEncoder();
+    var body = {
+      getReader: function() {
+        return {
+          read: function() {
+            // Hang forever — will be aborted
+            return new Promise(function() {});
+          }
+        };
+      }
+    };
+    return Promise.resolve({ ok: true, status: 200, body: body });
+  }
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+// Simulate 2 previously committed messages (1 user + 1 assistant)
+var msgEl = _elements['messages'];
+var domMsgs = [{className: 'msg user'}, {className: 'msg assistant'}];
+msgEl.querySelectorAll = function(sel) {
+  if (sel === '.msg:not(.error)') return domMsgs.filter(function(m) { return m.className.indexOf('error') === -1; });
+  return [];
+};
+msgEl.appendChild = function(el) { domMsgs.push(el); };
+committedMessageCount = 2;
+
+_elements['input'].value = 'aborted message';
+sendMessage();  // addMsg pushes user msg via appendChild
+
+// Abort the stream
+await new Promise(function(r) { setTimeout(r, 50); });
+stopStream();
+await new Promise(function(r) { setTimeout(r, 100); });
+
+result = {
+  countAfterAbort: messageCount(),
+  domLength: domMsgs.length,
+};
+""")
+        self.assertEqual(result["countAfterAbort"], 2,
+                         "messageCount should stay at 2 (committed), not 3 (DOM)")
+        self.assertEqual(result["domLength"], 3,
+                         "DOM should have 3 messages (including uncommitted user msg)")
+
+    def test_save_count_excludes_uncommitted_after_failure(self):
+        """After stream fails, messageCount must not include
+        the uncommitted user message from the failed turn."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/chat/stream') {
+    return Promise.resolve({ok:false, status:500, json:()=>Promise.resolve({error:'stream failed'}), text:()=>Promise.resolve('stream failed')});
+  }
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+// Simulate 2 previously committed messages
+var msgEl = _elements['messages'];
+var domMsgs = [{className: 'msg user'}, {className: 'msg assistant'}];
+msgEl.querySelectorAll = function(sel) {
+  if (sel === '.msg:not(.error)') return domMsgs.filter(function(m) { return m.className.indexOf('error') === -1; });
+  return [];
+};
+msgEl.appendChild = function(el) { domMsgs.push(el); };
+committedMessageCount = 2;
+
+_elements['input'].value = 'will fail';
+sendMessage();  // addMsg pushes user msg, then stream fails
+
+await new Promise(function(r) { setTimeout(r, 200); });
+
+result = {
+  countAfterFail: messageCount(),
+  domLength: domMsgs.length,
+};
+""")
+        self.assertEqual(result["countAfterFail"], 2,
+                         "messageCount should stay at 2 (committed), not 3 (DOM)")
+        self.assertTrue(result["domLength"] >= 3,
+                         "DOM should have at least 3 messages (user msg + error)")
+
+    def test_save_count_uses_done_event_message_count(self):
+        """After a successful completed turn, messageCount must use the
+        backend-committed count reported by the done event."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/chat/stream') {
+    var encoder = new TextEncoder();
+    var nextCount = 20;
+    var ci = 0;
+    var body = {
+      getReader: function() {
+        return {
+          read: function() {
+            var chunks = [
+              'data: {"type":"delta","content":"hello"}\n',
+              'data: {"type":"done","status":"ok","message_count":' + nextCount + '}\n'
+            ];
+            if (ci < chunks.length) {
+              var c = chunks[ci++];
+              return Promise.resolve({ done: false, value: encoder.encode(c) });
+            }
+            nextCount = 20;
+            return Promise.resolve({ done: true, value: undefined });
+          }
+        };
+      }
+    };
+    return Promise.resolve({ ok: true, status: 200, body: body });
+  }
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+// Simulate an already full backend memory. A local +2 guess would overstate
+// the next saved count as 22, but the backend reports the capped count.
+committedMessageCount = 20;
+
+_elements['input'].value = 'hello';
+sendMessage();
+await new Promise(function(r) { setTimeout(r, 200); });
+
+result = {
+  afterTurn: messageCount(),
+};
+""")
+        self.assertEqual(result["afterTurn"], 20,
+                         "messageCount should use backend done.message_count, not local +2")
+
+    def test_clear_failure_preserves_committed_count(self):
+        """When /chat/clear fails, committedMessageCount must not be zeroed."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: true, tasks: false, memory: false, websocket: true }")
+        setup = handler + "\n_fetchHandler = _authFetchHandler;\n"
+        setup += r"""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/status') !== -1) return _authFetchHandler(url, opts);
+  if (url === '/chat/clear') {
+    return Promise.resolve({ok:false, status:500, json:()=>Promise.resolve({error:'clear failed'}), text:()=>Promise.resolve('clear failed')});
+  }
+  return _authFetchHandler(url, opts);
+};
+"""
+        result = _run_node(
+            setup_js=setup,
+            test_body=r"""
+committedMessageCount = 4;
+newConversation();
+await new Promise(function(r) { setTimeout(r, 200); });
+result = {
+  countAfterFailedClear: messageCount(),
+};
+""")
+        self.assertEqual(result["countAfterFailedClear"], 4,
+                         "committedMessageCount must stay at 4 when /chat/clear fails")
+
+    def test_desktop_finish_task_blocks_empty_summary(self):
+        """Desktop Finish should not submit an empty task summary."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: false, tasks: true, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+var finishCalls = 0;
+finishTask = function(summary) { finishCalls += 1; };
+_promptHandler = function(message) {
+  result = result || {};
+  result.promptMessage = message;
+  return '   ';
+};
+currentTask = {goal: 'Ship feature', status: 'active', steps: [{id: 1, text: 'Do it', status: 'done'}]};
+var finishListener = null;
+document.getElementById('task-finish-btn').addEventListener = function(evt, fn) { if (evt === 'click') finishListener = fn; };
+renderTaskPanel();
+finishListener();
+result.finishCalls = finishCalls;
+result.stateText = _elements['top-state'].textContent;
+result.statePanelHtml = _elements['state-panel'].innerHTML;
+""")
+        self.assertEqual(result["promptMessage"], "Task summary (required):")
+        self.assertEqual(result["finishCalls"], 0)
+        self.assertEqual(result["stateText"], "error")
+        self.assertIn("Task summary is required.", result["statePanelHtml"])
+
+    def test_mobile_finish_task_blocks_empty_summary(self):
+        """Mobile Finish should not submit an empty task summary."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4.1-mini', workspace: '/tmp', "
+            "features: { sessions: false, tasks: true, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+var finishCalls = 0;
+finishTask = function(summary) { finishCalls += 1; };
+_promptHandler = function(message) {
+  result = result || {};
+  result.promptMessage = message;
+  return '';
+};
+currentTask = {goal: 'Ship mobile feature', status: 'active', steps: [{id: 1, text: 'Do it', status: 'done'}]};
+var finishListener = null;
+document.getElementById('mobile-task-finish').addEventListener = function(evt, fn) { if (evt === 'click') finishListener = fn; };
+renderMobileTask();
+finishListener();
+result.finishCalls = finishCalls;
+result.stateText = _elements['top-state'].textContent;
+result.statePanelHtml = _elements['state-panel'].innerHTML;
+""")
+        self.assertEqual(result["promptMessage"], "Task summary (required):")
+        self.assertEqual(result["finishCalls"], 0)
+        self.assertEqual(result["stateText"], "error")
+        self.assertIn("Task summary is required.", result["statePanelHtml"])

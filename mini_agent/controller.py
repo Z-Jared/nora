@@ -147,8 +147,7 @@ class MiniAgent:
             error_msg = str(error)[:500]
             yield {"type": "error", "error": error_msg}
             self._finish_turn(text, error_msg, status="blocked", failure=error_msg)
-            report = self.last_run_report
-            yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+            yield self._done_event()
 
     def _emit_answer(self, user_input: str, answer_or_gen) -> Generator[dict, None, None]:
         if isinstance(answer_or_gen, str):
@@ -161,8 +160,7 @@ class MiniAgent:
                 if event["type"] == "delta":
                     answer += event["content"]
         answer = self._finish_turn(user_input, answer)
-        report = self.last_run_report
-        yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+        yield self._done_event()
 
     def _has_local_answer(self, text: str) -> bool:
         if self._looks_like_calculation(text):
@@ -178,8 +176,18 @@ class MiniAgent:
     def _emit_blocked(self, user_input: str, error_msg: str) -> Generator[dict, None, None]:
         yield {"type": "delta", "content": error_msg}
         self._finish_turn(user_input, error_msg, status="blocked", failure=error_msg)
+        yield self._done_event()
+
+    def _done_event(self) -> dict:
         report = self.last_run_report
-        yield {"type": "done", "status": report.status, "tool_calls": len(report.tool_calls)}
+        return {
+            "type": "done",
+            "status": report.status,
+            "steps_used": report.steps_used,
+            "tool_calls": len(report.tool_calls),
+            "message_count": len(self.memory.messages()),
+            "failure": report.failure or "",
+        }
 
     def _run_with_llm_tools_events(self, text: str) -> Generator[dict, None, None]:
         messages = self._messages_for_user_input(text)

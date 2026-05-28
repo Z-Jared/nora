@@ -7,7 +7,9 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 from mini_agent.controller import MiniAgent
+from mini_agent.database import NoraDB
 from mini_agent.http_server import create_server
+from mini_agent.memory import LongTermMemory
 from mini_agent.session import SessionStore
 from mini_agent.tools import build_default_registry
 
@@ -121,7 +123,9 @@ class HTTPServerTests(unittest.TestCase):
 
         status, body = self._request("GET", "/session/list")
         self.assertEqual(status, 200)
-        self.assertIn("test", body["sessions"])
+        self.assertIsInstance(body["sessions"], list)
+        self.assertTrue(any(s["name"] == "test" for s in body["sessions"]))
+        self.assertIn("test", body["sessions_text"])
 
     def test_session_load(self):
         self.agent.run("hello")
@@ -141,6 +145,109 @@ class HTTPServerTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("required", body["error"])
+
+    def test_session_save_two_and_list_order(self):
+        self.agent.run("first message")
+        status, _ = self._request("POST", "/session/save", {"name": "alpha"})
+        self.assertEqual(status, 200)
+
+        self.agent.run("second message")
+        status, _ = self._request("POST", "/session/save", {"name": "beta"})
+        self.assertEqual(status, 200)
+
+        status, body = self._request("GET", "/session/list")
+        self.assertEqual(status, 200)
+        sessions = body["sessions"]
+        self.assertIsInstance(sessions, list)
+        names = [s["name"] for s in sessions]
+        self.assertIn("alpha", names)
+        self.assertIn("beta", names)
+        self.assertIn("alpha", body["sessions_text"])
+        self.assertIn("beta", body["sessions_text"])
+
+    def test_session_load_nonexistent_returns_error(self):
+        status, body = self._request("POST", "/session/load", {"name": "does_not_exist"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("未找到会话", body["result"])
+        self.assertEqual(body["messages"], [])
+
+    def test_session_name_with_spaces_sanitized(self):
+        self.agent.run("hello")
+        status, body = self._request("POST", "/session/save", {"name": "has spaces"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertIn("hasspaces", body["result"])
+
+    def test_session_name_with_chinese_allowed(self):
+        self.agent.run("hello")
+        status, body = self._request("POST", "/session/save", {"name": "中文会话"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertIn("中文会话", body["result"])
+
+    def test_session_name_with_quotes_sanitized(self):
+        self.agent.run("hello")
+        status, body = self._request("POST", "/session/save", {"name": "it's \"quoted\""})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertIn("itsquoted", body["result"])
+
+    def test_session_name_with_hyphens_and_underscores_allowed(self):
+        self.agent.run("hello")
+        status, body = self._request("POST", "/session/save", {"name": "my-session_v2"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertIn("my-session_v2", body["result"])
+
+    def test_session_save_auto_generates_name(self):
+        self.agent.run("hello")
+        status, body = self._request("POST", "/session/save", {})
+
+        self.assertEqual(status, 200)
+        self.assertIn("已保存", body["result"])
+        self.assertIn("session_", body["result"])
+
+    def test_session_save_load_roundtrip_messages(self):
+        self.agent.run("question one")
+        self.agent.run("question two")
+        self._request("POST", "/session/save", {"name": "roundtrip"})
+
+        new_agent = MiniAgent(build_default_registry())
+        self.server.__class__.agent = new_agent
+        status, body = self._request("POST", "/session/load", {"name": "roundtrip"})
+
+        self.assertEqual(status, 200)
+        contents = [m["content"] for m in body["messages"]]
+        self.assertIn("question one", contents)
+        self.assertIn("question two", contents)
+
+    def test_session_list_structured_fields(self):
+        self.agent.run("hello")
+        self._request("POST", "/session/save", {"name": "my-session"})
+
+        status, body = self._request("GET", "/session/list")
+        self.assertEqual(status, 200)
+        sessions = body["sessions"]
+        self.assertIsInstance(sessions, list)
+        self.assertEqual(len(sessions), 1)
+        session = sessions[0]
+        self.assertEqual(session["name"], "my-session")
+        self.assertIn("message_count", session)
+        self.assertIn("saved_at", session)
+        self.assertIsInstance(session["message_count"], int)
+        self.assertGreater(session["message_count"], 0)
+        self.assertTrue(session["saved_at"])
+
+    def test_session_list_empty_returns_empty_array(self):
+        status, body = self._request("GET", "/session/list")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["sessions"], [])
+        self.assertIn("暂无", body["sessions_text"])
 
     def test_not_found(self):
         status, body = self._request("GET", "/nonexistent")
@@ -172,6 +279,11 @@ class HTTPServerTests(unittest.TestCase):
         self.assertGreater(len(events), 0)
         last_event = json.loads(events[-1])
         self.assertEqual(last_event["type"], "done")
+        self.assertIn(last_event["status"], ("done", "blocked", "error"))
+        self.assertIsInstance(last_event["tool_calls"], int)
+        self.assertIsInstance(last_event["message_count"], int)
+        self.assertIn("steps_used", last_event)
+        self.assertIn("failure", last_event)
 
     def test_chat_stream_executes_tools_and_reports(self):
         import socket
@@ -202,8 +314,23 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(types[-1], "done")
 
         last_event = parsed[-1]
-        self.assertEqual(last_event["status"], "done")
+        self.assertIn(last_event["status"], ("done", "blocked", "error"))
+        self.assertIsInstance(last_event["tool_calls"], int)
         self.assertGreater(last_event.get("tool_calls", 0), 0)
+        self.assertIsInstance(last_event["message_count"], int)
+        self.assertEqual(last_event["message_count"], 2)
+        self.assertIn("steps_used", last_event)
+        self.assertIn("failure", last_event)
+
+        tool_start = next(e for e in parsed if e["type"] == "tool_call_start")
+        self.assertEqual(tool_start["name"], "calculate")
+        self.assertIn("arguments", tool_start)
+        self.assertIn("expression", tool_start["arguments"])
+
+        tool_result = next(e for e in parsed if e["type"] == "tool_call_result")
+        self.assertEqual(tool_result["name"], "calculate")
+        self.assertIn(tool_result["status"], ("ok", "error", "blocked", "cancelled", "budget_exceeded"))
+        self.assertIn("result", tool_result)
 
         all_content = "".join(
             e.get("content", "") for e in parsed if e["type"] == "delta"
@@ -250,6 +377,13 @@ class HTTPServerTests(unittest.TestCase):
         tool_start = events[start_idx]
         self.assertEqual(tool_start["name"], "calculate")
         self.assertIn("expression", tool_start["arguments"])
+
+        done = events[done_idx]
+        self.assertIn(done["status"], ("done", "blocked", "error"))
+        self.assertIsInstance(done["tool_calls"], int)
+        self.assertIsInstance(done["message_count"], int)
+        self.assertIn("steps_used", done)
+        self.assertIn("failure", done)
 
     def test_chat_stream_rejects_empty_message(self):
         status, body = self._request("POST", "/chat/stream", {"message": ""})
@@ -808,6 +942,12 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("No active task", html)
         self.assertIn("Start task", html)
 
+    def test_task_finish_summary_copy_is_required(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        self.assertIn("Task summary (required)", html)
+        self.assertNotIn("Task summary (optional)", html)
+
     def test_memory_panel_and_mobile_container_exist(self):
         _, _, body = self._get("/")
         html = body.decode("utf-8")
@@ -1252,6 +1392,13 @@ class HTTPServerStreamFormatTests(unittest.TestCase):
         self.assertIn("delta", types)
         self.assertEqual(types[-1], "done")
 
+        done = parsed[-1]
+        self.assertIn(done["status"], ("done", "blocked", "error"))
+        self.assertIsInstance(done["tool_calls"], int)
+        self.assertIsInstance(done["message_count"], int)
+        self.assertIn("steps_used", done)
+        self.assertIn("failure", done)
+
 
 class HTTPTaskTests(unittest.TestCase):
     def setUp(self):
@@ -1608,6 +1755,28 @@ class HTTPMemoryTests(unittest.TestCase):
         self.assertEqual(status2, 200)
         self.assertEqual(body2["memory"]["text"], "second memory")
         self.assertNotEqual(body2["memory"]["id"], body1["memory"]["id"])
+
+    def test_memory_save_returns_correct_record_consecutive_sqlite(self):
+        db = NoraDB(Path(self.tmpdir) / "memory.db")
+        try:
+            self.server.__class__.long_term_memory = LongTermMemory(db=db)
+
+            status1, body1 = self._request("POST", "/memory/save", {
+                "text": "sqlite first memory",
+                "tags": "a",
+            })
+            self.assertEqual(status1, 200)
+            self.assertEqual(body1["memory"]["text"], "sqlite first memory")
+
+            status2, body2 = self._request("POST", "/memory/save", {
+                "text": "sqlite second memory",
+                "tags": "b",
+            })
+            self.assertEqual(status2, 200)
+            self.assertEqual(body2["memory"]["text"], "sqlite second memory")
+            self.assertNotEqual(body2["memory"]["id"], body1["memory"]["id"])
+        finally:
+            db.close()
 
 
 class HTTPMemoryAuthTests(unittest.TestCase):

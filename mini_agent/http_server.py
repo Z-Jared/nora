@@ -161,14 +161,14 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(message)
             except json.JSONDecodeError:
-                ws.write_frame(json.dumps({"error": "invalid JSON"}))
+                ws.write_frame(json.dumps({"type": "error", "error": "invalid JSON"}))
                 continue
 
             # Auth check on first message
             if auth_pending:
                 token = body.get("token", "")
                 if token != self.api_token:
-                    ws.write_frame(json.dumps({"error": "unauthorized"}))
+                    ws.write_frame(json.dumps({"type": "error", "error": "unauthorized"}))
                     break
                 auth_pending = False
                 ws.write_frame(json.dumps({"type": "auth_ok"}))
@@ -188,12 +188,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 self.agent.memory.clear()
                 ws.write_frame(json.dumps({"type": "cleared", "result": "cleared"}))
             else:
-                ws.write_frame(json.dumps({"error": f"unknown type: {msg_type}"}))
+                ws.write_frame(json.dumps({"type": "error", "error": f"unknown type: {msg_type}"}))
 
     def _ws_handle_chat(self, ws: WebSocketConnection, body: dict) -> None:
         message = body.get("message", "").strip()
         if not message:
-            ws.write_frame(json.dumps({"error": "message is required"}))
+            ws.write_frame(json.dumps({"type": "error", "error": "message is required"}))
             return
 
         try:
@@ -204,7 +204,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
 
     def _ws_handle_session_save(self, ws: WebSocketConnection, body: dict) -> None:
         if not self.session_store:
-            ws.write_frame(json.dumps({"error": "session store not configured"}))
+            ws.write_frame(json.dumps({"type": "error", "error": "session store not configured"}))
             return
         name = body.get("name", "")
         result = self.session_store.save(self.agent.memory, name=name)
@@ -212,11 +212,11 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
 
     def _ws_handle_session_load(self, ws: WebSocketConnection, body: dict) -> None:
         if not self.session_store:
-            ws.write_frame(json.dumps({"error": "session store not configured"}))
+            ws.write_frame(json.dumps({"type": "error", "error": "session store not configured"}))
             return
         name = body.get("name", "").strip()
         if not name:
-            ws.write_frame(json.dumps({"error": "name is required"}))
+            ws.write_frame(json.dumps({"type": "error", "error": "name is required"}))
             return
         result = self.session_store.load(name, self.agent.memory)
         ws.write_frame(json.dumps({"type": "session_loaded", "result": result}))
@@ -414,10 +414,11 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         if not self._check_auth():
             return
         if not self.session_store:
-            self._json_response(200, {"sessions": []})
+            self._json_response(200, {"sessions": [], "sessions_text": "暂无保存的会话。"})
             return
-        result = self.session_store.list_sessions()
-        self._json_response(200, {"sessions": result})
+        sessions = self.session_store.list_sessions_structured()
+        sessions_text = self.session_store.list_sessions()
+        self._json_response(200, {"sessions": sessions, "sessions_text": sessions_text})
 
     def _handle_session_save(self, body: dict) -> None:
         if not self.session_store:
