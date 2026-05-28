@@ -271,6 +271,35 @@ class MiniAgentCLI:
                 return f"未找到 trace: {args[0]}"
             import json
             return json.dumps(t, ensure_ascii=False, indent=2)
+        if command == "/durable-tasks":
+            count = self._optional_int(args, default=20, name="limit")
+            if isinstance(count, str):
+                return count
+            store = getattr(self.registry, "durable_task_store", None)
+            if not store:
+                return "Durable task 存储未配置。"
+            tasks = store.list_tasks(limit=count)
+            if not tasks:
+                return "暂无 durable tasks。"
+            lines = [f"最近 {len(tasks)} 条 durable tasks:"]
+            for t in tasks:
+                cp = len(t.checkpoints)
+                lines.append(
+                    f"  {t.task_id}  {t.status}  step={t.current_step or '-'}"
+                    f"  checkpoints={cp}  {t.goal[:60]}"
+                )
+            return "\n".join(lines)
+        if command == "/durable-task":
+            if not args:
+                return "用法: /durable-task <task_id>"
+            store = getattr(self.registry, "durable_task_store", None)
+            if not store:
+                return "Durable task 存储未配置。"
+            task = store.get_task(args[0])
+            if not task:
+                return f"未找到 durable task: {args[0]}"
+            import json
+            return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
 
         return f"未知命令: {command}\n输入 /help 查看可用命令。"
 
@@ -356,6 +385,8 @@ class MiniAgentCLI:
                 "  /audit [n] - 生成工具调用安全审计摘要",
                 "  /traces [n] - 查看最近运行 trace",
                 "  /trace <trace_id> - 查看单条 trace 详情",
+                "  /durable-tasks [n] - 查看最近 durable tasks",
+                "  /durable-task <task_id> - 查看单条 durable task 详情",
                 "",
                 "Git:",
                 "  /status - 查看 Git 状态",

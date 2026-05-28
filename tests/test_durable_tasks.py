@@ -260,5 +260,275 @@ class JSONLStoreTests(unittest.TestCase):
         self.assertEqual(t2.task_id, "dtask_2")
 
 
+class TaskManagerMappingTests(unittest.TestCase):
+    """Tests for task_manager_task_to_durable()."""
+
+    def test_active_to_running(self):
+        task = {
+            "goal": "build feature",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [
+                {"id": 1, "text": "plan", "status": "done", "note": "", "summary": "planned"},
+                {"id": 2, "text": "build", "status": "in_progress", "note": "", "summary": ""},
+            ],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.status, TaskStatus.RUNNING)
+        self.assertEqual(dt.goal, "build feature")
+        self.assertEqual(dt.created_at, "2026-01-01T00:00:00Z")
+        self.assertIsNone(dt.finished_at)
+
+    def test_finished_to_completed(self):
+        task = {
+            "goal": "done task",
+            "status": "finished",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-02T00:00:00Z",
+            "summary": "all good",
+            "steps": [{"id": 1, "text": "do", "status": "done", "note": "", "summary": "did"}],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.status, TaskStatus.COMPLETED)
+        self.assertEqual(dt.finished_at, "2026-01-02T00:00:00Z")
+
+    def test_active_all_pending_to_pending(self):
+        task = {
+            "goal": "new task",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [
+                {"id": 1, "text": "step 1", "status": "pending", "note": "", "summary": ""},
+                {"id": 2, "text": "step 2", "status": "pending", "note": "", "summary": ""},
+            ],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.status, TaskStatus.PENDING)
+
+    def test_active_all_blocked_to_blocked(self):
+        task = {
+            "goal": "blocked task",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [
+                {"id": 1, "text": "step 1", "status": "blocked", "note": "waiting", "summary": ""},
+            ],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.status, TaskStatus.BLOCKED)
+
+    def test_step_field_mapping(self):
+        task = {
+            "goal": "test",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [
+                {"id": 1, "text": "my step", "status": "in_progress", "note": "working", "summary": "partial"},
+            ],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        step = dt.steps[0]
+        self.assertEqual(step.id, 1)
+        self.assertEqual(step.text, "my step")
+        self.assertEqual(step.status, "in_progress")
+        self.assertEqual(step.note, "working")
+        self.assertEqual(step.summary, "partial")
+        self.assertEqual(step.tool_hint, "")
+        self.assertIsNone(step.checkpoint_ref)
+
+    def test_missing_created_at_generates_now(self):
+        task = {
+            "goal": "no date",
+            "status": "active",
+            "finished_at": None,
+            "summary": "",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertTrue(dt.created_at)  # auto-generated ISO timestamp
+
+    def test_summary_preserved_as_input_summary(self):
+        task = {
+            "goal": "test",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "completed the feature and wrote tests",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.input_summary, "completed the feature and wrote tests")
+
+    def test_restored_from_creates_checkpoint(self):
+        task = {
+            "goal": "restored",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [],
+            "restored_from": "task_5",
+            "restored_at": "2026-01-03T12:00:00Z",
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(len(dt.checkpoints), 1)
+        cp = dt.checkpoints[0]
+        self.assertEqual(cp.checkpoint_id, "cp_1")
+        self.assertEqual(cp.step_id, 0)
+        self.assertIn("task_5", cp.description)
+        self.assertIn("2026-01-03T12:00:00Z", cp.description)
+        self.assertEqual(cp.state_snapshot["restored_from"], "task_5")
+
+    def test_no_restored_from_no_checkpoint(self):
+        task = {
+            "goal": "normal",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(len(dt.checkpoints), 0)
+
+    def test_custom_task_id_and_run_id(self):
+        task = {
+            "goal": "test",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task, task_id="dtask_42", run_id="run_3")
+        self.assertEqual(dt.task_id, "dtask_42")
+        self.assertEqual(dt.run_id, "run_3")
+
+    def test_default_resume_policy(self):
+        task = {
+            "goal": "test",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "summary": "",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.resume_policy, "from_step")
+
+    def test_finished_at_preserved(self):
+        task = {
+            "goal": "done",
+            "status": "finished",
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T05:00:00Z",
+            "summary": "",
+            "steps": [],
+        }
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.finished_at, "2026-01-01T05:00:00Z")
+        self.assertEqual(dt.status, TaskStatus.COMPLETED)
+
+
+class RegistryToolTests(unittest.TestCase):
+    """Tests for list_durable_tasks and get_durable_task registry tools."""
+
+    def _make_registry(self, db):
+        from mini_agent.tools import build_default_registry
+        return build_default_registry(db=db)
+
+    def test_registry_has_two_durable_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                tools = {t["function"]["name"] for t in registry.to_openai_tools()}
+                self.assertIn("list_durable_tasks", tools)
+                self.assertIn("get_durable_task", tools)
+            finally:
+                db.close()
+
+    def test_list_durable_tasks_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("list_durable_tasks")
+                self.assertIsInstance(result, str)
+                parsed = json.loads(result)
+                self.assertEqual(parsed, [])
+            finally:
+                db.close()
+
+    def test_list_durable_tasks_with_data(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                store = registry.durable_task_store
+                store.create_task(goal="build feature", steps=[{"text": "plan"}, {"text": "implement"}])
+                store.add_checkpoint("dtask_1", {"step_id": 1, "run_id": "run_1", "state_snapshot": {}})
+
+                result = registry.call("list_durable_tasks")
+                parsed = json.loads(result)
+                self.assertEqual(len(parsed), 1)
+                self.assertEqual(parsed[0]["task_id"], "dtask_1")
+                self.assertEqual(parsed[0]["status"], "pending")
+                self.assertEqual(parsed[0]["goal"], "build feature")
+                self.assertIsNone(parsed[0]["current_step"])
+                self.assertEqual(parsed[0]["checkpoint_count"], 1)
+            finally:
+                db.close()
+
+    def test_get_durable_task_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                store = registry.durable_task_store
+                store.create_task(goal="test goal", steps=[{"text": "step 1"}])
+
+                result = registry.call("get_durable_task", task_id="dtask_1")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["task_id"], "dtask_1")
+                self.assertEqual(parsed["goal"], "test goal")
+                self.assertEqual(len(parsed["steps"]), 1)
+                self.assertIn("checkpoints", parsed)
+                self.assertIn("trace_refs", parsed)
+            finally:
+                db.close()
+
+    def test_get_durable_task_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("get_durable_task", task_id="dtask_999")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+
 if __name__ == "__main__":
     unittest.main()

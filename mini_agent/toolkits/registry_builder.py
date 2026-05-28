@@ -27,6 +27,7 @@ from mini_agent.toolkits.register_state import register_state_tools
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
+from mini_agent.durable_tasks import DurableTaskStore
 from mini_agent.web_tools import WebTools
 
 
@@ -86,6 +87,7 @@ def build_default_registry(
     context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
     tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)
     trace_store = TraceStore(db=db)
+    durable_task_store = DurableTaskStore(db=db)
     logger = JsonlToolLogger(path=log_path or Path("logs/tool_calls.jsonl"), db=db)
     registry = ToolRegistry(
         logger=logger,
@@ -119,6 +121,7 @@ def build_default_registry(
     registry.task_manager = task_manager
     registry.long_term_memory = long_term_memory
     registry.trace_store = trace_store
+    registry.durable_task_store = durable_task_store
 
     def _list_traces_json(max_results: int = 20) -> str:
         traces = trace_store.list_traces(max_results=max_results)
@@ -161,6 +164,59 @@ def build_default_registry(
         },
         permission=ToolPermission(category="logs", risk="read"),
     )
+
+    def _list_durable_tasks_json(limit: int = 20) -> str:
+        tasks = durable_task_store.list_tasks(limit=limit)
+        summary = [
+            {
+                "task_id": t.task_id,
+                "status": t.status,
+                "goal": t.goal,
+                "current_step": t.current_step,
+                "checkpoint_count": len(t.checkpoints),
+            }
+            for t in tasks
+        ]
+        return _json.dumps(summary, ensure_ascii=False)
+
+    def _get_durable_task_json(task_id: str) -> str:
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        return _json.dumps(task.to_dict(), ensure_ascii=False)
+
+    registry.register(
+        "list_durable_tasks",
+        "列出最近的 durable tasks，包括 task_id、状态、goal、当前步骤和 checkpoint 数量。",
+        _list_durable_tasks_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少条，默认 20，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "get_durable_task",
+        "按 task_id 获取一条 durable task 的完整信息，包括步骤、checkpoints、trace 引用和失败原因。",
+        _get_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                }
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

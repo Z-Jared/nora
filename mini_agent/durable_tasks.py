@@ -494,3 +494,88 @@ class DurableTaskStore:
         if self.db:
             return self._all_ids_db()
         return [t.task_id for t in self._read_all_jsonl()]
+
+
+def _infer_status(task: dict) -> str:
+    old_status = task.get("status", "active")
+    steps = task.get("steps", [])
+    if old_status == "finished":
+        return TaskStatus.COMPLETED
+    # active: infer from steps
+    if steps and all(s.get("status") == "pending" for s in steps):
+        return TaskStatus.PENDING
+    if steps and all(s.get("status") == "blocked" for s in steps):
+        return TaskStatus.BLOCKED
+    return TaskStatus.RUNNING
+
+
+def task_manager_task_to_durable(
+    task: dict,
+    task_id: Optional[str] = None,
+    run_id: str = "run_1",
+) -> DurableTask:
+    """Convert a legacy TaskManager task dict to a DurableTask.
+
+    Mapping rules:
+    - goal -> goal
+    - steps -> steps (DurableStep with id/text/status/note/summary)
+    - active + all pending -> pending
+    - active + all blocked -> blocked
+    - active otherwise -> running
+    - finished -> completed
+    - created_at preserved; missing -> now
+    - finished_at preserved
+    - summary -> input_summary (preserved, not lost)
+    - restored_from/restored_at -> checkpoint with description (preserved, not lost)
+    - tool_hint empty (not present in old format)
+    - checkpoint_ref None
+    - failure_reason empty
+    - resume_policy from_step
+    """
+    now = _now_iso()
+    task_id = task_id or "dtask_1"
+    status = _infer_status(task)
+    created_at = task.get("created_at") or now
+
+    steps = []
+    for s in task.get("steps", []):
+        steps.append(DurableStep(
+            id=s.get("id", 0),
+            text=s.get("text", ""),
+            status=s.get("status", StepStatus.PENDING),
+            note=s.get("note", ""),
+            summary=s.get("summary", ""),
+            tool_hint=s.get("tool_hint", ""),
+        ))
+
+    checkpoints = []
+    restored_from = task.get("restored_from")
+    restored_at = task.get("restored_at")
+    if restored_from:
+        description = f"restored_from={restored_from}"
+        if restored_at:
+            description += f" restored_at={restored_at}"
+        checkpoints.append(DurableCheckpoint(
+            checkpoint_id="cp_1",
+            step_id=0,
+            run_id=run_id,
+            created_at=restored_at or now,
+            state_snapshot={"restored_from": restored_from, "restored_at": restored_at},
+            description=description,
+        ))
+
+    input_summary = task.get("summary", "")
+
+    return DurableTask(
+        task_id=task_id,
+        run_id=run_id,
+        status=status,
+        goal=task.get("goal", ""),
+        steps=steps,
+        created_at=created_at,
+        updated_at=now,
+        finished_at=task.get("finished_at"),
+        input_summary=input_summary,
+        checkpoints=checkpoints,
+        resume_policy=ResumePolicy.FROM_STEP,
+    )

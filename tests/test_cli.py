@@ -196,6 +196,116 @@ class MiniAgentCLITests(unittest.TestCase):
             self.assertIn("Nora(", cli.prompt())
 
 
+    def test_durable_tasks_empty(self):
+        import tempfile
+        from mini_agent.database import NoraDB
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                registry = FakeCLIRegistry()
+                registry.durable_task_store = store
+                cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+                result = cli.handle_slash_command("/durable-tasks")
+
+                self.assertIn("暂无", result)
+            finally:
+                db.close()
+
+    def test_durable_tasks_with_data(self):
+        import tempfile
+        from mini_agent.database import NoraDB
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="first task", steps=[{"text": "s1"}])
+                store.create_task(goal="second task", steps=[{"text": "s1"}, {"text": "s2"}])
+                store.add_checkpoint("dtask_1", {"step_id": 1, "run_id": "run_1", "state_snapshot": {}})
+
+                registry = FakeCLIRegistry()
+                registry.durable_task_store = store
+                cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+                result = cli.handle_slash_command("/durable-tasks 2")
+
+                self.assertIn("dtask_1", result)
+                self.assertIn("dtask_2", result)
+                self.assertIn("checkpoints=1", result)
+                self.assertIn("first task", result)
+            finally:
+                db.close()
+
+    def test_durable_task_found(self):
+        import json
+        import tempfile
+        from mini_agent.database import NoraDB
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="test goal", steps=[{"text": "step 1"}])
+
+                registry = FakeCLIRegistry()
+                registry.durable_task_store = store
+                cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+                result = cli.handle_slash_command("/durable-task dtask_1")
+
+                parsed = json.loads(result)
+                self.assertEqual(parsed["task_id"], "dtask_1")
+                self.assertEqual(parsed["goal"], "test goal")
+            finally:
+                db.close()
+
+    def test_durable_task_not_found(self):
+        import tempfile
+        from mini_agent.database import NoraDB
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+
+                registry = FakeCLIRegistry()
+                registry.durable_task_store = store
+                cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+                result = cli.handle_slash_command("/durable-task dtask_999")
+
+                self.assertIn("未找到", result)
+            finally:
+                db.close()
+
+    def test_durable_tasks_no_store(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/durable-tasks")
+
+        self.assertIn("未配置", result)
+
+    def test_durable_task_no_store(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/durable-task dtask_1")
+
+        self.assertIn("未配置", result)
+
+    def test_durable_task_requires_id(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/durable-task")
+
+        self.assertIn("用法", result)
+
+
 class FakeCLIAgent:
     def __init__(self):
         self.inputs = []
