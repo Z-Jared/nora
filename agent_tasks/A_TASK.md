@@ -1,63 +1,26 @@
 # Claude A Task
 
 Owner: Claude A
-Status: assigned
+Status: waiting_for_assignment
 
 ## Goal
 
-Improve Web UI session management without touching task or memory API logic.
+No active implementation task is assigned yet.
 
-## Scope
+## Instructions
 
-Implement a clearer session workflow in `mini_agent/static/index.html`:
-- Save current conversation with a user-provided session name.
-- Display saved sessions clearly.
-- Load a session by clicking/selecting it.
-- Keep New conversation, Save, and Load status messages accurate.
-- Preserve and reuse current auth recovery behavior when token auth fails.
+Do not make code changes from this file until Codex PM assigns a new task.
 
-## Auth Requirements
+If you opened this window expecting work:
+- Wait for Codex PM to update `agent_tasks/A_TASK.md`.
+- Do not continue work from older task descriptions or prior DONE reports.
+- Do not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`.
+- Do not push or commit.
 
-Every session request must include the existing Authorization header helper:
-- `GET /session/list`
-- `POST /session/save`
-- `POST /session/load`
+## Current PM Note
 
-If auth fails, reuse existing token recovery logic. Do not silently fail.
-
-## Do Not Touch
-
-- `mini_agent/memory.py`
-- `mini_agent/task_runner.py`
-- `/memory/*` backend behavior
-- `/task/*` backend behavior
-
-B is working on those areas.
-
-## Tests
-
-Add or update focused tests. Prefer existing `tests/test_http_server.py` static tests unless backend behavior truly changes.
-
-Required checks before writing `A_DONE.md`:
-
-```bash
-node -e "const fs=require('fs'); const html=fs.readFileSync('mini_agent/static/index.html','utf8'); const m=html.match(/<script>([\s\S]*)<\/script>/); new Function(m[1]); console.log('script syntax ok')"
-python3 -m unittest tests.test_http_server.HTTPServerStaticTests
-python3 -m unittest discover -s tests
-git diff --check
-```
+Codex PM is acting as project manager and reviewer. The next development scope has not been specified yet.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` with:
-- Summary of changes.
-- `git diff --stat`.
-- Exact test commands and results.
-- Any known issues or skipped tests.
-- Confirmation that no push was performed.
-
-Then run:
-
-```bash
-agent_tasks/notify_codex.sh A
-```
+No `A_DONE.md` update is required while this task is waiting for assignment.
