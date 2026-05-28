@@ -132,6 +132,10 @@ button{border:0;cursor:pointer}
 .setup-guidance .warn-list li{font-size:12px;color:#8f5f1b;padding:2px 0}
 .setup-guidance .env-vars{font-family:"SF Mono",Monaco,Consolas,monospace;font-size:11px;background:#f6f2ea;border:1px solid var(--line);border-radius:5px;padding:8px 10px;line-height:1.7;color:var(--ink)}
 .setup-guidance .env-vars code{background:rgba(47,125,79,.08);padding:1px 4px;border-radius:3px;font-size:11px}
+.env-alternatives{margin-top:8px}
+.env-alternatives h4{font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.env-alt-item{font-size:11px;color:#4c4a44;padding:2px 0;line-height:1.5}
+.env-alt-item code{background:rgba(47,125,79,.08);padding:1px 4px;border-radius:3px;font-family:"SF Mono",Monaco,Consolas,monospace}
 .mobile-status{display:none}
 .mobile-token{display:none}
 .mobile-token.auth-error{border-color:#efb3a8;background:#fff4f2;box-shadow:0 0 0 2px rgba(239,179,168,.35)}
@@ -594,7 +598,9 @@ button{border:0;cursor:pointer}
       var vars = _envVarDisplay(serverStatus.required_env, serverStatus.provider);
       html += '<div class="env-vars">';
       vars.forEach(function(v){ html += '<code>' + escapeHtml(v) + '</code><br>'; });
-      html += '</div></div></div>';
+      html += '</div>';
+      html += _envAlternativesHtml(serverStatus.accepted_env_alternatives);
+      html += '</div></div>';
     }
     if(state === 'error' && authFailed){
       html += '<div class="mobile-context panel-card error"><h3>Auth required</h3><p>Enter a valid token in the field above to continue.</p></div>';
@@ -1309,6 +1315,18 @@ button{border:0;cursor:pointer}
     return guide;
   }
 
+  function _envAlternativesHtml(alternatives){
+    if(!alternatives) return '';
+    var keys = Object.keys(alternatives);
+    if(keys.length === 0) return '';
+    var html = '<div class="env-alternatives"><h4>Accepted alternatives</h4>';
+    keys.forEach(function(key){
+      html += '<p class="env-alt-item"><code>' + escapeHtml(key) + '</code> can be replaced by <code>' + escapeHtml(alternatives[key]) + '</code></p>';
+    });
+    html += '</div>';
+    return html;
+  }
+
   function renderServerPanel(data){
     if(!serverPanelEl) return;
     if(!data){
@@ -1329,7 +1347,9 @@ button{border:0;cursor:pointer}
       var vars = _envVarDisplay(data.required_env, data.provider);
       html += '<div class="env-vars">';
       vars.forEach(function(v){ html += '<code>' + escapeHtml(v) + '</code><br>'; });
-      html += '</div></div></div>';
+      html += '</div>';
+      html += _envAlternativesHtml(data.accepted_env_alternatives);
+      html += '</div></div>';
     }
     html += '<div class="panel-card"><div class="server-info">';
     html += '<div class="server-row"><span class="server-label">provider</span><span class="server-value">' + escapeHtml(data.provider || 'unknown') + '</span></div>';

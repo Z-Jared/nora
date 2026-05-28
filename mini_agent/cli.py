@@ -5,7 +5,7 @@ from typing import Callable, Optional
 
 from mini_agent.git_tools import GitTools
 from mini_agent.session import SessionStore
-from mini_agent.settings import required_env_vars
+from mini_agent.settings import required_env_vars, env_alternatives
 
 
 class MiniAgentCLI:
@@ -262,6 +262,9 @@ class MiniAgentCLI:
             provider = getattr(self.settings, "provider", "") if self.settings else ""
             env_vars = required_env_vars(provider)
             suggestions.append(f"如需模型能力，请检查 .env 中的 {', '.join(env_vars)}。")
+            alternatives = env_alternatives(provider)
+            for primary, alt in alternatives.items():
+                suggestions.append(f"{primary} 也可用 {alt} 替代。")
         try:
             lines.append(f"tools: {len(self.registry.to_openai_tools())}")
         except AttributeError:

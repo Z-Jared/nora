@@ -1064,6 +1064,37 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("guideMap", fn_body)
         self.assertIn("_providerEnvGuide", fn_body)
 
+    def test_env_alternatives_function_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function _envAlternativesHtml\(alternatives\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "_envAlternativesHtml function not found")
+        fn_body = match.group(1)
+        self.assertIn("env-alternatives", fn_body)
+        self.assertIn("can be replaced by", fn_body)
+        self.assertIn("Object.keys", fn_body)
+
+    def test_server_panel_shows_alternatives(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderServerPanel\(data\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderServerPanel function not found")
+        fn_body = match.group(1)
+        self.assertIn("accepted_env_alternatives", fn_body)
+        self.assertIn("_envAlternativesHtml", fn_body)
+
+    def test_mobile_shows_alternatives(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderMobileStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderMobileStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("accepted_env_alternatives", fn_body)
+        self.assertIn("_envAlternativesHtml", fn_body)
+
     def test_server_panel_shows_config_warnings(self):
         _, _, body = self._get("/")
         html = body.decode("utf-8")

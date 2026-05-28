@@ -267,6 +267,8 @@ class CLIDoctorProviderTests(unittest.TestCase):
         self.assertIn("LLM_PROVIDER", result)
         self.assertIn("LLM_API_KEY", result)
         self.assertIn("LLM_MODEL", result)
+        self.assertIn("OPENAI_API_KEY", result)
+        self.assertIn("替代", result)
         self.assertNotIn("ANTHROPIC_API_KEY", result)
         self.assertNotIn("GEMINI_API_KEY", result)
 
@@ -284,6 +286,7 @@ class CLIDoctorProviderTests(unittest.TestCase):
         self.assertIn("ANTHROPIC_MODEL", result)
         self.assertNotIn("LLM_API_KEY", result)
         self.assertNotIn("LLM_MODEL", result)
+        self.assertNotIn("OPENAI_API_KEY", result)
         self.assertNotIn("GEMINI_API_KEY", result)
 
     def test_doctor_gemini_disabled(self):
@@ -300,6 +303,7 @@ class CLIDoctorProviderTests(unittest.TestCase):
         self.assertIn("GEMINI_MODEL", result)
         self.assertNotIn("LLM_API_KEY", result)
         self.assertNotIn("LLM_MODEL", result)
+        self.assertNotIn("OPENAI_API_KEY", result)
         self.assertNotIn("ANTHROPIC_API_KEY", result)
 
     def test_doctor_no_settings_uses_generic(self):

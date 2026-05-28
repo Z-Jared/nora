@@ -611,3 +611,63 @@ result = {
         self.assertIn("LLM_MODEL", result["serverHtml"])
         self.assertIn("LLM_BASE_URL", result["serverHtml"])
         self.assertIn("gpt-4.1-mini", result["serverHtml"])
+
+    def test_openai_alternatives_shown(self):
+        """When provider=openai-compatible, show OPENAI_API_KEY alternative."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'openai-compatible', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "accepted_env_alternatives: {'LLM_API_KEY': 'OPENAI_API_KEY'}, "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertIn("OPENAI_API_KEY", result["serverHtml"])
+        self.assertIn("can be replaced by", result["serverHtml"])
+        self.assertIn("env-alternatives", result["serverHtml"])
+
+    def test_anthropic_no_alternatives(self):
+        """When provider=anthropic, don't show alternatives section."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'anthropic', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "accepted_env_alternatives: {}, "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertNotIn("env-alternatives", result["serverHtml"])
+        self.assertNotIn("can be replaced by", result["serverHtml"])
+        self.assertIn("ANTHROPIC_API_KEY", result["serverHtml"])
+
+    def test_gemini_no_alternatives(self):
+        """When provider=gemini, don't show alternatives section."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'gemini', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "accepted_env_alternatives: {}, "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertNotIn("env-alternatives", result["serverHtml"])
+        self.assertNotIn("can be replaced by", result["serverHtml"])
+        self.assertIn("GEMINI_API_KEY", result["serverHtml"])
