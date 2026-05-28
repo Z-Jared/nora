@@ -322,6 +322,26 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(required_env_vars("unknown"), ["LLM_API_KEY"])
 
+    def test_env_alternatives_openai_compatible(self):
+        from mini_agent.settings import env_alternatives
+
+        self.assertEqual(env_alternatives("openai-compatible"), {"LLM_API_KEY": "OPENAI_API_KEY"})
+
+    def test_env_alternatives_anthropic(self):
+        from mini_agent.settings import env_alternatives
+
+        self.assertEqual(env_alternatives("anthropic"), {})
+
+    def test_env_alternatives_gemini(self):
+        from mini_agent.settings import env_alternatives
+
+        self.assertEqual(env_alternatives("gemini"), {})
+
+    def test_env_alternatives_unknown_provider(self):
+        from mini_agent.settings import env_alternatives
+
+        self.assertEqual(env_alternatives("unknown"), {})
+
 
 
 if __name__ == "__main__":

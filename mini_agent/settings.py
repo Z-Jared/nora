@@ -10,9 +10,17 @@ REQUIRED_ENV_VARS: dict[str, list[str]] = {
     "gemini": ["LLM_PROVIDER", "GEMINI_API_KEY", "GEMINI_MODEL"],
 }
 
+ENV_ALTERNATIVES: dict[str, dict[str, str]] = {
+    "openai-compatible": {"LLM_API_KEY": "OPENAI_API_KEY"},
+}
+
 
 def required_env_vars(provider: str) -> list[str]:
     return REQUIRED_ENV_VARS.get(provider, ["LLM_API_KEY"])
+
+
+def env_alternatives(provider: str) -> dict[str, str]:
+    return ENV_ALTERNATIVES.get(provider, {})
 
 
 @dataclass(frozen=True)

@@ -591,7 +591,7 @@ button{border:0;cursor:pointer}
         html += '</ul>';
       }
       html += '<div class="setup-guidance"><h4>Required .env variables</h4>';
-      var vars = _providerEnvGuide(serverStatus.provider);
+      var vars = _envVarDisplay(serverStatus.required_env, serverStatus.provider);
       html += '<div class="env-vars">';
       vars.forEach(function(v){ html += '<code>' + escapeHtml(v) + '</code><br>'; });
       html += '</div></div></div>';
@@ -1293,6 +1293,22 @@ button{border:0;cursor:pointer}
     return ['LLM_PROVIDER=openai-compatible','LLM_BASE_URL=https://api.openai.com/v1','LLM_API_KEY=your-key','LLM_MODEL=gpt-4.1-mini'];
   }
 
+  function _envVarDisplay(requiredEnv, provider){
+    var guide = _providerEnvGuide(provider);
+    if(requiredEnv && requiredEnv.length > 0){
+      var guideMap = {};
+      guide.forEach(function(item){
+        var idx = item.indexOf('=');
+        if(idx > 0) guideMap[item.substring(0, idx)] = item.substring(idx + 1);
+      });
+      return requiredEnv.map(function(name){
+        var value = guideMap[name];
+        return value ? name + '=' + value : name;
+      });
+    }
+    return guide;
+  }
+
   function renderServerPanel(data){
     if(!serverPanelEl) return;
     if(!data){
@@ -1310,7 +1326,7 @@ button{border:0;cursor:pointer}
       }
       html += '<div class="setup-guidance">';
       html += '<h4>Required .env variables</h4>';
-      var vars = _providerEnvGuide(data.provider);
+      var vars = _envVarDisplay(data.required_env, data.provider);
       html += '<div class="env-vars">';
       vars.forEach(function(v){ html += '<code>' + escapeHtml(v) + '</code><br>'; });
       html += '</div></div></div>';

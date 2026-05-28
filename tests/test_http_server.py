@@ -339,6 +339,12 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn("required_env", body)
         self.assertIsInstance(body["required_env"], list)
 
+    def test_status_accepted_env_alternatives_field(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("accepted_env_alternatives", body)
+        self.assertIsInstance(body["accepted_env_alternatives"], dict)
+
 
 class _StatusServerMixin:
     server_kwargs: dict = {}
@@ -351,6 +357,9 @@ class _StatusServerMixin:
         if "llm_required_env" not in kwargs:
             from mini_agent.settings import required_env_vars
             kwargs["llm_required_env"] = required_env_vars(kwargs.get("llm_provider", ""))
+        if "llm_env_alternatives" not in kwargs:
+            from mini_agent.settings import env_alternatives
+            kwargs["llm_env_alternatives"] = env_alternatives(kwargs.get("llm_provider", ""))
         self.server = create_server(
             self.agent,
             host="127.0.0.1",
@@ -466,6 +475,11 @@ class HTTPServerStatusAuthTests(_StatusServerMixin, unittest.TestCase):
 
         self.assertEqual(body["required_env"], ["LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL"])
 
+    def test_status_accepted_env_alternatives_openai(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["accepted_env_alternatives"], {"LLM_API_KEY": "OPENAI_API_KEY"})
+
 
 class HTTPServerStatusConfiguredTests(_StatusServerMixin, unittest.TestCase):
     server_kwargs = {
@@ -506,6 +520,11 @@ class HTTPServerStatusAnthropicTests(_StatusServerMixin, unittest.TestCase):
 
         self.assertEqual(body["required_env"], ["LLM_PROVIDER", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"])
 
+    def test_status_accepted_env_alternatives_anthropic(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["accepted_env_alternatives"], {})
+
     def test_status_config_warning_generic_for_anthropic(self):
         _, body = self.get_status()
 
@@ -522,6 +541,11 @@ class HTTPServerStatusGeminiTests(_StatusServerMixin, unittest.TestCase):
         _, body = self.get_status()
 
         self.assertEqual(body["required_env"], ["LLM_PROVIDER", "GEMINI_API_KEY", "GEMINI_MODEL"])
+
+    def test_status_accepted_env_alternatives_gemini(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["accepted_env_alternatives"], {})
 
     def test_status_config_warning_generic_for_gemini(self):
         _, body = self.get_status()
@@ -1010,7 +1034,7 @@ class HTTPServerStaticTests(unittest.TestCase):
         fn_body = match.group(1)
         self.assertIn("data.llm_configured", fn_body)
         self.assertIn("Model not configured", fn_body)
-        self.assertIn("_providerEnvGuide", fn_body)
+        self.assertIn("_envVarDisplay", fn_body)
 
     def test_provider_env_guide_function_exists(self):
         _, _, body = self._get("/")
@@ -1028,6 +1052,17 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIn("gpt-4.1-mini", fn_body)
         self.assertIn("claude-sonnet-4-5", fn_body)
         self.assertIn("gemini-2.5-pro", fn_body)
+
+    def test_env_var_display_function_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function _envVarDisplay\(requiredEnv, provider\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "_envVarDisplay function not found")
+        fn_body = match.group(1)
+        self.assertIn("requiredEnv", fn_body)
+        self.assertIn("guideMap", fn_body)
+        self.assertIn("_providerEnvGuide", fn_body)
 
     def test_server_panel_shows_config_warnings(self):
         _, _, body = self._get("/")
@@ -1059,7 +1094,7 @@ class HTTPServerStaticTests(unittest.TestCase):
         self.assertIsNotNone(match, "renderMobileStatus function not found")
         fn_body = match.group(1)
         self.assertIn("llm_configured", fn_body)
-        self.assertIn("_providerEnvGuide", fn_body)
+        self.assertIn("_envVarDisplay", fn_body)
         self.assertIn("config_warnings", fn_body)
 
     def test_recover_auth_checks_server_status(self):

@@ -34,6 +34,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     llm_configured: bool = False
     llm_has_api_key: bool = False
     llm_required_env: list = []
+    llm_env_alternatives: dict = {}
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -473,6 +474,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             "workspace": self.workspace,
             "llm_configured": self.llm_configured,
             "required_env": self.llm_required_env,
+            "accepted_env_alternatives": self.llm_env_alternatives,
             "config_warnings": self._build_config_warnings(),
             "features": {
                 "sessions": self.session_store is not None,
@@ -582,6 +584,7 @@ def create_server(
     llm_configured: bool = False,
     llm_has_api_key: bool = False,
     llm_required_env: Optional[list[str]] = None,
+    llm_env_alternatives: Optional[dict[str, str]] = None,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -598,4 +601,5 @@ def create_server(
     NoraHTTPHandler.llm_configured = llm_configured
     NoraHTTPHandler.llm_has_api_key = llm_has_api_key
     NoraHTTPHandler.llm_required_env = llm_required_env or []
+    NoraHTTPHandler.llm_env_alternatives = llm_env_alternatives or {}
     return HTTPServer((host, port), NoraHTTPHandler)
