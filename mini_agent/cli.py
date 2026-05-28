@@ -240,6 +240,37 @@ class MiniAgentCLI:
             if not self.session_store:
                 return "会话存储未配置。"
             return self.session_store.list_sessions()
+        if command == "/traces":
+            count = self._optional_int(args, default=20, name="max_results")
+            if isinstance(count, str):
+                return count
+            trace_store = getattr(self.registry, "trace_store", None)
+            if not trace_store:
+                return "Trace 存储未配置。"
+            traces = trace_store.list_traces(max_results=count)
+            if not traces:
+                return "暂无运行 trace。"
+            lines = [f"最近 {len(traces)} 条运行 trace:"]
+            for t in traces:
+                tools = len(t.get("tool_calls", []))
+                fail = t.get("failure", "")
+                fail_part = f" failure={fail[:40]}" if fail else ""
+                lines.append(
+                    f"  {t['trace_id']}  {t['status']}  {t['input_preview'][:50]}"
+                    f"  tools={tools}{fail_part}"
+                )
+            return "\n".join(lines)
+        if command == "/trace":
+            if not args:
+                return "用法: /trace <trace_id>"
+            trace_store = getattr(self.registry, "trace_store", None)
+            if not trace_store:
+                return "Trace 存储未配置。"
+            t = trace_store.get_trace(args[0])
+            if not t:
+                return f"未找到 trace: {args[0]}"
+            import json
+            return json.dumps(t, ensure_ascii=False, indent=2)
 
         return f"未知命令: {command}\n输入 /help 查看可用命令。"
 
@@ -323,6 +354,8 @@ class MiniAgentCLI:
                 "  /doctor - 检查 workspace、Git、LLM、工具数量和 PATH",
                 "  /logs [n] - 查看工具日志",
                 "  /audit [n] - 生成工具调用安全审计摘要",
+                "  /traces [n] - 查看最近运行 trace",
+                "  /trace <trace_id> - 查看单条 trace 详情",
                 "",
                 "Git:",
                 "  /status - 查看 Git 状态",

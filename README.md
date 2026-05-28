@@ -1,6 +1,6 @@
 # Nora
 
-Nora 是一个本地优先的个人 AI 助手，用来连接大模型、本地文件、项目代码、终端、浏览器、长期记忆和任务管理。
+Nora 的长期目标是成为本地优先的 Agent OS / Durable Runtime：一个可以承载代码、文件、浏览器、终端、记忆和多代理工作流的可审计执行层。当前版本先提供个人 AI 助手和 coding agent 工作台能力，并逐步向持久任务、可恢复执行、事件追踪、权限内核、上下文编译和多 agent 调度演进。
 
 ## 当前能力
 
@@ -584,7 +584,7 @@ python3 -m unittest discover -s tests
 python3 evals/run_evals.py
 ```
 
-eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、上下文窗口压缩、工具日志查看、RAG 排序、长期记忆、任务执行和 provider factory。
+eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、上下文窗口压缩、工具日志查看、RAG 排序、长期记忆、任务执行、provider factory、context compiler（git status、变更文件、Python outline、敏感路径过滤、工具返回 Markdown）和 trace store（运行记录、事件计数、工具调用摘要、敏感输入脱敏、工具结果脱敏）。
 
 真实模型 eval：
 

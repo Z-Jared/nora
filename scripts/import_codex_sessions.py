@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CODEX_HOME = Path.home() / ".codex"
 ARCHIVE_DIR = CODEX_HOME / "archived_sessions"
+SESSIONS_DIR = CODEX_HOME / "sessions"
 OUT_DIR = ROOT / "docs" / "knowledge" / "codex_sessions"
 INDEX_PATH = ROOT / "docs" / "knowledge" / "CHAT_INDEX.md"
 SESSION_INDEX_PATH = CODEX_HOME / "session_index.jsonl"
+SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?i)(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY)\s*=\s*\S+"),
+]
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -96,6 +102,7 @@ def extract_session(path: Path) -> dict[str, Any] | None:
     return {
         "id": session_id,
         "path": path,
+        "source_size": path.stat().st_size,
         "timestamp": meta.get("timestamp", ""),
         "cwd": cwd,
         "title": title,
@@ -149,18 +156,34 @@ def write_session(session: dict[str, Any]) -> Path:
     ]
     for message in session["messages"]:
         speaker = "User" if message["role"] == "user" else "Assistant"
-        lines.extend([f"### {speaker}", "", message["text"].strip(), ""])
+        lines.extend([f"### {speaker}", "", sanitize_text(message["text"]).strip(), ""])
 
-    out_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    out_path.write_text(clean_markdown("\n".join(lines)) + "\n", encoding="utf-8")
     return out_path
 
 
+def sanitize_text(text: str) -> str:
+    sanitized = text
+    for pattern in SECRET_PATTERNS:
+        sanitized = pattern.sub("[redacted-secret]", sanitized)
+    return sanitized
+
+
+def clean_markdown(text: str) -> str:
+    return "\n".join(line.rstrip() for line in text.splitlines()).rstrip()
+
+
 def main() -> int:
-    sessions = []
-    for path in sorted(ARCHIVE_DIR.glob("*.jsonl")):
+    sessions_by_id: dict[str, dict[str, Any]] = {}
+    paths = list(SESSIONS_DIR.glob("**/*.jsonl")) + list(ARCHIVE_DIR.glob("*.jsonl"))
+    for path in sorted(paths):
         session = extract_session(path)
         if session:
-            sessions.append(session)
+            current = sessions_by_id.get(session["id"])
+            if current is None or _is_better_session(session, current):
+                sessions_by_id[session["id"]] = session
+
+    sessions = sorted(sessions_by_id.values(), key=lambda item: str(item.get("timestamp") or ""))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for old in OUT_DIR.glob("*.md"):
@@ -192,6 +215,21 @@ def main() -> int:
     INDEX_PATH.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     print(f"Imported {len(written)} sessions into {OUT_DIR}")
     return 0
+
+
+def _is_better_session(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    """Prefer the most complete copy when the same session exists in active and archive dirs."""
+    candidate_messages = len(candidate.get("messages", []))
+    current_messages = len(current.get("messages", []))
+    if candidate_messages != current_messages:
+        return candidate_messages > current_messages
+
+    candidate_size = int(candidate.get("source_size") or 0)
+    current_size = int(current.get("source_size") or 0)
+    if candidate_size != current_size:
+        return candidate_size > current_size
+
+    return str(candidate.get("timestamp") or "") > str(current.get("timestamp") or "")
 
 
 if __name__ == "__main__":

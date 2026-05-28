@@ -11,7 +11,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
 from mini_agent.config import AgentConfig, load_agent_config
+from mini_agent.context_compiler import ContextCompiler
 from mini_agent.context_summary import ContextSummaryStore
+from mini_agent.database import NoraDB
 from mini_agent.context_system import ContextSystem
 from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
@@ -32,6 +34,7 @@ from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
+from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
 @dataclass
@@ -101,6 +104,14 @@ def main() -> int:
         EvalCase("provider_factory_openai", eval_provider_factory_openai),
         EvalCase("provider_factory_anthropic", eval_provider_factory_anthropic),
         EvalCase("provider_factory_gemini", eval_provider_factory_gemini),
+        EvalCase("context_compiler_includes_git_status_and_outline", eval_context_compiler_includes_git_status_and_outline),
+        EvalCase("context_compiler_skips_sensitive_paths", eval_context_compiler_skips_sensitive_paths),
+        EvalCase("context_compiler_tool_returns_markdown", eval_context_compiler_tool_returns_markdown),
+        EvalCase("trace_store_records_run", eval_trace_store_records_run),
+        EvalCase("trace_redacts_sensitive_input", eval_trace_redacts_sensitive_input),
+        EvalCase("trace_redacts_sensitive_tool_preview", eval_trace_redacts_sensitive_tool_preview),
+        EvalCase("trace_lists_and_gets", eval_trace_lists_and_gets),
+        EvalCase("trace_inspection_tools_via_registry", eval_trace_inspection_tools_via_registry),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -847,6 +858,226 @@ def eval_provider_factory_gemini():
         }
     )
     assert isinstance(build_llm_client(settings), GeminiClient)
+
+
+def eval_context_compiler_includes_git_status_and_outline():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        (root / "main.py").write_text("def hello():\n    return 'hi'\n\ndef world():\n    pass\n", encoding="utf-8")
+        subprocess.run(["git", "add", "main.py"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-m", "add main.py"], cwd=root, capture_output=True, check=True)
+        (root / "new.txt").write_text("new content\n", encoding="utf-8")
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "eval test",
+            include_git_status=True,
+            include_changed_files=True,
+            include_file_outlines=["main.py"],
+        )
+        md = pack.to_markdown()
+
+        assert "eval test" in md, "task description missing"
+        assert "Git Status" in md, "git status section missing"
+        assert "Changed Files" in md, "changed files section missing"
+        assert "Outline: main.py" in md, "outline section missing"
+        assert "hello" in md, "function name missing from outline"
+        assert "new.txt" in md, "changed file missing"
+
+
+def eval_context_compiler_skips_sensitive_paths():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        (root / ".env").write_text("LLM_API_KEY=secret123\n", encoding="utf-8")
+        (root / "data").mkdir()
+        (root / "data" / "secret.json").write_text('{"key": "value"}\n', encoding="utf-8")
+        (root / "logs").mkdir()
+        (root / "logs" / "app.log").write_text("log entry\n", encoding="utf-8")
+        (root / "public.md").write_text("public content\n", encoding="utf-8")
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "eval sensitive",
+            include_knowledge_excerpts=[".env", "data/secret.json", "logs/app.log", "public.md"],
+        )
+        md = pack.to_markdown()
+
+        assert "secret123" not in md, ".env content leaked"
+        assert "public.md" in md, "public file should be included"
+        assert ".env" not in md or "Knowledge: .env" not in md, ".env should be skipped"
+
+
+def eval_context_compiler_tool_returns_markdown():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "README.md").write_text("# Eval Project\nTest project.\n", encoding="utf-8")
+        registry = build_default_registry(workspace_root=root)
+        result = registry.call(
+            "compile_context_pack",
+            task_description="eval tool test",
+            include_git_status=False,
+            include_changed_files=False,
+            include_knowledge_excerpts=["README.md"],
+        )
+        assert isinstance(result, str), f"expected string, got {type(result)}"
+        assert "# Context Pack: eval tool test" in result, "markdown header missing"
+        assert "README.md" in result, "knowledge excerpt missing"
+
+
+def eval_trace_store_records_run():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = TraceStore(Path(tmpdir))
+        trace = RunTrace(
+            trace_id="trace_1",
+            created_at="2026-05-28T12:00:00Z",
+            status="done",
+            input_preview="calculate 2+3",
+            event_counts={"delta": 3, "done": 1},
+            tool_calls=[
+                ToolCallTrace(name="calculate", status="ok", result_preview="5"),
+            ],
+            failure="",
+        )
+        store.record(trace)
+
+        traces = store.list_traces()
+        assert len(traces) == 1, f"expected 1 trace, got {len(traces)}"
+        t = traces[0]
+        assert t["trace_id"] == "trace_1"
+        assert t["status"] == "done"
+        assert t["event_counts"]["delta"] == 3
+        assert t["tool_calls"][0]["name"] == "calculate"
+        assert t["tool_calls"][0]["result_preview"] == "5"
+        assert t["failure"] == ""
+
+
+def eval_trace_redacts_sensitive_input():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = TraceStore(Path(tmpdir))
+        trace = build_trace(
+            trace_id="trace_1",
+            user_input="OPENAI_API_KEY=sk-secret1234567890abcdef please help",
+            status="done",
+            events=[{"type": "delta"}],
+            tool_records=[],
+        )
+        store.record(trace)
+
+        traces = store.list_traces()
+        assert "sk-secret" not in traces[0]["input_preview"], "API key leaked in trace"
+        assert "[redacted]" in traces[0]["input_preview"], "should be redacted"
+
+
+def eval_trace_redacts_sensitive_tool_preview():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = TraceStore(Path(tmpdir))
+
+        class FakeRecord:
+            name = "read_file"
+            status = "ok"
+            result_preview = "ANTHROPIC_API_KEY=sk-ant-secret1234567890abcdef"
+
+        trace = build_trace(
+            trace_id="trace_1",
+            user_input="read config",
+            status="done",
+            events=[{"type": "tool_result"}],
+            tool_records=[FakeRecord()],
+        )
+        store.record(trace)
+
+        traces = store.list_traces()
+        preview = traces[0]["tool_calls"][0]["result_preview"]
+        assert "sk-ant-secret" not in preview, "API key leaked in tool preview"
+        assert "[redacted]" in preview, "should be redacted"
+
+
+def eval_trace_lists_and_gets():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = TraceStore(Path(tmpdir))
+        for i in range(3):
+            trace = RunTrace(
+                trace_id=f"trace_{i+1}",
+                created_at=f"2026-05-28T12:0{i}:00Z",
+                status="done" if i < 2 else "error",
+                input_preview=f"input {i+1}",
+                event_counts={"delta": i},
+                tool_calls=[],
+                failure="" if i < 2 else "timeout",
+            )
+            store.record(trace)
+
+        traces = store.list_traces(max_results=10)
+        assert len(traces) == 3, f"expected 3, got {len(traces)}"
+        assert traces[0]["trace_id"] == "trace_3", "should be most recent first"
+
+        single = store.get_trace("trace_2")
+        assert single is not None
+        assert single["status"] == "done"
+        assert single["input_preview"] == "input 2"
+
+        missing = store.get_trace("trace_999")
+        assert missing is None
+
+
+def eval_trace_inspection_tools_via_registry():
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+
+            # Empty state: list_run_traces returns "[]"
+            result = registry.call("list_run_traces")
+            assert isinstance(result, str), f"expected str, got {type(result)}"
+            parsed = _json.loads(result)
+            assert parsed == [], f"expected empty list, got {parsed}"
+
+            # Record a trace via registry.trace_store
+            trace = RunTrace(
+                trace_id="trace_1",
+                created_at="2026-05-29T10:00:00Z",
+                status="done",
+                input_preview="calculate 2+3",
+                event_counts={"delta": 2, "done": 1},
+                tool_calls=[
+                    ToolCallTrace(name="calculate", status="ok", result_preview="5"),
+                ],
+                failure="",
+            )
+            registry.trace_store.record(trace)
+
+            # list_run_traces returns JSON array with trace data
+            result = registry.call("list_run_traces")
+            assert isinstance(result, str), f"expected str, got {type(result)}"
+            parsed = _json.loads(result)
+            assert len(parsed) == 1, f"expected 1 trace, got {len(parsed)}"
+            assert parsed[0]["trace_id"] == "trace_1"
+            assert parsed[0]["status"] == "done"
+            assert "input_preview" in parsed[0]
+
+            # get_run_trace returns full trace object
+            result = registry.call("get_run_trace", trace_id="trace_1")
+            assert isinstance(result, str), f"expected str, got {type(result)}"
+            parsed = _json.loads(result)
+            assert parsed["trace_id"] == "trace_1"
+            assert parsed["status"] == "done"
+            assert parsed["event_counts"]["delta"] == 2
+            assert len(parsed["tool_calls"]) == 1
+            assert parsed["tool_calls"][0]["name"] == "calculate"
+            assert parsed["failure"] == ""
+
+            # get_run_trace for non-existent trace returns error object
+            result = registry.call("get_run_trace", trace_id="trace_999")
+            assert isinstance(result, str), f"expected str, got {type(result)}"
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error key, got {parsed}"
+        finally:
+            db.close()
 
 
 def _init_git_repo(root: Path) -> None:

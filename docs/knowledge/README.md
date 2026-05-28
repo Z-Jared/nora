@@ -6,12 +6,14 @@ New Codex or Claude Code windows should read these files before starting work:
 
 1. `PROJECT_WAKEUP.md`
 2. `DECISIONS.md`
-3. `CHAT_INDEX.md`
-4. The current task file under `agent_tasks/`
+3. `AGENT_OS_DURABLE_RUNTIME.md`
+4. `CHAT_INDEX.md`
+5. The current task file under `agent_tasks/`
 
 ## What Belongs Here
 
 - Project direction and strategy.
+- Agent OS / Durable Runtime architecture decisions.
 - Stable decisions from chats.
 - Daily AI agent radar summaries.
 - Imported Codex conversation transcripts for this repository.
@@ -31,7 +33,7 @@ Run:
 python3 scripts/import_codex_sessions.py
 ```
 
-The importer reads local Codex session archives and imports only sessions whose recorded `cwd` exactly matches this repository root.
+The importer reads local Codex active sessions and archived sessions, then imports only sessions whose recorded `cwd` exactly matches this repository root.
 
 For this project, the scope is:
 

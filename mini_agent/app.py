@@ -82,6 +82,7 @@ def build_agent(root: Path = None):
         context_system=context_system,
         max_tool_calls_per_turn=config.budgets.max_tool_calls_per_turn,
         system_prompt=config.system_prompt,
+        trace_store=getattr(registry, "trace_store", None),
     )
     session_store = SessionStore(db=db)
     return agent, registry, settings, session_store, root

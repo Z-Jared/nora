@@ -1,3 +1,4 @@
+import json as _json
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -25,6 +26,7 @@ from mini_agent.toolkits.register_git import register_git_tools
 from mini_agent.toolkits.register_state import register_state_tools
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
+from mini_agent.traces import TraceStore
 from mini_agent.web_tools import WebTools
 
 
@@ -83,6 +85,7 @@ def build_default_registry(
     )
     context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
     tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)
+    trace_store = TraceStore(db=db)
     logger = JsonlToolLogger(path=log_path or Path("logs/tool_calls.jsonl"), db=db)
     registry = ToolRegistry(
         logger=logger,
@@ -115,6 +118,49 @@ def build_default_registry(
     )
     registry.task_manager = task_manager
     registry.long_term_memory = long_term_memory
+    registry.trace_store = trace_store
+
+    def _list_traces_json(max_results: int = 20) -> str:
+        traces = trace_store.list_traces(max_results=max_results)
+        return _json.dumps(traces, ensure_ascii=False)
+
+    def _get_trace_json(trace_id: str) -> str:
+        trace = trace_store.get_trace(trace_id)
+        if trace is None:
+            return _json.dumps({"error": f"未找到 trace: {trace_id}"}, ensure_ascii=False)
+        return _json.dumps(trace, ensure_ascii=False)
+
+    registry.register(
+        "list_run_traces",
+        "列出最近的运行 trace，包括 trace_id、状态、输入预览和工具调用数。",
+        _list_traces_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少条 trace，默认 20，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "get_run_trace",
+        "按 trace_id 获取一条运行 trace 的完整信息，包括事件计数、工具调用详情和失败原因。",
+        _get_trace_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "trace_id": {
+                    "type": "string",
+                    "description": "trace id，例如 trace_1",
+                }
+            },
+            "required": ["trace_id"],
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

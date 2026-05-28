@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mini_agent.cli import MiniAgentCLI
 from mini_agent.controller import MiniAgent
+from mini_agent.database import NoraDB
 from mini_agent.tools import build_default_registry
 from mini_agent.traces import (
     RunTrace,
@@ -394,6 +396,247 @@ class ControllerTraceIntegrationTests(unittest.TestCase):
         traces = self.trace_store.list_traces()
         self.assertLess(len(traces[0]["input_preview"]), len(long_input))
         self.assertLessEqual(len(traces[0]["input_preview"]), 201)
+
+
+class DefaultBuildWiringTests(unittest.TestCase):
+    def test_build_default_registry_has_trace_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_default_registry(
+                workspace_root=Path(tmpdir),
+                notes_path=Path(tmpdir) / "notes.txt",
+            )
+            self.assertIsInstance(registry.trace_store, TraceStore)
+
+    def test_build_default_registry_has_trace_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = build_default_registry(
+                workspace_root=Path(tmpdir),
+                notes_path=Path(tmpdir) / "notes.txt",
+            )
+            self.assertIn("list_run_traces", registry._tools)
+            self.assertIn("get_run_trace", registry._tools)
+
+
+class TraceToolsViaRegistryTests(unittest.TestCase):
+    """Test that trace tools are correctly wired into the registry and work via TraceStore."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.registry = build_default_registry(
+            workspace_root=Path(self.tmpdir),
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=self.db,
+        )
+        self.trace_store = self.registry.trace_store
+
+    def tearDown(self):
+        self.db.conn.close()
+
+    def test_list_run_traces_returns_empty_initially(self):
+        result = self.trace_store.list_traces()
+        self.assertEqual(result, [])
+
+    def test_list_run_traces_returns_recorded_traces(self):
+        trace = build_trace("trace_1", "test input", "done", [{"type": "delta"}], [])
+        self.trace_store.record(trace)
+
+        result = self.trace_store.list_traces()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["trace_id"], "trace_1")
+
+    def test_get_run_trace_returns_none_for_missing(self):
+        result = self.trace_store.get_trace("trace_999")
+        self.assertIsNone(result)
+
+    def test_get_run_trace_returns_trace(self):
+        trace = build_trace("trace_1", "test input", "done", [{"type": "delta"}], [])
+        self.trace_store.record(trace)
+
+        result = self.trace_store.get_trace("trace_1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["trace_id"], "trace_1")
+        self.assertEqual(result["status"], "done")
+
+    def test_list_run_traces_respects_max_results(self):
+        for i in range(5):
+            trace = build_trace(f"trace_{i+1}", f"input {i}", "done", [], [])
+            self.trace_store.record(trace)
+
+        result = self.trace_store.list_traces(max_results=3)
+        self.assertEqual(len(result), 3)
+
+    def test_trace_tools_registered_in_registry(self):
+        self.assertIn("list_run_traces", self.registry._tools)
+        self.assertIn("get_run_trace", self.registry._tools)
+
+    def test_trace_tool_descriptions_present(self):
+        list_desc = self.registry._tools["list_run_traces"].description
+        get_desc = self.registry._tools["get_run_trace"].description
+        self.assertIn("trace", list_desc)
+        self.assertIn("trace_id", get_desc)
+
+
+class TraceToolsRegistryCallTests(unittest.TestCase):
+    """Regression: registry.call() must work with trace tools (returns JSON string, not list/dict)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.registry = build_default_registry(
+            workspace_root=Path(self.tmpdir),
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=self.db,
+        )
+
+    def tearDown(self):
+        self.db.conn.close()
+
+    def test_call_list_run_traces_empty(self):
+        result = self.registry.call("list_run_traces")
+        self.assertIsInstance(result, str)
+        self.assertEqual(result, "[]")
+
+    def test_call_list_run_traces_with_records(self):
+        self.registry.trace_store.record(
+            build_trace("trace_1", "hello", "done", [{"type": "done"}], [])
+        )
+        result = self.registry.call("list_run_traces")
+        self.assertIsInstance(result, str)
+        import json
+        traces = json.loads(result)
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0]["trace_id"], "trace_1")
+
+    def test_call_get_run_trace_found(self):
+        self.registry.trace_store.record(
+            build_trace("trace_1", "hello", "done", [{"type": "done"}], [])
+        )
+        result = self.registry.call("get_run_trace", trace_id="trace_1")
+        self.assertIsInstance(result, str)
+        import json
+        trace = json.loads(result)
+        self.assertEqual(trace["trace_id"], "trace_1")
+        self.assertEqual(trace["status"], "done")
+
+    def test_call_get_run_trace_not_found(self):
+        result = self.registry.call("get_run_trace", trace_id="trace_999")
+        self.assertIsInstance(result, str)
+        import json
+        data = json.loads(result)
+        self.assertIn("error", data)
+        self.assertIn("trace_999", data["error"])
+
+
+class CLITraceCommandTests(unittest.TestCase):
+    def test_traces_command_with_no_store(self):
+        registry = FakeRegistryNoTraceStore()
+        cli = MiniAgentCLI(FakeAgent(), registry)
+
+        result = cli.handle_slash_command("/traces")
+        self.assertIn("未配置", result)
+
+    def test_traces_command_with_empty_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            trace_store = TraceStore(db=db)
+            registry = FakeRegistryWithTrace(trace_store)
+            cli = MiniAgentCLI(FakeAgent(), registry)
+
+            result = cli.handle_slash_command("/traces")
+            self.assertIn("暂无运行 trace", result)
+            db.conn.close()
+
+    def test_traces_command_shows_traces(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            trace_store = TraceStore(db=db)
+            trace = build_trace("trace_1", "hello world", "done", [{"type": "delta"}], [])
+            trace_store.record(trace)
+            registry = FakeRegistryWithTrace(trace_store)
+            cli = MiniAgentCLI(FakeAgent(), registry)
+
+            result = cli.handle_slash_command("/traces")
+            self.assertIn("trace_1", result)
+            self.assertIn("done", result)
+            self.assertIn("hello world", result)
+            db.conn.close()
+
+    def test_traces_command_with_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            trace_store = TraceStore(db=db)
+            for i in range(5):
+                trace_store.record(build_trace(f"trace_{i+1}", f"input {i}", "done", [], []))
+            registry = FakeRegistryWithTrace(trace_store)
+            cli = MiniAgentCLI(FakeAgent(), registry)
+
+            result = cli.handle_slash_command("/traces 2")
+            self.assertIn("最近 2 条", result)
+            db.conn.close()
+
+    def test_trace_command_requires_id(self):
+        cli = MiniAgentCLI(FakeAgent(), FakeRegistryWithTrace(TraceStore()))
+        result = cli.handle_slash_command("/trace")
+        self.assertIn("用法", result)
+
+    def test_trace_command_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            trace_store = TraceStore(db=db)
+            registry = FakeRegistryWithTrace(trace_store)
+            cli = MiniAgentCLI(FakeAgent(), registry)
+
+            result = cli.handle_slash_command("/trace trace_999")
+            self.assertIn("未找到", result)
+            db.conn.close()
+
+    def test_trace_command_shows_detail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            trace_store = TraceStore(db=db)
+            trace_store.record(build_trace("trace_1", "test input", "done", [], []))
+            registry = FakeRegistryWithTrace(trace_store)
+            cli = MiniAgentCLI(FakeAgent(), registry)
+
+            result = cli.handle_slash_command("/trace trace_1")
+            self.assertIn("trace_1", result)
+            self.assertIn("test input", result)
+            db.conn.close()
+
+    def test_help_includes_trace_commands(self):
+        cli = MiniAgentCLI(FakeAgent(), FakeRegistryNoTraceStore())
+        result = cli._help()
+        self.assertIn("/traces", result)
+        self.assertIn("/trace", result)
+
+
+class FakeRegistryNoTraceStore:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, tool_name, **kwargs):
+        return f"called {tool_name}"
+
+    def to_openai_tools(self):
+        return [{"function": {"name": "fake"}}]
+
+
+class FakeRegistryWithTrace:
+    def __init__(self, trace_store):
+        self.trace_store = trace_store
+        self.calls = []
+
+    def call(self, tool_name, **kwargs):
+        return f"called {tool_name}"
+
+    def to_openai_tools(self):
+        return [{"function": {"name": "fake"}}]
+
+
+class FakeAgent:
+    def __init__(self):
+        self.last_run_report = None
 
 
 if __name__ == "__main__":
