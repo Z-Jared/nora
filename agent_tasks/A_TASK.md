@@ -5,45 +5,40 @@ Status: assigned
 
 ## Goal
 
-Implement the first vertical slice of Nora run tracing.
+Integrate Nora run tracing into the default runtime and expose read-only trace inspection.
 
 ## Instructions
 
-Implement only the trace foundation. Do not refactor unrelated controller, logging, or HTTP code.
+Implement only trace integration and read-only inspection. Do not change trace schema unless required for the inspection path.
 
-Required behavior:
+Context:
 
-- Add a lightweight run trace data model and store.
-- Record one trace per `MiniAgent.run_events()` turn.
-- Trace must include:
-  - `trace_id`
-  - created timestamp
-  - final status
-  - user input preview, redacted/truncated
-  - event counts by type
-  - tool calls with name/status/result preview only
-  - failure text when blocked/error
-- Support both SQLite-backed storage and JSONL fallback, matching existing store patterns.
-- Add a read-only method/tool/API only if it is small and follows existing patterns; otherwise keep this as an internal store plus tests.
-- Do not store raw API keys, tokens, full prompts, full model outputs, or full tool results.
+- The first trace slice is merged in `mini_agent/traces.py`, `mini_agent/controller.py`, and `mini_agent/database.py`.
+- Current gap: `build_agent()` does not pass a `TraceStore`, so normal CLI/HTTP runs do not persist traces.
+- Current gap: there is no user-facing way to list or inspect traces.
 
-Suggested files:
+Required:
 
-- `mini_agent/database.py`
-- `mini_agent/controller.py`
-- new `mini_agent/traces.py`
-- `tests/test_mini_agent.py`
-- new focused `tests/test_traces.py` if cleaner
+- Wire `TraceStore(db=db)` into `MiniAgent` in `mini_agent/app.py`.
+- Add read-only registry tools:
+  - `list_run_traces(max_results=20)`
+  - `get_run_trace(trace_id)`
+- Add CLI commands:
+  - `/traces [n]`
+  - `/trace <trace_id>`
+- Keep output concise and redacted. Do not expose full prompts, full model outputs, or full tool results.
+- Update README command/tool docs if user-visible commands are added.
+- Add focused tests for default build wiring if practical, trace tools, and CLI commands.
 
 ## Current PM Note
 
-Frontier direction from Codex/Claude Code/Agents SDK: traceability is now core runtime infrastructure, not a debugging extra. This task should build the smallest reliable trace spine before we add hooks, worker isolation, or evals.
+Trace spine exists but is not yet part of the normal product path. This task turns it from an internal library into operational runtime infrastructure.
 
 ## Completion Report
 
 Update `agent_tasks/A_DONE.md` with:
 
-- Summary of trace behavior and schema.
+- Summary of trace integration and inspection commands/tools.
 - Diff stat.
 - Exact tests run and results.
 - Any known limitations.
