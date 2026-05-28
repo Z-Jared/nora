@@ -112,6 +112,7 @@ def main() -> int:
         EvalCase("trace_redacts_sensitive_tool_preview", eval_trace_redacts_sensitive_tool_preview),
         EvalCase("trace_lists_and_gets", eval_trace_lists_and_gets),
         EvalCase("trace_inspection_tools_via_registry", eval_trace_inspection_tools_via_registry),
+        EvalCase("durable_task_schema_spec", eval_durable_task_schema_spec),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -203,7 +204,7 @@ def eval_cli_doctor_reports_runtime_status():
     assert "tools: 1" in result
     assert "nora command:" in result
     assert "suggestions:" in result
-    assert "LLM_PROVIDER" in result
+    assert "LLM_API_KEY" in result
 
 
 def eval_cli_multiline_input():
@@ -1078,6 +1079,43 @@ def eval_trace_inspection_tools_via_registry():
             assert "error" in parsed, f"expected error key, got {parsed}"
         finally:
             db.close()
+
+
+def eval_durable_task_schema_spec():
+    """Check that the durable task schema spec exists and contains required fields, status enum, and lifecycle keywords."""
+    schema_path = PROJECT_ROOT / "docs" / "knowledge" / "DURABLE_TASK_SCHEMA.md"
+    assert schema_path.exists(), f"spec not found: {schema_path}"
+    text = schema_path.read_text(encoding="utf-8")
+
+    # Required fields
+    required_fields = [
+        "task_id",
+        "run_id",
+        "parent_task_id",
+        "status",
+        "current_step",
+        "checkpoints",
+        "input_summary",
+        "context_pack_ref",
+        "trace_refs",
+        "worker_id",
+        "created_at",
+        "updated_at",
+        "failure_reason",
+        "resume_policy",
+    ]
+    for field in required_fields:
+        assert field in text, f"required field '{field}' not found in spec"
+
+    # Status enum values
+    status_values = ["pending", "running", "paused", "blocked", "completed", "failed", "cancelled"]
+    for status in status_values:
+        assert status in text, f"status value '{status}' not found in spec"
+
+    # Lifecycle keywords
+    lifecycle_keywords = ["intake", "plan", "execute", "checkpoint", "pause", "resume", "review", "complete", "fail", "cancel"]
+    for keyword in lifecycle_keywords:
+        assert keyword in text.lower(), f"lifecycle keyword '{keyword}' not found in spec"
 
 
 def _init_git_repo(root: Path) -> None:
