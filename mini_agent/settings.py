@@ -4,6 +4,17 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 
+REQUIRED_ENV_VARS: dict[str, list[str]] = {
+    "openai-compatible": ["LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL"],
+    "anthropic": ["LLM_PROVIDER", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"],
+    "gemini": ["LLM_PROVIDER", "GEMINI_API_KEY", "GEMINI_MODEL"],
+}
+
+
+def required_env_vars(provider: str) -> list[str]:
+    return REQUIRED_ENV_VARS.get(provider, ["LLM_API_KEY"])
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     provider: str

@@ -13,7 +13,7 @@ from mini_agent.providers.factory import build_llm_client
 from mini_agent.rag import ProjectRAG
 from mini_agent.plugins import load_plugins
 from mini_agent.session import SessionStore
-from mini_agent.settings import load_settings
+from mini_agent.settings import load_settings, required_env_vars
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import build_default_registry
 
@@ -104,7 +104,7 @@ def serve(host: str = "", port: int = 0, api_token: str = "") -> None:
     static_dir = Path(__file__).resolve().parent / "static"
     task_manager = getattr(_registry, "task_manager", None)
     long_term_memory = getattr(_registry, "long_term_memory", None)
-    server = create_server(agent, host=host, port=port, session_store=session_store, task_manager=task_manager, long_term_memory=long_term_memory, api_token=api_token, static_dir=static_dir, llm_provider=_settings.provider, llm_model=_settings.model, workspace=str(root), llm_configured=_settings.is_llm_enabled, llm_has_api_key=bool(_settings.api_key))
+    server = create_server(agent, host=host, port=port, session_store=session_store, task_manager=task_manager, long_term_memory=long_term_memory, api_token=api_token, static_dir=static_dir, llm_provider=_settings.provider, llm_model=_settings.model, workspace=str(root), llm_configured=_settings.is_llm_enabled, llm_has_api_key=bool(_settings.api_key), llm_required_env=required_env_vars(_settings.provider))
     print(f"Nora HTTP server started on http://{host}:{port}")
     print(f"Workspace: {root}")
     if api_token:

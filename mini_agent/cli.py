@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 from mini_agent.git_tools import GitTools
 from mini_agent.session import SessionStore
+from mini_agent.settings import required_env_vars
 
 
 class MiniAgentCLI:
@@ -258,7 +259,9 @@ class MiniAgentCLI:
             lines.append(f"llm: enabled ({self.settings.provider} / {self.settings.model})")
         else:
             lines.append("llm: disabled")
-            suggestions.append("如需模型能力，请检查 .env 中的 LLM_PROVIDER、LLM_API_KEY 和 LLM_MODEL。")
+            provider = getattr(self.settings, "provider", "") if self.settings else ""
+            env_vars = required_env_vars(provider)
+            suggestions.append(f"如需模型能力，请检查 .env 中的 {', '.join(env_vars)}。")
         try:
             lines.append(f"tools: {len(self.registry.to_openai_tools())}")
         except AttributeError:

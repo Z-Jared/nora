@@ -333,6 +333,12 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn("missing model", body["config_warnings"])
         self.assertIn("missing api key", body["config_warnings"])
 
+    def test_status_required_env_field(self):
+        _, body = self._request("GET", "/status")
+
+        self.assertIn("required_env", body)
+        self.assertIsInstance(body["required_env"], list)
+
 
 class _StatusServerMixin:
     server_kwargs: dict = {}
@@ -341,11 +347,15 @@ class _StatusServerMixin:
         self.port = _find_free_port()
         self.tmpdir = tempfile.mkdtemp()
         self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        kwargs = dict(self.server_kwargs)
+        if "llm_required_env" not in kwargs:
+            from mini_agent.settings import required_env_vars
+            kwargs["llm_required_env"] = required_env_vars(kwargs.get("llm_provider", ""))
         self.server = create_server(
             self.agent,
             host="127.0.0.1",
             port=self.port,
-            **self.server_kwargs,
+            **kwargs,
         )
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.daemon = True
@@ -439,9 +449,9 @@ class HTTPServerStatusAuthTests(_StatusServerMixin, unittest.TestCase):
         _, body = self.get_status()
         raw = json.dumps(body).lower()
 
-        self.assertNotIn("api_key", raw)
         self.assertNotIn("sk-", raw)
         self.assertNotIn("bearer", raw)
+        self.assertNotIn("secret", raw)
 
     def test_status_config_warnings_missing_api_key(self):
         _, body = self.get_status()
@@ -450,6 +460,11 @@ class HTTPServerStatusAuthTests(_StatusServerMixin, unittest.TestCase):
         self.assertIn("missing api key", body["config_warnings"])
         self.assertNotIn("missing provider", body["config_warnings"])
         self.assertNotIn("missing model", body["config_warnings"])
+
+    def test_status_required_env_openai(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["required_env"], ["LLM_PROVIDER", "LLM_API_KEY", "LLM_MODEL"])
 
 
 class HTTPServerStatusConfiguredTests(_StatusServerMixin, unittest.TestCase):
@@ -470,14 +485,48 @@ class HTTPServerStatusConfiguredTests(_StatusServerMixin, unittest.TestCase):
         _, body = self.get_status()
         raw = json.dumps(body).lower()
 
-        self.assertNotIn("api_key", raw)
         self.assertNotIn("sk-", raw)
-        self.assertNotIn("key", raw)
+        self.assertNotIn("bearer", raw)
+        self.assertNotIn("secret", raw)
 
     def test_status_config_warnings_empty_when_configured(self):
         _, body = self.get_status()
 
         self.assertEqual(body["config_warnings"], [])
+
+
+class HTTPServerStatusAnthropicTests(_StatusServerMixin, unittest.TestCase):
+    server_kwargs = {
+        "llm_provider": "anthropic",
+        "llm_model": "claude-sonnet-4-5",
+    }
+
+    def test_status_required_env_anthropic(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["required_env"], ["LLM_PROVIDER", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"])
+
+    def test_status_config_warning_generic_for_anthropic(self):
+        _, body = self.get_status()
+
+        self.assertIn("missing api key", body["config_warnings"])
+
+
+class HTTPServerStatusGeminiTests(_StatusServerMixin, unittest.TestCase):
+    server_kwargs = {
+        "llm_provider": "gemini",
+        "llm_model": "gemini-2.5-pro",
+    }
+
+    def test_status_required_env_gemini(self):
+        _, body = self.get_status()
+
+        self.assertEqual(body["required_env"], ["LLM_PROVIDER", "GEMINI_API_KEY", "GEMINI_MODEL"])
+
+    def test_status_config_warning_generic_for_gemini(self):
+        _, body = self.get_status()
+
+        self.assertIn("missing api key", body["config_warnings"])
 
 
 class HTTPServerStatusFeaturesTests(_StatusServerMixin, unittest.TestCase):
@@ -961,7 +1010,57 @@ class HTTPServerStaticTests(unittest.TestCase):
         fn_body = match.group(1)
         self.assertIn("data.llm_configured", fn_body)
         self.assertIn("Model not configured", fn_body)
+        self.assertIn("_providerEnvGuide", fn_body)
+
+    def test_provider_env_guide_function_exists(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function _providerEnvGuide\(provider\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "_providerEnvGuide function not found")
+        fn_body = match.group(1)
+        self.assertIn("openai-compatible", fn_body)
+        self.assertIn("anthropic", fn_body)
+        self.assertIn("gemini", fn_body)
         self.assertIn("LLM_API_KEY", fn_body)
+        self.assertIn("ANTHROPIC_API_KEY", fn_body)
+        self.assertIn("GEMINI_API_KEY", fn_body)
+        self.assertIn("gpt-4.1-mini", fn_body)
+        self.assertIn("claude-sonnet-4-5", fn_body)
+        self.assertIn("gemini-2.5-pro", fn_body)
+
+    def test_server_panel_shows_config_warnings(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderServerPanel\(data\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderServerPanel function not found")
+        fn_body = match.group(1)
+        self.assertIn("config_warnings", fn_body)
+        self.assertIn("warn-list", fn_body)
+
+    def test_server_panel_no_secret_form(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderServerPanel\(data\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderServerPanel function not found")
+        fn_body = match.group(1)
+        self.assertNotIn("POST", fn_body)
+        self.assertNotIn("<form", fn_body)
+        self.assertNotIn("type=\"password\"", fn_body)
+        self.assertNotIn("type='password'", fn_body)
+
+    def test_mobile_shows_setup_guidance(self):
+        _, _, body = self._get("/")
+        html = body.decode("utf-8")
+        import re
+        match = re.search(r"function renderMobileStatus\(\)\{([\s\S]*?)\n  \}", html)
+        self.assertIsNotNone(match, "renderMobileStatus function not found")
+        fn_body = match.group(1)
+        self.assertIn("llm_configured", fn_body)
+        self.assertIn("_providerEnvGuide", fn_body)
+        self.assertIn("config_warnings", fn_body)
 
     def test_recover_auth_checks_server_status(self):
         _, _, body = self._get("/")

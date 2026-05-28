@@ -440,6 +440,108 @@ result = {
         self.assertIn("panel-card error", result["statePanelHtml"], "state-panel should have error styling")
         self.assertEqual(result["composerText"], "Token required")
 
+    def test_setup_guidance_shows_openai_env_vars(self):
+        """When provider=openai-compatible and llm_configured=false,
+        server panel should show openai-compatible env vars."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'openai-compatible', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing provider', 'missing model', 'missing api key'], "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertIn("Model not configured", result["serverHtml"])
+        self.assertIn("missing provider", result["serverHtml"])
+        self.assertIn("missing model", result["serverHtml"])
+        self.assertIn("missing api key", result["serverHtml"])
+        self.assertIn("LLM_PROVIDER", result["serverHtml"])
+        self.assertIn("LLM_BASE_URL", result["serverHtml"])
+        self.assertIn("LLM_API_KEY", result["serverHtml"])
+        self.assertIn("LLM_MODEL", result["serverHtml"])
+        self.assertIn("gpt-4.1-mini", result["serverHtml"])
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_setup_guidance_shows_anthropic_env_vars(self):
+        """When provider=anthropic and llm_configured=false,
+        server panel should show anthropic env vars."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'anthropic', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertIn("ANTHROPIC_API_KEY", result["serverHtml"])
+        self.assertIn("ANTHROPIC_MODEL", result["serverHtml"])
+        self.assertIn("claude-sonnet-4-5", result["serverHtml"])
+        self.assertNotIn("LLM_BASE_URL", result["serverHtml"])
+
+    def test_setup_guidance_shows_gemini_env_vars(self):
+        """When provider=gemini and llm_configured=false,
+        server panel should show gemini env vars."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'gemini', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertIn("GEMINI_API_KEY", result["serverHtml"])
+        self.assertIn("GEMINI_MODEL", result["serverHtml"])
+        self.assertIn("gemini-2.5-pro", result["serverHtml"])
+        self.assertNotIn("LLM_BASE_URL", result["serverHtml"])
+
+    def test_setup_guidance_not_shown_when_configured(self):
+        """When llm_configured=true, server panel should NOT show setup guidance."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: true, "
+            "provider: 'openai-compatible', model: 'gpt-4', workspace: '/tmp', "
+            "features: { sessions: true, tasks: true, memory: true, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+result = {
+  serverHtml: _elements['server-panel'].innerHTML,
+};
+""")
+        self.assertNotIn("Model not configured", result["serverHtml"])
+        self.assertNotIn("env-vars", result["serverHtml"])
+        self.assertNotIn("LLM_API_KEY", result["serverHtml"])
+
+    def test_mobile_setup_guidance_shows_env_vars(self):
+        """Mobile layout should show setup guidance when llm_configured=false."""
+        handler = _AUTH_NO_TOKEN_HANDLER.replace('STATUS_DATA',
+            "status: 'ok', auth_required: false, llm_configured: false, "
+            "provider: 'anthropic', model: '', workspace: '/tmp', "
+            "config_warnings: ['missing api key'], "
+            "features: { sessions: false, tasks: false, memory: false, websocket: true }")
+        result = _run_node(
+            setup_js=handler + "\n_fetchHandler = _authFetchHandler;\n",
+            test_body=r"""
+await new Promise(r => setTimeout(r, 100));
+var mobileContainer = _elements['mobile-runtime-container'];
+result = {
+  mobileHtml: mobileContainer ? mobileContainer.innerHTML : '',
+};
+""")
+        self.assertIn("Model not configured", result["mobileHtml"])
+        self.assertIn("ANTHROPIC_API_KEY", result["mobileHtml"])
+        self.assertIn("missing api key", result["mobileHtml"])

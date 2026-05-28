@@ -93,7 +93,7 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("nora command:", result)
         self.assertIn("suggestions:", result)
         self.assertIn("进入 Git 项目目录", result)
-        self.assertIn("LLM_PROVIDER", result)
+        self.assertIn("LLM_API_KEY", result)
         self.assertIn("data/ 缺失通常没关系", result)
 
     def test_symbol_commands_call_registry(self):
@@ -241,6 +241,86 @@ class FakeCLIRegistry:
 
     def to_openai_tools(self):
         return [{"function": {"name": "fake"}}]
+
+
+class FakeSettings:
+    def __init__(self, provider="", model="", api_key=""):
+        self.provider = provider
+        self.model = model
+        self.api_key = api_key
+
+    @property
+    def is_llm_enabled(self):
+        return bool(self.api_key and self.model)
+
+
+class CLIDoctorProviderTests(unittest.TestCase):
+    def test_doctor_openai_compatible_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertIn("llm: disabled", result)
+        self.assertIn("LLM_PROVIDER", result)
+        self.assertIn("LLM_API_KEY", result)
+        self.assertIn("LLM_MODEL", result)
+        self.assertNotIn("ANTHROPIC_API_KEY", result)
+        self.assertNotIn("GEMINI_API_KEY", result)
+
+    def test_doctor_anthropic_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertIn("llm: disabled", result)
+        self.assertIn("LLM_PROVIDER", result)
+        self.assertIn("ANTHROPIC_API_KEY", result)
+        self.assertIn("ANTHROPIC_MODEL", result)
+        self.assertNotIn("LLM_API_KEY", result)
+        self.assertNotIn("LLM_MODEL", result)
+        self.assertNotIn("GEMINI_API_KEY", result)
+
+    def test_doctor_gemini_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            settings = FakeSettings(provider="gemini", model="gemini-2.5-pro")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertIn("llm: disabled", result)
+        self.assertIn("LLM_PROVIDER", result)
+        self.assertIn("GEMINI_API_KEY", result)
+        self.assertIn("GEMINI_MODEL", result)
+        self.assertNotIn("LLM_API_KEY", result)
+        self.assertNotIn("LLM_MODEL", result)
+        self.assertNotIn("ANTHROPIC_API_KEY", result)
+
+    def test_doctor_no_settings_uses_generic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertIn("llm: disabled", result)
+        self.assertIn("LLM_API_KEY", result)
+
+    def test_doctor_no_key_leak(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini", api_key="sk-secret123")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+
+            result = cli.handle_slash_command("/doctor")
+
+        self.assertNotIn("sk-secret123", result)
 
 
 def _fake_input(values):
