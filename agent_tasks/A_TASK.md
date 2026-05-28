@@ -1,26 +1,44 @@
 # Claude A Task
 
 Owner: Claude A
-Status: waiting_for_assignment
+Status: completed
 
 ## Goal
 
-No active implementation task is assigned yet.
+Completed: fix `/session/list` response compatibility without removing the structured session data.
 
 ## Instructions
 
-Do not make code changes from this file until Codex PM assigns a new task.
+This task has been completed and reviewed by Codex PM. Do not continue work from this task in a new worker window.
 
-If you opened this window expecting work:
-- Wait for Codex PM to update `agent_tasks/A_TASK.md`.
-- Do not continue work from older task descriptions or prior DONE reports.
-- Do not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`.
-- Do not push or commit.
+Completed scope:
+
+- Preserve the old HTTP contract where `body["sessions"]` is the legacy formatted string.
+- Keep the new structured data under a new field such as `sessions_structured`.
+- Keep `sessions_text` only if useful as an alias, but do not rely on it as the compatibility field.
+- Update the Web UI to prefer the structured field and fall back to the legacy `sessions` string.
+- Update or add focused tests for:
+  - `/session/list` returns legacy string in `sessions`.
+  - structured entries remain available.
+  - empty/no-store behavior remains stable.
+
+Suggested files:
+
+- `mini_agent/http_server.py`
+- `mini_agent/static/index.html`
+- `tests/test_http_server.py`
+- `tests/test_http_server_extra.py`
+- `tests/test_webui_smoke.py` only if needed
 
 ## Current PM Note
 
-Codex PM is acting as project manager and reviewer. The next development scope has not been specified yet.
+Codex review found a medium compatibility issue: the last change moved the legacy string from `sessions` to `sessions_text`, which can break existing HTTP clients. This has been fixed and is waiting for the next PM assignment.
 
 ## Completion Report
 
-No `A_DONE.md` update is required while this task is waiting for assignment.
+Update `agent_tasks/A_DONE.md` with:
+
+- Summary of compatibility behavior.
+- Diff stat.
+- Exact tests run and results.
+- Any known limitations.

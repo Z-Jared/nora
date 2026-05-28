@@ -123,9 +123,9 @@ class HTTPServerTests(unittest.TestCase):
 
         status, body = self._request("GET", "/session/list")
         self.assertEqual(status, 200)
-        self.assertIsInstance(body["sessions"], list)
-        self.assertTrue(any(s["name"] == "test" for s in body["sessions"]))
-        self.assertIn("test", body["sessions_text"])
+        self.assertIsInstance(body["sessions_structured"], list)
+        self.assertTrue(any(s["name"] == "test" for s in body["sessions_structured"]))
+        self.assertIn("test", body["sessions"])
 
     def test_session_load(self):
         self.agent.run("hello")
@@ -157,13 +157,13 @@ class HTTPServerTests(unittest.TestCase):
 
         status, body = self._request("GET", "/session/list")
         self.assertEqual(status, 200)
-        sessions = body["sessions"]
+        sessions = body["sessions_structured"]
         self.assertIsInstance(sessions, list)
         names = [s["name"] for s in sessions]
         self.assertIn("alpha", names)
         self.assertIn("beta", names)
-        self.assertIn("alpha", body["sessions_text"])
-        self.assertIn("beta", body["sessions_text"])
+        self.assertIn("alpha", body["sessions"])
+        self.assertIn("beta", body["sessions"])
 
     def test_session_load_nonexistent_returns_error(self):
         status, body = self._request("POST", "/session/load", {"name": "does_not_exist"})
@@ -232,7 +232,9 @@ class HTTPServerTests(unittest.TestCase):
 
         status, body = self._request("GET", "/session/list")
         self.assertEqual(status, 200)
-        sessions = body["sessions"]
+        self.assertIsInstance(body["sessions"], str)
+        self.assertIn("my-session", body["sessions"])
+        sessions = body["sessions_structured"]
         self.assertIsInstance(sessions, list)
         self.assertEqual(len(sessions), 1)
         session = sessions[0]
@@ -243,11 +245,12 @@ class HTTPServerTests(unittest.TestCase):
         self.assertGreater(session["message_count"], 0)
         self.assertTrue(session["saved_at"])
 
-    def test_session_list_empty_returns_empty_array(self):
+    def test_session_list_empty_returns_legacy_string(self):
         status, body = self._request("GET", "/session/list")
         self.assertEqual(status, 200)
-        self.assertEqual(body["sessions"], [])
-        self.assertIn("暂无", body["sessions_text"])
+        self.assertIsInstance(body["sessions"], str)
+        self.assertIn("暂无", body["sessions"])
+        self.assertEqual(body["sessions_structured"], [])
 
     def test_not_found(self):
         status, body = self._request("GET", "/nonexistent")

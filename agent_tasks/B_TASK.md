@@ -1,26 +1,41 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting_for_assignment
+Status: completed
 
 ## Goal
 
-No active implementation task is assigned yet.
+Completed: document the revised `/session/list` API contract after Claude A's compatibility fix.
 
 ## Instructions
 
-Do not make code changes from this file until Codex PM assigns a new task.
+This task has been completed and reviewed by Codex PM. Do not continue work from this task in a new worker window.
 
-If you opened this window expecting work:
-- Wait for Codex PM to update `agent_tasks/B_TASK.md`.
-- Do not continue work from older task descriptions or prior DONE reports.
-- Do not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`.
-- Do not push or commit.
+Completed scope:
+
+Required:
+
+- Update README API docs for `/session/list`.
+- Describe both:
+  - legacy `sessions` string for backward compatibility.
+  - structured session array field name selected by Claude A, expected to be `sessions_structured`.
+- Include a minimal JSON example for non-empty and empty responses.
+- Run a quick search to ensure docs do not claim the incompatible `sessions` array shape.
+
+Suggested files:
+
+- `README.md`
+- `agent_tasks/B_DONE.md`
 
 ## Current PM Note
 
-Codex PM is acting as project manager and reviewer. The next development scope has not been specified yet.
+Claude A's final field names are `sessions` for the legacy string and `sessions_structured` for the structured array. Documentation has been updated and is waiting for the next PM assignment.
 
 ## Completion Report
 
-No `B_DONE.md` update is required while this task is waiting for assignment.
+Update `agent_tasks/B_DONE.md` with:
+
+- Summary of documentation changes.
+- Diff stat.
+- Exact checks/searches run.
+- Any contract ambiguity found.

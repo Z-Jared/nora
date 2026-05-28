@@ -359,6 +359,26 @@ POST /session/load        恢复会话 {"name": "..."}
 GET  /session/list        列出已保存会话
 ```
 
+`/session/list` 返回两个字段：
+
+- `sessions`（字符串）：传统格式，每行 `- name: N 条消息, 保存于 timestamp`，兼容旧版前端。
+- `sessions_structured`（数组）：结构化数据，每项为 `{"name": "...", "message_count": N, "saved_at": "..."}`。
+
+无会话时 `sessions` 为 `"暂无保存的会话。"`，`sessions_structured` 为空数组。
+
+示例：
+
+```bash
+curl http://localhost:8080/session/list
+# {"sessions": "- my-session: 2 条消息, 保存于 2026-05-28T...", "sessions_structured": [{"name": "my-session", "message_count": 2, "saved_at": "2026-05-28T..."}]}
+```
+
+空响应示例：
+
+```json
+{"sessions": "暂无保存的会话。", "sessions_structured": []}
+```
+
 设置 `NORA_API_TOKEN` 后，所有 POST 端点以及 `/tools`、`/task`、`/memory/list`、`/memory/search`、`/session/list` 需要 `Authorization: Bearer <token>` 头。`/health`、`/status` 和 `/docs` 无需认证。浏览器 Web UI 使用时，在页面顶部 Token 输入框填写同一个 token 即可。内置令牌桶速率限制（默认 10 req/s，突发 20）。所有响应带 CORS 头（默认 `*`），支持浏览器直接调用。
 
 `/status` 返回字段：`auth_required`（是否需要 token）、`provider`/`model`（当前 LLM 配置，可为空）、`llm_configured`（provider、model、API key 是否齐全）、`config_warnings`（缺失配置项提示，齐全时为空数组）、`required_env`（当前 provider 所需的环境变量名列表）、`accepted_env_alternatives`（可替代的环境变量映射，如 `openai-compatible` 下 `LLM_API_KEY` 可由 `OPENAI_API_KEY` 替代）、`workspace`（工作目录）、`features`（sessions/tasks/memory/websocket 是否可用）、`runtime`（Python 版本、平台信息）。不泄露 API key、token 或环境变量。

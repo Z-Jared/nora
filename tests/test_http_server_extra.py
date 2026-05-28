@@ -153,7 +153,9 @@ class HTTPServerNoSessionStoreTests(unittest.TestCase):
         status, body = self._request("GET", "/session/list")
 
         self.assertEqual(status, 200)
-        self.assertEqual(body["sessions"], [])
+        self.assertIsInstance(body["sessions"], str)
+        self.assertIn("暂无", body["sessions"])
+        self.assertEqual(body["sessions_structured"], [])
 
     def test_session_save_returns_error_without_store(self):
         status, body = self._request("POST", "/session/save", {"name": "test"})

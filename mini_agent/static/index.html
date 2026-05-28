@@ -819,7 +819,7 @@ button{border:0;cursor:pointer}
       return resp.json();
     }).then(function(data){
       authFailed = false;
-      sessions = parseSessions(data.sessions);
+      sessions = parseSessions(data.sessions_structured || data.sessions);
       renderSessions('ready');
       if(!options.silent){
         setState('ready', sessions.length ? 'Loaded ' + sessions.length + ' saved session' + (sessions.length === 1 ? '.' : 's.') : 'No saved sessions yet.');

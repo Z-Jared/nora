@@ -1,18 +1,18 @@
-# Nora Claude Code Collaboration Rules
+# Nora Codex Collaboration Rules
 
-Codex is the project manager, reviewer, and committer for this repository. Claude Code windows are implementation workers.
+Codex is the project manager, reviewer, and committer for this repository. Codex windows are implementation workers.
 
 ## Worker Identity
 
-At the start of a Claude Code window, identify yourself as either:
+At the start of a Codex window, identify yourself as either:
 
-- Claude A
-- Claude B
+- Codex A
+- Codex B
 
 Then follow only the matching task file:
 
-- Claude A reads `agent_tasks/A_TASK.md`
-- Claude B reads `agent_tasks/B_TASK.md`
+- Codex A reads `agent_tasks/A_TASK.md`
+- Codex B reads `agent_tasks/B_TASK.md`
 
 ## Task Flow
 
@@ -22,11 +22,11 @@ Then follow only the matching task file:
 3. Implement only your assigned scope.
 4. Run the required checks listed in your task file.
 5. Write your completion report:
-   - Claude A writes `agent_tasks/A_DONE.md`
-   - Claude B writes `agent_tasks/B_DONE.md`
+   - Codex A writes `agent_tasks/A_DONE.md`
+   - Codex B writes `agent_tasks/B_DONE.md`
 6. Notify Codex PM:
-   - Claude A runs `agent_tasks/notify_codex.sh A`
-   - Claude B runs `agent_tasks/notify_codex.sh B`
+   - Codex A runs `agent_tasks/notify_codex.sh A`
+   - Codex B runs `agent_tasks/notify_codex.sh B`
 7. Do not push.
 8. Do not commit unless Codex explicitly asks.
 
@@ -43,7 +43,7 @@ Then follow only the matching task file:
 Use this structure:
 
 ```markdown
-# Claude A/B Completion Report
+# Codex A/B Completion Report
 
 Status: ready for Codex review
 

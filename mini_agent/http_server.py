@@ -414,11 +414,11 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         if not self._check_auth():
             return
         if not self.session_store:
-            self._json_response(200, {"sessions": [], "sessions_text": "暂无保存的会话。"})
+            self._json_response(200, {"sessions": "暂无保存的会话。", "sessions_structured": []})
             return
-        sessions = self.session_store.list_sessions_structured()
         sessions_text = self.session_store.list_sessions()
-        self._json_response(200, {"sessions": sessions, "sessions_text": sessions_text})
+        sessions_structured = self.session_store.list_sessions_structured()
+        self._json_response(200, {"sessions": sessions_text, "sessions_structured": sessions_structured})
 
     def _handle_session_save(self, body: dict) -> None:
         if not self.session_store:
