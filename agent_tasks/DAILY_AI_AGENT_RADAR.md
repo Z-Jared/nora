@@ -91,3 +91,25 @@ Nora should aim to beat Claude Code and Codex in focused areas before attempting
 4. Hooks: lifecycle events for pre-tool, post-tool, pre-edit, post-edit, pre-test, post-test, stop, compact, and handoff.
 5. Eval harness: fixed coding tasks with pass/fail, time, token, edit count, test count, and review findings.
 6. MCP/plugin layer: external tool integrations without hard-coding every tool into Nora core.
+
+## 2026-05-28 Radar Update
+
+Executive signal:
+
+- Direction change: no, but priority is sharper.
+- Highest-impact item: tracing and explicit context management are now table stakes for serious coding agents.
+- Nora priority affected: build trace spine and context compiler before adding more UI features.
+
+Source signals:
+
+- OpenAI Agents SDK documents built-in traces/spans for agent runs, LLM generations, tool calls, handoffs, guardrails, and custom events.
+- OpenAI Agents SDK positions agents around tools, handoffs, guardrails, sessions, and traceability.
+- Claude Code docs emphasize project/user subagents with isolated context windows and configurable tool access.
+- Claude Code hooks cover PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop, PreCompact, SessionStart, and SessionEnd.
+- Claude Code memory docs continue to rely on project memory files such as `CLAUDE.md`, not opaque vector-only recall.
+
+Nora actions:
+
+- Claude A: implement first run trace vertical slice.
+- Claude B: implement first context compiler vertical slice.
+- Codex PM: review both for privacy, deterministic output, and testability before any merge.

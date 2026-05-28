@@ -1,44 +1,49 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-Completed: fix `/session/list` response compatibility without removing the structured session data.
+Implement the first vertical slice of Nora run tracing.
 
 ## Instructions
 
-This task has been completed and reviewed by Codex PM. Do not continue work from this task in a new worker window.
+Implement only the trace foundation. Do not refactor unrelated controller, logging, or HTTP code.
 
-Completed scope:
+Required behavior:
 
-- Preserve the old HTTP contract where `body["sessions"]` is the legacy formatted string.
-- Keep the new structured data under a new field such as `sessions_structured`.
-- Keep `sessions_text` only if useful as an alias, but do not rely on it as the compatibility field.
-- Update the Web UI to prefer the structured field and fall back to the legacy `sessions` string.
-- Update or add focused tests for:
-  - `/session/list` returns legacy string in `sessions`.
-  - structured entries remain available.
-  - empty/no-store behavior remains stable.
+- Add a lightweight run trace data model and store.
+- Record one trace per `MiniAgent.run_events()` turn.
+- Trace must include:
+  - `trace_id`
+  - created timestamp
+  - final status
+  - user input preview, redacted/truncated
+  - event counts by type
+  - tool calls with name/status/result preview only
+  - failure text when blocked/error
+- Support both SQLite-backed storage and JSONL fallback, matching existing store patterns.
+- Add a read-only method/tool/API only if it is small and follows existing patterns; otherwise keep this as an internal store plus tests.
+- Do not store raw API keys, tokens, full prompts, full model outputs, or full tool results.
 
 Suggested files:
 
-- `mini_agent/http_server.py`
-- `mini_agent/static/index.html`
-- `tests/test_http_server.py`
-- `tests/test_http_server_extra.py`
-- `tests/test_webui_smoke.py` only if needed
+- `mini_agent/database.py`
+- `mini_agent/controller.py`
+- new `mini_agent/traces.py`
+- `tests/test_mini_agent.py`
+- new focused `tests/test_traces.py` if cleaner
 
 ## Current PM Note
 
-Codex review found a medium compatibility issue: the last change moved the legacy string from `sessions` to `sessions_text`, which can break existing HTTP clients. This has been fixed and is waiting for the next PM assignment.
+Frontier direction from Codex/Claude Code/Agents SDK: traceability is now core runtime infrastructure, not a debugging extra. This task should build the smallest reliable trace spine before we add hooks, worker isolation, or evals.
 
 ## Completion Report
 
 Update `agent_tasks/A_DONE.md` with:
 
-- Summary of compatibility behavior.
+- Summary of trace behavior and schema.
 - Diff stat.
 - Exact tests run and results.
 - Any known limitations.
