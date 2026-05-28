@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from mini_agent.code_quality import CodeQualityTools
+from mini_agent.context_compiler import ContextCompiler
 from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.database import NoraDB
 from mini_agent.diagnostics import Diagnostics
@@ -69,6 +70,11 @@ def build_default_registry(
     browser_tools = BrowserTools(root=root, backend=browser_backend)
     process_manager = ProcessManager(root, profiles=process_profiles)
     code_quality = CodeQualityTools(root)
+    context_compiler = ContextCompiler(
+        root,
+        symbol_index=symbol_index,
+        project_rag=project_rag,
+    )
     long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
     task_manager = TaskManager(
         path=task_state_path or Path("data/current_task.json"),
@@ -96,6 +102,7 @@ def build_default_registry(
         shell_runner,
         process_manager,
         code_quality=code_quality,
+        context_compiler=context_compiler,
     )
     register_external_tools(registry, project_rag, web_tools, browser_tools)
     register_state_tools(

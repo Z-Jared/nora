@@ -9,6 +9,7 @@ from mini_agent.providers.base import LLMError, LLMResponse
 from mini_agent.registry import ToolRegistry
 from mini_agent.tool_cache import ToolResultCache
 from mini_agent.tool_results import ToolResultStore
+from mini_agent.traces import TraceStore, build_trace
 
 
 class LLMClient(Protocol):
@@ -84,6 +85,7 @@ class MiniAgent:
         max_tool_calls_per_turn: int = default_max_tool_calls_per_turn,
         system_prompt: str = "",
         tool_cache: Optional[ToolResultCache] = None,
+        trace_store: Optional[TraceStore] = None,
     ):
         self.tools = tools
         self.llm = llm
@@ -94,6 +96,7 @@ class MiniAgent:
         self.context_system = context_system
         self.system_prompt = system_prompt
         self.tool_cache = tool_cache or ToolResultCache()
+        self.trace_store = trace_store
         self.max_tool_calls_per_turn = max(1, int(max_tool_calls_per_turn or self.default_max_tool_calls_per_turn))
         self.last_run_report = RunReport(
             status="idle",
@@ -116,38 +119,53 @@ class MiniAgent:
     def run_events(self, user_input: str) -> Generator[dict, None, None]:
         text = user_input.strip()
         self._start_run_report()
-        yield {"type": "typing"}
+        trace_events: list[dict] = []
+
+        yield from self._run_events_inner(text, trace_events)
+        self._maybe_record_trace(text, trace_events)
+
+    def _run_events_inner(self, text: str, trace_events: list[dict]) -> Generator[dict, None, None]:
+        def _col(event: dict) -> Generator[dict, None, None]:
+            trace_events.append(event)
+            yield event
+
+        def _collect(gen) -> Generator[dict, None, None]:
+            for evt in gen:
+                trace_events.append(evt)
+                yield evt
+
+        yield from _col({"type": "typing"})
 
         try:
             if self.llm and hasattr(self.llm, "chat"):
                 try:
-                    yield from self._emit_answer(text, self._run_with_llm_tools_events(text))
+                    yield from _collect(self._emit_answer(text, self._run_with_llm_tools_events(text)))
                     return
                 except LLMError as error:
                     if self._has_local_answer(text):
-                        yield from self._emit_answer(text, self._run_local_events(text))
+                        yield from _collect(self._emit_answer(text, self._run_local_events(text)))
                         return
-                    yield from self._emit_blocked(text, f"模型调用失败: {error}")
+                    yield from _collect(self._emit_blocked(text, f"模型调用失败: {error}"))
                     return
 
             if self._has_local_answer(text):
-                yield from self._emit_answer(text, self._run_local_events(text))
+                yield from _collect(self._emit_answer(text, self._run_local_events(text)))
                 return
 
             if self.llm:
                 try:
-                    yield from self._emit_answer(text, self.llm.complete(text))
+                    yield from _collect(self._emit_answer(text, self.llm.complete(text)))
                     return
                 except LLMError as error:
-                    yield from self._emit_blocked(text, f"模型调用失败: {error}")
+                    yield from _collect(self._emit_blocked(text, f"模型调用失败: {error}"))
                     return
 
-            yield from self._emit_answer(text, self._help_message())
+            yield from _collect(self._emit_answer(text, self._help_message()))
         except Exception as error:
             error_msg = str(error)[:500]
-            yield {"type": "error", "error": error_msg}
+            yield from _col({"type": "error", "error": error_msg})
             self._finish_turn(text, error_msg, status="blocked", failure=error_msg)
-            yield self._done_event()
+            yield from _col(self._done_event())
 
     def _emit_answer(self, user_input: str, answer_or_gen) -> Generator[dict, None, None]:
         if isinstance(answer_or_gen, str):
@@ -161,6 +179,24 @@ class MiniAgent:
                     answer += event["content"]
         answer = self._finish_turn(user_input, answer)
         yield self._done_event()
+
+    def _maybe_record_trace(self, user_input: str, trace_events: list[dict]) -> None:
+        if not self.trace_store:
+            return
+        report = self.last_run_report
+        trace_id = self.trace_store.next_trace_id()
+        trace = build_trace(
+            trace_id=trace_id,
+            user_input=user_input,
+            status=report.status,
+            events=trace_events,
+            tool_records=report.tool_calls,
+            failure=report.failure,
+        )
+        try:
+            self.trace_store.record(trace)
+        except Exception:
+            pass
 
     def _has_local_answer(self, text: str) -> bool:
         if self._looks_like_calculation(text):

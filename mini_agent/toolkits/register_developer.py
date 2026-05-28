@@ -10,6 +10,7 @@ def register_developer_tools(
     shell_runner,
     process_manager,
     code_quality=None,
+    context_compiler=None,
 ) -> None:
     registry.register(
         "preview_write_project_file",
@@ -568,4 +569,50 @@ def register_developer_tools(
                 },
             },
             permission=ToolPermission(category="workspace", risk="write", requires_confirmation=True),
+        )
+    if context_compiler:
+        def compile_context_pack(**kwargs):
+            return context_compiler.compile(**kwargs).to_markdown()
+
+        registry.register(
+            "compile_context_pack",
+            "编译任务相关的项目上下文包：包含 git status、变更文件列表、Python 文件 outline、知识库摘要和辅助 RAG 片段。只读。",
+            compile_context_pack,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "任务描述，用作上下文包标题",
+                    },
+                    "include_git_status": {
+                        "type": "boolean",
+                        "description": "是否包含 git status，默认 true",
+                    },
+                    "include_changed_files": {
+                        "type": "boolean",
+                        "description": "是否包含变更文件列表，默认 true",
+                    },
+                    "include_file_outlines": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要包含 outline 的 Python 文件路径列表",
+                    },
+                    "include_knowledge_excerpts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要包含的知识库文件路径列表",
+                    },
+                    "rag_query": {
+                        "type": "string",
+                        "description": "可选的 RAG 检索关键词，结果标记为 auxiliary",
+                    },
+                    "rag_max_results": {
+                        "type": "integer",
+                        "description": "RAG 最多返回几条片段，默认 3",
+                    },
+                },
+                "required": ["task_description"],
+            },
+            permission=ToolPermission(category="workspace", risk="read"),
         )

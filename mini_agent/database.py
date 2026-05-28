@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     message_count INTEGER NOT NULL,
     messages_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS run_traces (
+    trace_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    input_preview TEXT NOT NULL DEFAULT '',
+    event_counts_json TEXT NOT NULL DEFAULT '{}',
+    tool_calls_json TEXT NOT NULL DEFAULT '[]',
+    failure TEXT NOT NULL DEFAULT ''
+);
 """
 
 _INDEXES = """
@@ -77,6 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_tr_tool ON tool_results(tool);
 CREATE INDEX IF NOT EXISTS idx_tl_timestamp ON tool_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_tl_tool ON tool_logs(tool);
 CREATE INDEX IF NOT EXISTS idx_tl_status ON tool_logs(status);
+CREATE INDEX IF NOT EXISTS idx_rt_created ON run_traces(created_at);
 """
 
 
