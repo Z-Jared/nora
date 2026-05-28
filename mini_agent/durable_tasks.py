@@ -323,6 +323,42 @@ class DurableTaskStore:
 
         return cp
 
+    def upsert_task(self, task: DurableTask) -> None:
+        """Insert or update a DurableTask. Overwrites if task_id already exists."""
+        if self.db:
+            self._ensure_table()
+            self.db.conn.execute(
+                """INSERT OR REPLACE INTO durable_tasks
+                   (task_id, run_id, parent_task_id, status, goal,
+                    steps_json, current_step, checkpoints_json,
+                    input_summary, context_pack_ref, trace_refs_json,
+                    worker_id, created_at, updated_at, finished_at,
+                    failure_reason, resume_policy)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task.task_id,
+                    task.run_id,
+                    task.parent_task_id,
+                    task.status,
+                    task.goal,
+                    json.dumps([s.to_dict() for s in task.steps], ensure_ascii=False),
+                    task.current_step,
+                    json.dumps([c.to_dict() for c in task.checkpoints], ensure_ascii=False),
+                    task.input_summary,
+                    task.context_pack_ref,
+                    json.dumps(task.trace_refs, ensure_ascii=False),
+                    task.worker_id,
+                    task.created_at,
+                    task.updated_at,
+                    task.finished_at,
+                    task.failure_reason,
+                    task.resume_policy,
+                ),
+            )
+            self.db.conn.commit()
+        else:
+            self._rewrite_jsonl(task)
+
     # --- SQLite backend ---
 
     def _insert_db(self, task: DurableTask) -> None:

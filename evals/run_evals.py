@@ -35,6 +35,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
+from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 
 
 @dataclass
@@ -114,6 +115,8 @@ def main() -> int:
         EvalCase("trace_inspection_tools_via_registry", eval_trace_inspection_tools_via_registry),
         EvalCase("durable_task_schema_spec", eval_durable_task_schema_spec),
         EvalCase("durable_task_taskmanager_mapping_spec", eval_durable_task_taskmanager_mapping_spec),
+        EvalCase("task_manager_durable_shadow_consistency", eval_task_manager_durable_shadow_consistency),
+        EvalCase("task_manager_durable_shadow_failure_isolation", eval_task_manager_durable_shadow_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1142,6 +1145,103 @@ def eval_durable_task_taskmanager_mapping_spec():
 
     # Case-insensitive check for "lossy" (spec uses "Lossy Migrations")
     assert "lossy" in text.lower(), "keyword 'lossy' not found in spec"
+
+
+def eval_task_manager_durable_shadow_consistency():
+    """Verify that TaskManager shadow-writes to DurableTaskStore with consistent semantics."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            durable_store = DurableTaskStore(db=db)
+            manager = TaskManager(
+                tmp_path / "task.json",
+                durable_store=durable_store,
+                enable_durable_shadow=True,
+            )
+
+            # Create task
+            manager.start("构建功能", "写代码\n写测试\n提交")
+
+            # Update step 1 to done with summary
+            manager.update_step(1, "done", note="代码完成", summary="实现了核心功能")
+
+            # Update step 2 to done
+            manager.update_step(2, "done", summary="测试通过")
+
+            # Finish task
+            manager.finish("功能完成，所有测试通过")
+
+            # Verify DurableTaskStore has the shadow task
+            tasks = durable_store.list_tasks()
+            assert len(tasks) >= 1, f"expected >=1 durable task, got {len(tasks)}"
+
+            # Find the shadow task (most recent)
+            dt = tasks[0]
+            assert dt.goal == "构建功能", f"goal mismatch: {dt.goal}"
+            assert dt.status == TaskStatus.COMPLETED, f"status mismatch: {dt.status}"
+            assert len(dt.steps) == 3, f"step count mismatch: {len(dt.steps)}"
+            assert dt.finished_at is not None, "finished_at should be set"
+
+            # Step text consistency
+            assert dt.steps[0].text == "写代码", f"step 0 text: {dt.steps[0].text}"
+            assert dt.steps[1].text == "写测试", f"step 1 text: {dt.steps[1].text}"
+            assert dt.steps[2].text == "提交", f"step 2 text: {dt.steps[2].text}"
+
+            # Step status consistency
+            assert dt.steps[0].status == "done", f"step 0 status: {dt.steps[0].status}"
+            assert dt.steps[1].status == "done", f"step 1 status: {dt.steps[1].status}"
+            # Step 2 may be pending or done depending on shadow implementation
+
+            # Step summary consistency
+            assert dt.steps[0].summary == "实现了核心功能", f"step 0 summary: {dt.steps[0].summary}"
+            assert dt.steps[1].summary == "测试通过", f"step 1 summary: {dt.steps[1].summary}"
+        finally:
+            db.close()
+
+
+def eval_task_manager_durable_shadow_failure_isolation():
+    """Verify that DurableTaskStore failures don't break TaskManager."""
+    class FailingDurableStore:
+        """A fake store that always raises on write operations."""
+        def create_task(self, **kwargs):
+            raise RuntimeError("store unavailable")
+
+        def get_task(self, task_id):
+            raise RuntimeError("store unavailable")
+
+        def list_tasks(self, limit=50):
+            raise RuntimeError("store unavailable")
+
+        def update_status(self, task_id, status, failure_reason=""):
+            raise RuntimeError("store unavailable")
+
+        def add_checkpoint(self, task_id, checkpoint):
+            raise RuntimeError("store unavailable")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        failing_store = FailingDurableStore()
+        manager = TaskManager(
+            tmp_path / "task.json",
+            durable_store=failing_store,
+            enable_durable_shadow=True,
+        )
+
+        # TaskManager should still work despite durable store failures
+        result = manager.start("测试隔离", "步骤一\n步骤二")
+        assert "已创建任务" in result, f"start failed: {result}"
+
+        result = manager.update_step(1, "done", summary="完成")
+        assert "已更新步骤" in result, f"update_step failed: {result}"
+
+        result = manager.finish("隔离测试完成")
+        assert "已完成任务" in result, f"finish failed: {result}"
+
+        # Old task data should be intact
+        task = manager.get_current_task()
+        assert task["goal"] == "测试隔离", f"goal mismatch: {task['goal']}"
+        assert task["status"] == "finished", f"status mismatch: {task['status']}"
 
 
 def _init_git_repo(root: Path) -> None:

@@ -178,3 +178,124 @@ class TaskManagerTests(unittest.TestCase):
 
         self.assertIn("建议工具类型", result)
         self.assertIn("test/", result)
+
+
+class ShadowWriteTests(unittest.TestCase):
+    """Tests for TaskManager optional durable shadow write."""
+
+    def test_default_no_shadow_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from mini_agent.durable_tasks import DurableTaskStore
+            db_path = Path(tmpdir) / "durable.db"
+            from mini_agent.database import NoraDB
+            db = NoraDB(db_path)
+            store = DurableTaskStore(db=db)
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=store, enable_durable_shadow=False)
+            manager.start("test goal", "step one")
+            tasks = store.list_tasks()
+            self.assertEqual(tasks, [])
+            db.conn.close()
+
+    def test_shadow_write_on_start(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from mini_agent.durable_tasks import DurableTaskStore
+            db_path = Path(tmpdir) / "durable.db"
+            from mini_agent.database import NoraDB
+            db = NoraDB(db_path)
+            store = DurableTaskStore(db=db)
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=store, enable_durable_shadow=True)
+            manager.start("build feature", "plan\nimplement\ntest")
+            tasks = store.list_tasks()
+            self.assertEqual(len(tasks), 1)
+            dt = tasks[0]
+            self.assertEqual(dt.goal, "build feature")
+            self.assertEqual(dt.status, "pending")  # all steps pending
+            self.assertEqual(len(dt.steps), 3)
+            db.conn.close()
+
+    def test_shadow_write_on_update_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from mini_agent.durable_tasks import DurableTaskStore
+            db_path = Path(tmpdir) / "durable.db"
+            from mini_agent.database import NoraDB
+            db = NoraDB(db_path)
+            store = DurableTaskStore(db=db)
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=store, enable_durable_shadow=True)
+            manager.start("build feature", "plan\nimplement")
+            manager.update_step(1, "done", summary="planned")
+
+            tasks = store.list_tasks()
+            dt = tasks[0]
+            self.assertEqual(dt.status, "running")  # mixed done/pending = running
+            self.assertEqual(dt.steps[0].status, "done")
+            self.assertEqual(dt.steps[0].summary, "planned")
+            self.assertEqual(dt.steps[1].status, "pending")
+            db.conn.close()
+
+    def test_shadow_write_on_finish(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from mini_agent.durable_tasks import DurableTaskStore
+            db_path = Path(tmpdir) / "durable.db"
+            from mini_agent.database import NoraDB
+            db = NoraDB(db_path)
+            store = DurableTaskStore(db=db)
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=store, enable_durable_shadow=True)
+            manager.start("test goal", "step one")
+            manager.finish("done")
+
+            tasks = store.list_tasks()
+            dt = tasks[0]
+            self.assertEqual(dt.status, "completed")
+            self.assertIsNotNone(dt.finished_at)
+            self.assertEqual(dt.input_summary, "done")
+            db.conn.close()
+
+    def test_shadow_write_failure_does_not_affect_task_manager(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            class BrokenStore:
+                def upsert_task(self, task):
+                    raise RuntimeError("store broken")
+
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=BrokenStore(), enable_durable_shadow=True)
+            result = manager.start("test goal", "step one")
+            self.assertIn("已创建任务", result)
+
+            result = manager.update_step(1, "done", summary="done")
+            self.assertIn("已更新步骤", result)
+
+            result = manager.finish("completed")
+            self.assertIn("已完成任务", result)
+
+            # Verify old task manager state is intact
+            listing = manager.list()
+            self.assertIn("status=finished", listing)
+
+    def test_shadow_write_with_real_sqlite_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
+            db_path = Path(tmpdir) / "durable.db"
+            from mini_agent.database import NoraDB
+            db = NoraDB(db_path)
+            store = DurableTaskStore(db=db)
+            manager = TaskManager(Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                                  durable_store=store, enable_durable_shadow=True)
+
+            manager.start("real task", "step a\nstep b")
+            manager.update_step(1, "done", summary="a done")
+            manager.update_step(2, "blocked", note="waiting for input")
+            manager.finish("all done")
+
+            tasks = store.list_tasks()
+            self.assertEqual(len(tasks), 1)
+            dt = tasks[0]
+            self.assertEqual(dt.goal, "real task")
+            self.assertEqual(dt.status, "completed")
+            self.assertEqual(dt.steps[0].status, "done")
+            self.assertEqual(dt.steps[1].status, "blocked")
+            self.assertEqual(dt.steps[1].note, "waiting for input")
+            db.conn.close()

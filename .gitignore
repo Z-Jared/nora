@@ -9,6 +9,7 @@ evals/.tmp/
 *.egg-info/
 .venv
 .coverage
+.ccb/
 CODEX_TERMINAL_HANDOFF.md
 designs/
 agent_tasks/A_DONE.md

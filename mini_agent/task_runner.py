@@ -12,10 +12,13 @@ VALID_STEP_STATUSES = {"pending", "in_progress", "done", "blocked"}
 
 
 class TaskManager:
-    def __init__(self, path: Path = None, history_path: Path = None, db=None):
+    def __init__(self, path: Path = None, history_path: Path = None, db=None,
+                 durable_store=None, enable_durable_shadow: bool = False):
         self.path = path
         self.history_path = history_path or Path("data/task_history.jsonl")
         self.db = db
+        self.durable_store = durable_store
+        self.enable_durable_shadow = enable_durable_shadow
 
     def start(self, goal: str, steps: str) -> str:
         goal = goal.strip()
@@ -37,6 +40,7 @@ class TaskManager:
             ],
         }
         self._write(task)
+        self._shadow_sync_to_durable(task)
         return f"已创建任务: {goal}\n{self._format(task)}"
 
     def update_step(self, step_id: int, status: str, note: str = "", summary: str = "") -> str:
@@ -58,6 +62,7 @@ class TaskManager:
                 step["note"] = note
                 step["summary"] = summary
                 self._write(task)
+                self._shadow_sync_to_durable(task)
                 message = f"已更新步骤 {step_id}: {status}"
                 if status == "done" and not summary:
                     message += "。建议填写 summary 记录执行结果。"
@@ -84,7 +89,18 @@ class TaskManager:
         task["summary"] = summary.strip()
         self._write(task)
         self._append_history(task)
+        self._shadow_sync_to_durable(task)
         return f"已完成任务: {task['goal']}\n总结: {task['summary']}"
+
+    def _shadow_sync_to_durable(self, task: dict) -> None:
+        if not self.enable_durable_shadow or not self.durable_store:
+            return
+        try:
+            from mini_agent.durable_tasks import task_manager_task_to_durable
+            durable_task = task_manager_task_to_durable(task, task_id="dtask_shadow_1")
+            self.durable_store.upsert_task(durable_task)
+        except Exception:
+            pass
 
     def list_history(self, max_results: int = 20) -> str:
         records = self._read_history()
@@ -152,6 +168,7 @@ class TaskManager:
         task["restored_from"] = history_id
         task["restored_at"] = datetime.now(timezone.utc).isoformat()
         self._write(task)
+        self._shadow_sync_to_durable(task)
         return f"已恢复任务: {history_id}\n{self._format(task)}"
 
     def run_once(self) -> str:
