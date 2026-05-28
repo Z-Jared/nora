@@ -113,6 +113,7 @@ def main() -> int:
         EvalCase("trace_lists_and_gets", eval_trace_lists_and_gets),
         EvalCase("trace_inspection_tools_via_registry", eval_trace_inspection_tools_via_registry),
         EvalCase("durable_task_schema_spec", eval_durable_task_schema_spec),
+        EvalCase("durable_task_taskmanager_mapping_spec", eval_durable_task_taskmanager_mapping_spec),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1116,6 +1117,31 @@ def eval_durable_task_schema_spec():
     lifecycle_keywords = ["intake", "plan", "execute", "checkpoint", "pause", "resume", "review", "complete", "fail", "cancel"]
     for keyword in lifecycle_keywords:
         assert keyword in text.lower(), f"lifecycle keyword '{keyword}' not found in spec"
+
+
+def eval_durable_task_taskmanager_mapping_spec():
+    """Check that the durable task schema spec contains TaskManager compatibility mapping."""
+    schema_path = PROJECT_ROOT / "docs" / "knowledge" / "DURABLE_TASK_SCHEMA.md"
+    assert schema_path.exists(), f"spec not found: {schema_path}"
+    text = schema_path.read_text(encoding="utf-8")
+
+    required_keywords = [
+        "TaskManager Compatibility Mapping",
+        "current_task.json",
+        "task_history.jsonl",
+        "active -> running",
+        "finished -> completed",
+        "goal -> goal",
+        "steps -> steps",
+        "tool_hint -> tool_hint",
+        "summary -> summary",
+        "无法保真",
+    ]
+    for keyword in required_keywords:
+        assert keyword in text, f"keyword '{keyword}' not found in spec"
+
+    # Case-insensitive check for "lossy" (spec uses "Lossy Migrations")
+    assert "lossy" in text.lower(), "keyword 'lossy' not found in spec"
 
 
 def _init_git_repo(root: Path) -> None:
