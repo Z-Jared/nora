@@ -5,45 +5,25 @@ Status: assigned
 
 ## Goal
 
-Upgrade the eval harness to measure trace and context compiler behavior.
+Add eval coverage for the durable task CLI inspection tools (once Claude A implements them).
 
 ## Instructions
 
-Implement only eval harness coverage. Do not modify agent runtime behavior unless a test reveals a clear bug and Codex PM approves scope.
+The durable task shadow write evals are done (71 passing). Next:
 
-Context:
+1. Wait for Claude A to add `list_durable_tasks` tool and `/tasks` CLI command.
+2. Add eval cases for:
+   - `list_durable_tasks` returns correct task count and fields
+   - Task status transitions (pending → running → completed) are captured
+   - CLI `/tasks` output format is readable and correct
+3. Keep evals deterministic and offline.
 
-- Existing `evals/run_evals.py` covers many old capabilities.
-- New trace and context compiler features need eval coverage so progress is measurable.
+## Context
 
-Required:
-
-- Add offline eval cases for:
-  - context compiler includes git status/changed files and Python outline.
-  - context compiler skips `.env`, `data/`, and `logs` paths in explicit inputs and git output.
-  - `compile_context_pack` registry tool returns Markdown text, not an object.
-  - trace store records a run with status, event counts, and tool call summary.
-  - trace output redacts sensitive input/tool previews.
-- If Claude A adds trace inspection tools before you finish, add eval coverage for `list_run_traces` and `get_run_trace`.
-- Update README eval description to include trace and context compiler coverage.
-- Keep evals deterministic and offline by default.
-
-Suggested files:
-
-- `evals/run_evals.py`
-- `README.md`
-- README only if you add a user-visible tool/CLI command
-- `agent_tasks/B_DONE.md`
-
-## Current PM Note
-
-The context compiler and trace store are now code, but Nora needs eval gates to prevent regressions. This is how we move toward Codex/Claude Code-level engineering reliability.
+- `evals/run_evals.py` currently has 71 passing evals
+- Durable task shadow write evals were added in commit `dbdb7c2`
+- If Claude A's tools are not yet available, focus on adding eval cases for any other gaps you find
 
 ## Completion Report
 
-Update `agent_tasks/B_DONE.md` with:
-
-- Summary of eval cases added.
-- Diff stat.
-- Exact tests/checks run.
-- Any known limitations or eval gaps.
+Update `agent_tasks/B_DONE.md` with summary, diff stat, tests run, and known limitations.

@@ -5,40 +5,34 @@ Status: assigned
 
 ## Goal
 
-Integrate Nora run tracing into the default runtime and expose read-only trace inspection.
+Continue durable task integration — wire DurableTaskStore into the default agent build and add CLI commands for task inspection.
 
 ## Instructions
 
-Implement only trace integration and read-only inspection. Do not change trace schema unless required for the inspection path.
+The durable task shadow write is implemented and committed (`dbdb7c2`). Now integrate it into the runtime:
 
-Context:
+1. Wire `DurableTaskStore` into `build_agent()` in `mini_agent/app.py`:
+   - Create `DurableTaskStore(db=db)` and pass it to `TaskManager(durable_store=..., enable_durable_shadow=True)`
+   - This makes all CLI/HTTP runs persist tasks automatically
 
-- The first trace slice is merged in `mini_agent/traces.py`, `mini_agent/controller.py`, and `mini_agent/database.py`.
-- Current gap: `build_agent()` does not pass a `TraceStore`, so normal CLI/HTTP runs do not persist traces.
-- Current gap: there is no user-facing way to list or inspect traces.
+2. Add CLI commands for task inspection:
+   - `/tasks [n]` — list recent durable tasks
+   - `/task <task_id>` — show a specific task with steps and status
 
-Required:
+3. Add a registry tool:
+   - `list_durable_tasks(max_results=20)` — read-only task listing
 
-- Wire `TraceStore(db=db)` into `MiniAgent` in `mini_agent/app.py`.
-- Add read-only registry tools:
-  - `list_run_traces(max_results=20)`
-  - `get_run_trace(trace_id)`
-- Add CLI commands:
-  - `/traces [n]`
-  - `/trace <trace_id>`
-- Keep output concise and redacted. Do not expose full prompts, full model outputs, or full tool results.
-- Update README command/tool docs if user-visible commands are added.
-- Add focused tests for default build wiring if practical, trace tools, and CLI commands.
+4. Update README if user-visible commands are added.
 
-## Current PM Note
+5. Add focused tests for the wiring and new tools/commands.
 
-Trace spine exists but is not yet part of the normal product path. This task turns it from an internal library into operational runtime infrastructure.
+## Context
+
+- `mini_agent/durable_tasks.py` has `DurableTaskStore` with `upsert_task()`, `get_task()`, `list_tasks()`
+- `mini_agent/task_runner.py` has `TaskManager` with `durable_store` and `enable_durable_shadow` params
+- Current gap: `build_agent()` does not pass a DurableTaskStore, so normal runs don't persist tasks
+- Current gap: no user-facing way to list or inspect durable tasks
 
 ## Completion Report
 
-Update `agent_tasks/A_DONE.md` with:
-
-- Summary of trace integration and inspection commands/tools.
-- Diff stat.
-- Exact tests run and results.
-- Any known limitations.
+Update `agent_tasks/A_DONE.md` with summary, diff stat, tests run, and known limitations.
