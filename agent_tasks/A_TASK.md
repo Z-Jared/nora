@@ -1,42 +1,47 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-Implement durable tool-call event logging.
+Implement durable model-call event logging.
 
 ## Instructions
 
-The durable event log v1 is committed in `b18beba` and current main is `fe20206`. Your task is to extend the event log from task lifecycle events to tool-call events.
+The durable event log now records task lifecycle events and tool-call events. Extend it to cover model-call lifecycle events from `MiniAgent`.
 
 Implement a narrow vertical slice:
 
-1. Record durable events from `MiniAgent` tool execution:
-   - Successful tool call
-   - Tool call error
-   - Blocked/cancelled permissioned tool call
-   - Tool result budget/compaction behavior if already represented by current run records
+1. Record durable events around model calls:
+   - model call started
+   - model call finished
+   - model call error
+   - streaming final-answer path if it uses `stream_chat`
 
 2. Event shape:
    - Use existing `DurableEventStore`
-   - Event types can be simple strings such as `tool_call_started`, `tool_call_finished`, `tool_call_blocked`, `tool_call_error`
-   - Payload should include tool name, status, result preview, and safe/truncated arguments preview
-   - Do not store secrets or full unbounded tool results
+   - Add explicit event type constants such as `model_call_started`, `model_call_finished`, and `model_call_error`
+   - Payload may include safe metadata: provider/model if available, message count, tool schema count, whether streaming was used, response preview, tool_call_count, latency_ms if easy
+   - Do not store raw prompts, full messages, raw API keys, tool schemas, or unbounded model output
+   - Reuse existing durable event sanitization/redaction behavior
 
-3. Task linkage:
-   - If there is an active durable task, include its task_id when practical.
-   - If task_id cannot be resolved safely, record the event without task_id rather than failing.
+3. Hook points:
+   - `mini_agent/controller.py` paths that call `llm.chat(...)`
+   - `_stream_answer(...)` path that calls `llm.stream_chat(...)`
+   - `run_autonomous(...)`
+   - fallback `llm.complete(...)` path if practical
 
-4. Failure isolation:
-   - Event writes must never break tool execution, trace recording, or existing run behavior.
+4. Task linkage and failure isolation:
+   - If task_id cannot be resolved safely, record model events without `task_id`
+   - Event writes must never break model execution, tool execution, trace recording, streaming, or existing run behavior
 
 5. Tests:
-   - Add/extend focused tests for successful tool events
-   - Add/extend focused tests for tool errors
-   - Add/extend focused tests for blocked/cancelled tool calls
-   - Add failure-isolation test with a broken event store
+   - Add focused unit coverage for successful chat model event
+   - Add coverage for model responses that contain tool calls
+   - Add coverage for model error event
+   - Add coverage for streaming model event
+   - Add failure-isolation coverage with a broken event store
 
 Suggested verification:
 
@@ -47,10 +52,12 @@ python3 evals/run_evals.py
 
 ## Context
 
-- `mini_agent/durable_events.py` contains `DurableEventStore`
-- `mini_agent/controller.py` owns tool execution and run events
+- `mini_agent/durable_events.py` contains `DurableEventStore` and existing event type constants
+- `mini_agent/controller.py` owns LLM call paths
+- `tests/test_durable_events.py` has durable tool-call event patterns to mirror
 - `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 calls for model/tool/file/shell/test/review events
-- Keep scope to tool-call events only; do not implement replay or model-call events yet
+
+Keep scope to model-call events only; do not implement replay, model routing, cost accounting, or provider-specific telemetry.
 
 ## Completion Report
 

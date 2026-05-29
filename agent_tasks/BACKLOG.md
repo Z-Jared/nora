@@ -8,7 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空 — 当前任务已完成）
+### TASK-011: Durable model-call event logging
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: 无
+- 目标: 在 MiniAgent 的 LLM chat/stream/complete 路径记录 durable model-call lifecycle events。
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 和 `python3 evals/run_evals.py` 通过。
+- 参考: `mini_agent/controller.py` LLM call sites；`mini_agent/durable_events.py` event constants；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1。
+
+### TASK-012: Eval coverage for model-call events
+- 优先级: high
+- 预计: 1 小时
+- 依赖: 等待 TASK-011
+- 目标: 为 durable model-call event logging 增加 deterministic offline eval，覆盖成功、tool-call 响应、错误、streaming 和 event write failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
+- 参考: `evals/run_evals.py` durable event/tool-call event eval 区域；TASK-011 新增行为。
 
 ## 已完成
 
