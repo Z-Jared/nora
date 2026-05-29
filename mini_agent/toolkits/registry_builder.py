@@ -313,7 +313,7 @@ def build_default_registry(
 
     registry.register(
         "retry_durable_task",
-        "重试一个失败的 durable task。将状态重置为 pending，步骵也重置，retry_count 加 1。仅 FAILED 状态可重试，且不能超过 max_retries。",
+        "重试一个失败的 durable task。将状态重置为 pending，步骤也重置，retry_count 加 1。仅 FAILED 状态可重试，且不能超过 max_retries。",
         _retry_durable_task_json,
         parameters={
             "type": "object",

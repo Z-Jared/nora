@@ -24,6 +24,8 @@ Nora 的长期目标是成为本地优先的 Agent OS / Durable Runtime：一个
 - 联网搜索和网页读取：只读 HTTP/HTTPS 页面
 - 工具调用日志：记录到 `logs/tool_calls.jsonl`，会脱敏工具参数和敏感结果预览，并可通过工具查看最近日志或生成安全审计摘要
 - 后台进程管理：只允许内置 profile 启动本地后台进程，支持查看状态、读取输出、等待输出和停止进程
+- 运行 trace：每次对话自动记录 trace（trace_id、状态、输入预览、事件计数、工具调用摘要），支持 SQLite 和 JSONL 双后端，自动脱敏敏感输入和工具结果
+- Durable tasks：持久化多步骤任务（状态机、checkpoints、trace 引用），支持 SQLite 和 JSONL 双后端，可通过 CLI 命令或只读工具查看
 
 ## 运行
 
@@ -126,6 +128,10 @@ curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8081/chat -d '{"messa
 /auto 3 总结 README 并说明项目能力
 /logs 10
 /context 10
+/traces
+/trace trace_1
+/durable-tasks
+/durable-task dtask_1
 /processes
 <<<
 请分析这段多行输入

@@ -34,8 +34,8 @@ from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
+from mini_agent.durable_tasks import DurableTaskStore
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
-from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 
 
 @dataclass
@@ -115,8 +115,18 @@ def main() -> int:
         EvalCase("trace_inspection_tools_via_registry", eval_trace_inspection_tools_via_registry),
         EvalCase("durable_task_schema_spec", eval_durable_task_schema_spec),
         EvalCase("durable_task_taskmanager_mapping_spec", eval_durable_task_taskmanager_mapping_spec),
-        EvalCase("task_manager_durable_shadow_consistency", eval_task_manager_durable_shadow_consistency),
-        EvalCase("task_manager_durable_shadow_failure_isolation", eval_task_manager_durable_shadow_failure_isolation),
+        EvalCase("list_durable_tasks_returns_correct_fields", eval_list_durable_tasks_returns_correct_fields),
+        EvalCase("get_durable_task_returns_complete_data", eval_get_durable_task_returns_complete_data),
+        EvalCase("durable_task_status_transitions", eval_durable_task_status_transitions),
+        EvalCase("cli_durable_tasks_output_format", eval_cli_durable_tasks_output_format),
+        EvalCase("cli_durable_task_detail_output", eval_cli_durable_task_detail_output),
+        EvalCase("cli_dashboard_shows_status_distribution", eval_cli_dashboard_shows_status_distribution),
+        EvalCase("cli_dashboard_shows_running_and_completed", eval_cli_dashboard_shows_running_and_completed),
+        EvalCase("crud_create_durable_task", eval_crud_create_durable_task),
+        EvalCase("crud_get_durable_task", eval_crud_get_durable_task),
+        EvalCase("crud_update_durable_task", eval_crud_update_durable_task),
+        EvalCase("crud_delete_durable_task", eval_crud_delete_durable_task),
+        EvalCase("crud_full_lifecycle", eval_crud_full_lifecycle),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1147,101 +1157,573 @@ def eval_durable_task_taskmanager_mapping_spec():
     assert "lossy" in text.lower(), "keyword 'lossy' not found in spec"
 
 
-def eval_task_manager_durable_shadow_consistency():
-    """Verify that TaskManager shadow-writes to DurableTaskStore with consistent semantics."""
+def eval_list_durable_tasks_returns_correct_fields():
+    """list_durable_tasks registry tool returns correct task count and fields."""
+    import json as _json
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         db = NoraDB(tmp_path / "test.db")
         try:
-            durable_store = DurableTaskStore(db=db)
-            manager = TaskManager(
-                tmp_path / "task.json",
-                durable_store=durable_store,
-                enable_durable_shadow=True,
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+
+            # Empty state returns empty JSON array
+            result = registry.call("list_durable_tasks")
+            parsed = _json.loads(result)
+            assert parsed == [], f"expected empty list, got {parsed}"
+
+            # Create 3 tasks
+            store = registry.durable_task_store
+            store.create_task(
+                goal="task one",
+                steps=[{"text": "step A"}, {"text": "step B"}],
+            )
+            store.create_task(
+                goal="task two",
+                steps=[{"text": "step X"}],
+                input_summary="input summary two",
+            )
+            store.create_task(
+                goal="task three",
+                steps=[{"text": "step Y"}, {"text": "step Z"}],
             )
 
-            # Create task
-            manager.start("构建功能", "写代码\n写测试\n提交")
+            # list returns all 3 with correct fields
+            result = registry.call("list_durable_tasks")
+            parsed = _json.loads(result)
+            assert len(parsed) == 3, f"expected 3 tasks, got {len(parsed)}"
 
-            # Update step 1 to done with summary
-            manager.update_step(1, "done", note="代码完成", summary="实现了核心功能")
+            required_fields = {"task_id", "status", "goal", "current_step", "checkpoint_count"}
+            for item in parsed:
+                assert required_fields.issubset(item.keys()), f"missing fields in {item}"
+                assert item["status"] == "pending", f"expected pending, got {item['status']}"
+                assert item["current_step"] is None, f"expected None, got {item['current_step']}"
+                assert item["checkpoint_count"] == 0, f"expected 0, got {item['checkpoint_count']}"
 
-            # Update step 2 to done
-            manager.update_step(2, "done", summary="测试通过")
+            # Verify specific goals
+            goals = {item["goal"] for item in parsed}
+            assert goals == {"task one", "task two", "task three"}, f"unexpected goals: {goals}"
 
-            # Finish task
-            manager.finish("功能完成，所有测试通过")
+            # Limit works
+            result = registry.call("list_durable_tasks", limit=1)
+            parsed = _json.loads(result)
+            assert len(parsed) == 1, f"expected 1 task with limit=1, got {len(parsed)}"
 
-            # Verify DurableTaskStore has the shadow task
-            tasks = durable_store.list_tasks()
-            assert len(tasks) >= 1, f"expected >=1 durable task, got {len(tasks)}"
-
-            # Find the shadow task (most recent)
-            dt = tasks[0]
-            assert dt.goal == "构建功能", f"goal mismatch: {dt.goal}"
-            assert dt.status == TaskStatus.COMPLETED, f"status mismatch: {dt.status}"
-            assert len(dt.steps) == 3, f"step count mismatch: {len(dt.steps)}"
-            assert dt.finished_at is not None, "finished_at should be set"
-
-            # Step text consistency
-            assert dt.steps[0].text == "写代码", f"step 0 text: {dt.steps[0].text}"
-            assert dt.steps[1].text == "写测试", f"step 1 text: {dt.steps[1].text}"
-            assert dt.steps[2].text == "提交", f"step 2 text: {dt.steps[2].text}"
-
-            # Step status consistency
-            assert dt.steps[0].status == "done", f"step 0 status: {dt.steps[0].status}"
-            assert dt.steps[1].status == "done", f"step 1 status: {dt.steps[1].status}"
-            # Step 2 may be pending or done depending on shadow implementation
-
-            # Step summary consistency
-            assert dt.steps[0].summary == "实现了核心功能", f"step 0 summary: {dt.steps[0].summary}"
-            assert dt.steps[1].summary == "测试通过", f"step 1 summary: {dt.steps[1].summary}"
+            # Non-existent task returns error
+            result = registry.call("get_durable_task", task_id="dtask_999")
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error key, got {parsed}"
         finally:
             db.close()
 
 
-def eval_task_manager_durable_shadow_failure_isolation():
-    """Verify that DurableTaskStore failures don't break TaskManager."""
-    class FailingDurableStore:
-        """A fake store that always raises on write operations."""
-        def create_task(self, **kwargs):
-            raise RuntimeError("store unavailable")
-
-        def get_task(self, task_id):
-            raise RuntimeError("store unavailable")
-
-        def list_tasks(self, limit=50):
-            raise RuntimeError("store unavailable")
-
-        def update_status(self, task_id, status, failure_reason=""):
-            raise RuntimeError("store unavailable")
-
-        def add_checkpoint(self, task_id, checkpoint):
-            raise RuntimeError("store unavailable")
+def eval_get_durable_task_returns_complete_data():
+    """get_durable_task registry tool returns complete task data including steps, checkpoints, and failure."""
+    import json as _json
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
-        failing_store = FailingDurableStore()
-        manager = TaskManager(
-            tmp_path / "task.json",
-            durable_store=failing_store,
-            enable_durable_shadow=True,
-        )
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+            store = registry.durable_task_store
 
-        # TaskManager should still work despite durable store failures
-        result = manager.start("测试隔离", "步骤一\n步骤二")
-        assert "已创建任务" in result, f"start failed: {result}"
+            task = store.create_task(
+                goal="full data task",
+                steps=[{"text": "prepare"}, {"text": "execute"}, {"text": "verify"}],
+                run_id="run_42",
+                input_summary="do something important",
+                worker_id="worker_1",
+            )
 
-        result = manager.update_step(1, "done", summary="完成")
-        assert "已更新步骤" in result, f"update_step failed: {result}"
+            # Add a checkpoint
+            store.add_checkpoint(task.task_id, {
+                "step_id": 1,
+                "run_id": "run_42",
+                "state_snapshot": {"progress": "half done"},
+                "description": "mid-task snapshot",
+            })
 
-        result = manager.finish("隔离测试完成")
-        assert "已完成任务" in result, f"finish failed: {result}"
+            # Advance to running
+            store.update_status(task.task_id, "running")
 
-        # Old task data should be intact
-        task = manager.get_current_task()
-        assert task["goal"] == "测试隔离", f"goal mismatch: {task['goal']}"
-        assert task["status"] == "finished", f"status mismatch: {task['status']}"
+            result = registry.call("get_durable_task", task_id=task.task_id)
+            parsed = _json.loads(result)
+
+            assert parsed["task_id"] == task.task_id
+            assert parsed["run_id"] == "run_42"
+            assert parsed["status"] == "running"
+            assert parsed["goal"] == "full data task"
+            assert parsed["input_summary"] == "do something important"
+            assert parsed["worker_id"] == "worker_1"
+            assert len(parsed["steps"]) == 3
+            assert parsed["steps"][0]["text"] == "prepare"
+            assert parsed["steps"][0]["status"] == "pending"
+            assert len(parsed["checkpoints"]) == 1
+            assert parsed["checkpoints"][0]["description"] == "mid-task snapshot"
+            assert parsed["checkpoints"][0]["state_snapshot"]["progress"] == "half done"
+            assert parsed["failure_reason"] == ""
+        finally:
+            db.close()
+
+
+def eval_durable_task_status_transitions():
+    """Task status transitions are validated: valid transitions succeed, invalid ones raise."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            store = DurableTaskStore(db=db)
+
+            # Happy path: pending -> running -> completed
+            t1 = store.create_task(goal="happy path", steps=[{"text": "do it"}])
+            assert t1.status == "pending"
+            t1 = store.update_status(t1.task_id, "running")
+            assert t1.status == "running"
+            assert t1.finished_at is None
+            t1 = store.update_status(t1.task_id, "completed")
+            assert t1.status == "completed"
+            assert t1.finished_at is not None
+
+            # Pending -> cancelled
+            t2 = store.create_task(goal="cancel path", steps=[{"text": "do it"}])
+            t2 = store.update_status(t2.task_id, "cancelled")
+            assert t2.status == "cancelled"
+            assert t2.finished_at is not None
+
+            # Running -> paused -> running -> failed
+            t3 = store.create_task(goal="pause resume fail", steps=[{"text": "do it"}])
+            store.update_status(t3.task_id, "running")
+            t3 = store.update_status(t3.task_id, "paused")
+            assert t3.status == "paused"
+            t3 = store.update_status(t3.task_id, "running")
+            assert t3.status == "running"
+            t3 = store.update_status(t3.task_id, "failed", failure_reason="timeout")
+            assert t3.status == "failed"
+            assert t3.failure_reason == "timeout"
+
+            # Running -> blocked -> running
+            t4 = store.create_task(goal="blocked path", steps=[{"text": "do it"}])
+            store.update_status(t4.task_id, "running")
+            t4 = store.update_status(t4.task_id, "blocked")
+            assert t4.status == "blocked"
+            t4 = store.update_status(t4.task_id, "running")
+            assert t4.status == "running"
+
+            # Invalid transitions raise ValueError
+            t5 = store.create_task(goal="invalid transitions", steps=[{"text": "do it"}])
+            try:
+                store.update_status(t5.task_id, "completed")
+                assert False, "should have raised for pending->completed"
+            except ValueError as e:
+                assert "Invalid transition" in str(e)
+
+            # Terminal states cannot transition
+            t6 = store.create_task(goal="terminal", steps=[{"text": "do it"}])
+            store.update_status(t6.task_id, "running")
+            store.update_status(t6.task_id, "completed")
+            try:
+                store.update_status(t6.task_id, "running")
+                assert False, "should have raised for completed->running"
+            except ValueError as e:
+                assert "Invalid transition" in str(e)
+        finally:
+            db.close()
+
+
+def eval_cli_durable_tasks_output_format():
+    """CLI /durable-tasks output is readable and contains task summary lines."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+            store = registry.durable_task_store
+
+            # Empty state
+            cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
+            result = cli.handle_slash_command("/durable-tasks")
+            assert "暂无 durable tasks" in result, f"expected empty message, got: {result}"
+
+            # Create tasks
+            t1 = store.create_task(
+                goal="implement feature X",
+                steps=[{"text": "design"}, {"text": "code"}, {"text": "test"}],
+            )
+            store.create_task(
+                goal="fix bug Y in the authentication module",
+                steps=[{"text": "reproduce"}, {"text": "fix"}],
+            )
+
+            result = cli.handle_slash_command("/durable-tasks")
+            assert "最近 2 条 durable tasks" in result, f"expected count header, got: {result}"
+            assert "dtask_" in result, f"expected task_id, got: {result}"
+            assert "pending" in result, f"expected status, got: {result}"
+            assert "implement feature X" in result, f"expected goal, got: {result}"
+            assert "checkpoints=0" in result, f"expected checkpoint count, got: {result}"
+            assert "step=-" in result, f"expected step placeholder for pending task, got: {result}"
+
+            # After advancing a task, output reflects the change
+            store.update_status(t1.task_id, "running")
+            result = cli.handle_slash_command("/durable-tasks")
+            assert "running" in result, f"expected running status, got: {result}"
+        finally:
+            db.close()
+
+
+def eval_cli_durable_task_detail_output():
+    """CLI /durable-task <task_id> returns full JSON detail."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+            store = registry.durable_task_store
+
+            task = store.create_task(
+                goal="detail test task",
+                steps=[{"text": "step one"}, {"text": "step two"}],
+                run_id="run_detail",
+                input_summary="test detail output",
+            )
+            store.add_checkpoint(task.task_id, {
+                "step_id": 1,
+                "run_id": "run_detail",
+                "state_snapshot": {},
+                "description": "test checkpoint",
+            })
+
+            cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
+
+            # Valid task returns JSON
+            result = cli.handle_slash_command(f"/durable-task {task.task_id}")
+            parsed = _json.loads(result)
+            assert parsed["task_id"] == task.task_id
+            assert parsed["goal"] == "detail test task"
+            assert parsed["run_id"] == "run_detail"
+            assert len(parsed["steps"]) == 2
+            assert len(parsed["checkpoints"]) == 1
+            assert parsed["checkpoints"][0]["description"] == "test checkpoint"
+
+            # Non-existent task returns error message
+            result = cli.handle_slash_command("/durable-task dtask_999")
+            assert "未找到" in result, f"expected not-found message, got: {result}"
+        finally:
+            db.close()
+
+
+def eval_cli_dashboard_shows_status_distribution():
+    """CLI /dashboard shows status counts and total."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+            store = registry.durable_task_store
+
+            # Empty state
+            cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
+            result = cli.handle_slash_command("/dashboard")
+            assert "暂无 durable tasks" in result
+
+            # Create tasks in various statuses
+            t1 = store.create_task(goal="pending task", steps=[{"text": "a"}])
+            t2 = store.create_task(goal="running task", steps=[{"text": "b"}, {"text": "c"}])
+            store.update_status(t2.task_id, "running")
+            t3 = store.create_task(goal="done task", steps=[{"text": "d"}])
+            store.update_status(t3.task_id, "running")
+            store.update_status(t3.task_id, "completed")
+            t4 = store.create_task(goal="failed task", steps=[{"text": "e"}])
+            store.update_status(t4.task_id, "running")
+            store.update_status(t4.task_id, "failed", failure_reason="crash")
+
+            result = cli.handle_slash_command("/dashboard")
+            assert "Durable Task Dashboard" in result, f"missing header: {result}"
+            assert "pending: 1" in result, f"missing pending count: {result}"
+            assert "running: 1" in result, f"missing running count: {result}"
+            assert "completed: 1" in result, f"missing completed count: {result}"
+            assert "failed: 1" in result, f"missing failed count: {result}"
+            assert "总计: 4" in result, f"missing total: {result}"
+        finally:
+            db.close()
+
+
+def eval_cli_dashboard_shows_running_and_completed():
+    """CLI /dashboard lists running tasks with step info and recent completions."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmp_path, db=db)
+            store = registry.durable_task_store
+
+            # Create running task
+            t_running = store.create_task(
+                goal="build dashboard feature",
+                steps=[{"text": "design"}, {"text": "implement"}, {"text": "test"}],
+            )
+            store.update_status(t_running.task_id, "running")
+
+            # Create completed task
+            t_done = store.create_task(
+                goal="fix authentication bug",
+                steps=[{"text": "reproduce"}, {"text": "fix"}],
+            )
+            store.update_status(t_done.task_id, "running")
+            store.update_status(t_done.task_id, "completed")
+
+            # Create failed task
+            t_fail = store.create_task(
+                goal="deploy to production",
+                steps=[{"text": "build"}, {"text": "deploy"}],
+            )
+            store.update_status(t_fail.task_id, "running")
+            store.update_status(t_fail.task_id, "failed", failure_reason="timeout error")
+
+            cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
+            result = cli.handle_slash_command("/dashboard")
+
+            # Running section
+            assert "进行中的任务" in result, f"missing running section: {result}"
+            assert "build dashboard feature" in result, f"missing running goal: {result}"
+
+            # Completed section
+            assert "最近完成的任务" in result, f"missing completed section: {result}"
+            assert "fix authentication bug" in result, f"missing completed goal: {result}"
+
+            # Failed section
+            assert "失败的任务" in result, f"missing failed section: {result}"
+            assert "deploy to production" in result, f"missing failed goal: {result}"
+            assert "timeout error" in result, f"missing failure reason: {result}"
+        finally:
+            db.close()
+
+
+def eval_crud_create_durable_task():
+    """create_durable_task registry tool returns correct fields."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmp_path, db=db,
+                confirm_action=lambda prompt: True,
+            )
+            result = registry.call(
+                "create_durable_task",
+                goal="eval CRUD create",
+                steps="step one\nstep two\nstep three",
+            )
+            parsed = _json.loads(result)
+            assert "task_id" in parsed, f"missing task_id: {parsed}"
+            assert parsed["task_id"].startswith("dtask_"), f"bad id format: {parsed['task_id']}"
+            assert parsed["goal"] == "eval CRUD create"
+            assert parsed["status"] == "pending"
+            assert len(parsed["steps"]) == 3
+            assert parsed["steps"][0]["text"] == "step one"
+            assert parsed["steps"][0]["status"] == "pending"
+            assert parsed["steps"][2]["text"] == "step three"
+            assert parsed["created_at"], f"missing created_at"
+            assert parsed["updated_at"], f"missing updated_at"
+            assert parsed["failure_reason"] == ""
+        finally:
+            db.close()
+
+
+def eval_crud_get_durable_task():
+    """get_durable_task registry tool returns complete data for created task."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmp_path, db=db,
+                confirm_action=lambda prompt: True,
+            )
+            create_result = registry.call(
+                "create_durable_task",
+                goal="eval CRUD get",
+                steps="step A\nstep B",
+            )
+            created = _json.loads(create_result)
+            task_id = created["task_id"]
+
+            result = registry.call("get_durable_task", task_id=task_id)
+            parsed = _json.loads(result)
+            assert parsed["task_id"] == task_id
+            assert parsed["goal"] == "eval CRUD get"
+            assert parsed["status"] == "pending"
+            assert len(parsed["steps"]) == 2
+            assert parsed["steps"][0]["text"] == "step A"
+            assert parsed["steps"][1]["text"] == "step B"
+
+            # Non-existent task
+            result = registry.call("get_durable_task", task_id="dtask_999")
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error: {parsed}"
+        finally:
+            db.close()
+
+
+def eval_crud_update_durable_task():
+    """update_durable_task registry tool updates status correctly."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmp_path, db=db,
+                confirm_action=lambda prompt: True,
+            )
+            create_result = registry.call(
+                "create_durable_task",
+                goal="eval CRUD update",
+                steps="step X",
+            )
+            created = _json.loads(create_result)
+            task_id = created["task_id"]
+
+            # pending -> running
+            result = registry.call("update_durable_task", task_id=task_id, status="running")
+            parsed = _json.loads(result)
+            assert parsed["status"] == "running"
+            assert parsed["task_id"] == task_id
+
+            # running -> failed with reason
+            result = registry.call(
+                "update_durable_task",
+                task_id=task_id,
+                status="failed",
+                failure_reason="timeout",
+            )
+            parsed = _json.loads(result)
+            assert parsed["status"] == "failed"
+            assert parsed["failure_reason"] == "timeout"
+            assert parsed["finished_at"] is not None
+
+            # Invalid transition returns error
+            result = registry.call("update_durable_task", task_id=task_id, status="running")
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error for invalid transition: {parsed}"
+
+            # Missing status returns error
+            result = registry.call("update_durable_task", task_id=task_id, status="")
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error for missing status: {parsed}"
+        finally:
+            db.close()
+
+
+def eval_crud_delete_durable_task():
+    """delete_durable_task registry tool removes task and confirms deletion."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmp_path, db=db,
+                confirm_action=lambda prompt: True,
+            )
+            create_result = registry.call(
+                "create_durable_task",
+                goal="eval CRUD delete",
+                steps="step D",
+            )
+            created = _json.loads(create_result)
+            task_id = created["task_id"]
+
+            # Delete succeeds
+            result = registry.call("delete_durable_task", task_id=task_id)
+            parsed = _json.loads(result)
+            assert parsed["deleted"] is True
+            assert parsed["task_id"] == task_id
+
+            # Verify task is gone
+            result = registry.call("get_durable_task", task_id=task_id)
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error after delete: {parsed}"
+
+            # Delete non-existent returns error
+            result = registry.call("delete_durable_task", task_id="dtask_999")
+            parsed = _json.loads(result)
+            assert "error" in parsed, f"expected error for missing task: {parsed}"
+        finally:
+            db.close()
+
+
+def eval_crud_full_lifecycle():
+    """Full CRUD lifecycle: create -> get -> update -> delete."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        db = NoraDB(tmp_path / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmp_path, db=db,
+                confirm_action=lambda prompt: True,
+            )
+
+            # Create
+            result = registry.call(
+                "create_durable_task",
+                goal="lifecycle test",
+                steps="prepare\nexecute\nverify",
+            )
+            created = _json.loads(result)
+            task_id = created["task_id"]
+            assert created["status"] == "pending"
+            assert len(created["steps"]) == 3
+
+            # Get
+            result = registry.call("get_durable_task", task_id=task_id)
+            fetched = _json.loads(result)
+            assert fetched["task_id"] == task_id
+            assert fetched["goal"] == "lifecycle test"
+
+            # Update pending -> running
+            result = registry.call("update_durable_task", task_id=task_id, status="running")
+            updated = _json.loads(result)
+            assert updated["status"] == "running"
+
+            # Update running -> completed
+            result = registry.call("update_durable_task", task_id=task_id, status="completed")
+            updated = _json.loads(result)
+            assert updated["status"] == "completed"
+            assert updated["finished_at"] is not None
+
+            # Verify final state via get
+            result = registry.call("get_durable_task", task_id=task_id)
+            final = _json.loads(result)
+            assert final["status"] == "completed"
+
+            # Delete
+            result = registry.call("delete_durable_task", task_id=task_id)
+            deleted = _json.loads(result)
+            assert deleted["deleted"] is True
+
+            # Confirm gone
+            result = registry.call("get_durable_task", task_id=task_id)
+            assert "error" in _json.loads(result)
+
+            # Also verify list no longer contains it
+            result = registry.call("list_durable_tasks")
+            listing = _json.loads(result)
+            assert all(item["task_id"] != task_id for item in listing), "deleted task still in list"
+        finally:
+            db.close()
 
 
 def _init_git_repo(root: Path) -> None:

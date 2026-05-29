@@ -433,6 +433,7 @@ class MiniAgentCLI:
                 "  /trace <trace_id> - 查看单条 trace 详情",
                 "  /durable-tasks [n] - 查看最近 durable tasks",
                 "  /durable-task <task_id> - 查看单条 durable task 详情",
+                "  /dashboard - Durable task 状态概览",
                 "",
                 "Git:",
                 "  /status - 查看 Git 状态",
