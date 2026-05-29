@@ -319,5 +319,108 @@ class WebSocketHandlerUnitTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+def _ws_handshake_with_origin(port, origin, token=None, path="/ws"):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(("127.0.0.1", port))
+    key = base64.b64encode(b"test_key_origin00").decode()
+    url_path = path
+    if token:
+        url_path += f"?token={token}"
+    origin_line = f"Origin: {origin}\r\n" if origin else ""
+    request = (
+        f"GET {url_path} HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"{origin_line}"
+        f"\r\n"
+    )
+    sock.sendall(request.encode())
+    response = b""
+    while b"\r\n\r\n" not in response:
+        response += sock.recv(4096)
+    return sock, response
+
+
+class WebSocketOriginTests(unittest.TestCase):
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        self.agent = MiniAgent(build_default_registry(notes_path=Path(self.tmpdir) / "notes.txt"))
+        self.server = create_server(self.agent, host="127.0.0.1", port=self.port, api_token="secret")
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def test_evil_origin_rejected(self):
+        sock, response = _ws_handshake_with_origin(self.port, "https://evil.example", token="secret")
+        try:
+            self.assertIn(b"403", response)
+        finally:
+            sock.close()
+
+    def test_localhost_origin_allowed(self):
+        sock, response = _ws_handshake_with_origin(self.port, "http://localhost:8080", token="secret")
+        try:
+            self.assertIn(b"101", response)
+        finally:
+            sock.close()
+
+    def test_127_0_0_1_origin_allowed(self):
+        sock, response = _ws_handshake_with_origin(self.port, "http://127.0.0.1:8080", token="secret")
+        try:
+            self.assertIn(b"101", response)
+        finally:
+            sock.close()
+
+    def test_ipv6_loopback_origin_allowed(self):
+        sock, response = _ws_handshake_with_origin(self.port, "http://[::1]:8080", token="secret")
+        try:
+            self.assertIn(b"101", response)
+        finally:
+            sock.close()
+
+    def test_same_host_origin_allowed(self):
+        sock, response = _ws_handshake_with_origin(self.port, "http://127.0.0.1:9999", token="secret")
+        try:
+            self.assertIn(b"101", response)
+        finally:
+            sock.close()
+
+    def test_no_origin_allowed(self):
+        sock, response = _ws_handshake_with_origin(self.port, None, token="secret")
+        try:
+            self.assertIn(b"101", response)
+        finally:
+            sock.close()
+
+    def test_no_token_allows_all_origins(self):
+        """When api_token is empty, all Origins are allowed."""
+        port = _find_free_port()
+        tmpdir = tempfile.mkdtemp()
+        agent = MiniAgent(build_default_registry(notes_path=Path(tmpdir) / "notes.txt"))
+        server = create_server(agent, host="127.0.0.1", port=port)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            sock, response = _ws_handshake_with_origin(port, "https://evil.example")
+            try:
+                self.assertIn(b"101", response)
+            finally:
+                sock.close()
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,10 @@
+[run]
+source = mini_agent
+
+[report]
+omit =
+    tests/*
+    evals/*
+    .venv/*
+    setup.py
+    main.py

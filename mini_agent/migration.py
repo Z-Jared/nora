@@ -125,6 +125,24 @@ def migrate_jsonl_to_sqlite(db: NoraDB, data_dir: Path, logs_dir: Path | None = 
         _backup(tl_path)
         migrated.append("tool_logs")
 
+    # Durable tasks
+    dt_path = data_dir / "durable_tasks.jsonl"
+    if dt_path.exists():
+        from mini_agent.durable_tasks import DurableTask, DurableTaskStore, DurableStep, DurableCheckpoint
+
+        dt_store = DurableTaskStore(db=db)
+        dt_store._ensure_table()
+        if not db.has_data("durable_tasks"):
+            records = read_jsonl(dt_path)
+            for r in records:
+                try:
+                    task = DurableTask.from_dict(r)
+                    dt_store.upsert_task(task)
+                except (KeyError, TypeError, ValueError):
+                    continue
+            _backup(dt_path)
+            migrated.append("durable_tasks")
+
     # Sessions
     sessions_dir = data_dir / "sessions"
     if sessions_dir.exists() and sessions_dir.is_dir() and not db.has_data("sessions"):

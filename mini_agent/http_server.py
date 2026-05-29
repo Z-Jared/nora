@@ -129,7 +129,45 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
 
         self.metrics.record(path, self._last_status, time.monotonic() - start)
 
+    def _check_websocket_origin(self) -> bool:
+        """Check WebSocket Origin header when api_token is set.
+
+        Returns True if allowed, False if rejected.
+        When api_token is empty, all Origins are allowed (backward compat).
+        When api_token is set:
+          - No Origin header → allowed (non-browser clients)
+          - localhost / 127.0.0.1 / [::1] → allowed
+          - Same as Host header → allowed
+          - Otherwise → rejected
+        """
+        if not self.api_token:
+            return True
+
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True
+
+        try:
+            parsed = urlparse(origin)
+            hostname = parsed.hostname or ""
+        except Exception:
+            return False
+
+        if hostname in ("localhost", "127.0.0.1", "[::1]", "::1"):
+            return True
+
+        host_header = self.headers.get("Host", "")
+        host_name = host_header.split(":")[0] if host_header else ""
+        if host_name and hostname == host_name:
+            return True
+
+        return False
+
     def _handle_websocket(self) -> None:
+        if not self._check_websocket_origin():
+            self._json_response(403, {"error": "forbidden: cross-origin WebSocket rejected"})
+            return
+
         ws = WebSocketConnection.accept_upgrade(self)
         if not ws:
             self._json_response(400, {"error": "WebSocket upgrade failed"})

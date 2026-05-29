@@ -11,6 +11,7 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.logs import JsonlToolLogger
 from mini_agent.session import SessionStore, ConversationMemory
 from mini_agent.migration import migrate_jsonl_to_sqlite
+from mini_agent.durable_tasks import DurableTaskStore, DurableTask, DurableStep, DurableCheckpoint
 
 
 class NoraDBTests(unittest.TestCase):
@@ -471,6 +472,86 @@ class MigrationTests(unittest.TestCase):
             migrate_jsonl_to_sqlite(db, data_dir)
             mem = LongTermMemory(db=db)
             self.assertEqual(mem.list().count("hello"), 1)
+            db.close()
+
+    def test_migrates_durable_tasks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            data_dir = tmpdir / "data"
+            data_dir.mkdir()
+            dt_path = data_dir / "durable_tasks.jsonl"
+            task_dict = {
+                "task_id": "dtask_1",
+                "run_id": "run_1",
+                "parent_task_id": None,
+                "status": "completed",
+                "goal": "build widget",
+                "steps": [
+                    {"id": 1, "text": "design", "status": "done", "note": "", "summary": "", "tool_hint": "", "checkpoint_ref": None},
+                    {"id": 2, "text": "implement", "status": "done", "note": "", "summary": "", "tool_hint": "", "checkpoint_ref": None},
+                ],
+                "current_step": 2,
+                "checkpoints": [],
+                "input_summary": "",
+                "context_pack_ref": None,
+                "trace_refs": [],
+                "worker_id": None,
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-01T01:00:00",
+                "finished_at": "2024-01-01T01:00:00",
+                "failure_reason": "",
+                "resume_policy": None,
+                "retry_count": 0,
+                "max_retries": 3,
+            }
+            dt_path.write_text(json.dumps(task_dict, ensure_ascii=False) + "\n", encoding="utf-8")
+            db = NoraDB(tmpdir / "test.db")
+            migrated = migrate_jsonl_to_sqlite(db, data_dir)
+            self.assertIn("durable_tasks", migrated)
+            store = DurableTaskStore(db=db)
+            tasks = store.list_tasks()
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0].task_id, "dtask_1")
+            self.assertEqual(tasks[0].goal, "build widget")
+            self.assertEqual(tasks[0].status, "completed")
+            self.assertEqual(len(tasks[0].steps), 2)
+            self.assertTrue(dt_path.with_suffix(".jsonl.bak").exists())
+            db.close()
+
+    def test_durable_tasks_migration_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            data_dir = tmpdir / "data"
+            data_dir.mkdir()
+            dt_path = data_dir / "durable_tasks.jsonl"
+            task_dict = {
+                "task_id": "dtask_1",
+                "run_id": "run_1",
+                "parent_task_id": None,
+                "status": "pending",
+                "goal": "test goal",
+                "steps": [],
+                "current_step": None,
+                "checkpoints": [],
+                "input_summary": "",
+                "context_pack_ref": None,
+                "trace_refs": [],
+                "worker_id": None,
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-01T00:00:00",
+                "finished_at": None,
+                "failure_reason": "",
+                "resume_policy": None,
+                "retry_count": 0,
+                "max_retries": 3,
+            }
+            dt_path.write_text(json.dumps(task_dict, ensure_ascii=False) + "\n", encoding="utf-8")
+            db = NoraDB(tmpdir / "test.db")
+            migrate_jsonl_to_sqlite(db, data_dir)
+            # Second migration — file already backed up, no duplicate
+            migrate_jsonl_to_sqlite(db, data_dir)
+            store = DurableTaskStore(db=db)
+            self.assertEqual(len(store.list_tasks()), 1)
             db.close()
 
 
