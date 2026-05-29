@@ -8,15 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-010: Eval coverage for tool-call events
-- 优先级: high
-- 预计: 1 小时
-- 依赖: 等待 TASK-009
-- 目标: 为 durable tool-call event logging 增加 deterministic offline eval，验证工具成功、工具失败、权限取消和 event write failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
-- 参考: `evals/run_evals.py` trace/durable event eval 区域；TASK-009 新增行为。
+（空 — 当前任务已完成）
 
 ## 已完成
+
+### TASK-010: Eval coverage for tool-call events ✅
+- 完成者: Claude B
+- 验证: `python3 evals/run_evals.py` 93 passed；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 168 tests OK
+- 工作树: .ccb/workspaces/claude-b；PM 已移植到 /Users/mac/Documents/agent
+- 内容: 新增 4 个 deterministic offline eval，覆盖 tool-call success、error、permission blocked/cancelled、event write failure isolation。
 
 ### TASK-009: Durable tool-call event logging ✅
 - 完成者: Claude A

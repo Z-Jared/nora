@@ -35,7 +35,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore
+from mini_agent.durable_events import DurableEventStore, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -136,6 +136,10 @@ def main() -> int:
         EvalCase("durable_event_task_lifecycle", eval_durable_event_task_lifecycle),
         EvalCase("durable_event_trace_linkage", eval_durable_event_trace_linkage),
         EvalCase("durable_event_failure_isolation", eval_durable_event_failure_isolation),
+        EvalCase("tool_call_event_success", eval_tool_call_event_success),
+        EvalCase("tool_call_event_error", eval_tool_call_event_error),
+        EvalCase("tool_call_event_permission_blocked_or_cancelled", eval_tool_call_event_permission_blocked_or_cancelled),
+        EvalCase("tool_call_event_failure_isolation", eval_tool_call_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -2047,6 +2051,160 @@ def eval_durable_event_failure_isolation():
             assert len(trace_store.list_traces()) == 1, "trace recording should survive event failure"
         finally:
             db.close()
+
+
+def eval_tool_call_event_success():
+    """Successful tool call writes TOOL_CALL_STARTED and TOOL_CALL_FINISHED with correct payload fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, event_store=event_store)
+
+            agent.run("计算 2 + 3")
+
+            events = event_store.list_events()
+            started = [e for e in events if e.event_type == TOOL_CALL_STARTED]
+            finished = [e for e in events if e.event_type == TOOL_CALL_FINISHED]
+
+            assert len(started) >= 1, f"expected >=1 started event, got {len(started)}"
+            assert len(finished) >= 1, f"expected >=1 finished event, got {len(finished)}"
+
+            s = started[0]
+            assert s.payload["tool_name"] == "calculate", f"tool_name: {s.payload['tool_name']}"
+            assert s.payload["status"] == "started"
+            assert s.severity == "info"
+
+            f = finished[0]
+            assert f.payload["tool_name"] == "calculate"
+            assert f.payload["status"] == "ok"
+            assert "result_preview" in f.payload
+            assert f.severity == "info"
+
+            # result_preview must contain the actual result
+            assert "5" in f.payload["result_preview"], f"result_preview: {f.payload['result_preview']}"
+
+            # started and finished must share the same tool_name
+            assert s.payload["tool_name"] == f.payload["tool_name"]
+        finally:
+            db.close()
+
+
+def eval_tool_call_event_error():
+    """Tool that raises records TOOL_CALL_ERROR with error status and no crash."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+
+            class FailingRegistry:
+                def call(self, name, **kwargs):
+                    raise RuntimeError("simulated failure for eval")
+                def permission_for(self, name):
+                    return None
+                def to_openai_tools(self):
+                    return []
+                def describe(self):
+                    return ""
+
+            agent = MiniAgent(FailingRegistry(), event_store=event_store)
+            agent._active_tool_records = []
+            result = agent._call_tool("broken_tool", {"arg": "val"})
+
+            # Agent must not crash — returns an error message instead
+            assert "工具调用失败" in result, f"expected error message, got: {result}"
+            assert "simulated failure" in result
+
+            events = event_store.list_events()
+            started = [e for e in events if e.event_type == TOOL_CALL_STARTED]
+            errors = [e for e in events if e.event_type == TOOL_CALL_ERROR]
+            finished = [e for e in events if e.event_type == TOOL_CALL_FINISHED]
+
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(errors) == 1, f"expected 1 error, got {len(errors)}"
+            assert len(finished) == 0, f"error path must not emit finished event, got {len(finished)}"
+
+            err = errors[0]
+            assert err.payload["tool_name"] == "broken_tool"
+            assert err.payload["status"] == "error"
+            assert err.severity == "warning"
+            assert "simulated failure" in err.payload["result_preview"]
+        finally:
+            db.close()
+
+
+def eval_tool_call_event_permission_blocked_or_cancelled():
+    """Permission-blocked and user-cancelled tool calls emit TOOL_CALL_BLOCKED with correct status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            # --- blocked: permission requires reason but none given ---
+            registry = build_default_registry(
+                db=db, workspace_root=tmpdir,
+                permission_overrides={"calculate": True},
+            )
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, event_store=event_store)
+            agent._active_tool_records = []
+            result = agent._call_tool("calculate", {"expression": "2 + 3"})
+
+            assert "拒绝调用" in result, f"expected blocked message, got: {result}"
+            events = event_store.list_events()
+            blocked = [e for e in events if e.event_type == TOOL_CALL_BLOCKED]
+            assert len(blocked) == 1, f"expected 1 blocked event, got {len(blocked)}"
+            assert blocked[0].payload["tool_name"] == "calculate"
+            assert blocked[0].payload["status"] == "blocked"
+            assert blocked[0].severity == "warning"
+
+            # --- cancelled: user denies confirmation ---
+            registry2 = build_default_registry(
+                db=db, workspace_root=tmpdir,
+                confirm_action=lambda _prompt: False,
+            )
+            event_store2 = registry2.durable_event_store
+            agent2 = MiniAgent(registry2, event_store=event_store2)
+            agent2._active_tool_records = []
+            result2 = agent2._call_tool("git_commit_staged", {"message": "test", "reason": "eval"})
+
+            assert "已取消操作" in result2, f"expected cancel message, got: {result2}"
+            events2 = event_store2.list_events()
+            cancelled = [e for e in events2
+                         if e.event_type == TOOL_CALL_BLOCKED and e.payload.get("status") == "cancelled"]
+            finished2 = [e for e in events2 if e.event_type == TOOL_CALL_FINISHED]
+            assert len(cancelled) == 1, f"expected 1 cancelled event, got {len(cancelled)}"
+            assert len(finished2) == 0, "cancelled tool must not emit finished event"
+            assert cancelled[0].severity == "warning"
+        finally:
+            db.close()
+
+
+def eval_tool_call_event_failure_isolation():
+    """Broken event store must not break tool execution or return value."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+        def get_event(self, event_id):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        registry = build_default_registry(workspace_root=tmpdir)
+        agent = MiniAgent(registry, event_store=BrokenEventStore())
+
+        # Tool execution must still succeed despite broken event store
+        result = agent.run("计算 2 + 3")
+        assert "5" in result, f"expected result containing 5, got: {result}"
+
+        # run_events must also survive
+        events_list = list(agent.run_events("计算 4 + 5"))
+        # The stream should complete without raising
+        assert len(events_list) > 0, "run_events should produce at least one event"
 
 
 def _init_git_repo(root: Path) -> None:
