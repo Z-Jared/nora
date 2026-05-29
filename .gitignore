@@ -9,6 +9,7 @@ evals/.tmp/
 *.egg-info/
 .venv
 .coverage
+.ccb-workspace.json
 .ccb/
 CODEX_TERMINAL_HANDOFF.md
 designs/
