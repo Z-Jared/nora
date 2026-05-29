@@ -1,52 +1,47 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed by Codex PM
+Status: assigned
 
 ## Goal
 
-Add eval coverage for durable event log v1 after Claude A completes TASK-007.
+Add eval coverage for durable tool-call event logging after Claude A completes TASK-009.
 
 ## Instructions
 
-Wait for Claude A to implement `DurableEventStore` and the durable event registry tools. Then add deterministic offline eval coverage.
+Wait for Claude A to implement TASK-009. Then add deterministic offline eval coverage for tool-call events.
 
 Add eval cases for:
 
-1. Event store basics:
-   - Create/list/get durable events
-   - Required fields are present
-   - Ordering is newest-first or clearly documented and asserted
+1. Successful tool call event:
+   - Run a local/tool-backed prompt or direct agent flow that invokes a tool
+   - Verify durable event log records tool name, status, and safe result preview
 
-2. Task lifecycle events:
-   - Start task records creation/start event
-   - `run_once()` records step/checkpoint event
-   - `update_step(done)` records update/checkpoint event
-   - `finish()` records completion event
+2. Tool error event:
+   - Invoke a failing tool path
+   - Verify durable event log records an error/blocked status without crashing
 
-3. Trace linkage:
-   - Agent run records trace
-   - Durable task gets trace_ref
-   - Durable event log records the trace-linked event with task_id and trace_id
+3. Permission cancellation event:
+   - Use an unconfirmed permissioned tool path
+   - Verify durable event log records blocked/cancelled status
 
 4. Failure isolation:
-   - Fake event store failure does not break task manager or trace recording
+   - Broken event store should not change existing tool execution behavior
 
-Keep evals deterministic and offline. Do not call live LLM APIs.
+Keep evals offline and deterministic. Do not call live LLM APIs.
 
 Suggested verification:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_traces
+python3 -m unittest tests.test_durable_events tests.test_mini_agent
 ```
 
 ## Context
 
-- Current eval count before this task: 85 passing
-- Durable task / trace evals are already in `evals/run_evals.py`
-- TASK-007 should add the event store API and registry tools
-- If Claude A is not done yet, wait; do not reimplement TASK-007
+- Current eval count before this task: 89 passing
+- `evals/run_evals.py` already has durable event lifecycle evals
+- If TASK-009 is not complete, wait; do not reimplement it
 
 ## Completion Report
 
