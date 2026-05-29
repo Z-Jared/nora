@@ -590,7 +590,7 @@ python3 -m unittest discover -s tests
 python3 evals/run_evals.py
 ```
 
-eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、上下文窗口压缩、工具日志查看、RAG 排序、长期记忆、任务执行、provider factory、context compiler（git status、变更文件、Python outline、敏感路径过滤、工具返回 Markdown）和 trace store（运行记录、事件计数、工具调用摘要、敏感输入脱敏、工具结果脱敏）。
+eval 不调用真实模型，覆盖 CLI 命令解析、多行输入、核心工具、安全边界、权限确认、浏览器工具、diff 预览、patch 应用、Git 本地工作流、测试诊断、修复测试循环、后台进程管理、Python 符号索引、上下文摘要、上下文窗口压缩、工具日志查看、RAG 排序、长期记忆、任务执行、provider factory、context compiler（git status、变更文件、Python outline、敏感路径过滤、工具返回 Markdown）、trace store（运行记录、事件计数、工具调用摘要、敏感输入脱敏、工具结果脱敏）、trace inspection tools（registry call 路径）、durable task schema spec（字段、状态枚举、生命周期）、TaskManager compatibility mapping（字段映射、状态映射、lossy 迁移）、durable task shadow write consistency（语义一致性、故障隔离）、durable task CRUD 和 lifecycle。
 
 真实模型 eval：
 

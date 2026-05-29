@@ -33,6 +33,8 @@ A **DurableTask** is the top-level unit of work. It owns one or more **runs** (a
 | `finished_at` | `string \| null` | no | ISO-8601 UTC timestamp when task reached a terminal state. |
 | `failure_reason` | `string` | no | Free-text reason when status is `failed` or `cancelled`. |
 | `resume_policy` | `enum` | no | How the task should behave on resume: `from_checkpoint`, `from_step`, `from_beginning`. Default: `from_checkpoint` if checkpoints exist, else `from_step`. |
+| `retry_count` | `int` | no | Number of times this task has been retried from `failed` state. Default: `0`. |
+| `max_retries` | `int` | no | Maximum number of retries allowed. Default: `3`. When `retry_count >= max_retries`, retry is refused. |
 
 ### Status Enum
 
@@ -42,7 +44,7 @@ running     — actively executing a step
 paused      — intentionally suspended; can be resumed
 blocked     — waiting on external input or dependency
 completed   — all steps done successfully
-failed      — unrecoverable error
+failed      — error; may be retried if retry_count < max_retries
 cancelled   — user or system cancelled the task
 ```
 
@@ -54,9 +56,11 @@ running   → paused, blocked, completed, failed, cancelled
 paused    → running, cancelled
 blocked   → running, cancelled
 completed → (terminal)
-failed    → (terminal)
+failed    → pending (retry only via retry_durable_task()), cancelled
 cancelled → (terminal)
 ```
+
+**Retry semantics:** A `failed` task can transition back to `pending` **only** via `retry_durable_task()`, which increments `retry_count`, resets all steps to `pending`, and clears `failure_reason`. Retry is refused when `retry_count >= max_retries`. Direct `update_status("task_id", "pending")` on a failed task is rejected — this prevents bypassing retry limits.
 
 ### Step Record
 
@@ -308,7 +312,9 @@ CREATE TABLE durable_tasks (
     updated_at TEXT NOT NULL,
     finished_at TEXT,
     failure_reason TEXT,
-    resume_policy TEXT
+    resume_policy TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 3
 );
 ```
 

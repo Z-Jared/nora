@@ -44,7 +44,9 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.PAUSED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.BLOCKED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: {TaskStatus.PENDING},
+    # FAILED -> PENDING is NOT listed here; it can only happen via
+    # retry_durable_task(), which enforces retry_count < max_retries.
+    TaskStatus.FAILED: {TaskStatus.CANCELLED},
     TaskStatus.CANCELLED: set(),
 }
 
@@ -180,11 +182,6 @@ CREATE TABLE IF NOT EXISTS durable_tasks (
 );
 """
 
-_DURABLE_TASKS_MIGRATE_RETRY = """
-ALTER TABLE durable_tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE durable_tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3;
-"""
-
 _DURABLE_TASKS_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_dt_status ON durable_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dt_created ON durable_tasks(created_at);
@@ -221,12 +218,17 @@ class DurableTaskStore:
         if self.db and not self._table_created:
             self.db.conn.executescript(_DURABLE_TASKS_TABLE)
             self.db.conn.executescript(_DURABLE_TASKS_INDEX)
-            # Migrate existing tables: add retry columns if missing
-            try:
-                self.db.conn.executescript(_DURABLE_TASKS_MIGRATE_RETRY)
-            except Exception:
-                pass  # columns already exist
+            self._migrate_retry_columns()
             self._table_created = True
+
+    def _migrate_retry_columns(self) -> None:
+        """Add retry_count and max_retries columns if they don't exist."""
+        columns = {row[1] for row in self.db.conn.execute("PRAGMA table_info(durable_tasks)").fetchall()}
+        if "retry_count" not in columns:
+            self.db.conn.execute("ALTER TABLE durable_tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+        if "max_retries" not in columns:
+            self.db.conn.execute("ALTER TABLE durable_tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3")
+        self.db.conn.commit()
 
     def create_task(
         self,
@@ -685,6 +687,13 @@ def task_manager_task_to_durable(
 
     input_summary = task.get("summary", "")
 
+    # Find current_step: 1-based index of the in_progress step, or None
+    current_step = None
+    for s in task.get("steps", []):
+        if s.get("status") == "in_progress":
+            current_step = s.get("id")
+            break
+
     return DurableTask(
         task_id=task_id,
         run_id=run_id,
@@ -693,6 +702,7 @@ def task_manager_task_to_durable(
         steps=steps,
         created_at=created_at,
         updated_at=now,
+        current_step=current_step,
         finished_at=task.get("finished_at"),
         input_summary=input_summary,
         checkpoints=checkpoints,

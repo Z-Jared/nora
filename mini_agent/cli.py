@@ -164,7 +164,17 @@ class MiniAgentCLI:
                 return "用法: /auto [n] <goal>"
             return self._format_agent_response(self.agent.run_autonomous(" ".join(goal_parts), max_steps=max_steps))
         if command == "/task":
-            return self.registry.call("list_task")
+            if not args:
+                return self.registry.call("list_task")
+            # /task <task_id> → get durable task by ID
+            store = getattr(self.registry, "durable_task_store", None)
+            if not store:
+                return "Durable task 存储未配置。"
+            task = store.get_task(args[0])
+            if not task:
+                return f"未找到 durable task: {args[0]}"
+            import json
+            return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
         if command == "/task-next":
             return self.registry.call("run_task_once")
         if command == "/task-history":
@@ -271,7 +281,7 @@ class MiniAgentCLI:
                 return f"未找到 trace: {args[0]}"
             import json
             return json.dumps(t, ensure_ascii=False, indent=2)
-        if command == "/durable-tasks":
+        if command in ("/durable-tasks", "/tasks"):
             count = self._optional_int(args, default=20, name="limit")
             if isinstance(count, str):
                 return count
@@ -433,6 +443,7 @@ class MiniAgentCLI:
                 "  /trace <trace_id> - 查看单条 trace 详情",
                 "  /durable-tasks [n] - 查看最近 durable tasks",
                 "  /durable-task <task_id> - 查看单条 durable task 详情",
+                "  /tasks [n] - durable-tasks 的别名",
                 "  /dashboard - Durable task 状态概览",
                 "",
                 "Git:",
@@ -459,6 +470,7 @@ class MiniAgentCLI:
                 "",
                 "任务、记忆与上下文:",
                 "  /task - 查看当前任务",
+                "  /task <task_id> - 查看 durable task 详情",
                 "  /task-next - 推进当前任务一步",
                 "  /task-history [n] - 查看最近完成的任务历史",
                 "  /task-search <query> - 搜索已完成任务历史",

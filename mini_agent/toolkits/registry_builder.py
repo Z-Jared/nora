@@ -85,6 +85,7 @@ def build_default_registry(
         history_path=task_history_path or Path("data/task_history.jsonl"),
         db=db,
         durable_store=durable_task_store,
+        enable_durable_shadow=True,
     )
     context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
     tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)

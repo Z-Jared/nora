@@ -985,6 +985,22 @@ class RetryDurableTaskTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_update_status_blocks_failed_to_pending(self):
+        """update_status() must reject FAILED -> PENDING; only retry_durable_task() can do this."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                self._make_failed_task(store)
+                with self.assertRaises(ValueError) as ctx:
+                    store.update_status("dtask_1", TaskStatus.PENDING)
+                self.assertIn("Invalid transition", str(ctx.exception))
+                # Verify task is still FAILED
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.status, TaskStatus.FAILED)
+            finally:
+                db.close()
+
 
 class RetryRegistryToolTests(unittest.TestCase):
     """Tests for retry_durable_task registry tool."""
@@ -1045,6 +1061,164 @@ class RetryRegistryToolTests(unittest.TestCase):
                 result = registry.call("retry_durable_task", task_id="dtask_999")
                 parsed = json.loads(result)
                 self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+
+class CurrentStepMappingTests(unittest.TestCase):
+    """Tests for current_step in task_manager_task_to_durable()."""
+
+    def test_current_step_none_when_no_in_progress(self):
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        task = {
+            "goal": "test", "status": "active",
+            "created_at": "2026-01-01T00:00:00Z", "finished_at": None, "summary": "",
+            "steps": [
+                {"id": 1, "text": "s1", "status": "pending", "note": "", "summary": ""},
+                {"id": 2, "text": "s2", "status": "done", "note": "", "summary": ""},
+            ],
+        }
+        dt = task_manager_task_to_durable(task)
+        self.assertIsNone(dt.current_step)
+
+    def test_current_step_set_to_in_progress_step(self):
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        task = {
+            "goal": "test", "status": "active",
+            "created_at": "2026-01-01T00:00:00Z", "finished_at": None, "summary": "",
+            "steps": [
+                {"id": 1, "text": "s1", "status": "done", "note": "", "summary": ""},
+                {"id": 2, "text": "s2", "status": "in_progress", "note": "", "summary": ""},
+                {"id": 3, "text": "s3", "status": "pending", "note": "", "summary": ""},
+            ],
+        }
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.current_step, 2)
+
+    def test_current_step_first_in_progress(self):
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        task = {
+            "goal": "test", "status": "active",
+            "created_at": "2026-01-01T00:00:00Z", "finished_at": None, "summary": "",
+            "steps": [
+                {"id": 1, "text": "s1", "status": "in_progress", "note": "", "summary": ""},
+                {"id": 2, "text": "s2", "status": "in_progress", "note": "", "summary": ""},
+            ],
+        }
+        dt = task_manager_task_to_durable(task)
+        self.assertEqual(dt.current_step, 1)
+
+    def test_current_step_finished_task(self):
+        from mini_agent.durable_tasks import task_manager_task_to_durable
+        task = {
+            "goal": "test", "status": "finished",
+            "created_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-02T00:00:00Z", "summary": "",
+            "steps": [
+                {"id": 1, "text": "s1", "status": "done", "note": "", "summary": ""},
+            ],
+        }
+        dt = task_manager_task_to_durable(task)
+        self.assertIsNone(dt.current_step)
+
+
+class ShadowWriteRunOnceTests(unittest.TestCase):
+    """Tests that run_once() syncs to durable store."""
+
+    def test_run_once_syncs_to_durable(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement\ntest")
+                manager.run_once()  # marks step 1 as in_progress
+
+                tasks = store.list_tasks()
+                self.assertEqual(len(tasks), 1)
+                dt = tasks[0]
+                self.assertEqual(dt.status, "running")
+                self.assertEqual(dt.current_step, 1)
+                self.assertEqual(dt.steps[0].status, "in_progress")
+                self.assertEqual(dt.steps[1].status, "pending")
+            finally:
+                db.close()
+
+    def test_run_once_existing_in_progress_syncs(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement")
+                manager.run_once()  # step 1 in_progress
+                manager.update_step(1, "done", summary="planned")
+                manager.run_once()  # step 2 in_progress
+
+                tasks = store.list_tasks()
+                dt = tasks[0]
+                self.assertEqual(dt.current_step, 2)
+                self.assertEqual(dt.steps[0].status, "done")
+                self.assertEqual(dt.steps[1].status, "in_progress")
+            finally:
+                db.close()
+
+
+class ShadowEnabledByDefaultTests(unittest.TestCase):
+    """Tests that build_default_registry() enables shadow write."""
+
+    def test_shadow_enabled_in_default_registry(self):
+        from mini_agent.tools import build_default_registry
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = build_default_registry(db=db)
+                tm = registry.task_manager
+                self.assertTrue(tm.enable_durable_shadow)
+            finally:
+                db.close()
+
+    def test_default_registry_syncs_on_start(self):
+        from mini_agent.tools import build_default_registry
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = build_default_registry(db=db)
+                tm = registry.task_manager
+                store = registry.durable_task_store
+                tm.start("test goal", "step a\nstep b")
+
+                tasks = store.list_tasks()
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0].goal, "test goal")
+                self.assertEqual(tasks[0].status, "pending")
+            finally:
+                db.close()
+
+    def test_default_registry_syncs_on_finish(self):
+        from mini_agent.tools import build_default_registry
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = build_default_registry(db=db)
+                tm = registry.task_manager
+                store = registry.durable_task_store
+                tm.start("test goal", "step a")
+                tm.finish("done")
+
+                tasks = store.list_tasks()
+                dt = tasks[0]
+                self.assertEqual(dt.status, "completed")
+                self.assertEqual(dt.input_summary, "done")
             finally:
                 db.close()
 

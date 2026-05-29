@@ -184,6 +184,7 @@ class TaskManager:
                 step["status"] = "in_progress"
                 step["note"] = "已选为下一步执行"
                 self._write(task)
+                self._shadow_sync_to_durable(task)
                 return "\n".join(
                     [
                         f"下一步: {step['id']}. {step['text']}",
@@ -193,6 +194,7 @@ class TaskManager:
                 )
 
             if step["status"] == "in_progress":
+                self._shadow_sync_to_durable(task)
                 return "\n".join(
                     [
                         f"继续当前步骤: {step['id']}. {step['text']}",

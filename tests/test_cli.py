@@ -458,5 +458,97 @@ def _init_git_repo(root: Path) -> None:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=root, check=True, capture_output=True)
 
 
+class CLITaskCommandTests(unittest.TestCase):
+    """Tests for /task, /tasks, /durable-tasks, /durable-task CLI commands."""
+
+    def _make_cli(self, tmpdir):
+        from mini_agent.database import NoraDB
+        from mini_agent.tools import build_default_registry
+        db = NoraDB(Path(tmpdir) / "test.db")
+        registry = build_default_registry(db=db, workspace_root=Path(tmpdir))
+        cli = MiniAgentCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
+        return cli, db
+
+    def test_task_no_args_calls_legacy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            result = cli.handle_slash_command("/task")
+            self.assertIn("暂无任务", result)
+            db.close()
+
+    def test_task_with_id_gets_durable_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            store = cli.registry.durable_task_store
+            store.create_task(goal="test goal", steps=[{"text": "s1"}])
+            result = cli.handle_slash_command("/task dtask_1")
+            self.assertIn("dtask_1", result)
+            self.assertIn("test goal", result)
+            db.close()
+
+    def test_task_with_id_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            result = cli.handle_slash_command("/task dtask_999")
+            self.assertIn("未找到", result)
+            db.close()
+
+    def test_tasks_lists_durable_tasks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            store = cli.registry.durable_task_store
+            store.create_task(goal="task a", steps=[])
+            store.create_task(goal="task b", steps=[])
+            result = cli.handle_slash_command("/tasks")
+            self.assertIn("最近 2 条", result)
+            self.assertIn("task a", result)
+            self.assertIn("task b", result)
+            db.close()
+
+    def test_tasks_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            result = cli.handle_slash_command("/tasks")
+            self.assertIn("暂无 durable tasks", result)
+            db.close()
+
+    def test_tasks_with_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            store = cli.registry.durable_task_store
+            for i in range(5):
+                store.create_task(goal=f"task {i}", steps=[])
+            result = cli.handle_slash_command("/tasks 2")
+            self.assertIn("最近 2 条", result)
+            db.close()
+
+    def test_durable_tasks_still_works(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            store = cli.registry.durable_task_store
+            store.create_task(goal="legacy cmd", steps=[])
+            result = cli.handle_slash_command("/durable-tasks")
+            self.assertIn("legacy cmd", result)
+            db.close()
+
+    def test_durable_task_still_works(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli, db = self._make_cli(tmpdir)
+            store = cli.registry.durable_task_store
+            store.create_task(goal="detail test", steps=[])
+            result = cli.handle_slash_command("/durable-task dtask_1")
+            self.assertIn("dtask_1", result)
+            self.assertIn("detail test", result)
+            db.close()
+
+    def test_help_includes_new_commands(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        result = cli._help()
+        self.assertIn("/task <task_id>", result)
+        self.assertIn("/tasks [n]", result)
+        self.assertIn("/durable-tasks", result)
+        self.assertIn("/durable-task", result)
+
+
 if __name__ == "__main__":
     unittest.main()
