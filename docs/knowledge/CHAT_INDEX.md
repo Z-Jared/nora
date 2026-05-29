@@ -1,10 +1,10 @@
 # Chat Index
 
-Last imported: `2026-05-28T17:13:24Z`
+Last imported: `2026-05-29T12:19:41Z`
 
 Scope: only Codex sessions with `cwd == /Users/mac/Documents/agent`
 
-Imported project sessions: 7
+Imported project sessions: 11
 
 ## Sessions
 
@@ -15,3 +15,7 @@ Imported project sessions: 7
 - [你好](./codex_sessions/20260528T065127-你好-019e6d5a-2efd.md) - `2026-05-28T06:51:27.395Z`
 - [你好](./codex_sessions/20260528T065154-你好-019e6d5a-98f1.md) - `2026-05-28T06:51:54.515Z`
 - [你好](./codex_sessions/20260528T100013-你好-019e6e07-00f5.md) - `2026-05-28T10:00:13.338Z`
+- [# AGENTS.md instructions for /Users/mac/Documents/agent](./codex_sessions/20260529T044019-agentsmd-instructions-for-usersmacdocumentsagent-019e7208-7d3c.md) - `2026-05-29T04:40:19.565Z`
+- [# AGENTS.md instructions for /Users/mac/Documents/agent](./codex_sessions/20260529T044025-agentsmd-instructions-for-usersmacdocumentsagent-019e7208-9584.md) - `2026-05-29T04:40:25.775Z`
+- [# AGENTS.md instructions for /Users/mac/Documents/agent](./codex_sessions/20260529T095423-agentsmd-instructions-for-usersmacdocumentsagent-019e7328-0687.md) - `2026-05-29T09:54:23.538Z`
+- [# AGENTS.md instructions for /Users/mac/Documents/agent](./codex_sessions/20260529T120751-agentsmd-instructions-for-usersmacdocumentsagent-019e73a2-3661.md) - `2026-05-29T12:07:51.175Z`
