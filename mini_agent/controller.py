@@ -196,7 +196,13 @@ class MiniAgent:
         try:
             self.trace_store.record(trace)
         except Exception:
-            pass
+            return
+        durable_store = getattr(self, "durable_task_store", None)
+        if durable_store:
+            try:
+                durable_store.add_trace_ref(trace_id)
+            except Exception:
+                pass
 
     def _has_local_answer(self, text: str) -> bool:
         if self._looks_like_calculation(text):

@@ -411,6 +411,23 @@ class DurableTaskStore:
         else:
             self._rewrite_jsonl(task)
 
+    def add_trace_ref(self, trace_id: str) -> bool:
+        """Append trace_id to the first active/running durable task. Returns True if linked."""
+        non_terminal = {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED, TaskStatus.BLOCKED}
+        tasks = self.list_tasks(limit=50)
+        for task in tasks:
+            if task.status in non_terminal:
+                if trace_id in task.trace_refs:
+                    return True
+                task.trace_refs.append(trace_id)
+                task.updated_at = _now_iso()
+                if self.db:
+                    self._update_db(task)
+                else:
+                    self._rewrite_jsonl(task)
+                return True
+        return False
+
     def add_checkpoint(self, task_id: str, checkpoint: dict) -> Optional[DurableCheckpoint]:
         task = self.get_task(task_id)
         if task is None:
@@ -634,6 +651,8 @@ def task_manager_task_to_durable(
     task: dict,
     task_id: Optional[str] = None,
     run_id: str = "run_1",
+    checkpoints: Optional[list[DurableCheckpoint]] = None,
+    step_checkpoint_refs: Optional[dict[int, str]] = None,
 ) -> DurableTask:
     """Convert a legacy TaskManager task dict to a DurableTask.
 
@@ -659,24 +678,27 @@ def task_manager_task_to_durable(
     created_at = task.get("created_at") or now
 
     steps = []
+    refs = step_checkpoint_refs or {}
     for s in task.get("steps", []):
+        sid = s.get("id", 0)
         steps.append(DurableStep(
-            id=s.get("id", 0),
+            id=sid,
             text=s.get("text", ""),
             status=s.get("status", StepStatus.PENDING),
             note=s.get("note", ""),
             summary=s.get("summary", ""),
             tool_hint=s.get("tool_hint", ""),
+            checkpoint_ref=refs.get(sid),
         ))
 
-    checkpoints = []
+    existing_checkpoints = []
     restored_from = task.get("restored_from")
     restored_at = task.get("restored_at")
     if restored_from:
         description = f"restored_from={restored_from}"
         if restored_at:
             description += f" restored_at={restored_at}"
-        checkpoints.append(DurableCheckpoint(
+        existing_checkpoints.append(DurableCheckpoint(
             checkpoint_id="cp_1",
             step_id=0,
             run_id=run_id,
@@ -684,6 +706,9 @@ def task_manager_task_to_durable(
             state_snapshot={"restored_from": restored_from, "restored_at": restored_at},
             description=description,
         ))
+
+    if checkpoints:
+        existing_checkpoints.extend(checkpoints)
 
     input_summary = task.get("summary", "")
 
@@ -705,6 +730,6 @@ def task_manager_task_to_durable(
         current_step=current_step,
         finished_at=task.get("finished_at"),
         input_summary=input_summary,
-        checkpoints=checkpoints,
+        checkpoints=existing_checkpoints,
         resume_policy=ResumePolicy.FROM_STEP,
     )

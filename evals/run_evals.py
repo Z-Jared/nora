@@ -130,6 +130,7 @@ def main() -> int:
         EvalCase("task_manager_durable_shadow_consistency", eval_task_manager_durable_shadow_consistency),
         EvalCase("task_manager_durable_shadow_failure_isolation", eval_task_manager_durable_shadow_failure_isolation),
         EvalCase("retry_state_machine_consistency", eval_retry_state_machine_consistency),
+        EvalCase("trace_links_to_durable_task", eval_trace_links_to_durable_task),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1871,6 +1872,50 @@ def eval_retry_state_machine_consistency():
             # 5. FAILED -> CANCELLED is still allowed via update_status()
             task = store.update_status("dtask_1", TaskStatus.CANCELLED)
             assert task.status == TaskStatus.CANCELLED, f"cancelled status: {task.status}"
+        finally:
+            db.close()
+
+
+def eval_trace_links_to_durable_task():
+    """Verify that agent.run links trace_id to active durable task's trace_refs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            from mini_agent.traces import TraceStore as TStore
+            trace_store = TStore(db=db)
+            durable_store = DurableTaskStore(db=db)
+
+            # Create a running durable task
+            durable_store.create_task("eval goal", [{"text": "s1"}, {"text": "s2"}])
+            durable_store.update_status("dtask_1", TaskStatus.RUNNING)
+
+            # Build agent with trace + durable store
+            registry = build_default_registry(
+                workspace_root=tmpdir,
+                notes_path=tmpdir / "notes.txt",
+                db=db,
+            )
+            agent = MiniAgent(registry, trace_store=trace_store)
+            agent.durable_task_store = durable_store
+
+            # Run agent
+            list(agent.run_events("计算 2 + 3"))
+
+            # Verify trace was recorded
+            traces = trace_store.list_traces()
+            assert len(traces) == 1, f"expected 1 trace, got {len(traces)}"
+            trace_id = traces[0]["trace_id"]
+
+            # Verify trace_id linked to durable task
+            task = durable_store.get_task("dtask_1")
+            assert trace_id in task.trace_refs, f"{trace_id} not in {task.trace_refs}"
+
+            # Verify no duplicate on second run
+            list(agent.run_events("计算 4 + 5"))
+            task = durable_store.get_task("dtask_1")
+            assert len(task.trace_refs) == 2, f"expected 2 trace refs, got {len(task.trace_refs)}"
+            assert len(set(task.trace_refs)) == 2, f"duplicate trace refs: {task.trace_refs}"
         finally:
             db.close()
 

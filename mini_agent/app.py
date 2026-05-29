@@ -84,6 +84,7 @@ def build_agent(root: Path = None):
         system_prompt=config.system_prompt,
         trace_store=getattr(registry, "trace_store", None),
     )
+    agent.durable_task_store = getattr(registry, "durable_task_store", None)
     session_store = SessionStore(db=db)
     return agent, registry, settings, session_store, root
 

@@ -1173,6 +1173,170 @@ class ShadowWriteRunOnceTests(unittest.TestCase):
                 db.close()
 
 
+class CheckpointLifecycleTests(unittest.TestCase):
+    """Tests that checkpoints are created during task lifecycle."""
+
+    def test_run_once_creates_checkpoint_with_ref(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement")
+                manager.run_once()
+
+                dt = store.get_task("dtask_shadow_1")
+                self.assertIsNotNone(dt)
+                self.assertEqual(len(dt.checkpoints), 1)
+                cp = dt.checkpoints[0]
+                self.assertEqual(cp.step_id, 1)
+                self.assertIn("run_once", cp.description)
+                self.assertIn("in_progress", cp.description)
+                self.assertEqual(cp.state_snapshot["goal"], "build feature")
+                self.assertEqual(cp.state_snapshot["current_step"], 1)
+
+                self.assertEqual(dt.steps[0].checkpoint_ref, cp.checkpoint_id)
+                self.assertIsNone(dt.steps[1].checkpoint_ref)
+            finally:
+                db.close()
+
+    def test_update_step_done_creates_checkpoint_with_ref(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement")
+                manager.run_once()
+                manager.update_step(1, "done", summary="planned")
+
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(len(dt.checkpoints), 2)
+                done_cp = dt.checkpoints[1]
+                self.assertEqual(done_cp.step_id, 1)
+                self.assertIn("update_step", done_cp.description)
+                self.assertIn("done", done_cp.description)
+                self.assertEqual(done_cp.state_snapshot["summary"], "planned")
+
+                self.assertEqual(dt.steps[0].checkpoint_ref, done_cp.checkpoint_id)
+            finally:
+                db.close()
+
+    def test_blocked_step_checkpoint_includes_note(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement")
+                manager.run_once()
+                manager.update_step(1, "blocked", note="waiting for API key", summary="need auth")
+
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(len(dt.checkpoints), 2)
+                blocked_cp = dt.checkpoints[1]
+                self.assertEqual(blocked_cp.step_id, 1)
+                self.assertIn("blocked", blocked_cp.description)
+                self.assertEqual(blocked_cp.state_snapshot["note"], "waiting for API key")
+                self.assertEqual(blocked_cp.state_snapshot["summary"], "need auth")
+
+                self.assertEqual(dt.steps[0].checkpoint_ref, blocked_cp.checkpoint_id)
+            finally:
+                db.close()
+
+    def test_multiple_steps_checkpoint_refs(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement\ntest")
+                manager.run_once()  # step 1 in_progress -> cp_1
+                manager.update_step(1, "done", summary="planned")  # step 1 done -> cp_2
+                manager.run_once()  # step 2 in_progress -> cp_3
+
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(len(dt.checkpoints), 3)
+                self.assertEqual(dt.steps[0].checkpoint_ref, "cp_2")
+                self.assertEqual(dt.steps[1].checkpoint_ref, "cp_3")
+                self.assertIsNone(dt.steps[2].checkpoint_ref)
+            finally:
+                db.close()
+
+    def test_checkpoint_jsonl_backend(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tasks.jsonl"
+            store = DurableTaskStore(path=path)
+            manager = TaskManager(
+                Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                durable_store=store, enable_durable_shadow=True,
+            )
+            manager.start("build feature", "plan\nimplement")
+            manager.run_once()
+            manager.update_step(1, "done", summary="planned")
+
+            dt = store.get_task("dtask_shadow_1")
+            self.assertIsNotNone(dt)
+            self.assertEqual(len(dt.checkpoints), 2)
+            self.assertEqual(dt.steps[0].checkpoint_ref, "cp_2")
+            self.assertIsNone(dt.steps[1].checkpoint_ref)
+
+    def test_trace_refs_preserved_across_shadow_syncs(self):
+        from mini_agent.task_runner import TaskManager
+        from mini_agent.durable_tasks import DurableTaskStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "durable.db")
+            try:
+                store = DurableTaskStore(db=db)
+                manager = TaskManager(
+                    Path(tmpdir) / "task.json", Path(tmpdir) / "history.jsonl",
+                    durable_store=store, enable_durable_shadow=True,
+                )
+                manager.start("build feature", "plan\nimplement")
+
+                # Simulate external trace binding (e.g., by trace system)
+                dt = store.get_task("dtask_shadow_1")
+                dt.trace_refs = ["trace_1", "trace_2"]
+                store.upsert_task(dt)
+
+                # Shadow sync should preserve trace_refs
+                manager.run_once()
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(dt.trace_refs, ["trace_1", "trace_2"])
+
+                manager.update_step(1, "done", summary="planned")
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(dt.trace_refs, ["trace_1", "trace_2"])
+
+                manager.run_once()
+                dt = store.get_task("dtask_shadow_1")
+                self.assertEqual(dt.trace_refs, ["trace_1", "trace_2"])
+            finally:
+                db.close()
+
+
 class ShadowEnabledByDefaultTests(unittest.TestCase):
     """Tests that build_default_registry() enables shadow write."""
 
@@ -1219,6 +1383,106 @@ class ShadowEnabledByDefaultTests(unittest.TestCase):
                 dt = tasks[0]
                 self.assertEqual(dt.status, "completed")
                 self.assertEqual(dt.input_summary, "done")
+            finally:
+                db.close()
+
+
+class AddTraceRefTests(unittest.TestCase):
+    """Tests for DurableTaskStore.add_trace_ref()."""
+
+    def test_add_trace_ref_to_running_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task("goal", [{"text": "s1"}, {"text": "s2"}])
+                store.update_status("dtask_1", "running")
+                result = store.add_trace_ref("trace_1")
+                self.assertTrue(result)
+                task = store.get_task("dtask_1")
+                self.assertIn("trace_1", task.trace_refs)
+            finally:
+                db.close()
+
+    def test_add_trace_ref_to_pending_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task("goal", [{"text": "s1"}])
+                result = store.add_trace_ref("trace_5")
+                self.assertTrue(result)
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.trace_refs, ["trace_5"])
+            finally:
+                db.close()
+
+    def test_add_trace_ref_dedup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task("goal", [{"text": "s1"}])
+                store.update_status("dtask_1", "running")
+                store.add_trace_ref("trace_1")
+                store.add_trace_ref("trace_1")
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.trace_refs.count("trace_1"), 1)
+            finally:
+                db.close()
+
+    def test_add_trace_ref_skips_terminal_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task("goal", [{"text": "s1"}])
+                store.update_status("dtask_1", "running")
+                store.update_status("dtask_1", "completed")
+                result = store.add_trace_ref("trace_1")
+                self.assertFalse(result)
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.trace_refs, [])
+            finally:
+                db.close()
+
+    def test_add_trace_ref_no_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                result = store.add_trace_ref("trace_1")
+                self.assertFalse(result)
+            finally:
+                db.close()
+
+    def test_add_trace_ref_jsonl_backend(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "dtasks.jsonl"
+            store = DurableTaskStore(path=path)
+            store.create_task("goal", [{"text": "s1"}])
+            store.update_status("dtask_1", "running")
+            result = store.add_trace_ref("trace_7")
+            self.assertTrue(result)
+            task = store.get_task("dtask_1")
+            self.assertIn("trace_7", task.trace_refs)
+
+    def test_add_trace_ref_multiple_tasks_picks_first_active(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task("goal1", [{"text": "s1"}])
+                store.update_status("dtask_1", "running")
+                store.update_status("dtask_1", "completed")
+                store.create_task("goal2", [{"text": "s2"}])
+                store.update_status("dtask_2", "running")
+                result = store.add_trace_ref("trace_1")
+                self.assertTrue(result)
+                task1 = store.get_task("dtask_1")
+                task2 = store.get_task("dtask_2")
+                self.assertNotIn("trace_1", task1.trace_refs)
+                self.assertIn("trace_1", task2.trace_refs)
             finally:
                 db.close()
 

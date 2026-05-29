@@ -8,6 +8,7 @@ from pathlib import Path
 from mini_agent.cli import MiniAgentCLI
 from mini_agent.controller import MiniAgent
 from mini_agent.database import NoraDB
+from mini_agent.durable_tasks import DurableTaskStore
 from mini_agent.tools import build_default_registry
 from mini_agent.traces import (
     RunTrace,
@@ -637,6 +638,81 @@ class FakeRegistryWithTrace:
 class FakeAgent:
     def __init__(self):
         self.last_run_report = None
+
+
+class TraceDurableTaskLinkTests(unittest.TestCase):
+    """Test that agent.run links trace_id to active durable task."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.trace_store = TraceStore(db=self.db)
+        self.durable_store = DurableTaskStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+
+    def _make_agent(self):
+        registry = build_default_registry(
+            workspace_root=Path(self.tmpdir),
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=self.db,
+        )
+        agent = MiniAgent(
+            registry,
+            trace_store=self.trace_store,
+        )
+        agent.durable_task_store = self.durable_store
+        return agent
+
+    def test_trace_linked_to_running_durable_task(self):
+        self.durable_store.create_task("test goal", [{"text": "s1"}, {"text": "s2"}])
+        self.durable_store.update_status("dtask_1", "running")
+        agent = self._make_agent()
+        list(agent.run_events("计算 2 + 3"))
+        task = self.durable_store.get_task("dtask_1")
+        self.assertEqual(len(task.trace_refs), 1)
+        self.assertTrue(task.trace_refs[0].startswith("trace_"))
+        traces = self.trace_store.list_traces()
+        self.assertEqual(task.trace_refs[0], traces[0]["trace_id"])
+
+    def test_no_error_when_no_durable_task(self):
+        agent = self._make_agent()
+        events = list(agent.run_events("计算 1 + 1"))
+        types = [e["type"] for e in events]
+        self.assertIn("done", types)
+        traces = self.trace_store.list_traces()
+        self.assertEqual(len(traces), 1)
+
+    def test_no_duplicate_trace_ref(self):
+        self.durable_store.create_task("goal", [{"text": "s1"}])
+        self.durable_store.update_status("dtask_1", "running")
+        agent = self._make_agent()
+        list(agent.run_events("计算 1 + 1"))
+        list(agent.run_events("计算 2 + 2"))
+        task = self.durable_store.get_task("dtask_1")
+        self.assertEqual(len(task.trace_refs), 2)
+        self.assertEqual(len(set(task.trace_refs)), 2)
+
+    def test_no_link_to_completed_task(self):
+        self.durable_store.create_task("goal", [{"text": "s1"}])
+        self.durable_store.update_status("dtask_1", "running")
+        self.durable_store.update_status("dtask_1", "completed")
+        agent = self._make_agent()
+        list(agent.run_events("计算 2 + 3"))
+        task = self.durable_store.get_task("dtask_1")
+        self.assertEqual(task.trace_refs, [])
+
+    def test_no_error_when_durable_store_missing(self):
+        registry = build_default_registry(
+            workspace_root=Path(self.tmpdir),
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=self.db,
+        )
+        agent = MiniAgent(registry, trace_store=self.trace_store)
+        # No durable_task_store attribute set
+        events = list(agent.run_events("计算 1 + 1"))
+        self.assertIn("done", [e["type"] for e in events])
 
 
 if __name__ == "__main__":

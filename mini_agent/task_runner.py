@@ -62,7 +62,25 @@ class TaskManager:
                 step["note"] = note
                 step["summary"] = summary
                 self._write(task)
-                self._shadow_sync_to_durable(task)
+                checkpoint = None
+                if status in ("done", "blocked"):
+                    snapshot = {
+                        "goal": task.get("goal", ""),
+                        "status": task.get("status", ""),
+                        "steps": task.get("steps", []),
+                        "current_step": step_id,
+                    }
+                    if note:
+                        snapshot["note"] = note
+                    if summary:
+                        snapshot["summary"] = summary
+                    checkpoint = {
+                        "step_id": step_id,
+                        "run_id": "run_1",
+                        "state_snapshot": snapshot,
+                        "description": f"update_step: step {step_id} {status}",
+                    }
+                self._shadow_sync_to_durable(task, checkpoint=checkpoint)
                 message = f"已更新步骤 {step_id}: {status}"
                 if status == "done" and not summary:
                     message += "。建议填写 summary 记录执行结果。"
@@ -92,12 +110,47 @@ class TaskManager:
         self._shadow_sync_to_durable(task)
         return f"已完成任务: {task['goal']}\n总结: {task['summary']}"
 
-    def _shadow_sync_to_durable(self, task: dict) -> None:
+    def _shadow_sync_to_durable(self, task: dict, checkpoint: dict = None) -> None:
         if not self.enable_durable_shadow or not self.durable_store:
             return
         try:
             from mini_agent.durable_tasks import task_manager_task_to_durable
-            durable_task = task_manager_task_to_durable(task, task_id="dtask_shadow_1")
+
+            # Preserve existing checkpoints, checkpoint_refs, and trace_refs
+            existing_checkpoints = []
+            step_checkpoint_refs = {}
+            existing_trace_refs = []
+            existing = self.durable_store.get_task("dtask_shadow_1")
+            if existing:
+                existing_checkpoints = list(existing.checkpoints)
+                existing_trace_refs = list(existing.trace_refs)
+                for s in existing.steps:
+                    if s.checkpoint_ref:
+                        step_checkpoint_refs[s.id] = s.checkpoint_ref
+
+            # Create new checkpoint if requested
+            new_checkpoint = None
+            if checkpoint:
+                from mini_agent.durable_tasks import DurableCheckpoint, _next_id, _now_iso
+                existing_ids = [c.checkpoint_id for c in existing_checkpoints]
+                cp_id = _next_id("cp_", existing_ids)
+                new_checkpoint = DurableCheckpoint(
+                    checkpoint_id=cp_id,
+                    step_id=checkpoint.get("step_id", 0),
+                    run_id=checkpoint.get("run_id", "run_1"),
+                    created_at=_now_iso(),
+                    state_snapshot=checkpoint.get("state_snapshot", {}),
+                    description=checkpoint.get("description", ""),
+                )
+                existing_checkpoints.append(new_checkpoint)
+                step_checkpoint_refs[checkpoint.get("step_id", 0)] = cp_id
+
+            durable_task = task_manager_task_to_durable(
+                task, task_id="dtask_shadow_1",
+                checkpoints=existing_checkpoints if existing_checkpoints else None,
+                step_checkpoint_refs=step_checkpoint_refs if step_checkpoint_refs else None,
+            )
+            durable_task.trace_refs = existing_trace_refs
             self.durable_store.upsert_task(durable_task)
         except Exception:
             pass
@@ -184,7 +237,18 @@ class TaskManager:
                 step["status"] = "in_progress"
                 step["note"] = "已选为下一步执行"
                 self._write(task)
-                self._shadow_sync_to_durable(task)
+                checkpoint = {
+                    "step_id": step["id"],
+                    "run_id": "run_1",
+                    "state_snapshot": {
+                        "goal": task.get("goal", ""),
+                        "status": task.get("status", ""),
+                        "steps": task.get("steps", []),
+                        "current_step": step["id"],
+                    },
+                    "description": f"run_once: step {step['id']} in_progress",
+                }
+                self._shadow_sync_to_durable(task, checkpoint=checkpoint)
                 return "\n".join(
                     [
                         f"下一步: {step['id']}. {step['text']}",
