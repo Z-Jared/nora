@@ -76,6 +76,20 @@ CREATE TABLE IF NOT EXISTS run_traces (
     tool_calls_json TEXT NOT NULL DEFAULT '[]',
     failure TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS durable_events (
+    event_id TEXT PRIMARY KEY,
+    task_id TEXT,
+    event_type TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    trace_id TEXT,
+    checkpoint_id TEXT,
+    worker_id TEXT,
+    source TEXT NOT NULL DEFAULT '',
+    severity TEXT NOT NULL DEFAULT 'info'
+);
 """
 
 _INDEXES = """
@@ -88,6 +102,11 @@ CREATE INDEX IF NOT EXISTS idx_tl_timestamp ON tool_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_tl_tool ON tool_logs(tool);
 CREATE INDEX IF NOT EXISTS idx_tl_status ON tool_logs(status);
 CREATE INDEX IF NOT EXISTS idx_rt_created ON run_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_de_created ON durable_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_de_task ON durable_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_de_type ON durable_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_de_trace ON durable_events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_de_checkpoint ON durable_events(checkpoint_id);
 """
 
 

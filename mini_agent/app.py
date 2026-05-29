@@ -83,6 +83,7 @@ def build_agent(root: Path = None):
         max_tool_calls_per_turn=config.budgets.max_tool_calls_per_turn,
         system_prompt=config.system_prompt,
         trace_store=getattr(registry, "trace_store", None),
+        event_store=getattr(registry, "durable_event_store", None),
     )
     agent.durable_task_store = getattr(registry, "durable_task_store", None)
     session_store = SessionStore(db=db)

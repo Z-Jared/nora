@@ -35,6 +35,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
+from mini_agent.durable_events import DurableEventStore
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -131,6 +132,10 @@ def main() -> int:
         EvalCase("task_manager_durable_shadow_failure_isolation", eval_task_manager_durable_shadow_failure_isolation),
         EvalCase("retry_state_machine_consistency", eval_retry_state_machine_consistency),
         EvalCase("trace_links_to_durable_task", eval_trace_links_to_durable_task),
+        EvalCase("durable_event_store_basics", eval_durable_event_store_basics),
+        EvalCase("durable_event_task_lifecycle", eval_durable_event_task_lifecycle),
+        EvalCase("durable_event_trace_linkage", eval_durable_event_trace_linkage),
+        EvalCase("durable_event_failure_isolation", eval_durable_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1916,6 +1921,130 @@ def eval_trace_links_to_durable_task():
             task = durable_store.get_task("dtask_1")
             assert len(task.trace_refs) == 2, f"expected 2 trace refs, got {len(task.trace_refs)}"
             assert len(set(task.trace_refs)) == 2, f"duplicate trace refs: {task.trace_refs}"
+        finally:
+            db.close()
+
+
+def eval_durable_event_store_basics():
+    """DurableEventStore can record, list, get, and filter events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            store = DurableEventStore(db=db)
+            event1 = store.record(
+                "task_created",
+                task_id="dtask_1",
+                summary="created",
+                payload={"goal": "eval"},
+            )
+            event2 = store.record(
+                "step_updated",
+                task_id="dtask_2",
+                checkpoint_id="cp_1",
+                summary="updated",
+            )
+
+            assert event1.event_id == "devt_1", event1.event_id
+            assert event2.event_id == "devt_2", event2.event_id
+            all_events = store.list_events()
+            assert [e.event_id for e in all_events] == ["devt_2", "devt_1"], all_events
+            filtered = store.list_events(task_id="dtask_1")
+            assert len(filtered) == 1 and filtered[0].event_id == "devt_1", filtered
+            detail = store.get_event("devt_1")
+            assert detail.payload["goal"] == "eval", detail
+        finally:
+            db.close()
+
+
+def eval_durable_event_task_lifecycle():
+    """TaskManager lifecycle writes task, step, checkpoint, and finish events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            manager = registry.task_manager
+            event_store = registry.durable_event_store
+
+            manager.start("event eval", "step one")
+            manager.run_once()
+            manager.update_step(1, "done", summary="finished")
+            manager.finish("done")
+
+            events = event_store.list_events()
+            event_types = [event.event_type for event in events]
+            assert "task_created" in event_types, event_types
+            assert "step_updated" in event_types, event_types
+            assert "checkpoint_added" in event_types, event_types
+            assert "task_finished" in event_types, event_types
+            checkpoint_events = [e for e in events if e.event_type == "checkpoint_added"]
+            assert checkpoint_events[0].checkpoint_id, checkpoint_events[0]
+            task_events = event_store.list_events(task_id="dtask_shadow_1")
+            assert len(task_events) == len(events), (len(task_events), len(events))
+        finally:
+            db.close()
+
+
+def eval_durable_event_trace_linkage():
+    """Agent trace linkage writes both trace_refs and trace_linked event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry.task_manager.start("event trace eval", "step one")
+            agent = MiniAgent(
+                registry,
+                trace_store=TraceStore(db=db),
+                event_store=registry.durable_event_store,
+            )
+            agent.durable_task_store = registry.durable_task_store
+
+            list(agent.run_events("计算 2 + 3"))
+
+            task = registry.durable_task_store.get_task("dtask_shadow_1")
+            assert len(task.trace_refs) == 1, task.trace_refs
+            trace_id = task.trace_refs[0]
+            events = registry.durable_event_store.list_events()
+            linked = [e for e in events if e.event_type == "trace_linked"]
+            assert len(linked) == 1, events
+            assert linked[0].task_id == "dtask_shadow_1", linked[0]
+            assert linked[0].trace_id == trace_id, linked[0]
+        finally:
+            db.close()
+
+
+def eval_durable_event_failure_isolation():
+    """Broken event stores must not break task flow or trace recording."""
+    class BrokenEventStore:
+        def record(self, **_kwargs):
+            raise RuntimeError("event store unavailable")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            durable_store = DurableTaskStore(db=db)
+            manager = TaskManager(
+                path=tmpdir / "task.json",
+                history_path=tmpdir / "history.jsonl",
+                db=db,
+                durable_store=durable_store,
+                enable_durable_shadow=True,
+                event_store=BrokenEventStore(),
+            )
+            assert "已创建任务" in manager.start("event failure eval", "step one")
+            assert "下一步" in manager.run_once()
+            assert "已更新步骤" in manager.update_step(1, "done", summary="ok")
+
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            trace_store = TraceStore(db=db)
+            agent = MiniAgent(registry, trace_store=trace_store, event_store=BrokenEventStore())
+            registry.durable_task_store.create_task("trace eval", [{"text": "s"}])
+            agent.durable_task_store = registry.durable_task_store
+            list(agent.run_events("hello"))
+            assert len(trace_store.list_traces()) == 1, "trace recording should survive event failure"
         finally:
             db.close()
 

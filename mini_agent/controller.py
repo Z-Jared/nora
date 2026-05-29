@@ -86,6 +86,7 @@ class MiniAgent:
         system_prompt: str = "",
         tool_cache: Optional[ToolResultCache] = None,
         trace_store: Optional[TraceStore] = None,
+        event_store=None,
     ):
         self.tools = tools
         self.llm = llm
@@ -97,6 +98,7 @@ class MiniAgent:
         self.system_prompt = system_prompt
         self.tool_cache = tool_cache or ToolResultCache()
         self.trace_store = trace_store
+        self.event_store = event_store
         self.max_tool_calls_per_turn = max(1, int(max_tool_calls_per_turn or self.default_max_tool_calls_per_turn))
         self.last_run_report = RunReport(
             status="idle",
@@ -200,9 +202,34 @@ class MiniAgent:
         durable_store = getattr(self, "durable_task_store", None)
         if durable_store:
             try:
-                durable_store.add_trace_ref(trace_id)
+                linked = durable_store.add_trace_ref(trace_id)
             except Exception:
-                pass
+                linked = False
+            if linked:
+                self._record_trace_link_event(trace_id, durable_store)
+
+    def _record_trace_link_event(self, trace_id: str, durable_store) -> None:
+        if not self.event_store:
+            return
+        task_id = None
+        try:
+            for task in durable_store.list_tasks(limit=100):
+                if trace_id in task.trace_refs:
+                    task_id = task.task_id
+                    break
+        except Exception:
+            task_id = None
+        try:
+            self.event_store.record(
+                event_type="trace_linked",
+                task_id=task_id,
+                trace_id=trace_id,
+                source="mini_agent",
+                summary=f"trace linked: {trace_id}",
+                payload={"trace_id": trace_id},
+            )
+        except Exception:
+            pass
 
     def _has_local_answer(self, text: str) -> bool:
         if self._looks_like_calculation(text):

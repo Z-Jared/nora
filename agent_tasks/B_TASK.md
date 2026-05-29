@@ -1,28 +1,52 @@
 # Claude B Task
 
 Owner: Claude B
-Status: assigned
+Status: completed by Codex PM
 
 ## Goal
 
-Add eval coverage for the durable task CLI inspection tools (once Claude A implements them).
+Add eval coverage for durable event log v1 after Claude A completes TASK-007.
 
 ## Instructions
 
-The durable task shadow write evals are done (71 passing). Next:
+Wait for Claude A to implement `DurableEventStore` and the durable event registry tools. Then add deterministic offline eval coverage.
 
-1. Wait for Claude A to add `list_durable_tasks` tool and `/tasks` CLI command.
-2. Add eval cases for:
-   - `list_durable_tasks` returns correct task count and fields
-   - Task status transitions (pending → running → completed) are captured
-   - CLI `/tasks` output format is readable and correct
-3. Keep evals deterministic and offline.
+Add eval cases for:
+
+1. Event store basics:
+   - Create/list/get durable events
+   - Required fields are present
+   - Ordering is newest-first or clearly documented and asserted
+
+2. Task lifecycle events:
+   - Start task records creation/start event
+   - `run_once()` records step/checkpoint event
+   - `update_step(done)` records update/checkpoint event
+   - `finish()` records completion event
+
+3. Trace linkage:
+   - Agent run records trace
+   - Durable task gets trace_ref
+   - Durable event log records the trace-linked event with task_id and trace_id
+
+4. Failure isolation:
+   - Fake event store failure does not break task manager or trace recording
+
+Keep evals deterministic and offline. Do not call live LLM APIs.
+
+Suggested verification:
+
+```bash
+python3 evals/run_evals.py
+python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_traces
+```
 
 ## Context
 
-- `evals/run_evals.py` currently has 71 passing evals
-- Durable task shadow write evals were added in commit `dbdb7c2`
-- If Claude A's tools are not yet available, focus on adding eval cases for any other gaps you find
+- Current eval count before this task: 85 passing
+- Durable task / trace evals are already in `evals/run_evals.py`
+- TASK-007 should add the event store API and registry tools
+- If Claude A is not done yet, wait; do not reimplement TASK-007
 
 ## Completion Report
 

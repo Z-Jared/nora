@@ -28,6 +28,7 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
 from mini_agent.durable_tasks import DurableTaskStore
+from mini_agent.durable_events import DurableEventStore
 from mini_agent.web_tools import WebTools
 
 
@@ -80,12 +81,14 @@ def build_default_registry(
     )
     long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
     durable_task_store = DurableTaskStore(db=db)
+    durable_event_store = DurableEventStore(db=db)
     task_manager = TaskManager(
         path=task_state_path or Path("data/current_task.json"),
         history_path=task_history_path or Path("data/task_history.jsonl"),
         db=db,
         durable_store=durable_task_store,
         enable_durable_shadow=True,
+        event_store=durable_event_store,
     )
     context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
     tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)
@@ -124,6 +127,7 @@ def build_default_registry(
     registry.long_term_memory = long_term_memory
     registry.trace_store = trace_store
     registry.durable_task_store = durable_task_store
+    registry.durable_event_store = durable_event_store
 
     def _list_traces_json(max_results: int = 20) -> str:
         traces = trace_store.list_traces(max_results=max_results)
@@ -163,6 +167,65 @@ def build_default_registry(
                 }
             },
             "required": ["trace_id"],
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+
+    def _list_durable_events_json(task_id: str = "", max_results: int = 50) -> str:
+        events = durable_event_store.list_events(task_id=task_id or "", max_results=max_results)
+        summary = [
+            {
+                "event_id": event.event_id,
+                "task_id": event.task_id,
+                "event_type": event.event_type,
+                "created_at": event.created_at,
+                "summary": event.summary,
+                "trace_id": event.trace_id,
+                "checkpoint_id": event.checkpoint_id,
+                "worker_id": event.worker_id,
+            }
+            for event in events
+        ]
+        return _json.dumps(summary, ensure_ascii=False)
+
+    def _get_durable_event_json(event_id: str) -> str:
+        event = durable_event_store.get_event(event_id)
+        if event is None:
+            return _json.dumps({"error": f"未找到 durable event: {event_id}"}, ensure_ascii=False)
+        return _json.dumps(event.to_dict(), ensure_ascii=False)
+
+    registry.register(
+        "list_durable_events",
+        "列出 durable event log 中最近的事件，可按 task_id 过滤。",
+        _list_durable_events_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "可选 durable task id，例如 dtask_1；为空则列出所有事件",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "最多返回多少条，默认 50，最大 500",
+                },
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "get_durable_event",
+        "按 event_id 获取一条 durable event 的完整信息。",
+        _get_durable_event_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "durable event id，例如 devt_1",
+                }
+            },
+            "required": ["event_id"],
         },
         permission=ToolPermission(category="logs", risk="read"),
     )

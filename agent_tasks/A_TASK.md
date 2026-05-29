@@ -1,37 +1,57 @@
 # Claude A Task
 
 Owner: Claude A
-Status: assigned
+Status: completed by Codex PM
 
 ## Goal
 
-Continue durable task integration — wire DurableTaskStore into the default agent build and add CLI commands for task inspection.
+Implement durable event log v1.
 
 ## Instructions
 
-The durable task shadow write is implemented and committed (`dbdb7c2`). Now integrate it into the runtime:
+The durable task store, trace linkage, checkpoint creation, and trace_ref preservation are already committed through `3bde500`. The next step is the first vertical slice of the event log from the durable runtime north star.
 
-1. Wire `DurableTaskStore` into `build_agent()` in `mini_agent/app.py`:
-   - Create `DurableTaskStore(db=db)` and pass it to `TaskManager(durable_store=..., enable_durable_shadow=True)`
-   - This makes all CLI/HTTP runs persist tasks automatically
+Implement a small, queryable durable event log:
 
-2. Add CLI commands for task inspection:
-   - `/tasks [n]` — list recent durable tasks
-   - `/task <task_id>` — show a specific task with steps and status
+1. Add a `DurableEventStore` module:
+   - Prefer `mini_agent/durable_events.py`
+   - Support SQLite via `NoraDB` plus JSONL fallback, matching `DurableTaskStore` style
+   - Event fields should include at minimum: `event_id`, `task_id`, `event_type`, `created_at`, `summary`, `payload`, `trace_id`, `checkpoint_id`, `worker_id`
+   - Keep the schema small; do not attempt full replay yet
 
-3. Add a registry tool:
-   - `list_durable_tasks(max_results=20)` — read-only task listing
+2. Wire event recording into existing flows:
+   - `TaskManager.start()` records task created/started
+   - `TaskManager.run_once()` records step selected / checkpoint created
+   - `TaskManager.update_step()` records step status updates and checkpoint created when applicable
+   - `TaskManager.finish()` records task completed
+   - Trace linking records a trace-linked event when `MiniAgent` attaches a trace_id to a durable task
 
-4. Update README if user-visible commands are added.
+3. Add read-only registry tools:
+   - `list_durable_events(task_id="", max_results=50)`
+   - `get_durable_event(event_id)`
 
-5. Add focused tests for the wiring and new tools/commands.
+4. Failure isolation:
+   - Event log write failures must not break legacy task flow, trace recording, or durable task shadow sync.
+
+5. Tests:
+   - Add focused tests for SQLite and JSONL storage
+   - Add tests that task lifecycle/checkpoint/trace-link events are recorded
+   - Add tests that event write failures are isolated
+
+Suggested verification:
+
+```bash
+python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_traces
+python3 evals/run_evals.py
+```
 
 ## Context
 
-- `mini_agent/durable_tasks.py` has `DurableTaskStore` with `upsert_task()`, `get_task()`, `list_tasks()`
-- `mini_agent/task_runner.py` has `TaskManager` with `durable_store` and `enable_durable_shadow` params
-- Current gap: `build_agent()` does not pass a DurableTaskStore, so normal runs don't persist tasks
-- Current gap: no user-facing way to list or inspect durable tasks
+- North star: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`, Priority 1 Durable trace schema / event log
+- Current trace store is turn-level only: `mini_agent/traces.py`
+- Current durable task state is in `mini_agent/durable_tasks.py`
+- Current lifecycle hooks are mostly in `mini_agent/task_runner.py` and `mini_agent/controller.py`
+- Keep scope narrow: first event log slice, not full replay engine
 
 ## Completion Report
 

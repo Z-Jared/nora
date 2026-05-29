@@ -13,12 +13,50 @@ VALID_STEP_STATUSES = {"pending", "in_progress", "done", "blocked"}
 
 class TaskManager:
     def __init__(self, path: Path = None, history_path: Path = None, db=None,
-                 durable_store=None, enable_durable_shadow: bool = False):
+                 durable_store=None, enable_durable_shadow: bool = False, event_store=None):
         self.path = path
         self.history_path = history_path or Path("data/task_history.jsonl")
         self.db = db
         self.durable_store = durable_store
         self.enable_durable_shadow = enable_durable_shadow
+        self.event_store = event_store
+
+    def _record_event(
+        self,
+        event_type: str,
+        summary: str = "",
+        task_id: str = None,
+        trace_id: str = None,
+        checkpoint_id: str = None,
+        source: str = "task_manager",
+        payload: dict = None,
+    ) -> None:
+        if not self.event_store:
+            return
+        try:
+            self.event_store.record(
+                event_type=event_type,
+                task_id=task_id,
+                trace_id=trace_id,
+                checkpoint_id=checkpoint_id,
+                source=source,
+                summary=summary,
+                payload=payload or {},
+            )
+        except Exception:
+            pass
+
+    def _record_checkpoint_event(self, sync_result: dict, summary: str, payload: dict) -> None:
+        checkpoint_id = sync_result.get("checkpoint_id") if sync_result else None
+        if not checkpoint_id:
+            return
+        self._record_event(
+            "checkpoint_added",
+            task_id=sync_result.get("task_id"),
+            checkpoint_id=checkpoint_id,
+            summary=summary,
+            payload=payload,
+        )
 
     def start(self, goal: str, steps: str) -> str:
         goal = goal.strip()
@@ -40,7 +78,13 @@ class TaskManager:
             ],
         }
         self._write(task)
-        self._shadow_sync_to_durable(task)
+        sync_result = self._shadow_sync_to_durable(task)
+        self._record_event(
+            "task_created",
+            task_id=sync_result.get("task_id"),
+            summary=goal,
+            payload={"goal": goal, "step_count": len(parsed_steps)},
+        )
         return f"已创建任务: {goal}\n{self._format(task)}"
 
     def update_step(self, step_id: int, status: str, note: str = "", summary: str = "") -> str:
@@ -80,7 +124,25 @@ class TaskManager:
                         "state_snapshot": snapshot,
                         "description": f"update_step: step {step_id} {status}",
                     }
-                self._shadow_sync_to_durable(task, checkpoint=checkpoint)
+                sync_result = self._shadow_sync_to_durable(task, checkpoint=checkpoint)
+                payload = {
+                    "step_id": step_id,
+                    "status": status,
+                    "note": note,
+                    "summary": summary,
+                }
+                self._record_event(
+                    "step_updated",
+                    task_id=sync_result.get("task_id"),
+                    checkpoint_id=sync_result.get("checkpoint_id"),
+                    summary=f"step {step_id} -> {status}",
+                    payload=payload,
+                )
+                self._record_checkpoint_event(
+                    sync_result,
+                    summary=f"checkpoint for step {step_id} {status}",
+                    payload=payload,
+                )
                 message = f"已更新步骤 {step_id}: {status}"
                 if status == "done" and not summary:
                     message += "。建议填写 summary 记录执行结果。"
@@ -107,12 +169,18 @@ class TaskManager:
         task["summary"] = summary.strip()
         self._write(task)
         self._append_history(task)
-        self._shadow_sync_to_durable(task)
+        sync_result = self._shadow_sync_to_durable(task)
+        self._record_event(
+            "task_finished",
+            task_id=sync_result.get("task_id"),
+            summary=task["goal"],
+            payload={"goal": task["goal"], "summary": task["summary"]},
+        )
         return f"已完成任务: {task['goal']}\n总结: {task['summary']}"
 
-    def _shadow_sync_to_durable(self, task: dict, checkpoint: dict = None) -> None:
+    def _shadow_sync_to_durable(self, task: dict, checkpoint: dict = None) -> dict:
         if not self.enable_durable_shadow or not self.durable_store:
-            return
+            return {}
         try:
             from mini_agent.durable_tasks import task_manager_task_to_durable
 
@@ -152,8 +220,12 @@ class TaskManager:
             )
             durable_task.trace_refs = existing_trace_refs
             self.durable_store.upsert_task(durable_task)
+            return {
+                "task_id": durable_task.task_id,
+                "checkpoint_id": new_checkpoint.checkpoint_id if new_checkpoint else None,
+            }
         except Exception:
-            pass
+            return {}
 
     def list_history(self, max_results: int = 20) -> str:
         records = self._read_history()
@@ -221,7 +293,13 @@ class TaskManager:
         task["restored_from"] = history_id
         task["restored_at"] = datetime.now(timezone.utc).isoformat()
         self._write(task)
-        self._shadow_sync_to_durable(task)
+        sync_result = self._shadow_sync_to_durable(task)
+        self._record_event(
+            "task_status_changed",
+            task_id=sync_result.get("task_id"),
+            summary=f"restored from {history_id}",
+            payload={"restored_from": history_id, "status": "active"},
+        )
         return f"已恢复任务: {history_id}\n{self._format(task)}"
 
     def run_once(self) -> str:
@@ -248,7 +326,25 @@ class TaskManager:
                     },
                     "description": f"run_once: step {step['id']} in_progress",
                 }
-                self._shadow_sync_to_durable(task, checkpoint=checkpoint)
+                sync_result = self._shadow_sync_to_durable(task, checkpoint=checkpoint)
+                payload = {
+                    "step_id": step["id"],
+                    "status": "in_progress",
+                    "text": step["text"],
+                    "note": step["note"],
+                }
+                self._record_event(
+                    "step_updated",
+                    task_id=sync_result.get("task_id"),
+                    checkpoint_id=sync_result.get("checkpoint_id"),
+                    summary=f"step {step['id']} -> in_progress",
+                    payload=payload,
+                )
+                self._record_checkpoint_event(
+                    sync_result,
+                    summary=f"checkpoint for step {step['id']} in_progress",
+                    payload=payload,
+                )
                 return "\n".join(
                     [
                         f"下一步: {step['id']}. {step['text']}",
@@ -258,7 +354,13 @@ class TaskManager:
                 )
 
             if step["status"] == "in_progress":
-                self._shadow_sync_to_durable(task)
+                sync_result = self._shadow_sync_to_durable(task)
+                self._record_event(
+                    "step_updated",
+                    task_id=sync_result.get("task_id"),
+                    summary=f"step {step['id']} still in_progress",
+                    payload={"step_id": step["id"], "status": "in_progress", "text": step["text"]},
+                )
                 return "\n".join(
                     [
                         f"继续当前步骤: {step['id']}. {step['text']}",
