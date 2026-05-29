@@ -4,6 +4,10 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+（空 — 当前任务已派发）
+
+## 进行中
+
 ### TASK-009: Durable tool-call event logging
 - 优先级: high
 - 预计: 1-2 小时
