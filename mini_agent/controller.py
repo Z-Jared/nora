@@ -1,7 +1,15 @@
+import json
 import re
 from dataclasses import dataclass
 from typing import Generator, Optional, Protocol
 
+from mini_agent.durable_events import (
+    TOOL_CALL_BLOCKED,
+    TOOL_CALL_BUDGET_EXCEEDED,
+    TOOL_CALL_ERROR,
+    TOOL_CALL_FINISHED,
+    TOOL_CALL_STARTED,
+)
 from mini_agent.context_system import ContextSystem
 from mini_agent.context_window import ContextWindow
 from mini_agent.memory import ConversationMemory
@@ -108,6 +116,7 @@ class MiniAgent:
             remaining_tool_calls=self.max_tool_calls_per_turn,
         )
         self._active_tool_records: list[ToolRunRecord] = []
+        self._turn_tool_args: dict[str, dict] = {}
 
     def run(self, user_input: str) -> str:
         answer = ""
@@ -201,8 +210,9 @@ class MiniAgent:
             return
         durable_store = getattr(self, "durable_task_store", None)
         if durable_store:
+            task_id = self._resolve_task_id_from_tool_calls(report.tool_calls)
             try:
-                linked = durable_store.add_trace_ref(trace_id)
+                linked = durable_store.add_trace_ref(trace_id, task_id=task_id)
             except Exception:
                 linked = False
             if linked:
@@ -613,6 +623,7 @@ class MiniAgent:
 
     def _start_run_report(self) -> None:
         self._active_tool_records = []
+        self._turn_tool_args = {}
         self.last_run_report = RunReport(
             status="running",
             steps_used=0,
@@ -652,18 +663,95 @@ class MiniAgent:
             return compacted + "\n[result_id unavailable: sensitive result not cached]"
         return compacted + f"\n[result_id={result_id} use read_tool_result to inspect more]"
 
+    _SENSITIVE_KEY_PATTERNS = (
+        "password", "passwd", "token", "api_key", "apikey", "secret",
+        "authorization", "bearer", "credential", "credentials", "auth",
+        "private_key", "access_token", "refresh_token", "session_token",
+        "client_secret", "connection_string",
+    )
+
+    def _redact_sensitive_args(self, arguments: dict) -> dict:
+        result = {}
+        for k, v in arguments.items():
+            if any(p in k.lower() for p in self._SENSITIVE_KEY_PATTERNS):
+                result[k] = "[redacted]"
+            elif isinstance(v, dict):
+                result[k] = self._redact_sensitive_args(v)
+            elif isinstance(v, (list, tuple)):
+                result[k] = [self._redact_sensitive_args(i) if isinstance(i, dict) else i for i in v]
+            else:
+                result[k] = v
+        return result
+
+    def _safe_args_preview(self, arguments: dict, limit: int = 200) -> str:
+        safe = self._redact_sensitive_args(arguments)
+        try:
+            text = json.dumps(safe, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(safe)
+        if len(text) > limit:
+            return text[:limit] + "..."
+        return text
+
+    _LEGACY_TASK_TOOLS = {"start_task", "update_task_step", "finish_task", "run_task_once", "list_task", "restore_task"}
+    _DURABLE_TASK_TOOLS = {"create_durable_task", "get_durable_task", "update_durable_task", "delete_durable_task", "retry_durable_task"}
+
+    def _resolve_task_id_from_tool_calls(self, tool_calls: list) -> Optional[str]:
+        """Resolve task_id from tool calls this turn.
+
+        For legacy task tools, return dtask_shadow_1.
+        For durable CRUD tools, extract task_id from arguments when available.
+        Returns None if no task tool was called.
+        """
+        result = None
+        for record in tool_calls:
+            if record.name in self._LEGACY_TASK_TOOLS:
+                result = "dtask_shadow_1"
+            elif record.name in self._DURABLE_TASK_TOOLS:
+                args = self._turn_tool_args.get(record.name, {})
+                tid = args.get("task_id") or args.get("taskid")
+                if tid:
+                    return tid
+                result = result  # keep previous if any
+        return result
+
+    def _record_tool_event(self, event_type: str, name: str, status: str, result_preview: str = "", arguments: Optional[dict] = None) -> None:
+        if not self.event_store:
+            return
+        try:
+            self.event_store.record(
+                event_type=event_type,
+                task_id=None,
+                source="controller",
+                summary=f"{event_type}: {name} ({status})",
+                severity="info" if event_type in (TOOL_CALL_STARTED, TOOL_CALL_FINISHED) else "warning",
+                payload={
+                    "tool_name": name,
+                    "status": status,
+                    "result_preview": self._shorten_trace_result(result_preview, limit=120) if result_preview else "",
+                    "arguments_preview": self._safe_args_preview(arguments) if arguments else "",
+                },
+            )
+        except Exception:
+            pass
+
     def _call_tool(self, name: str, arguments: dict) -> str:
+        self._turn_tool_args[name] = arguments
+        self._record_tool_event(TOOL_CALL_STARTED, name, "started", arguments=arguments)
+
         if len(self._active_tool_records) >= self.max_tool_calls_per_turn:
             result = f"工具调用预算已用完: 本轮最多允许 {self.max_tool_calls_per_turn} 次工具调用。"
             self._active_tool_records.append(
                 ToolRunRecord(name=name, status="budget_exceeded", result_preview=result)
             )
+            self._record_tool_event(TOOL_CALL_BUDGET_EXCEEDED, name, "budget_exceeded", result, arguments)
             return result
 
         permission = self.tools.permission_for(name) if hasattr(self.tools, "permission_for") else None
         if permission and permission.requires_confirmation and not str(arguments.get("reason") or "").strip():
             result = f"拒绝调用: 高风险工具需要提供 reason: {name}"
             self._active_tool_records.append(ToolRunRecord(name=name, status="blocked", result_preview=result))
+            self._record_tool_event(TOOL_CALL_BLOCKED, name, "blocked", result, arguments)
             return result
 
         is_read_only = permission and permission.risk == "read"
@@ -673,6 +761,7 @@ class MiniAgent:
                 self._active_tool_records.append(
                     ToolRunRecord(name=name, status="ok", result_preview=self._shorten_trace_result(cached, limit=120))
                 )
+                self._record_tool_event(TOOL_CALL_FINISHED, name, "ok", cached, arguments)
                 return cached
 
         try:
@@ -681,10 +770,18 @@ class MiniAgent:
             safe_error = str(error)[:500]
             result = f"工具调用失败: {safe_error}"
             self._active_tool_records.append(ToolRunRecord(name=name, status="error", result_preview=result))
+            self._record_tool_event(TOOL_CALL_ERROR, name, "error", safe_error, arguments)
             return result
 
         if is_read_only:
             self.tool_cache.put(name, arguments, result)
+
+        if result == "已取消操作。":
+            self._active_tool_records.append(
+                ToolRunRecord(name=name, status="cancelled", result_preview=result)
+            )
+            self._record_tool_event(TOOL_CALL_BLOCKED, name, "cancelled", result, arguments)
+            return result
 
         self._active_tool_records.append(
             ToolRunRecord(
@@ -693,6 +790,7 @@ class MiniAgent:
                 result_preview=self._shorten_trace_result(result, limit=120),
             )
         )
+        self._record_tool_event(TOOL_CALL_FINISHED, name, _tool_status_from_result(result), result, arguments)
         return result
 
     def _run_local(self, text: str) -> Optional[str]:

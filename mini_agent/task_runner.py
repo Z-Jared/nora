@@ -185,16 +185,22 @@ class TaskManager:
             from mini_agent.durable_tasks import task_manager_task_to_durable
 
             # Preserve existing checkpoints, checkpoint_refs, and trace_refs
+            # only if this is the same legacy task (goal + created_at match)
             existing_checkpoints = []
             step_checkpoint_refs = {}
             existing_trace_refs = []
             existing = self.durable_store.get_task("dtask_shadow_1")
             if existing:
-                existing_checkpoints = list(existing.checkpoints)
-                existing_trace_refs = list(existing.trace_refs)
-                for s in existing.steps:
-                    if s.checkpoint_ref:
-                        step_checkpoint_refs[s.id] = s.checkpoint_ref
+                same_task = (
+                    existing.goal == task.get("goal", "")
+                    and existing.created_at == task.get("created_at", "")
+                )
+                if same_task:
+                    existing_checkpoints = list(existing.checkpoints)
+                    existing_trace_refs = list(existing.trace_refs)
+                    for s in existing.steps:
+                        if s.checkpoint_ref:
+                            step_checkpoint_refs[s.id] = s.checkpoint_ref
 
             # Create new checkpoint if requested
             new_checkpoint = None

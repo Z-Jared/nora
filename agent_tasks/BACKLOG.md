@@ -8,14 +8,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-009: Durable tool-call event logging
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无
-- 目标: 把 MiniAgent 工具调用写入 durable event log，覆盖 tool_call started/finished/blocked/error 等可审计事件。
-- 验证: focused unittest 覆盖工具成功、失败、权限取消/blocked、事件失败隔离；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 不回归。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1；`mini_agent/controller.py` `_call_tool` / run events；`mini_agent/durable_events.py`。
-
 ### TASK-010: Eval coverage for tool-call events
 - 优先级: high
 - 预计: 1 小时
@@ -25,6 +17,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 参考: `evals/run_evals.py` trace/durable event eval 区域；TASK-009 新增行为。
 
 ## 已完成
+
+### TASK-009: Durable tool-call event logging ✅
+- 完成者: Claude A
+- Reviewer: Claude B fallback review（reviewer pane 上游断流）
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.test_traces tests.test_mini_agent` 341 tests OK；`python3 evals/run_evals.py` 89 passed；`python3 -m unittest discover -s tests` 1148 tests OK
+- 工作树: .ccb/workspaces/claude-a (5 files, +730/-11)
+- 内容: MiniAgent tool-call durable events；tool args/result preview 脱敏/截断；cancelled→blocked audit semantics；event-write failure isolation；trace/shadow regression fixes。
 
 ### TASK-003: Durable task CRUD API ✅
 - 完成者: Claude A

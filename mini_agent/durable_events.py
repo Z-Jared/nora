@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from mini_agent.memory import is_sensitive_text
+
+_SUMMARY_LIMIT = 500
+_PAYLOAD_STRING_LIMIT = 1000
+_PAYLOAD_DEPTH_LIMIT = 4
+
 
 TASK_CREATED = "task_created"
 TASK_FINISHED = "task_finished"
@@ -17,6 +23,11 @@ CHECKPOINT_ADDED = "checkpoint_added"
 TASK_RETRIED = "task_retried"
 TRACE_LINKED = "trace_linked"
 ERROR = "error"
+TOOL_CALL_STARTED = "tool_call_started"
+TOOL_CALL_FINISHED = "tool_call_finished"
+TOOL_CALL_BLOCKED = "tool_call_blocked"
+TOOL_CALL_ERROR = "tool_call_error"
+TOOL_CALL_BUDGET_EXCEEDED = "tool_call_budget_exceeded"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -27,6 +38,11 @@ VALID_EVENT_TYPES = {
     TASK_RETRIED,
     TRACE_LINKED,
     ERROR,
+    TOOL_CALL_STARTED,
+    TOOL_CALL_FINISHED,
+    TOOL_CALL_BLOCKED,
+    TOOL_CALL_ERROR,
+    TOOL_CALL_BUDGET_EXCEEDED,
 }
 
 _DURABLE_EVENTS_TABLE = """
@@ -104,6 +120,57 @@ def _next_id(prefix: str, existing_ids: list[str]) -> str:
     return f"{prefix}{max_num + 1}"
 
 
+_REDACTED = "[redacted]"
+
+_SENSITIVE_KEY_PATTERNS = (
+    "password", "passwd", "token", "api_key", "apikey", "secret",
+    "authorization", "bearer", "credential", "credentials", "auth",
+    "private_key", "access_token", "refresh_token", "session_token",
+    "client_secret", "connection_string",
+)
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lower = key.lower()
+    return any(pattern in lower for pattern in _SENSITIVE_KEY_PATTERNS)
+
+
+def _sanitize_string(text: str, limit: int = _PAYLOAD_STRING_LIMIT) -> str:
+    if not isinstance(text, str):
+        return text
+    if is_sensitive_text(text):
+        return _REDACTED
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _sanitize_value(value, depth: int = 0, sensitive_key: bool = False):
+    if depth > _PAYLOAD_DEPTH_LIMIT:
+        return "[truncated]"
+    if isinstance(value, str):
+        if sensitive_key:
+            return _REDACTED
+        return _sanitize_string(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_value(v, depth + 1, sensitive_key=sensitive_key or _is_sensitive_key(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_value(v, depth + 1, sensitive_key=sensitive_key) for v in value]
+    if sensitive_key:
+        return _REDACTED
+    return value
+
+
+def _sanitize_summary(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    if is_sensitive_text(text):
+        return _REDACTED
+    if len(text) > _SUMMARY_LIMIT:
+        return text[:_SUMMARY_LIMIT] + "..."
+    return text
+
+
 class DurableEventStore:
     """Append-only event store with SQLite and JSONL backends."""
 
@@ -129,8 +196,8 @@ class DurableEventStore:
             task_id=task_id,
             event_type=event_type,
             created_at=_now_iso(),
-            summary=summary,
-            payload=payload or {},
+            summary=_sanitize_summary(summary),
+            payload=_sanitize_value(payload or {}),
             trace_id=trace_id,
             checkpoint_id=checkpoint_id,
             worker_id=worker_id,

@@ -411,8 +411,25 @@ class DurableTaskStore:
         else:
             self._rewrite_jsonl(task)
 
-    def add_trace_ref(self, trace_id: str) -> bool:
-        """Append trace_id to the first active/running durable task. Returns True if linked."""
+    def add_trace_ref(self, trace_id: str, task_id: Optional[str] = None) -> bool:
+        """Append trace_id to a durable task. Returns True if linked.
+
+        If task_id is given, link to that specific task even if it is terminal.
+        Otherwise link to the first non-terminal task.
+        """
+        if task_id:
+            task = self.get_task(task_id)
+            if task:
+                if trace_id not in task.trace_refs:
+                    task.trace_refs.append(trace_id)
+                    task.updated_at = _now_iso()
+                    if self.db:
+                        self._update_db(task)
+                    else:
+                        self._rewrite_jsonl(task)
+                return True
+            return False
+
         non_terminal = {TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED, TaskStatus.BLOCKED}
         tasks = self.list_tasks(limit=50)
         for task in tasks:
