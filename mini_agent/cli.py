@@ -289,6 +289,52 @@ class MiniAgentCLI:
                     f"  checkpoints={cp}  {t.goal[:60]}"
                 )
             return "\n".join(lines)
+        if command == "/dashboard":
+            store = getattr(self.registry, "durable_task_store", None)
+            if not store:
+                return "Durable task 存储未配置。"
+            tasks = store.list_tasks(limit=200)
+            if not tasks:
+                return "暂无 durable tasks。"
+            from collections import Counter
+            counts = Counter(t.status for t in tasks)
+            lines = ["Durable Task Dashboard", ""]
+            lines.append("状态分布:")
+            for status in ("pending", "running", "paused", "blocked", "completed", "failed", "cancelled"):
+                n = counts.get(status, 0)
+                if n > 0:
+                    lines.append(f"  {status}: {n}")
+            lines.append(f"  总计: {len(tasks)}")
+            running = [t for t in tasks if t.status == "running"]
+            if running:
+                lines.append("")
+                lines.append(f"进行中的任务 ({len(running)}):")
+                for t in running:
+                    step = t.current_step or "-"
+                    total = len(t.steps)
+                    lines.append(
+                        f"  {t.task_id}  step={step}/{total}  {t.goal[:50]}"
+                    )
+            completed = [t for t in tasks if t.status == "completed"]
+            if completed:
+                recent = completed[:5]
+                lines.append("")
+                lines.append(f"最近完成的任务 ({len(recent)}):")
+                for t in recent:
+                    lines.append(
+                        f"  {t.task_id}  {t.goal[:50]}"
+                    )
+            failed = [t for t in tasks if t.status == "failed"]
+            if failed:
+                recent_fail = failed[:5]
+                lines.append("")
+                lines.append(f"失败的任务 ({len(recent_fail)}):")
+                for t in recent_fail:
+                    reason = t.failure_reason[:40] if t.failure_reason else "-"
+                    lines.append(
+                        f"  {t.task_id}  {t.goal[:40]}  reason={reason}"
+                    )
+            return "\n".join(lines)
         if command == "/durable-task":
             if not args:
                 return "用法: /durable-task <task_id>"

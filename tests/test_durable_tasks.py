@@ -530,5 +530,524 @@ class RegistryToolTests(unittest.TestCase):
                 db.close()
 
 
+class DeleteTaskTests(unittest.TestCase):
+    """Tests for DurableTaskStore.delete_task()."""
+
+    def test_delete_existing_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="to delete", steps=[{"text": "s1"}])
+                self.assertIsNotNone(store.get_task("dtask_1"))
+                result = store.delete_task("dtask_1")
+                self.assertTrue(result)
+                self.assertIsNone(store.get_task("dtask_1"))
+                self.assertEqual(store.list_tasks(), [])
+            finally:
+                db.close()
+
+    def test_delete_nonexistent_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                result = store.delete_task("dtask_999")
+                self.assertFalse(result)
+            finally:
+                db.close()
+
+    def test_delete_existing_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tasks.jsonl"
+            store = DurableTaskStore(path=path)
+            store.create_task(goal="to delete", steps=[])
+            self.assertTrue(store.delete_task("dtask_1"))
+            self.assertIsNone(store.get_task("dtask_1"))
+
+    def test_delete_nonexistent_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tasks.jsonl"
+            store = DurableTaskStore(path=path)
+            self.assertFalse(store.delete_task("dtask_999"))
+
+    def test_delete_does_not_affect_other_tasks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="keep", steps=[])
+                store.create_task(goal="delete me", steps=[])
+                store.delete_task("dtask_2")
+                remaining = store.list_tasks()
+                self.assertEqual(len(remaining), 1)
+                self.assertEqual(remaining[0].goal, "keep")
+            finally:
+                db.close()
+
+
+class CRUDRegistryToolTests(unittest.TestCase):
+    """Tests for create_durable_task, update_durable_task, delete_durable_task registry tools."""
+
+    def _make_registry(self, db):
+        from mini_agent.tools import build_default_registry
+        return build_default_registry(db=db, confirm_action=lambda _: True)
+
+    def test_registry_has_crud_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                tools = {t["function"]["name"] for t in registry.to_openai_tools()}
+                self.assertIn("create_durable_task", tools)
+                self.assertIn("update_durable_task", tools)
+                self.assertIn("delete_durable_task", tools)
+            finally:
+                db.close()
+
+    def test_create_durable_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("create_durable_task", goal="build feature", steps="plan\nimplement\ntest")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["task_id"], "dtask_1")
+                self.assertEqual(parsed["goal"], "build feature")
+                self.assertEqual(parsed["status"], "pending")
+                self.assertEqual(len(parsed["steps"]), 3)
+                self.assertEqual(parsed["steps"][0]["text"], "plan")
+            finally:
+                db.close()
+
+    def test_create_durable_task_empty_steps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("create_durable_task", goal="simple", steps="")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["task_id"], "dtask_1")
+                self.assertEqual(len(parsed["steps"]), 0)
+            finally:
+                db.close()
+
+    def test_update_durable_task_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="step1")
+                result = registry.call("update_durable_task", task_id="dtask_1", status="running")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["status"], "running")
+            finally:
+                db.close()
+
+    def test_update_durable_task_to_completed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="step1")
+                registry.call("update_durable_task", task_id="dtask_1", status="running")
+                result = registry.call("update_durable_task", task_id="dtask_1", status="completed")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["status"], "completed")
+                self.assertIsNotNone(parsed["finished_at"])
+            finally:
+                db.close()
+
+    def test_update_durable_task_with_failure_reason(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="step1")
+                registry.call("update_durable_task", task_id="dtask_1", status="running")
+                result = registry.call("update_durable_task", task_id="dtask_1", status="failed", failure_reason="timeout")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["status"], "failed")
+                self.assertEqual(parsed["failure_reason"], "timeout")
+            finally:
+                db.close()
+
+    def test_update_durable_task_invalid_transition(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="step1")
+                result = registry.call("update_durable_task", task_id="dtask_1", status="completed")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+                self.assertIn("pending", parsed["error"])
+            finally:
+                db.close()
+
+    def test_update_durable_task_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("update_durable_task", task_id="dtask_999", status="running")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+    def test_update_durable_task_missing_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("update_durable_task", task_id="dtask_1")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+    def test_delete_durable_task(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="to delete", steps="step1")
+                result = registry.call("delete_durable_task", task_id="dtask_1")
+                parsed = json.loads(result)
+                self.assertTrue(parsed["deleted"])
+                self.assertEqual(parsed["task_id"], "dtask_1")
+                # Verify actually gone
+                result2 = registry.call("get_durable_task", task_id="dtask_1")
+                parsed2 = json.loads(result2)
+                self.assertIn("error", parsed2)
+            finally:
+                db.close()
+
+    def test_delete_durable_task_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("delete_durable_task", task_id="dtask_999")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+    def test_full_crud_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                # Create
+                result = registry.call("create_durable_task", goal="lifecycle test", steps="s1\ns2")
+                task = json.loads(result)
+                task_id = task["task_id"]
+                self.assertEqual(task["status"], "pending")
+                # Read
+                result = registry.call("get_durable_task", task_id=task_id)
+                self.assertEqual(json.loads(result)["goal"], "lifecycle test")
+                # Update
+                result = registry.call("update_durable_task", task_id=task_id, status="running")
+                self.assertEqual(json.loads(result)["status"], "running")
+                result = registry.call("update_durable_task", task_id=task_id, status="completed")
+                self.assertEqual(json.loads(result)["status"], "completed")
+                # Delete
+                result = registry.call("delete_durable_task", task_id=task_id)
+                self.assertTrue(json.loads(result)["deleted"])
+                # Confirm gone
+                result = registry.call("get_durable_task", task_id=task_id)
+                self.assertIn("error", json.loads(result))
+            finally:
+                db.close()
+
+
+class TaskManagerDurableStoreWiringTests(unittest.TestCase):
+    """Tests that TaskManager receives durable_store."""
+
+    def test_task_manager_has_durable_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                from mini_agent.tools import build_default_registry
+                registry = build_default_registry(db=db)
+                tm = registry.task_manager
+                self.assertIsNotNone(tm.durable_store)
+                self.assertIsInstance(tm.durable_store, DurableTaskStore)
+            finally:
+                db.close()
+
+    def test_task_manager_durable_store_is_same_as_registry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                from mini_agent.tools import build_default_registry
+                registry = build_default_registry(db=db)
+                self.assertIs(registry.task_manager.durable_store, registry.durable_task_store)
+            finally:
+                db.close()
+
+    def test_task_manager_without_durable_store(self):
+        from mini_agent.task_runner import TaskManager
+        tm = TaskManager()
+        self.assertIsNone(tm.durable_store)
+
+
+class RetryFieldTests(unittest.TestCase):
+    """Tests for retry_count and max_retries fields on DurableTask."""
+
+    def test_default_retry_fields(self):
+        task = DurableTask(
+            task_id="dtask_1", run_id="run_1", status="pending",
+            goal="test", steps=[], created_at="2026-01-01", updated_at="2026-01-01",
+        )
+        self.assertEqual(task.retry_count, 0)
+        self.assertEqual(task.max_retries, 3)
+
+    def test_custom_max_retries_on_create(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                task = store.create_task(goal="test", steps=[{"text": "s1"}], max_retries=5)
+                self.assertEqual(task.max_retries, 5)
+                self.assertEqual(task.retry_count, 0)
+            finally:
+                db.close()
+
+    def test_retry_fields_in_to_dict(self):
+        task = DurableTask(
+            task_id="dtask_1", run_id="run_1", status="pending",
+            goal="test", steps=[], created_at="2026-01-01", updated_at="2026-01-01",
+            retry_count=2, max_retries=5,
+        )
+        d = task.to_dict()
+        self.assertEqual(d["retry_count"], 2)
+        self.assertEqual(d["max_retries"], 5)
+
+    def test_retry_fields_from_dict(self):
+        data = {
+            "task_id": "dtask_1", "run_id": "run_1", "status": "pending",
+            "goal": "test", "steps": [], "created_at": "2026-01-01", "updated_at": "2026-01-01",
+            "retry_count": 1, "max_retries": 5,
+        }
+        task = DurableTask.from_dict(data)
+        self.assertEqual(task.retry_count, 1)
+        self.assertEqual(task.max_retries, 5)
+
+    def test_retry_fields_backward_compat_from_dict(self):
+        """from_dict with no retry fields should use defaults."""
+        data = {
+            "task_id": "dtask_1", "run_id": "run_1", "status": "pending",
+            "goal": "test", "steps": [], "created_at": "2026-01-01", "updated_at": "2026-01-01",
+        }
+        task = DurableTask.from_dict(data)
+        self.assertEqual(task.retry_count, 0)
+        self.assertEqual(task.max_retries, 3)
+
+    def test_retry_fields_persist_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="test", steps=[], max_retries=7)
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.retry_count, 0)
+                self.assertEqual(task.max_retries, 7)
+            finally:
+                db.close()
+
+
+class RetryDurableTaskTests(unittest.TestCase):
+    """Tests for DurableTaskStore.retry_durable_task()."""
+
+    def _make_failed_task(self, store, max_retries=3):
+        store.create_task(goal="test", steps=[{"text": "s1"}, {"text": "s2"}], max_retries=max_retries)
+        store.update_status("dtask_1", TaskStatus.RUNNING)
+        store.update_status("dtask_1", TaskStatus.FAILED, failure_reason="timeout")
+
+    def test_retry_resets_to_pending(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                self._make_failed_task(store)
+                task = store.retry_durable_task("dtask_1")
+                self.assertEqual(task.status, TaskStatus.PENDING)
+                self.assertEqual(task.retry_count, 1)
+                self.assertEqual(task.failure_reason, "")
+                self.assertIsNone(task.finished_at)
+            finally:
+                db.close()
+
+    def test_retry_resets_steps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="test", steps=[{"text": "s1", "status": "done"}])
+                store.update_status("dtask_1", TaskStatus.RUNNING)
+                store.update_status("dtask_1", TaskStatus.FAILED)
+                task = store.retry_durable_task("dtask_1")
+                for step in task.steps:
+                    self.assertEqual(step.status, StepStatus.PENDING)
+                    self.assertEqual(step.note, "")
+            finally:
+                db.close()
+
+    def test_retry_increments_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                self._make_failed_task(store, max_retries=3)
+                store.retry_durable_task("dtask_1")
+                store.update_status("dtask_1", TaskStatus.RUNNING)
+                store.update_status("dtask_1", TaskStatus.FAILED, failure_reason="err2")
+                task = store.retry_durable_task("dtask_1")
+                self.assertEqual(task.retry_count, 2)
+            finally:
+                db.close()
+
+    def test_retry_max_retries_exceeded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                self._make_failed_task(store, max_retries=1)
+                store.retry_durable_task("dtask_1")
+                store.update_status("dtask_1", TaskStatus.RUNNING)
+                store.update_status("dtask_1", TaskStatus.FAILED)
+                with self.assertRaises(ValueError) as ctx:
+                    store.retry_durable_task("dtask_1")
+                self.assertIn("Max retries", str(ctx.exception))
+            finally:
+                db.close()
+
+    def test_retry_non_failed_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="test", steps=[])
+                with self.assertRaises(ValueError) as ctx:
+                    store.retry_durable_task("dtask_1")
+                self.assertIn("pending", str(ctx.exception))
+            finally:
+                db.close()
+
+    def test_retry_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                result = store.retry_durable_task("dtask_999")
+                self.assertIsNone(result)
+            finally:
+                db.close()
+
+    def test_retry_persists_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                self._make_failed_task(store)
+                store.retry_durable_task("dtask_1")
+                task = store.get_task("dtask_1")
+                self.assertEqual(task.status, TaskStatus.PENDING)
+                self.assertEqual(task.retry_count, 1)
+            finally:
+                db.close()
+
+    def test_retry_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tasks.jsonl"
+            store = DurableTaskStore(path=path)
+            self._make_failed_task(store)
+            task = store.retry_durable_task("dtask_1")
+            self.assertEqual(task.status, TaskStatus.PENDING)
+            self.assertEqual(task.retry_count, 1)
+            # Verify persistence
+            task2 = store.get_task("dtask_1")
+            self.assertEqual(task2.status, TaskStatus.PENDING)
+
+    def test_retry_zero_max_retries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableTaskStore(db=db)
+                store.create_task(goal="test", steps=[], max_retries=0)
+                store.update_status("dtask_1", TaskStatus.RUNNING)
+                store.update_status("dtask_1", TaskStatus.FAILED)
+                with self.assertRaises(ValueError):
+                    store.retry_durable_task("dtask_1")
+            finally:
+                db.close()
+
+
+class RetryRegistryToolTests(unittest.TestCase):
+    """Tests for retry_durable_task registry tool."""
+
+    def _make_registry(self, db):
+        from mini_agent.tools import build_default_registry
+        return build_default_registry(db=db, confirm_action=lambda _: True)
+
+    def test_retry_tool_registered(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                tools = {t["function"]["name"] for t in registry.to_openai_tools()}
+                self.assertIn("retry_durable_task", tools)
+            finally:
+                db.close()
+
+    def test_retry_tool_success(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="s1")
+                registry.call("update_durable_task", task_id="dtask_1", status="running")
+                registry.call("update_durable_task", task_id="dtask_1", status="failed", failure_reason="err")
+                result = registry.call("retry_durable_task", task_id="dtask_1")
+                parsed = json.loads(result)
+                self.assertEqual(parsed["status"], "pending")
+                self.assertEqual(parsed["retry_count"], 1)
+            finally:
+                db.close()
+
+    def test_retry_tool_max_retries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                registry.call("create_durable_task", goal="test", steps="s1")
+                registry.call("update_durable_task", task_id="dtask_1", status="running")
+                registry.call("update_durable_task", task_id="dtask_1", status="failed")
+                # Default max_retries=3, so retry 3 times
+                for _ in range(3):
+                    registry.call("retry_durable_task", task_id="dtask_1")
+                    registry.call("update_durable_task", task_id="dtask_1", status="running")
+                    registry.call("update_durable_task", task_id="dtask_1", status="failed")
+                result = registry.call("retry_durable_task", task_id="dtask_1")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+    def test_retry_tool_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = self._make_registry(db)
+                result = registry.call("retry_durable_task", task_id="dtask_999")
+                parsed = json.loads(result)
+                self.assertIn("error", parsed)
+            finally:
+                db.close()
+
+
 if __name__ == "__main__":
     unittest.main()

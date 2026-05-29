@@ -79,15 +79,16 @@ def build_default_registry(
         project_rag=project_rag,
     )
     long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
+    durable_task_store = DurableTaskStore(db=db)
     task_manager = TaskManager(
         path=task_state_path or Path("data/current_task.json"),
         history_path=task_history_path or Path("data/task_history.jsonl"),
         db=db,
+        durable_store=durable_task_store,
     )
     context_summaries = ContextSummaryStore(path=context_summary_path or Path("data/context_summaries.jsonl"), db=db)
     tool_results = ToolResultStore(path=tool_results_path or Path("data/tool_results.jsonl"), db=db)
     trace_store = TraceStore(db=db)
-    durable_task_store = DurableTaskStore(db=db)
     logger = JsonlToolLogger(path=log_path or Path("logs/tool_calls.jsonl"), db=db)
     registry = ToolRegistry(
         logger=logger,
@@ -215,6 +216,116 @@ def build_default_registry(
             "required": ["task_id"],
         },
         permission=ToolPermission(category="logs", risk="read"),
+    )
+
+    def _create_durable_task_json(goal: str, steps: str) -> str:
+        parsed = [s.strip() for s in steps.splitlines() if s.strip()]
+        step_dicts = [{"text": s} for s in parsed]
+        task = durable_task_store.create_task(goal=goal, steps=step_dicts)
+        return _json.dumps(task.to_dict(), ensure_ascii=False)
+
+    def _update_durable_task_json(task_id: str, status: str = "", failure_reason: str = "") -> str:
+        if not status:
+            return _json.dumps({"error": "status 参数必填"}, ensure_ascii=False)
+        try:
+            task = durable_task_store.update_status(task_id, status, failure_reason=failure_reason)
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        return _json.dumps(task.to_dict(), ensure_ascii=False)
+
+    def _delete_durable_task_json(task_id: str) -> str:
+        deleted = durable_task_store.delete_task(task_id)
+        if not deleted:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        return _json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False)
+
+    registry.register(
+        "create_durable_task",
+        "创建一个新的 durable task。goal 是任务目标，steps 是每行一个步骤的文本。",
+        _create_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "任务目标描述",
+                },
+                "steps": {
+                    "type": "string",
+                    "description": "每行一个步骤的文本",
+                },
+            },
+            "required": ["goal", "steps"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+    registry.register(
+        "update_durable_task",
+        "更新 durable task 的状态（如 running、completed、failed、cancelled）。",
+        _update_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "新状态: running, paused, blocked, completed, failed, cancelled",
+                },
+                "failure_reason": {
+                    "type": "string",
+                    "description": "失败原因（可选，仅 failed/cancelled 时使用）",
+                },
+            },
+            "required": ["task_id", "status"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+    registry.register(
+        "delete_durable_task",
+        "删除一条 durable task。此操作不可逆。",
+        _delete_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                }
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
+    def _retry_durable_task_json(task_id: str) -> str:
+        try:
+            task = durable_task_store.retry_durable_task(task_id)
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        return _json.dumps(task.to_dict(), ensure_ascii=False)
+
+    registry.register(
+        "retry_durable_task",
+        "重试一个失败的 durable task。将状态重置为 pending，步骵也重置，retry_count 加 1。仅 FAILED 状态可重试，且不能超过 max_retries。",
+        _retry_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                }
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
     )
 
     registry.register(

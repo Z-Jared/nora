@@ -44,7 +44,7 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.PAUSED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.BLOCKED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: set(),
+    TaskStatus.FAILED: {TaskStatus.PENDING},
     TaskStatus.CANCELLED: set(),
 }
 
@@ -103,6 +103,8 @@ class DurableTask:
     finished_at: Optional[str] = None
     failure_reason: str = ""
     resume_policy: Optional[str] = None
+    retry_count: int = 0
+    max_retries: int = 3
 
     def to_dict(self) -> dict:
         return {
@@ -123,6 +125,8 @@ class DurableTask:
             "finished_at": self.finished_at,
             "failure_reason": self.failure_reason,
             "resume_policy": self.resume_policy,
+            "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
         }
 
     @classmethod
@@ -147,6 +151,8 @@ class DurableTask:
             finished_at=data.get("finished_at"),
             failure_reason=data.get("failure_reason", ""),
             resume_policy=data.get("resume_policy"),
+            retry_count=data.get("retry_count", 0),
+            max_retries=data.get("max_retries", 3),
         )
 
 
@@ -168,8 +174,15 @@ CREATE TABLE IF NOT EXISTS durable_tasks (
     updated_at TEXT NOT NULL,
     finished_at TEXT,
     failure_reason TEXT NOT NULL DEFAULT '',
-    resume_policy TEXT
+    resume_policy TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 3
 );
+"""
+
+_DURABLE_TASKS_MIGRATE_RETRY = """
+ALTER TABLE durable_tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE durable_tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3;
 """
 
 _DURABLE_TASKS_INDEX = """
@@ -208,6 +221,11 @@ class DurableTaskStore:
         if self.db and not self._table_created:
             self.db.conn.executescript(_DURABLE_TASKS_TABLE)
             self.db.conn.executescript(_DURABLE_TASKS_INDEX)
+            # Migrate existing tables: add retry columns if missing
+            try:
+                self.db.conn.executescript(_DURABLE_TASKS_MIGRATE_RETRY)
+            except Exception:
+                pass  # columns already exist
             self._table_created = True
 
     def create_task(
@@ -218,6 +236,7 @@ class DurableTaskStore:
         parent_task_id: Optional[str] = None,
         input_summary: str = "",
         worker_id: Optional[str] = None,
+        max_retries: int = 3,
     ) -> DurableTask:
         now = _now_iso()
         existing = self._all_ids()
@@ -245,6 +264,7 @@ class DurableTaskStore:
             parent_task_id=parent_task_id,
             input_summary=input_summary,
             worker_id=worker_id,
+            max_retries=max(0, int(max_retries)),
         )
 
         if self.db:
@@ -296,6 +316,61 @@ class DurableTaskStore:
 
         return task
 
+    def delete_task(self, task_id: str) -> bool:
+        """Delete a task by id. Returns True if deleted, False if not found."""
+        task = self.get_task(task_id)
+        if task is None:
+            return False
+        if self.db:
+            self._ensure_table()
+            self.db.conn.execute("DELETE FROM durable_tasks WHERE task_id = ?", (task_id,))
+            self.db.conn.commit()
+        else:
+            tasks = [t for t in self._read_all_jsonl() if t.task_id != task_id]
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("w", encoding="utf-8") as f:
+                for t in tasks:
+                    f.write(json.dumps(t.to_dict(), ensure_ascii=False) + "\n")
+        return True
+
+    def retry_durable_task(self, task_id: str) -> Optional[DurableTask]:
+        """Retry a failed task: reset to pending, increment retry_count, reset steps.
+
+        Returns the updated task, or None if not found.
+        Raises ValueError if task is not FAILED or max_retries reached.
+        """
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+
+        if task.status != TaskStatus.FAILED:
+            raise ValueError(
+                f"Cannot retry task in status {task.status!r}. Only FAILED tasks can be retried."
+            )
+        if task.retry_count >= task.max_retries:
+            raise ValueError(
+                f"Max retries ({task.max_retries}) reached for task {task_id}."
+            )
+
+        now = _now_iso()
+        task.status = TaskStatus.PENDING
+        task.retry_count += 1
+        task.finished_at = None
+        task.failure_reason = ""
+        task.updated_at = now
+        # Reset all steps to pending
+        for step in task.steps:
+            step.status = StepStatus.PENDING
+            step.note = ""
+            step.summary = ""
+
+        if self.db:
+            self._update_db(task)
+        else:
+            self._rewrite_jsonl(task)
+
+        return task
+
     def add_checkpoint(self, task_id: str, checkpoint: dict) -> Optional[DurableCheckpoint]:
         task = self.get_task(task_id)
         if task is None:
@@ -323,42 +398,6 @@ class DurableTaskStore:
 
         return cp
 
-    def upsert_task(self, task: DurableTask) -> None:
-        """Insert or update a DurableTask. Overwrites if task_id already exists."""
-        if self.db:
-            self._ensure_table()
-            self.db.conn.execute(
-                """INSERT OR REPLACE INTO durable_tasks
-                   (task_id, run_id, parent_task_id, status, goal,
-                    steps_json, current_step, checkpoints_json,
-                    input_summary, context_pack_ref, trace_refs_json,
-                    worker_id, created_at, updated_at, finished_at,
-                    failure_reason, resume_policy)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task.task_id,
-                    task.run_id,
-                    task.parent_task_id,
-                    task.status,
-                    task.goal,
-                    json.dumps([s.to_dict() for s in task.steps], ensure_ascii=False),
-                    task.current_step,
-                    json.dumps([c.to_dict() for c in task.checkpoints], ensure_ascii=False),
-                    task.input_summary,
-                    task.context_pack_ref,
-                    json.dumps(task.trace_refs, ensure_ascii=False),
-                    task.worker_id,
-                    task.created_at,
-                    task.updated_at,
-                    task.finished_at,
-                    task.failure_reason,
-                    task.resume_policy,
-                ),
-            )
-            self.db.conn.commit()
-        else:
-            self._rewrite_jsonl(task)
-
     # --- SQLite backend ---
 
     def _insert_db(self, task: DurableTask) -> None:
@@ -369,8 +408,8 @@ class DurableTaskStore:
                 steps_json, current_step, checkpoints_json,
                 input_summary, context_pack_ref, trace_refs_json,
                 worker_id, created_at, updated_at, finished_at,
-                failure_reason, resume_policy)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                failure_reason, resume_policy, retry_count, max_retries)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task.task_id,
                 task.run_id,
@@ -389,6 +428,8 @@ class DurableTaskStore:
                 task.finished_at,
                 task.failure_reason,
                 task.resume_policy,
+                task.retry_count,
+                task.max_retries,
             ),
         )
         self.db.conn.commit()
@@ -401,7 +442,7 @@ class DurableTaskStore:
                steps_json=?, current_step=?, checkpoints_json=?,
                input_summary=?, context_pack_ref=?, trace_refs_json=?,
                worker_id=?, updated_at=?, finished_at=?,
-               failure_reason=?, resume_policy=?
+               failure_reason=?, resume_policy=?, retry_count=?, max_retries=?
                WHERE task_id=?""",
             (
                 task.run_id,
@@ -419,6 +460,8 @@ class DurableTaskStore:
                 task.finished_at,
                 task.failure_reason,
                 task.resume_policy,
+                task.retry_count,
+                task.max_retries,
                 task.task_id,
             ),
         )
@@ -431,7 +474,7 @@ class DurableTaskStore:
                       steps_json, current_step, checkpoints_json,
                       input_summary, context_pack_ref, trace_refs_json,
                       worker_id, created_at, updated_at, finished_at,
-                      failure_reason, resume_policy
+                      failure_reason, resume_policy, retry_count, max_retries
                FROM durable_tasks WHERE task_id=?""",
             (task_id,),
         ).fetchone()
@@ -444,7 +487,7 @@ class DurableTaskStore:
                       steps_json, current_step, checkpoints_json,
                       input_summary, context_pack_ref, trace_refs_json,
                       worker_id, created_at, updated_at, finished_at,
-                      failure_reason, resume_policy
+                      failure_reason, resume_policy, retry_count, max_retries
                FROM durable_tasks ORDER BY rowid DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -477,6 +520,8 @@ class DurableTaskStore:
             finished_at=row[14],
             failure_reason=row[15] or "",
             resume_policy=row[16],
+            retry_count=row[17] or 0,
+            max_retries=row[18] if row[18] is not None else 3,
         )
 
     # --- JSONL backend ---
