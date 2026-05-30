@@ -4,19 +4,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（空 — 当前任务已派发）
+（空 — 当前无待分配任务）
 
 ## 进行中
 
-### TASK-016: Eval coverage for shell-command events
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-015 已完成
-- 目标: 为 durable shell-command event logging 增加 deterministic offline eval，覆盖 success、blocked/cancelled、timeout/error 和 event write failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
-- 参考: `evals/run_evals.py` durable event/tool/model/file event eval 区域；TASK-015 新增行为。
+（空 — 当前无进行中任务）
 
 ## 已完成
+
+### TASK-016: Eval coverage for shell-command events ✅
+- 完成者: Claude B；Codex PM 加固 forbidden payload-key 和 sentinel 断言
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 108 passed；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 203 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 shell-command success、blocked/disallowed、cancelled、timeout/OSError、event-store failure isolation；用 4 个 sentinel 和 10 个 forbidden payload key 断言确认 raw command args、stdout/stderr、raw exception、reason/secrets 不进入 serialized durable events；eval-only，无 runtime shim/fallback。
 
 ### TASK-015: Durable shell-command event logging ✅
 - 完成者: Claude A；Codex PM 移植到主工作区并加固 raw command handling

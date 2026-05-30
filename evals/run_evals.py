@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -152,6 +152,11 @@ def main() -> int:
         EvalCase("file_edit_event_blocked_or_cancelled", eval_file_edit_event_blocked_or_cancelled),
         EvalCase("file_edit_event_error", eval_file_edit_event_error),
         EvalCase("file_edit_event_failure_isolation", eval_file_edit_event_failure_isolation),
+        EvalCase("shell_command_event_success", eval_shell_command_event_success),
+        EvalCase("shell_command_event_blocked", eval_shell_command_event_blocked),
+        EvalCase("shell_command_event_cancelled", eval_shell_command_event_cancelled),
+        EvalCase("shell_command_event_error", eval_shell_command_event_error),
+        EvalCase("shell_command_event_failure_isolation", eval_shell_command_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -2672,6 +2677,214 @@ def eval_file_edit_event_failure_isolation():
         replaced = files.replace("replace.txt", "old", "new", reason=_FILE_EDIT_SENTINELS[4])
         assert "已修改" in replaced, replaced
         assert (tmpdir / "replace.txt").read_text(encoding="utf-8") == "new\n"
+
+
+_SHELL_SENTINEL_CMD = "NORA_EVAL_SHELL_SENTINEL_a7c3e1f9"
+_SHELL_SENTINEL_OUTPUT = "NORA_EVAL_SHELL_OUTPUT_SECRET_d4b28e61"
+_SHELL_SENTINEL_REASON = "NORA_EVAL_SHELL_REASON_9f1e3d7a"
+_SHELL_FORBIDDEN_PAYLOAD_KEYS = {"command", "args", "argv", "stdout", "stderr", "output", "result", "reason", "exception", "traceback"}
+
+
+def _shell_events(event_store, event_type=None):
+    events = event_store.list_events()
+    shell_types = (SHELL_COMMAND_STARTED, SHELL_COMMAND_FINISHED, SHELL_COMMAND_ERROR, SHELL_COMMAND_BLOCKED)
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in shell_types]
+
+
+def _serialized_shell_events(event_store):
+    return json.dumps(
+        [event.to_dict() for event in _shell_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_shell_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_shell_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"shell event stored forbidden raw value {value!r}: {serialized}"
+    for event in _shell_events(event_store):
+        leaked_keys = _SHELL_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"shell event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_shell_command_event_success():
+    """Successful allowed command records started/finished with safe metadata. No raw command text persisted."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            runner = ShellRunner(tmpdir, require_confirmation=False, event_store=event_store)
+            result = runner.run("pwd", reason=_SHELL_SENTINEL_REASON)
+
+            assert "exit_code: 0" in result, f"expected exit_code 0, got: {result}"
+
+            started = _shell_events(event_store, SHELL_COMMAND_STARTED)
+            finished = _shell_events(event_store, SHELL_COMMAND_FINISHED)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(finished) == 1, f"expected 1 finished, got {len(finished)}"
+
+            assert started[0].payload["executable"] == "pwd"
+            assert started[0].severity == "info"
+            assert started[0].task_id is None
+
+            assert finished[0].payload["exit_code"] == 0
+            assert finished[0].payload["status"] == "finished"
+            assert finished[0].payload["stdout_bytes"] > 0
+            assert finished[0].severity == "info"
+            assert finished[0].task_id is None
+
+            _assert_shell_events_safe(event_store, [_SHELL_SENTINEL_REASON])
+
+            arg_db = NoraDB(tmpdir / "arg.db")
+            try:
+                arg_store = DurableEventStore(db=arg_db)
+                sentinel_path = f"{_SHELL_SENTINEL_CMD}.py"
+                (tmpdir / sentinel_path).write_text("x = 1\n", encoding="utf-8")
+                arg_result = ShellRunner(tmpdir, require_confirmation=False, event_store=arg_store).run(
+                    f"python3 -m py_compile {sentinel_path}"
+                )
+                assert "exit_code: 0" in arg_result, f"expected py_compile success, got: {arg_result}"
+                _assert_shell_events_safe(arg_store, [_SHELL_SENTINEL_CMD, sentinel_path])
+            finally:
+                arg_db.close()
+        finally:
+            db.close()
+
+
+def eval_shell_command_event_blocked():
+    """Disallowed command records blocked event with no started/finished."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            runner = ShellRunner(tmpdir, require_confirmation=False, event_store=event_store)
+            result = runner.run("rm -rf /")
+
+            assert "拒绝" in result, f"expected rejection, got: {result}"
+
+            blocked = _shell_events(event_store, SHELL_COMMAND_BLOCKED)
+            started = _shell_events(event_store, SHELL_COMMAND_STARTED)
+            finished = _shell_events(event_store, SHELL_COMMAND_FINISHED)
+            assert len(blocked) == 1, f"expected 1 blocked, got {len(blocked)}"
+            assert len(started) == 0, f"expected 0 started, got {len(started)}"
+            assert len(finished) == 0, f"expected 0 finished, got {len(finished)}"
+
+            assert blocked[0].payload["error"] == "disallowed_command"
+            assert blocked[0].payload["status"] == "blocked"
+            assert blocked[0].severity == "warning"
+
+            # Safety: raw command args must not leak
+            sentinel = _SHELL_SENTINEL_CMD
+            runner2 = ShellRunner(tmpdir, require_confirmation=False, event_store=event_store)
+            runner2.run(f"'{sentinel}")
+            _assert_shell_events_safe(event_store, [sentinel])
+        finally:
+            db.close()
+
+
+def eval_shell_command_event_cancelled():
+    """User-cancelled command records blocked event with no started."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            runner = ShellRunner(
+                tmpdir, require_confirmation=True,
+                confirm_action=lambda _: False,
+                event_store=event_store,
+            )
+            result = runner.run("pwd")
+
+            assert "已取消" in result, f"expected cancel message, got: {result}"
+
+            started = _shell_events(event_store, SHELL_COMMAND_STARTED)
+            blocked = _shell_events(event_store, SHELL_COMMAND_BLOCKED)
+            finished = _shell_events(event_store, SHELL_COMMAND_FINISHED)
+            assert len(started) == 0, f"cancelled command must not emit started, got {len(started)}"
+            assert len(blocked) == 1, f"expected 1 blocked, got {len(blocked)}"
+            assert len(finished) == 0, f"cancelled command must not emit finished, got {len(finished)}"
+
+            assert blocked[0].payload["error"] == "cancelled"
+            assert blocked[0].severity == "warning"
+            _assert_shell_events_safe(event_store, [])
+        finally:
+            db.close()
+
+
+def eval_shell_command_event_error():
+    """Timeout and OSError emit error events. No raw output or exception text in payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+
+            # --- timeout ---
+            (tmpdir / "main.py").write_text(
+                f"import time\nprint('{_SHELL_SENTINEL_OUTPUT}', flush=True)\ntime.sleep(30)\n",
+                encoding="utf-8",
+            )
+            runner = ShellRunner(tmpdir, require_confirmation=False, timeout_seconds=1, event_store=event_store)
+            result = runner.run("python3 main.py")
+
+            assert "timeout" in result, f"expected timeout in result, got: {result}"
+            errors = _shell_events(event_store, SHELL_COMMAND_ERROR)
+            started = _shell_events(event_store, SHELL_COMMAND_STARTED)
+            assert len(started) == 1, f"timeout should record started, got {len(started)}"
+            assert len(errors) == 1, f"expected 1 error, got {len(errors)}"
+            assert errors[0].payload["error"] == "timeout"
+            assert errors[0].payload["status"] == "timeout"
+            assert errors[0].payload["timeout"] is True
+            assert errors[0].severity == "warning"
+
+            # Sentinel output must not appear in serialized events
+            _assert_shell_events_safe(event_store, [_SHELL_SENTINEL_OUTPUT])
+
+            # --- OSError ---
+            db2 = NoraDB(tmpdir / "test2.db")
+            try:
+                event_store2 = DurableEventStore(db=db2)
+                runner2 = ShellRunner(tmpdir, require_confirmation=False, event_store=event_store2)
+                os_sentinel = "NORA_EVAL_OSERROR_SENTINEL_c8d4f2a1"
+                with patch("mini_agent.shell.subprocess.run", side_effect=OSError(os_sentinel)):
+                    result2 = runner2.run("pwd")
+
+                assert "OSError" in result2, f"expected OSError in result, got: {result2}"
+                assert os_sentinel not in result2, "raw OSError leaked to user"
+
+                errors2 = _shell_events(event_store2, SHELL_COMMAND_ERROR)
+                assert len(errors2) == 1
+                assert errors2[0].payload["error"] == "os_error"
+                assert errors2[0].severity == "warning"
+                _assert_shell_events_safe(event_store2, [os_sentinel])
+            finally:
+                db2.close()
+        finally:
+            db.close()
+
+
+def eval_shell_command_event_failure_isolation():
+    """Broken event store must not break shell execution."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        runner = ShellRunner(tmpdir, require_confirmation=False, event_store=BrokenEventStore())
+        result = runner.run("pwd")
+        assert "exit_code: 0" in result, f"shell must work with broken event store, got: {result}"
+
+        # Also verify no event store is fine
+        runner2 = ShellRunner(tmpdir, require_confirmation=False, event_store=None)
+        result2 = runner2.run("pwd")
+        assert "exit_code: 0" in result2, f"shell must work without event store, got: {result2}"
 
 
 def _init_git_repo(root: Path) -> None:

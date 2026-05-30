@@ -1,66 +1,46 @@
-# TASK-014 Completion Report — File-Edit Event Eval Coverage
+# Claude B Completion Report - TASK-016
 
 Status: ready for Codex review
 
 ## Summary
 
-Claude B reported a stale-worktree blocker: its isolated worktree did not contain TASK-013 runtime and still showed old TASK-012 task content. Codex PM took over TASK-014 in the main worktree to avoid duplicating runtime or adding fallback shims.
+Added 5 deterministic offline eval cases for durable shell-command event logging (TASK-015 runtime at b1794fa). Codex PM tightened the candidate with explicit forbidden payload-key checks and a safe allowed-arg sentinel case.
 
-Added deterministic offline eval coverage for durable file-edit events in `evals/run_evals.py`.
+1. **shell_command_event_success** — Exercises `pwd` via `ShellRunner`. Verifies `SHELL_COMMAND_STARTED` → `SHELL_COMMAND_FINISHED` with `executable`, `exit_code=0`, `stdout_bytes>0`, `severity=info`, `task_id=None`.
 
-## Coverage Added
+2. **shell_command_event_blocked** — Exercises `rm -rf /`. Verifies `SHELL_COMMAND_BLOCKED` with `error=disallowed_command`, no started/finished events. Runs a second malformed command with sentinel arg to assert raw command text absent from serialized events.
 
-New eval cases:
+3. **shell_command_event_cancelled** — Exercises confirmation denial via `confirm_action=lambda _: False`. Verifies `SHELL_COMMAND_BLOCKED` with `error=cancelled`, no started or finished events.
 
-1. `file_edit_event_success`
-   - Exercises registry-wired `write_project_file`.
-   - Verifies `FILE_EDIT_STARTED` → `FILE_EDIT_FINISHED`.
-   - Checks path, paths list, status, byte metadata, severity, and `task_id is None`.
+4. **shell_command_event_error** — Two sub-cases:
+   - **Timeout**: Sleeps 30s script with 1s timeout. Verifies `SHELL_COMMAND_ERROR` with `status=timeout`, `timeout=True`. Asserts sentinel stdout content absent from serialized events.
+   - **OSError**: Patches `subprocess.run` to raise `OSError(sentinel)`. Verifies `SHELL_COMMAND_ERROR` with `error=os_error`. Asserts sentinel OSError text absent from both user-visible result and serialized events.
 
-2. `file_edit_event_patch_metadata`
-   - Exercises `apply_project_patch` and `apply_project_multi_patch`.
-   - Verifies patch and multi-patch started/finished events.
-   - Checks path(s), file_count, and byte metadata.
-   - Asserts raw patch text is not persisted.
+5. **shell_command_event_failure_isolation** — Broken event store and `event_store=None` both must not break shell execution.
 
-3. `file_edit_event_blocked_or_cancelled`
-   - Exercises denied `.env` write as blocked-only.
-   - Exercises direct `WorkspaceFiles` confirmation cancellation as started → blocked.
-   - Verifies no finished event is emitted on cancellation.
+## Safety Assertions
 
-4. `file_edit_event_error`
-   - Simulates `Path.write_text` OSError.
-   - Verifies started → error with generic `write_failed` event label.
-   - Preserves existing user-visible error return while asserting raw OSError sentinel is not persisted.
-
-5. `file_edit_event_failure_isolation`
-   - Uses a broken event store.
-   - Verifies write and replace operations still succeed.
-
-Safety assertions cover:
-
-- raw file content
-- replacement text
-- patch text
-- raw OS error text
-- reason text
-- forbidden payload keys such as `content`, `old_text`, `new_text`, `patch`, `diff`, `reason`, `exception`, `traceback`
+All evals use named sentinels and assert absence from `event.to_dict()` serialized output:
+- `_SHELL_SENTINEL_CMD` — raw command path/arg
+- `_SHELL_SENTINEL_OUTPUT` — raw stdout content
+- `os_sentinel` — raw OSError text
+- Forbidden payload keys: no `stdout`, `stderr`, `command`, `args`, `argv`, `output`, `result`, `reason`, `exception`, or `traceback` keys stored
 
 ## Diff
 
 ```text
- evals/run_evals.py | 224 +++++++++++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 217 insertions(+), 7 deletions(-)
+ evals/run_evals.py | 215 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 214 insertions(+), 1 deletion(-)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-103 passed, 0 failed
+108 passed, 0 failed
 
-python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch
-Ran 104 tests — OK
+python3 -m unittest tests.test_durable_events tests.test_mini_agent
+Ran 203 tests — OK
 
 git diff --check
 OK
@@ -68,7 +48,7 @@ OK
 
 ## Notes
 
-- No runtime changes were added for TASK-014.
-- No fallback imports or shims were added.
-- Claude B's stale worktree was not modified.
+- No runtime code changed (TASK-015 was already complete at b1794fa).
+- No fallback imports or shims added.
+- Eval count increased from 103 to 108.
 - No commit or push performed.
