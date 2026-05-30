@@ -1,56 +1,56 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: waiting
 
 ## Goal
 
-Implement TASK-014: eval coverage for durable file-edit event logging.
+Prepare for TASK-016: eval coverage for durable shell-command event logging after Claude A completes TASK-015.
 
 ## Instructions
 
-TASK-013 is complete in the main worktree and approved by reviewer. Add deterministic offline eval coverage for durable file-edit events in `evals/run_evals.py`.
+Do not start implementation until Codex PM explicitly dispatches this task after TASK-015 lands in the main worktree.
 
-Important: your isolated worktree may be stale and may still contain old TASK-012 eval changes. Do not reimplement TASK-013 runtime behavior. If your worktree does not contain `FILE_EDIT_STARTED`, `FILE_EDIT_FINISHED`, `FILE_EDIT_BLOCKED`, and `FILE_EDIT_ERROR`, stop and report the stale-worktree blocker in `agent_tasks/B_DONE.md` instead of inventing fallback imports or runtime shims.
+Once TASK-015 is complete, add deterministic offline eval coverage for durable shell-command events in `evals/run_evals.py`.
 
 Add eval cases for:
 
-1. Successful file edit event:
-   - Exercise a workspace write path.
-   - Verify durable event log records started/finished events with safe file metadata.
+1. Successful shell command:
+   - Exercise an allowed command such as `pwd`.
+   - Verify durable event log records started/finished events with safe command metadata.
 
-2. Replace or patch metadata:
-   - Exercise `replace`, `apply_unified_diff`, or `apply_multi_file_patch`.
-   - Verify metadata includes paths/file counts/status without storing raw content, raw replacement text, full patch, or raw diff.
+2. Blocked command:
+   - Exercise a disallowed/dangerous command.
+   - Verify a blocked event is emitted and no finished event is recorded.
 
-3. Blocked or cancelled edit:
-   - Exercise sensitive path denial or confirmation cancellation.
-   - Verify a blocked event is emitted and no finished event is incorrectly recorded.
+3. Cancelled command:
+   - Exercise direct `ShellRunner` confirmation cancellation if registry-level confirmation would stop before runtime.
+   - Verify cancelled/blocked semantics.
 
-4. Error or rollback behavior:
-   - Exercise an edit failure path.
+4. Timeout or execution error:
+   - Exercise timeout or `OSError`.
    - Verify an error event is emitted while preserving existing operation behavior.
 
 5. Failure isolation:
-   - Broken event store should not change existing workspace operation behavior.
+   - Broken event store should not change existing shell operation behavior.
 
 6. Safety assertions:
-   - Use sentinel strings that would fail the eval if raw content, raw patch/diff, or secret-like text is persisted in durable event payloads or serialized event records.
+   - Use sentinel strings that would fail the eval if raw command output, raw stderr/stdout, raw exception text, or secret-like command text is persisted in durable event payloads or serialized event records.
 
-Keep evals offline and deterministic. Do not call live LLM APIs and do not reimplement TASK-013 runtime behavior in eval-only code.
+Keep evals offline and deterministic. Do not call live LLM APIs and do not reimplement TASK-015 runtime behavior in eval-only code.
 
 Suggested verification:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch
+python3 -m unittest tests.test_durable_events tests.test_mini_agent
 ```
 
 ## Context
 
-- TASK-013 added `FILE_EDIT_STARTED`, `FILE_EDIT_FINISHED`, `FILE_EDIT_ERROR`, and `FILE_EDIT_BLOCKED`.
-- `evals/run_evals.py` already has durable event lifecycle, tool-call event, and model-call event evals.
-- Keep this task eval-only. Runtime changes belong to TASK-013 and should not be duplicated here.
+- TASK-015 is expected to add `SHELL_COMMAND_STARTED`, `SHELL_COMMAND_FINISHED`, `SHELL_COMMAND_ERROR`, and `SHELL_COMMAND_BLOCKED`.
+- `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, and file-edit event evals.
+- Keep this task eval-only. Runtime changes belong to TASK-015 and should not be duplicated here.
 
 ## Completion Report
 

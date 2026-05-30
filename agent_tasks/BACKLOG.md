@@ -4,11 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（空 — 当前无待分配任务）
+（空 — 当前任务已派发）
 
 ## 进行中
 
-（空 — 当前无进行中任务）
+### TASK-015: Durable shell-command event logging
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: 无
+- 目标: 为 `run_shell_command` / `ShellRunner.run` 记录 durable shell-command lifecycle events。
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 和 `python3 evals/run_evals.py` 通过。
+- 参考: `mini_agent/shell.py`；`mini_agent/toolkits/registry_builder.py` shell runner wiring；`mini_agent/durable_events.py` event constants；`tests/test_durable_events.py` file-edit/model/tool event patterns；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1。
+
+### TASK-016: Eval coverage for shell-command events
+- 优先级: high
+- 预计: 1 小时
+- 依赖: 等待 TASK-015
+- 目标: 为 durable shell-command event logging 增加 deterministic offline eval，覆盖 success、blocked/cancelled、timeout/error 和 event write failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
+- 参考: `evals/run_evals.py` durable event/tool/model/file event eval 区域；TASK-015 新增行为。
 
 ## 已完成
 
