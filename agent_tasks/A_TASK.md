@@ -1,64 +1,101 @@
 # Claude A Task
 
 Owner: Claude A
-Status: assigned
+Status: completed
 
 ## Goal
 
-Implement durable model-call event logging.
+Implement TASK-013: durable file-edit event logging.
 
-## Instructions
+Nora is moving toward an Agent OS / Durable Runtime. File edits must become auditable durable lifecycle events, just like task/tool/model calls, without storing raw file contents or patches.
 
-The durable event log now records task lifecycle events and tool-call events. Extend it to cover model-call lifecycle events from `MiniAgent`.
+## Scope
 
-Implement a narrow vertical slice:
+Add durable event logging for workspace file-edit operations:
 
-1. Record durable events around model calls:
-   - model call started
-   - model call finished
-   - model call error
-   - streaming final-answer path if it uses `stream_chat`
+1. Add event constants in `mini_agent/durable_events.py`:
+   - `FILE_EDIT_STARTED`
+   - `FILE_EDIT_FINISHED`
+   - `FILE_EDIT_ERROR`
+   - `FILE_EDIT_BLOCKED`
+   - Include them in valid event type validation.
 
-2. Event shape:
-   - Use existing `DurableEventStore`
-   - Add explicit event type constants such as `model_call_started`, `model_call_finished`, and `model_call_error`
-   - Payload may include safe metadata: provider/model if available, message count, tool schema count, whether streaming was used, response preview, tool_call_count, latency_ms if easy
-   - Do not store raw prompts, full messages, raw API keys, tool schemas, or unbounded model output
-   - Reuse existing durable event sanitization/redaction behavior
+2. Hook file-edit lifecycle events in `mini_agent/toolkits/workspace.py`:
+   - `write`
+   - `replace`
+   - `apply_unified_diff`
+   - `apply_multi_file_patch`
 
-3. Hook points:
-   - `mini_agent/controller.py` paths that call `llm.chat(...)`
-   - `_stream_answer(...)` path that calls `llm.stream_chat(...)`
-   - `run_autonomous(...)`
-   - fallback `llm.complete(...)` path if practical
+3. Wire `DurableEventStore` into `WorkspaceFiles`, likely through `mini_agent/toolkits/registry_builder.py`.
+   - Current construction order may need to change because `WorkspaceFiles` is built before `DurableEventStore`.
+   - Keep the wiring small and compatible with existing direct `WorkspaceFiles(...)` tests.
 
-4. Task linkage and failure isolation:
-   - If task_id cannot be resolved safely, record model events without `task_id`
-   - Event writes must never break model execution, tool execution, trace recording, streaming, or existing run behavior
+## Payload Requirements
 
-5. Tests:
-   - Add focused unit coverage for successful chat model event
-   - Add coverage for model responses that contain tool calls
-   - Add coverage for model error event
-   - Add coverage for streaming model event
-   - Add failure-isolation coverage with a broken event store
+Event payloads must contain safe metadata only. Good examples:
 
-Suggested verification:
+- operation name
+- path or paths
+- file count
+- bytes before / bytes after when easy and bounded
+- status
+- error type or blocked reason
+- short sanitized reason preview if useful
+
+Do not store:
+
+- raw file content
+- old/new replacement text
+- full patch
+- raw diff
+- secrets or sentinel secret strings
+- unbounded stdout/stderr/output
+
+Event writes must be failure-isolated. A broken durable event store must not change the existing return behavior of file operations.
+
+Blocked, denied, cancelled, or permission-rejected paths should be auditable as `FILE_EDIT_BLOCKED`, not `FILE_EDIT_FINISHED`.
+
+Keep this task narrow. Do not add replay, rollback engine, scheduler work, broad refactors, or UI changes.
+
+## Suggested Tests
+
+Add focused coverage in `tests/test_durable_events.py` and/or existing workspace test files:
+
+1. Successful `write` emits started + finished events with safe metadata.
+2. `replace` and/or patch operations emit file metadata without raw content, raw replacement text, full patch, or raw diff.
+3. Sensitive path denial emits blocked metadata without unsafe payloads.
+4. Confirmation cancellation emits blocked metadata.
+5. OS/write failure emits error metadata without changing existing return behavior.
+6. Broken event store does not break write/replace/patch behavior.
+
+## Verification
+
+Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_durable_events tests.test_mini_agent
+python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch
 python3 evals/run_evals.py
 ```
 
-## Context
+If the implementation touches shared registry or durable event behavior, also run:
 
-- `mini_agent/durable_events.py` contains `DurableEventStore` and existing event type constants
-- `mini_agent/controller.py` owns LLM call paths
-- `tests/test_durable_events.py` has durable tool-call event patterns to mirror
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 calls for model/tool/file/shell/test/review events
-
-Keep scope to model-call events only; do not implement replay, model routing, cost accounting, or provider-specific telemetry.
+```bash
+python3 -m unittest discover -s tests
+```
 
 ## Completion Report
 
-Update `agent_tasks/A_DONE.md` with summary, diff stat, tests run, and known limitations.
+Update `agent_tasks/A_DONE.md` with:
+
+- summary
+- diff stat
+- exact checks run and pass/fail result
+- known risks or limitations
+
+Then notify Codex PM:
+
+```bash
+agent_tasks/notify_codex.sh A
+```
+
+Do not commit or push.

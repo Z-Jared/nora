@@ -1,143 +1,147 @@
 # CCB Code Review Report
 
-Reviewed: TASK-011 Durable model-call event logging + TASK-012 Eval coverage for model-call events
-Worker: Claude A (TASK-011 runtime), Claude B (TASK-012 evals), PM-curated into main worktree
+Reviewed: TASK-014 Eval coverage for durable file-edit events
+Worker: Codex PM (Claude B blocked by stale worktree)
 Status: **APPROVED**
 
 ---
 
 ## Review Scope
 
-### 1. Model-call Event Logging Coverage in `controller.py`
+### 1. Eval Coverage Completeness
 
 **Verdict: ✅ COMPLETE**
 
-All LLM call paths are properly instrumented:
+5 new eval cases added (eval count: 98 → 103):
 
-- ✅ `llm.chat()` via `_call_model()` — used in `_run_with_llm_tools_events()`, `_run_with_llm_tools()` (dead code, consistent), `run_autonomous()`
-- ✅ `llm.stream_chat()` via `_stream_answer()` — used in `_run_with_llm_tools_events()` streaming path
-- ✅ `llm.complete()` via `_call_model_complete()` — used in `_run_events_inner()` fallback path
-- ✅ Autonomous path via `run_autonomous()` — uses `_call_model()` directly
-- ✅ All paths emit `MODEL_CALL_STARTED` before call and `MODEL_CALL_FINISHED`/`MODEL_CALL_ERROR` after
+1. **`file_edit_event_success`** (line 2501)
+   - ✅ Exercises registry-wired `write_project_file`
+   - ✅ Verifies `FILE_EDIT_STARTED` → `FILE_EDIT_FINISHED` lifecycle
+   - ✅ Checks operation="write", status, path, paths list, bytes_before=0, bytes_after, severity="info"
+   - ✅ Asserts `task_id is None` for all events
+   - ✅ Calls `_assert_file_edit_events_safe()` for safety checks
 
-### 2. Event Write Failure Isolation
+2. **`file_edit_event_patch_metadata`** (line 2533)
+   - ✅ Exercises `apply_project_patch` (single file) and `apply_project_multi_patch` (2 files)
+   - ✅ Verifies both patch and multi-patch started→finished lifecycles
+   - ✅ Checks path(s), file_count=2, byte metadata
+   - ✅ Asserts raw patch text and multi-patch text NOT in serialized events
+   - ✅ Calls `_assert_file_edit_events_safe()` for safety checks
 
-**Verdict: ✅ SAFE**
+3. **`file_edit_event_blocked_or_cancelled`** (line 2588)
+   - ✅ Exercises denied `.env` write → blocked-only (no STARTED emitted)
+   - ✅ Verifies status="blocked", error="denied_path", severity="warning"
+   - ✅ Exercises confirmation cancellation → started→blocked
+   - ✅ Verifies status="cancelled", error="cancelled", no FINISHED event
+   - ✅ Calls `_assert_file_edit_events_safe()` for both scenarios
 
-All event recording is wrapped in try/except in `_record_model_event()`:
+4. **`file_edit_event_error`** (line 2634)
+   - ✅ Simulates `Path.write_text` OSError with sentinel error text
+   - ✅ Verifies started→error lifecycle
+   - ✅ Checks status="error", error="write_failed" (generic label), severity="warning"
+   - ✅ Asserts user-visible error behavior preserved (raw OSError in result string)
+   - ✅ Asserts raw OSError sentinel NOT in serialized events
+   - ✅ Calls `_assert_file_edit_events_safe()` for safety checks
+
+5. **`file_edit_event_failure_isolation`** (line 2657)
+   - ✅ Uses BrokenEventStore that raises RuntimeError
+   - ✅ Verifies `write()` succeeds and file is written correctly
+   - ✅ Verifies `replace()` succeeds and file is modified correctly
+   - ✅ Confirms event store failure doesn't break workspace operations
+
+### 2. Strong Safety Assertions
+
+**Verdict: ✅ ROBUST**
+
+**Sentinel-based verification (5 sentinels):**
 
 ```python
-def _record_model_event(self, ...) -> None:
-    if not self.event_store:
-        return
-    try:
-        # ... record event ...
-    except Exception:
-        pass
+_FILE_EDIT_SENTINELS = [
+    "RAW_FILE_CONTENT_SHOULD_NOT_BE_STORED_6C2D",
+    "RAW_REPLACEMENT_TEXT_SHOULD_NOT_BE_STORED_8E4A",
+    "RAW_PATCH_TEXT_SHOULD_NOT_BE_STORED_1B7F",
+    "RAW_OS_ERROR_SHOULD_NOT_BE_STORED_9D3E",
+    "RAW_REASON_SHOULD_NOT_BE_STORED_2A5C",
+]
 ```
 
-- ✅ No event write failure can break model execution
-- ✅ No event write failure can break streaming
-- ✅ No event write failure can break run_events generator
-- ✅ Existing error handling (LLMError, Exception) preserved
-- ✅ Backward compatibility maintained (no event_store = no-op)
+**Additional sentinel:**
+- `PATCH_REPLACEMENT_MARKER_8E4A` — replacement text in patch
 
-### 3. Event Payload Safety (No Raw Data)
+**`_assert_file_edit_events_safe()` function (line 2491):**
+- ✅ Serializes all events to JSON
+- ✅ Checks all 6 sentinels are ABSENT from serialized data
+- ✅ Checks forbidden payload keys are ABSENT:
+  - `content`, `old_text`, `new_text` — raw file content
+  - `patch`, `diff` — patch/diff text
+  - `reason` — user-provided reason
+  - `exception`, `traceback` — raw error details
 
-**Verdict: ✅ SAFE**
+**Coverage in each eval:**
+- ✅ `file_edit_event_success` — content sentinel + reason sentinel checked
+- ✅ `file_edit_event_patch_metadata` — patch text + replacement marker checked explicitly
+- ✅ `file_edit_event_blocked_or_cancelled` — content + reason sentinels checked
+- ✅ `file_edit_event_error` — OS error sentinel + forbidden keys checked
+- ✅ `file_edit_event_failure_isolation` — uses sentinels (isolation test, not safety-focused)
 
-Payload contains only safe metadata:
+### 3. Deterministic and Offline
 
-```python
-payload = {
-    "status": status,                    # "started"/"ok"/"error"
-    "streaming": streaming,              # boolean
-    "provider_model": provider_model,    # "provider/model" string
-    "message_count": msg_count,          # integer count
-    "tool_schema_count": tool_count,     # integer count
-    "tool_call_count": tool_call_count,  # integer count
-    "response_preview": truncated,       # max 120 chars
-    "latency_ms": round(ms, 1),         # float
-    "error": truncated_error,            # max 200 chars
-}
-```
+**Verdict: ✅ DETERMINISTIC**
 
-**Explicitly excluded:**
-- ❌ Raw prompts/messages (only counts stored)
-- ❌ Full tool schemas (only count stored)
-- ❌ Raw model output (truncated to 120 chars)
-- ❌ API keys/tokens/credentials
-- ❌ Unbounded response text
+- ✅ No live LLM calls — uses `confirm_action=lambda _prompt: True` for auto-confirmation
+- ✅ No interactive terminal prompts — all confirmations auto-accepted
+- ✅ No external state dependencies — uses tempfile.TemporaryDirectory()
+- ✅ No network calls — purely in-memory/file-based
+- ✅ No timing dependencies — deterministic assertions
+- ✅ Reproducible — same results every run
 
-**Additionally protected by DurableEventStore:**
-- ✅ `_sanitize_string()` applies sensitive text redaction
-- ✅ `_is_sensitive_key()` redacts password/token/secret keys
-- ✅ String length limits enforced (_PAYLOAD_STRING_LIMIT=1000)
+### 4. No Stale Worktree Fallback Imports/Shims
 
-### 4. Eval Coverage Strength (TASK-012)
+**Verdict: ✅ CLEAN**
 
-**Verdict: ✅ STRONG**
+From `B_DONE.md`:
+- ✅ "Claude B reported a stale-worktree blocker"
+- ✅ "Codex PM took over TASK-014 in the main worktree to avoid duplicating runtime or adding fallback shims"
+- ✅ "No runtime changes were added for TASK-014"
+- ✅ "No fallback imports or shims were added"
+- ✅ "Claude B's stale worktree was not modified"
 
-5 new eval cases in `evals/run_evals.py`:
+**Code review confirms:**
+- ✅ Only `evals/run_evals.py` modified (217 lines added, 7 removed)
+- ✅ No changes to runtime code (controller.py, workspace.py, durable_events.py)
+- ✅ No compatibility shims or workarounds
+- ✅ Clean separation: eval-only changes
 
-1. **`eval_model_call_event_success`** — Uses sentinel prompt `RAW_PROMPT_SHOULD_NOT_BE_STORED_73F1`
-   - ✅ Asserts sentinel reaches FakeLLM (proves eval is live)
-   - ✅ Asserts sentinel absent from serialized event data
-   - ✅ Verifies forbidden payload keys: `messages`, `tools`, `tool_schema`, `tool_schemas`, `functions`, `parameters`
-   - ✅ Checks all safe metadata fields present
+### 5. Test Quality — Not Empty Assertions
 
-2. **`eval_model_call_event_with_tool_calls`** — Uses sentinel prompt + tool result
-   - ✅ Asserts sentinel prompt reaches model
-   - ✅ Asserts sentinel tool result reaches follow-up call
-   - ✅ Verifies tool_call_count >= 1
-   - ✅ Asserts model events have task_id=None (no spurious binding)
+**Verdict: ✅ SUBSTANTIVE**
 
-3. **`eval_model_call_event_error`** — Uses FailingLLM
-   - ✅ Verifies MODEL_CALL_STARTED emitted
-   - ✅ Verifies MODEL_CALL_ERROR emitted (not FINISHED)
-   - ✅ Checks error payload contains failure text
-   - ✅ Verifies severity="warning"
-   - ✅ Ensures agent.run() returns error message (no crash)
+All evals verify specific behaviors, not just "events exist":
 
-4. **`eval_model_call_event_streaming`** — Uses FakeStreamingLLM
-   - ✅ Verifies streaming=True in payload
-   - ✅ Checks response_preview contains streamed content
-   - ✅ Verifies latency_ms present
-   - ✅ Validates both started/finished events for streaming
+**Lifecycle verification:**
+- ✅ Exact event sequences: `[FILE_EDIT_STARTED, FILE_EDIT_FINISHED]`, `[FILE_EDIT_BLOCKED]`, `[FILE_EDIT_STARTED, FILE_EDIT_BLOCKED]`, `[FILE_EDIT_STARTED, FILE_EDIT_ERROR]`
+- ✅ No unexpected events: `assert not any(event.event_type == FILE_EDIT_FINISHED for event in cancel_events)`
 
-5. **`eval_model_call_event_failure_isolation`** — Uses BrokenEventStore
-   - ✅ Tests chat path survives event store failure
-   - ✅ Tests run_events stream survives event store failure
-   - ✅ Tests streaming path survives event store failure
-   - ✅ All paths return correct results
+**Payload field verification:**
+- ✅ Operation type: `started.payload["operation"] == "write"`, `"patch"`, `"multi_patch"`
+- ✅ Status values: `started.payload["status"] == "started"`, `"finished"`, `"blocked"`, `"cancelled"`, `"error"`
+- ✅ Path data: `started.payload["path"] == "notes.txt"`, `finished.payload["paths"] == ["b.txt", "c.txt"]`
+- ✅ File count: `multi_events[1].payload["file_count"] == 2`
+- ✅ Byte metadata: `finished.payload["bytes_before"] == 0`, `finished.payload["bytes_after"] == len(sentinel.encode("utf-8"))`
+- ✅ Error labels: `events[1].payload["error"] == "write_failed"`, `"denied_path"`, `"cancelled"`
+- ✅ Severity: `finished.severity == "info"`, `denied_events[0].severity == "warning"`, `events[1].severity == "warning"`
+- ✅ Task ID: `all(event.task_id is None for event in events)`
 
-**Shared assertion helper `_assert_model_events_do_not_store_raw_context()`:**
-- ✅ Checks all MODEL_CALL_* events in event list
-- ✅ Forbids sentinel values in serialized event data
-- ✅ Forbids raw context keys (messages, tools, tool_schema, etc.)
+**Negative assertions (sentinel absence):**
+- ✅ All 6 sentinels checked absent from serialized events
+- ✅ 8 forbidden payload keys checked absent
+- ✅ Specific patch text explicitly checked absent: `assert patch_text not in serialized`
 
-### 5. Unit Test Coverage in `test_durable_events.py`
-
-**Verdict: ✅ COMPLETE**
-
-`ModelCallDurableEventTests` class with 7 tests:
-
-1. **`test_successful_chat_records_started_and_finished`** — verifies basic event lifecycle
-2. **`test_tool_call_model_event_records_tool_call_count`** — verifies tool call metadata
-3. **`test_model_error_records_error_event`** — verifies error handling
-4. **`test_streaming_model_event_records_started_and_finished`** — verifies streaming events
-5. **`test_model_event_failure_does_not_break_execution`** — verifies broken store isolation
-6. **`test_no_event_store_does_not_break_model_calls`** — verifies backward compat
-7. **`test_autonomous_model_call_records_events`** — verifies autonomous path
-
-### 6. Status File Consistency
-
-**Verdict: ✅ CONSISTENT**
-
-- `BACKLOG.md`: TASK-011 ✅ completed, TASK-012 review candidate
-- `A_DONE.md`: TASK-011 completion report with all required sections
-- `B_DONE.md`: TASK-012 completion report with all required sections
-- No stale/conflicting state detected
+**Behavioral assertions:**
+- ✅ User-visible return preserved: `assert "写入失败" in result`
+- ✅ Raw error in result: `assert _FILE_EDIT_SENTINELS[3] in result`
+- ✅ File actually written: `assert (tmpdir / "ok.txt").read_text(...) == sentinel`
+- ✅ File actually modified: `assert (tmpdir / "replace.txt").read_text(...) == "new\n"`
 
 ---
 
@@ -145,18 +149,13 @@ payload = {
 
 ```text
 python3 evals/run_evals.py
-98 passed, 0 failed
+103 passed, 0 failed
 
-python3 -m unittest tests.test_durable_events tests.test_mini_agent
-Ran 175 tests in 0.914s
-OK
-
-python3 -m unittest discover -s tests
-Ran 1155 tests
-OK
+python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch
+Ran 104 tests — OK
 
 git diff --check
-passed
+OK
 ```
 
 ---
@@ -169,15 +168,16 @@ passed
 
 ### Suggestions
 
-**None** — code quality is high, no technical debt introduced.
+**None** — eval coverage is comprehensive and well-structured.
 
 ### Risk Assessment
 
-- ✅ **Safety**: No raw data exposure (prompts, messages, schemas, keys, unbounded output)
-- ✅ **Isolation**: Event failures cannot break model execution
-- ✅ **Compatibility**: Backward compatible (no event_store = no-op)
-- ✅ **Performance**: Event recording overhead minimal (count + truncation)
-- ✅ **Maintainability**: Clean separation between runtime events and evals
+- ✅ **Coverage**: All file-edit lifecycle paths covered (success, patch, multi-patch, blocked, cancelled, error, isolation)
+- ✅ **Safety**: Strong sentinel-based assertions prevent raw data leakage
+- ✅ **Determinism**: No live LLM, no interactive prompts, no external state
+- ✅ **Clean Separation**: Eval-only changes, no runtime modifications
+- ✅ **Test Quality**: Substantive assertions verify specific behaviors, not just event existence
+- ✅ **Maintainability**: Clear eval structure with shared safety assertion helper
 
 ---
 
@@ -185,6 +185,6 @@ passed
 
 **APPROVED**
 
-TASK-011 and TASK-012 are ready for commit and merge. Implementation meets all safety, correctness, and coverage requirements. No blockers, no technical debt, no known risks.
+TASK-014 is ready for commit and merge. Eval coverage is comprehensive, deterministic, and includes strong safety assertions. No blockers, no technical debt, no known risks.
 
 **Next Action**: PM can proceed with git commit and push.

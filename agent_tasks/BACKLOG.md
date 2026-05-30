@@ -4,13 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（空）
+（空 — 当前无待分配任务）
 
 ## 进行中
 
-（空）
+（空 — 当前无进行中任务）
 
 ## 已完成
+
+### TASK-014: Eval coverage for file-edit events ✅
+- 完成者: Claude B 因 stale worktree 阻塞；Codex PM 接管并在主工作区完成
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 103 passed；`python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch` 104 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 file-edit success、patch/multi-patch metadata、blocked/cancelled、OS error、event-store failure isolation；用 sentinel 和 forbidden payload key 断言确认 raw content、replacement text、patch/diff、reason、raw OS error 不进入 durable event payload 或 serialized records；无 runtime fallback/shim。
+
+### TASK-013: Durable file-edit event logging ✅
+- 完成者: Claude A；PM 整理并修复初审问题
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch` 104 tests OK；`python3 evals/run_evals.py` 98 passed；`python3 -m unittest discover -s tests` 1168 tests OK；`git diff --check` OK。
+- 内容: `WorkspaceFiles` write/replace/apply patch/multi-patch 记录 file-edit started/finished/blocked/error durable events；payload 仅含 path(s)、operation、file_count、status、generic error label 和 byte metadata；不持久化 raw content、replacement text、patch/diff、reason、raw exception 或 secret；event-write failure isolation。
 
 ### TASK-012: Eval coverage for model-call events ✅
 - 完成者: Claude B；PM 整理并修复 review 阻塞断言

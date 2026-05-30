@@ -31,6 +31,10 @@ TOOL_CALL_BUDGET_EXCEEDED = "tool_call_budget_exceeded"
 MODEL_CALL_STARTED = "model_call_started"
 MODEL_CALL_FINISHED = "model_call_finished"
 MODEL_CALL_ERROR = "model_call_error"
+FILE_EDIT_STARTED = "file_edit_started"
+FILE_EDIT_FINISHED = "file_edit_finished"
+FILE_EDIT_BLOCKED = "file_edit_blocked"
+FILE_EDIT_ERROR = "file_edit_error"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -49,6 +53,10 @@ VALID_EVENT_TYPES = {
     MODEL_CALL_STARTED,
     MODEL_CALL_FINISHED,
     MODEL_CALL_ERROR,
+    FILE_EDIT_STARTED,
+    FILE_EDIT_FINISHED,
+    FILE_EDIT_BLOCKED,
+    FILE_EDIT_ERROR,
 }
 
 _DURABLE_EVENTS_TABLE = """

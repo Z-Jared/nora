@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from mini_agent.controller import MiniAgent, RunReport, ToolRunRecord
 from mini_agent.database import NoraDB
@@ -10,6 +11,10 @@ from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
     DurableEvent,
     DurableEventStore,
+    FILE_EDIT_BLOCKED,
+    FILE_EDIT_ERROR,
+    FILE_EDIT_FINISHED,
+    FILE_EDIT_STARTED,
     MODEL_CALL_ERROR,
     MODEL_CALL_FINISHED,
     MODEL_CALL_STARTED,
@@ -26,6 +31,7 @@ from mini_agent.durable_events import (
 )
 from mini_agent.task_runner import TaskManager
 from mini_agent.tools import build_default_registry
+from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
 
 
@@ -893,6 +899,191 @@ class ModelCallDurableEventTests(unittest.TestCase):
         finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
         self.assertGreaterEqual(len(started), 1)
         self.assertGreaterEqual(len(finished), 1)
+
+
+class FileEditDurableEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _file_events(self, event_type=None):
+        event_types = {FILE_EDIT_STARTED, FILE_EDIT_FINISHED, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR}
+        events = [event for event in self.event_store.list_events() if event.event_type in event_types]
+        events.reverse()
+        if event_type:
+            return [event for event in events if event.event_type == event_type]
+        return events
+
+    def test_write_records_started_and_finished(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.write("hello.txt", "hello world")
+
+        self.assertIn("已写入", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_FINISHED])
+        self.assertEqual(events[0].payload["operation"], "write")
+        self.assertEqual(events[0].payload["status"], "started")
+        self.assertEqual(events[1].payload["status"], "finished")
+        self.assertEqual(events[1].payload["path"], "hello.txt")
+        self.assertEqual(events[1].payload["paths"], ["hello.txt"])
+        self.assertEqual(events[1].payload["bytes_before"], 0)
+        self.assertEqual(events[1].payload["bytes_after"], len("hello world".encode("utf-8")))
+        self.assertEqual(events[1].severity, "info")
+
+    def test_replace_records_started_and_finished(self):
+        (self.root / "data.txt").write_text("old content", encoding="utf-8")
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.replace("data.txt", "old content", "new content")
+
+        self.assertIn("已修改", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_FINISHED])
+        self.assertEqual(events[0].payload["operation"], "replace")
+        self.assertEqual(events[1].payload["bytes_before"], len("old content".encode("utf-8")))
+        self.assertEqual(events[1].payload["bytes_after"], len("new content".encode("utf-8")))
+
+    def test_cancelled_write_records_started_and_blocked(self):
+        files = WorkspaceFiles(
+            self.root,
+            require_confirmation=True,
+            confirm_action=lambda _: False,
+            event_store=self.event_store,
+        )
+
+        result = files.write("test.txt", "content")
+
+        self.assertIn("已取消", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_BLOCKED])
+        self.assertEqual(events[1].payload["status"], "cancelled")
+        self.assertEqual(events[1].payload["error"], "cancelled")
+        self.assertEqual(events[1].severity, "warning")
+
+    def test_denied_path_records_blocked_without_started(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.write(".env", "SUPER_SECRET_SENTINEL=value")
+
+        self.assertIn("拒绝", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_BLOCKED])
+        self.assertEqual(events[0].payload["status"], "blocked")
+        self.assertEqual(events[0].payload["error"], "denied_path")
+
+    def test_patch_records_started_and_finished(self):
+        (self.root / "file.txt").write_text("line one\nline two\nline three\n", encoding="utf-8")
+        patch_text = "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n line one\n-line two\n+line two modified\n line three\n"
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.apply_unified_diff(patch_text)
+
+        self.assertIn("已应用", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_FINISHED])
+        self.assertEqual(events[0].payload["operation"], "patch")
+        self.assertEqual(events[1].payload["path"], "file.txt")
+
+    def test_multi_patch_records_started_and_finished_with_file_count(self):
+        (self.root / "a.txt").write_text("aaa\n", encoding="utf-8")
+        (self.root / "b.txt").write_text("bbb\n", encoding="utf-8")
+        patch_text = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-aaa\n+AAA\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-bbb\n+BBB\n"
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.apply_multi_file_patch(patch_text)
+
+        self.assertIn("已应用", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_FINISHED])
+        self.assertEqual(events[0].payload["operation"], "multi_patch")
+        self.assertEqual(events[0].payload["file_count"], 2)
+        self.assertEqual(events[0].payload["paths"], ["a.txt", "b.txt"])
+
+    def test_replace_text_not_found_records_blocked_without_raw_text(self):
+        (self.root / "data.txt").write_text("actual content", encoding="utf-8")
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.replace("data.txt", "SUPER_SECRET_OLD_TEXT", "SUPER_SECRET_NEW_TEXT")
+
+        self.assertIn("没有找到", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_BLOCKED])
+        self.assertEqual(events[0].payload["error"], "text_not_found")
+        serialized = json.dumps([event.to_dict() for event in events], ensure_ascii=False)
+        self.assertNotIn("SUPER_SECRET_OLD_TEXT", serialized)
+        self.assertNotIn("SUPER_SECRET_NEW_TEXT", serialized)
+
+    def test_os_write_failure_records_error_with_generic_label(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        with patch.object(Path, "write_text", side_effect=OSError("disk full SUPER_SECRET_ERROR")):
+            result = files.write("test.txt", "content")
+
+        self.assertIn("写入失败", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_STARTED, FILE_EDIT_ERROR])
+        self.assertEqual(events[1].payload["status"], "error")
+        self.assertEqual(events[1].payload["error"], "write_failed")
+        serialized = json.dumps([event.to_dict() for event in events], ensure_ascii=False)
+        self.assertNotIn("disk full SUPER_SECRET_ERROR", serialized)
+
+    def test_no_raw_content_or_patch_in_events(self):
+        secret_content = "SUPER_SECRET_FILE_CONTENT_123"
+        patch_secret = "SUPER_SECRET_PATCH_CONTENT_456"
+        (self.root / "secret.txt").write_text(secret_content + "\n", encoding="utf-8")
+        patch_text = f"--- a/secret.txt\n+++ b/secret.txt\n@@ -1 +1 @@\n-{secret_content}\n+{patch_secret}\n"
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        files.apply_unified_diff(patch_text)
+
+        serialized = json.dumps([event.to_dict() for event in self._file_events()], ensure_ascii=False)
+        self.assertNotIn(secret_content, serialized)
+        self.assertNotIn(patch_secret, serialized)
+        self.assertNotIn(patch_text, serialized)
+
+    def test_failure_isolation_broken_event_store(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("store broken")
+
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=BrokenEventStore())
+
+        result = files.write("test.txt", "content")
+
+        self.assertIn("已写入", result)
+        self.assertEqual((self.root / "test.txt").read_text(encoding="utf-8"), "content")
+
+    def test_no_event_store_does_not_break_file_ops(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=None)
+
+        result = files.write("test.txt", "content")
+
+        self.assertIn("已写入", result)
+
+    def test_file_edit_events_have_no_task_id(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        files.write("test.txt", "content")
+
+        for event in self._file_events():
+            self.assertIsNone(event.task_id)
+
+    def test_empty_old_text_records_blocked(self):
+        files = WorkspaceFiles(self.root, require_confirmation=False, event_store=self.event_store)
+
+        result = files.replace("test.txt", "", "new")
+
+        self.assertIn("拒绝", result)
+        events = self._file_events()
+        self.assertEqual([event.event_type for event in events], [FILE_EDIT_BLOCKED])
+        self.assertEqual(events[0].payload["error"], "empty_old_text")
 
 
 if __name__ == "__main__":

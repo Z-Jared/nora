@@ -2,6 +2,12 @@ import difflib
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from mini_agent.durable_events import (
+    FILE_EDIT_BLOCKED,
+    FILE_EDIT_ERROR,
+    FILE_EDIT_FINISHED,
+    FILE_EDIT_STARTED,
+)
 from mini_agent.tools_common import confirm_in_terminal
 
 
@@ -17,11 +23,51 @@ class WorkspaceFiles:
         max_file_bytes: int = MAX_FILE_BYTES,
         confirm_action: Optional[Callable[[str], bool]] = None,
         require_confirmation: bool = True,
+        event_store=None,
     ):
         self.root = root.resolve()
         self.max_file_bytes = max_file_bytes
         self.confirm_action = confirm_action or confirm_in_terminal
         self.require_confirmation = require_confirmation
+        self.event_store = event_store
+
+    def _record_file_edit_event(
+        self,
+        event_type: str,
+        path: str,
+        operation: str,
+        file_count: int = 1,
+        status: str = "",
+        error: str = "",
+        bytes_before: Optional[int] = None,
+        bytes_after: Optional[int] = None,
+    ) -> None:
+        if not self.event_store:
+            return
+        payload = {
+            "path": path,
+            "paths": [item.strip() for item in path.split(",") if item.strip()],
+            "operation": operation,
+            "file_count": file_count,
+            "status": status,
+            "error": error,
+        }
+        if bytes_before is not None:
+            payload["bytes_before"] = bytes_before
+        if bytes_after is not None:
+            payload["bytes_after"] = bytes_after
+        severity = "warning" if event_type in (FILE_EDIT_BLOCKED, FILE_EDIT_ERROR) else "info"
+        try:
+            self.event_store.record(
+                event_type=event_type,
+                task_id=None,
+                source="workspace",
+                summary=f"{event_type}: {path} ({operation})",
+                severity=severity,
+                payload=payload,
+            )
+        except Exception:
+            pass
 
     def read(self, path: str) -> str:
         try:
@@ -106,75 +152,147 @@ class WorkspaceFiles:
     def write(self, path: str, content: str, reason: str = "") -> str:
         target = self._resolve_target(path)
         if not target:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "write", status="blocked", error="denied_path")
             return "拒绝写入: 只能写入项目目录内的非敏感文件。"
 
-        if len(content.encode("utf-8")) > self.max_file_bytes:
+        bytes_after = len(content.encode("utf-8"))
+        if bytes_after > self.max_file_bytes:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "write", status="blocked", error="file_too_large")
             return f"拒绝写入: 最大支持 {self.max_file_bytes} bytes。"
+
+        bytes_before = self._file_size_or_zero(target)
+        self._record_file_edit_event(
+            FILE_EDIT_STARTED,
+            path,
+            "write",
+            status="started",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
 
         if self.require_confirmation:
             prompt = self._confirmation_prompt("写入/覆盖文件", target, reason)
             if not self.confirm_action(prompt):
+                self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "write", status="cancelled", error="cancelled")
                 return "已取消写入。"
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         except OSError as error:
+            self._record_file_edit_event(FILE_EDIT_ERROR, path, "write", status="error", error="write_failed")
             return f"写入失败: {error}"
 
+        self._record_file_edit_event(
+            FILE_EDIT_FINISHED,
+            path,
+            "write",
+            status="finished",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
         return f"已写入文件: {target.relative_to(self.root).as_posix()}"
 
     def replace(self, path: str, old_text: str, new_text: str, reason: str = "") -> str:
         target = self._resolve_target(path)
         if not target:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="blocked", error="denied_path")
             return "拒绝修改: 只能修改项目目录内的非敏感文件。"
 
         if not old_text:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="blocked", error="empty_old_text")
             return "拒绝修改: old_text 不能为空。"
 
         current = self.read(path)
         if current.startswith(("拒绝读取", "读取失败", "文件不存在", "不是文件", "文件过大")):
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="blocked", error="read_failed")
             return current
 
         if old_text not in current:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="blocked", error="text_not_found")
             return "没有找到要替换的文本。"
 
         updated = current.replace(old_text, new_text, 1)
-        if len(updated.encode("utf-8")) > self.max_file_bytes:
+        bytes_before = len(current.encode("utf-8"))
+        bytes_after = len(updated.encode("utf-8"))
+        if bytes_after > self.max_file_bytes:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="blocked", error="file_too_large")
             return f"拒绝修改: 最大支持 {self.max_file_bytes} bytes。"
+
+        self._record_file_edit_event(
+            FILE_EDIT_STARTED,
+            path,
+            "replace",
+            status="started",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
 
         if self.require_confirmation:
             prompt = self._confirmation_prompt("修改文件", target, reason)
             if not self.confirm_action(prompt):
+                self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "replace", status="cancelled", error="cancelled")
                 return "已取消修改。"
 
         try:
             target.write_text(updated, encoding="utf-8")
         except OSError as error:
+            self._record_file_edit_event(FILE_EDIT_ERROR, path, "replace", status="error", error="write_failed")
             return f"修改失败: {error}"
 
+        self._record_file_edit_event(
+            FILE_EDIT_FINISHED,
+            path,
+            "replace",
+            status="finished",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
         return f"已修改文件: {target.relative_to(self.root).as_posix()}"
 
     def apply_unified_diff(self, patch: str, reason: str = "") -> str:
         prepared = self._prepare_patch(patch, "应用 patch", allow_multiple=False)
         if isinstance(prepared, str):
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, "", "patch", status="blocked", error="invalid_patch")
             return prepared
         changes = prepared
         path, current, updated = changes[0]
         target = self._resolve_target(path)
         if target is None:
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "patch", status="blocked", error="denied_path")
             return "拒绝应用 patch: 只能修改项目目录内的非敏感文件。"
+
+        bytes_before = len(current.encode("utf-8"))
+        bytes_after = len(updated.encode("utf-8"))
+        self._record_file_edit_event(
+            FILE_EDIT_STARTED,
+            path,
+            "patch",
+            status="started",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
 
         if self.require_confirmation:
             prompt = self._confirmation_prompt("应用 patch", target, reason)
             if not self.confirm_action(prompt):
+                self._record_file_edit_event(FILE_EDIT_BLOCKED, path, "patch", status="cancelled", error="cancelled")
                 return "已取消应用 patch。"
 
         try:
             target.write_text(updated, encoding="utf-8")
         except OSError as error:
+            self._record_file_edit_event(FILE_EDIT_ERROR, path, "patch", status="error", error="patch_write_failed")
             return f"应用 patch 失败: {error}"
 
+        self._record_file_edit_event(
+            FILE_EDIT_FINISHED,
+            path,
+            "patch",
+            status="finished",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
         return f"已应用 patch: {target.relative_to(self.root).as_posix()}"
 
     def preview_multi_file_patch(self, patch: str, context_lines: int = 3) -> str:
@@ -192,20 +310,51 @@ class WorkspaceFiles:
     def apply_multi_file_patch(self, patch: str, reason: str = "") -> str:
         prepared = self._prepare_patch(patch, "应用多文件 patch", allow_multiple=True)
         if isinstance(prepared, str):
+            self._record_file_edit_event(FILE_EDIT_BLOCKED, "", "multi_patch", status="blocked", error="invalid_patch")
             return prepared
         paths = [path for path, _current, _updated in prepared]
+        file_count = len(paths)
         targets = []
         for path in paths:
             target = self._resolve_target(path)
             if target is None:
+                self._record_file_edit_event(
+                    FILE_EDIT_BLOCKED,
+                    path,
+                    "multi_patch",
+                    file_count=file_count,
+                    status="blocked",
+                    error="denied_path",
+                )
                 return "拒绝应用多文件 patch: 只能修改项目目录内的非敏感文件。"
             targets.append(target)
+
+        bytes_before = sum(len(current.encode("utf-8")) for _path, current, _updated in prepared)
+        bytes_after = sum(len(updated.encode("utf-8")) for _path, _current, updated in prepared)
+        joined_paths = ", ".join(paths)
+        self._record_file_edit_event(
+            FILE_EDIT_STARTED,
+            joined_paths,
+            "multi_patch",
+            file_count=file_count,
+            status="started",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
 
         if self.require_confirmation:
             target_text = ", ".join(paths)
             reason_text = reason.strip() or "未提供"
             prompt = f"应用多文件 patch: {target_text}\n原因: {reason_text}\n是否继续? [y/N]: "
             if not self.confirm_action(prompt):
+                self._record_file_edit_event(
+                    FILE_EDIT_BLOCKED,
+                    joined_paths,
+                    "multi_patch",
+                    file_count=file_count,
+                    status="cancelled",
+                    error="cancelled",
+                )
                 return "已取消应用多文件 patch。"
 
         originals = {target: target.read_text(encoding="utf-8") for target in targets}
@@ -224,9 +373,34 @@ class WorkspaceFiles:
                 except OSError as rollback_error:
                     rollback_errors.append(f"{target.relative_to(self.root).as_posix()}: {rollback_error}")
             if rollback_errors:
+                self._record_file_edit_event(
+                    FILE_EDIT_ERROR,
+                    joined_paths,
+                    "multi_patch",
+                    file_count=file_count,
+                    status="error",
+                    error="rollback_failed",
+                )
                 return f"应用多文件 patch 失败: {error}；回滚失败: {'; '.join(rollback_errors)}"
+            self._record_file_edit_event(
+                FILE_EDIT_ERROR,
+                joined_paths,
+                "multi_patch",
+                file_count=file_count,
+                status="error",
+                error="patch_write_failed_rolled_back",
+            )
             return f"应用多文件 patch 失败: {error}；已回滚已写入文件。"
 
+        self._record_file_edit_event(
+            FILE_EDIT_FINISHED,
+            joined_paths,
+            "multi_patch",
+            file_count=file_count,
+            status="finished",
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
         return "已应用多文件 patch:\n" + "\n".join(f"- {path}" for path in paths)
 
     def _prepare_patch(self, patch: str, action: str, allow_multiple: bool):
@@ -349,6 +523,14 @@ class WorkspaceFiles:
             return None
 
         return target
+
+    def _file_size_or_zero(self, target: Path) -> int:
+        try:
+            if target.exists() and target.is_file():
+                return target.stat().st_size
+        except OSError:
+            return 0
+        return 0
 
     def _confirmation_prompt(self, action: str, target: Path, reason: str) -> str:
         relative = target.relative_to(self.root).as_posix()

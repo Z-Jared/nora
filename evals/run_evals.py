@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -146,6 +147,11 @@ def main() -> int:
         EvalCase("model_call_event_error", eval_model_call_event_error),
         EvalCase("model_call_event_streaming", eval_model_call_event_streaming),
         EvalCase("model_call_event_failure_isolation", eval_model_call_event_failure_isolation),
+        EvalCase("file_edit_event_success", eval_file_edit_event_success),
+        EvalCase("file_edit_event_patch_metadata", eval_file_edit_event_patch_metadata),
+        EvalCase("file_edit_event_blocked_or_cancelled", eval_file_edit_event_blocked_or_cancelled),
+        EvalCase("file_edit_event_error", eval_file_edit_event_error),
+        EvalCase("file_edit_event_failure_isolation", eval_file_edit_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -1973,7 +1979,7 @@ def eval_durable_event_task_lifecycle():
         tmpdir = Path(tmpdir)
         db = NoraDB(tmpdir / "test.db")
         try:
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             manager = registry.task_manager
             event_store = registry.durable_event_store
 
@@ -2002,7 +2008,7 @@ def eval_durable_event_trace_linkage():
         tmpdir = Path(tmpdir)
         db = NoraDB(tmpdir / "test.db")
         try:
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             registry.task_manager.start("event trace eval", "step one")
             agent = MiniAgent(
                 registry,
@@ -2048,7 +2054,7 @@ def eval_durable_event_failure_isolation():
             assert "下一步" in manager.run_once()
             assert "已更新步骤" in manager.update_step(1, "done", summary="ok")
 
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             trace_store = TraceStore(db=db)
             agent = MiniAgent(registry, trace_store=trace_store, event_store=BrokenEventStore())
             registry.durable_task_store.create_task("trace eval", [{"text": "s"}])
@@ -2065,7 +2071,7 @@ def eval_tool_call_event_success():
         tmpdir = Path(tmpdir)
         db = NoraDB(tmpdir / "test.db")
         try:
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             event_store = registry.durable_event_store
             agent = MiniAgent(registry, event_store=event_store)
 
@@ -2241,7 +2247,7 @@ def eval_model_call_event_success():
                     assert sentinel_prompt in messages[-1]["content"], "sentinel prompt must reach the model"
                     return LLMResponse(content="eval answer 42")
 
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             event_store = registry.durable_event_store
             agent = MiniAgent(registry, llm=FakeLLM(), event_store=event_store)
 
@@ -2304,7 +2310,7 @@ def eval_model_call_event_with_tool_calls():
                         "sentinel tool result must reach the follow-up model call"
                     return LLMResponse(content="result is 2")
 
-            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
             event_store = registry.durable_event_store
             agent = MiniAgent(registry, llm=FakeToolLLM(), event_store=event_store)
 
@@ -2462,6 +2468,210 @@ def eval_model_call_event_failure_isolation():
         agent2 = MiniAgent(registry, llm=FakeStreamingLLM(), event_store=BrokenEventStore())
         result2 = agent2.run("计算 1+1")
         assert "ok" in result2 or "1" in result2, f"streaming path failed: {result2}"
+
+
+_FILE_EDIT_SENTINELS = [
+    "RAW_FILE_CONTENT_SHOULD_NOT_BE_STORED_6C2D",
+    "RAW_REPLACEMENT_TEXT_SHOULD_NOT_BE_STORED_8E4A",
+    "RAW_PATCH_TEXT_SHOULD_NOT_BE_STORED_1B7F",
+    "RAW_OS_ERROR_SHOULD_NOT_BE_STORED_9D3E",
+    "RAW_REASON_SHOULD_NOT_BE_STORED_2A5C",
+]
+
+
+def _file_edit_events(event_store):
+    events = [
+        event for event in event_store.list_events()
+        if event.event_type in (FILE_EDIT_STARTED, FILE_EDIT_FINISHED, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR)
+    ]
+    events.reverse()
+    return events
+
+
+def _assert_file_edit_events_safe(events) -> None:
+    serialized = json.dumps([event.to_dict() for event in events], ensure_ascii=False)
+    for sentinel in _FILE_EDIT_SENTINELS + ["PATCH_REPLACEMENT_MARKER_8E4A"]:
+        assert sentinel not in serialized, f"file-edit event leaked sentinel {sentinel}: {serialized}"
+    forbidden_keys = {"content", "old_text", "new_text", "patch", "diff", "reason", "exception", "traceback"}
+    for event in events:
+        leaked_keys = forbidden_keys & set(event.payload)
+        assert not leaked_keys, f"file-edit event stored raw-data keys {sorted(leaked_keys)}: {event.payload}"
+
+
+def eval_file_edit_event_success():
+    """Registry-wired workspace write records started/finished with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
+            result = registry.call(
+                "write_project_file",
+                path="notes.txt",
+                content=_FILE_EDIT_SENTINELS[0],
+                reason=_FILE_EDIT_SENTINELS[4],
+            )
+            assert "已写入" in result, result
+
+            events = _file_edit_events(registry.durable_event_store)
+            assert [event.event_type for event in events] == [FILE_EDIT_STARTED, FILE_EDIT_FINISHED], events
+            started, finished = events
+            assert started.payload["operation"] == "write", started.payload
+            assert started.payload["status"] == "started", started.payload
+            assert started.payload["path"] == "notes.txt", started.payload
+            assert started.payload["paths"] == ["notes.txt"], started.payload
+            assert finished.payload["status"] == "finished", finished.payload
+            assert finished.payload["bytes_before"] == 0, finished.payload
+            assert finished.payload["bytes_after"] == len(_FILE_EDIT_SENTINELS[0].encode("utf-8")), finished.payload
+            assert finished.severity == "info", finished
+            assert all(event.task_id is None for event in events), events
+            _assert_file_edit_events_safe(events)
+        finally:
+            db.close()
+
+
+def eval_file_edit_event_patch_metadata():
+    """Patch and multi-patch events record paths/file_count/bytes without raw patch or replacement text."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
+            (tmpdir / "a.txt").write_text("alpha\n", encoding="utf-8")
+            (tmpdir / "b.txt").write_text("bravo\n", encoding="utf-8")
+            (tmpdir / "c.txt").write_text("charlie\n", encoding="utf-8")
+
+            patch_text = (
+                "--- a/a.txt\n"
+                "+++ b/a.txt\n"
+                "@@ -1 +1 @@\n"
+                "-alpha\n"
+                "+PATCH_REPLACEMENT_MARKER_8E4A\n"
+            )
+            result = registry.call("apply_project_patch", patch=patch_text, reason=_FILE_EDIT_SENTINELS[4])
+            assert "已应用 patch" in result, result
+
+            multi_patch_text = (
+                "--- a/b.txt\n"
+                "+++ b/b.txt\n"
+                "@@ -1 +1 @@\n"
+                "-bravo\n"
+                "+BRAVO\n"
+                "--- a/c.txt\n"
+                "+++ b/c.txt\n"
+                "@@ -1 +1 @@\n"
+                "-charlie\n"
+                "+CHARLIE\n"
+            )
+            result2 = registry.call("apply_project_multi_patch", patch=multi_patch_text, reason=_FILE_EDIT_SENTINELS[4])
+            assert "已应用多文件 patch" in result2, result2
+
+            events = _file_edit_events(registry.durable_event_store)
+            patch_events = [event for event in events if event.payload.get("operation") == "patch"]
+            multi_events = [event for event in events if event.payload.get("operation") == "multi_patch"]
+            assert [event.event_type for event in patch_events] == [FILE_EDIT_STARTED, FILE_EDIT_FINISHED], patch_events
+            assert [event.event_type for event in multi_events] == [FILE_EDIT_STARTED, FILE_EDIT_FINISHED], multi_events
+            assert patch_events[1].payload["path"] == "a.txt", patch_events[1].payload
+            assert multi_events[1].payload["paths"] == ["b.txt", "c.txt"], multi_events[1].payload
+            assert multi_events[1].payload["file_count"] == 2, multi_events[1].payload
+            assert "bytes_before" in multi_events[1].payload, multi_events[1].payload
+            assert "bytes_after" in multi_events[1].payload, multi_events[1].payload
+
+            _assert_file_edit_events_safe(events)
+            serialized = json.dumps([event.to_dict() for event in events], ensure_ascii=False)
+            assert patch_text not in serialized, "single-file patch text leaked into file-edit events"
+            assert multi_patch_text not in serialized, "multi-file patch text leaked into file-edit events"
+        finally:
+            db.close()
+
+
+def eval_file_edit_event_blocked_or_cancelled():
+    """Denied pre-checks are blocked-only; confirmation cancellation is started->blocked."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db, confirm_action=lambda _prompt: True)
+            denied = registry.call(
+                "write_project_file",
+                path=".env",
+                content=_FILE_EDIT_SENTINELS[0],
+                reason=_FILE_EDIT_SENTINELS[4],
+            )
+            assert "拒绝写入" in denied, denied
+            denied_events = _file_edit_events(registry.durable_event_store)
+            assert [event.event_type for event in denied_events] == [FILE_EDIT_BLOCKED], denied_events
+            assert denied_events[0].payload["status"] == "blocked", denied_events[0].payload
+            assert denied_events[0].payload["error"] == "denied_path", denied_events[0].payload
+            assert denied_events[0].severity == "warning", denied_events[0]
+            _assert_file_edit_events_safe(denied_events)
+
+            cancel_store = DurableEventStore(db=db)
+            cancelling_files = WorkspaceFiles(
+                tmpdir,
+                confirm_action=lambda _prompt: False,
+                event_store=cancel_store,
+            )
+            cancelled = cancelling_files.write(
+                "cancelled.txt",
+                _FILE_EDIT_SENTINELS[0],
+                reason=_FILE_EDIT_SENTINELS[4],
+            )
+            assert "已取消写入" in cancelled, cancelled
+            cancel_events = [
+                event for event in _file_edit_events(cancel_store)
+                if event.payload.get("path") == "cancelled.txt"
+            ]
+            assert [event.event_type for event in cancel_events] == [FILE_EDIT_STARTED, FILE_EDIT_BLOCKED], cancel_events
+            assert cancel_events[1].payload["status"] == "cancelled", cancel_events[1].payload
+            assert cancel_events[1].payload["error"] == "cancelled", cancel_events[1].payload
+            assert not any(event.event_type == FILE_EDIT_FINISHED for event in cancel_events), cancel_events
+            _assert_file_edit_events_safe(cancel_events)
+        finally:
+            db.close()
+
+
+def eval_file_edit_event_error():
+    """OS write failure records started->error with a generic label and preserves existing return behavior."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            files = WorkspaceFiles(tmpdir, require_confirmation=False, event_store=event_store)
+            with patch.object(Path, "write_text", side_effect=OSError(_FILE_EDIT_SENTINELS[3])):
+                result = files.write("error.txt", _FILE_EDIT_SENTINELS[0], reason=_FILE_EDIT_SENTINELS[4])
+            assert "写入失败" in result, result
+            assert _FILE_EDIT_SENTINELS[3] in result, "user-visible error behavior should be preserved"
+
+            events = _file_edit_events(event_store)
+            assert [event.event_type for event in events] == [FILE_EDIT_STARTED, FILE_EDIT_ERROR], events
+            assert events[1].payload["status"] == "error", events[1].payload
+            assert events[1].payload["error"] == "write_failed", events[1].payload
+            assert events[1].severity == "warning", events[1]
+            _assert_file_edit_events_safe(events)
+        finally:
+            db.close()
+
+
+def eval_file_edit_event_failure_isolation():
+    """Broken event store must not change workspace operation behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        files = WorkspaceFiles(tmpdir, require_confirmation=False, event_store=BrokenEventStore())
+
+        result = files.write("ok.txt", _FILE_EDIT_SENTINELS[0], reason=_FILE_EDIT_SENTINELS[4])
+        assert "已写入" in result, result
+        assert (tmpdir / "ok.txt").read_text(encoding="utf-8") == _FILE_EDIT_SENTINELS[0]
+
+        (tmpdir / "replace.txt").write_text("old\n", encoding="utf-8")
+        replaced = files.replace("replace.txt", "old", "new", reason=_FILE_EDIT_SENTINELS[4])
+        assert "已修改" in replaced, replaced
+        assert (tmpdir / "replace.txt").read_text(encoding="utf-8") == "new\n"
 
 
 def _init_git_repo(root: Path) -> None:
