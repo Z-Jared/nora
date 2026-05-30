@@ -39,6 +39,10 @@ SHELL_COMMAND_STARTED = "shell_command_started"
 SHELL_COMMAND_FINISHED = "shell_command_finished"
 SHELL_COMMAND_ERROR = "shell_command_error"
 SHELL_COMMAND_BLOCKED = "shell_command_blocked"
+TEST_RUN_STARTED = "test_run_started"
+TEST_RUN_FINISHED = "test_run_finished"
+TEST_RUN_ERROR = "test_run_error"
+TEST_RUN_BLOCKED = "test_run_blocked"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -65,6 +69,10 @@ VALID_EVENT_TYPES = {
     SHELL_COMMAND_FINISHED,
     SHELL_COMMAND_ERROR,
     SHELL_COMMAND_BLOCKED,
+    TEST_RUN_STARTED,
+    TEST_RUN_FINISHED,
+    TEST_RUN_ERROR,
+    TEST_RUN_BLOCKED,
 }
 
 _DURABLE_EVENTS_TABLE = """

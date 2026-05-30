@@ -130,6 +130,8 @@ def build_default_registry(
     registry.durable_event_store = durable_event_store
     workspace_files.event_store = durable_event_store
     shell_runner.event_store = durable_event_store
+    diagnostics.event_store = durable_event_store
+    registry.diagnostics = diagnostics
 
     def _list_traces_json(max_results: int = 20) -> str:
         traces = trace_store.list_traces(max_results=max_results)

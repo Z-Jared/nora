@@ -4,27 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（空 — 当前任务已派发）
-
-## 进行中
-
-### TASK-017: Durable test-run event logging
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无
-- 目标: 为 `Diagnostics.run_tests` 记录 durable test-run lifecycle events。
-- 验证: `python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent` 和 `python3 evals/run_evals.py` 通过；必要时 full suite。
-- 参考: `mini_agent/diagnostics.py`；`mini_agent/toolkits/registry_builder.py` diagnostics wiring；`mini_agent/durable_events.py` event constants；`tests/test_durable_events.py` shell/file/model event patterns。
-
 ### TASK-018: Eval coverage for test-run events
 - 优先级: high
 - 预计: 1 小时
-- 依赖: 等待 TASK-017
+- 依赖: TASK-017 已完成
 - 目标: 为 durable test-run event logging 增加 deterministic offline eval，覆盖 success、failure、blocked、timeout/error 和 event-write failure isolation。
 - 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
 - 参考: `evals/run_evals.py` durable event eval 区域；TASK-017 新增行为。
 
+## 进行中
+
+（空 — 当前无进行中任务）
+
 ## 已完成
+
+### TASK-017: Durable test-run event logging ✅
+- 完成者: Claude A incomplete 后 Codex PM 接管整理
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent` 227 tests OK；`python3 evals/run_evals.py` 108 passed；`python3 -m unittest discover -s tests` 1193 tests OK；`git diff --check` OK。
+- 内容: `Diagnostics.run_tests` 记录 test-run started/finished/blocked/error durable events；registry wiring 注入 durable event store；payload 仅含 command_kind、status、exit_code、timeout、stdout/stderr byte counts、max_output_chars 和 generic error labels；sentinel/forbidden key tests 确认 raw stdout/stderr、traceback/failure body、command/args、reason、raw exception、secrets 不进入 serialized events；event-write failure isolation。
 
 ### TASK-016: Eval coverage for shell-command events ✅
 - 完成者: Claude B；Codex PM 加固 forbidden payload-key 和 sentinel 断言

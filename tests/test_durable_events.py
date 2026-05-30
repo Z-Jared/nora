@@ -26,6 +26,10 @@ from mini_agent.durable_events import (
     TASK_CREATED,
     TASK_FINISHED,
     TASK_STATUS_CHANGED,
+    TEST_RUN_BLOCKED,
+    TEST_RUN_ERROR,
+    TEST_RUN_FINISHED,
+    TEST_RUN_STARTED,
     TOOL_CALL_BLOCKED,
     TOOL_CALL_BUDGET_EXCEEDED,
     TOOL_CALL_ERROR,
@@ -37,6 +41,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tools import build_default_registry
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.shell import ShellRunner
+from mini_agent.diagnostics import Diagnostics
 from mini_agent.traces import TraceStore
 
 
@@ -1290,6 +1295,191 @@ class ShellCommandDurableEventTests(unittest.TestCase):
         self.assertIn("exit_code: 0", result)
         events = self._shell_events()
         self.assertEqual([event.event_type for event in events], [SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED])
+
+
+class TestRunDurableEventTests(unittest.TestCase):
+    """Tests for durable test-run event logging."""
+
+    COMMAND_SENTINEL = "NORA_TEST_COMMAND_SECRET_2319"
+    OUTPUT_SENTINEL = "NORA_TEST_OUTPUT_SECRET_8221"
+    ERROR_SENTINEL = "NORA_TEST_OS_ERROR_SECRET_9910"
+    REASON_SENTINEL = "NORA_TEST_REASON_SECRET_4437"
+    FORBIDDEN_PAYLOAD_KEYS = {
+        "command", "args", "argv", "stdout", "stderr", "output",
+        "result", "reason", "exception", "traceback",
+    }
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _test_events(self, event_type=None):
+        events = self.event_store.list_events()
+        test_types = (TEST_RUN_STARTED, TEST_RUN_FINISHED, TEST_RUN_ERROR, TEST_RUN_BLOCKED)
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return [e for e in events if e.event_type in test_types]
+
+    def _write_test(self, filename: str, body: str) -> None:
+        test_dir = self.root / "tests"
+        test_dir.mkdir(exist_ok=True)
+        (test_dir / "__init__.py").write_text("", encoding="utf-8")
+        (test_dir / filename).write_text(body, encoding="utf-8")
+
+    def _serialized_test_events(self) -> str:
+        return json.dumps(
+            [event.to_dict() for event in self._test_events()],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    def _assert_events_safe(self, *forbidden_values: str) -> None:
+        serialized = self._serialized_test_events()
+        for value in forbidden_values:
+            self.assertNotIn(value, serialized)
+        for event in self._test_events():
+            leaked_keys = self.FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+            self.assertEqual(leaked_keys, set(), event.payload)
+
+    def test_successful_test_run_records_started_and_finished(self):
+        self._write_test(
+            "test_ok.py",
+            "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\n",
+        )
+        diag = Diagnostics(self.root, event_store=self.event_store)
+        result = diag.run_tests(reason=self.REASON_SENTINEL)
+
+        self.assertIn("exit_code: 0", result)
+        started = self._test_events(TEST_RUN_STARTED)
+        finished = self._test_events(TEST_RUN_FINISHED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(finished), 1)
+        self.assertEqual(started[0].payload["command_kind"], "unittest_discover")
+        self.assertEqual(started[0].payload["max_output_chars"], 12000)
+        self.assertEqual(finished[0].payload["status"], "finished")
+        self.assertEqual(finished[0].payload["exit_code"], 0)
+        self.assertGreater(finished[0].payload["stdout_bytes"] + finished[0].payload["stderr_bytes"], 0)
+        self._assert_events_safe(self.REASON_SENTINEL)
+
+    def test_disallowed_command_records_blocked(self):
+        diag = Diagnostics(self.root, event_store=self.event_store)
+        result = diag.run_tests(command=f"python3 -m unittest discover -s tests {self.COMMAND_SENTINEL}")
+
+        self.assertIn("拒绝", result)
+        blocked = self._test_events(TEST_RUN_BLOCKED)
+        started = self._test_events(TEST_RUN_STARTED)
+        finished = self._test_events(TEST_RUN_FINISHED)
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(len(started), 0)
+        self.assertEqual(len(finished), 0)
+        self.assertEqual(blocked[0].payload["error"], "disallowed_command")
+        self._assert_events_safe(self.COMMAND_SENTINEL)
+
+    def test_failing_tests_still_records_finished(self):
+        self._write_test(
+            "test_fail.py",
+            f"import unittest\nclass T(unittest.TestCase):\n    def test_f(self): self.fail('{self.OUTPUT_SENTINEL}')\n",
+        )
+
+        diag = Diagnostics(self.root, timeout_seconds=30, event_store=self.event_store)
+        result = diag.run_tests()
+
+        self.assertIn("exit_code:", result)
+        self.assertIn(self.OUTPUT_SENTINEL, result)
+        finished = self._test_events(TEST_RUN_FINISHED)
+        self.assertEqual(len(finished), 1)
+        self.assertNotEqual(finished[0].payload["exit_code"], 0)
+        self._assert_events_safe(self.OUTPUT_SENTINEL)
+
+    def test_timeout_records_error(self):
+        self._write_test(
+            "test_slow.py",
+            f"import unittest, time\nclass T(unittest.TestCase):\n    def test_s(self):\n        print('{self.OUTPUT_SENTINEL}', flush=True)\n        time.sleep(30)\n",
+        )
+
+        diag = Diagnostics(self.root, timeout_seconds=1, event_store=self.event_store)
+        result = diag.run_tests()
+
+        self.assertIn("timeout", result)
+        errors = self._test_events(TEST_RUN_ERROR)
+        started = self._test_events(TEST_RUN_STARTED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["error"], "timeout")
+        self.assertTrue(errors[0].payload["timeout"])
+        self._assert_events_safe(self.OUTPUT_SENTINEL)
+
+    def test_os_error_records_generic_error_without_raw_exception(self):
+        diag = Diagnostics(self.root, event_store=self.event_store)
+
+        with patch("mini_agent.diagnostics.subprocess.run", side_effect=OSError(self.ERROR_SENTINEL)):
+            result = diag.run_tests()
+
+        self.assertIn("OSError", result)
+        self.assertNotIn(self.ERROR_SENTINEL, result)
+        errors = self._test_events(TEST_RUN_ERROR)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["error"], "os_error")
+        self._assert_events_safe(self.ERROR_SENTINEL)
+
+    def test_failure_isolation_broken_event_store(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("store broken")
+
+        diag = Diagnostics(self.root, event_store=BrokenEventStore())
+        result = diag.run_tests()
+        self.assertIn("exit_code:", result)
+
+    def test_no_event_store_does_not_break_tests(self):
+        diag = Diagnostics(self.root, event_store=None)
+        result = diag.run_tests()
+        self.assertIn("exit_code:", result)
+
+    def test_test_run_event_no_task_id(self):
+        diag = Diagnostics(self.root, event_store=self.event_store)
+        diag.run_tests()
+
+        for event in self._test_events():
+            self.assertIsNone(event.task_id)
+
+    def test_payload_has_command_kind(self):
+        self._write_test(
+            "test_ok.py",
+            "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\n",
+        )
+        diag = Diagnostics(self.root, event_store=self.event_store)
+        diag.run_tests(max_output_chars=900)
+
+        started = self._test_events(TEST_RUN_STARTED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(started[0].payload["command_kind"], "unittest_discover")
+        self.assertEqual(started[0].payload["max_output_chars"], 900)
+
+    def test_default_registry_wires_test_run_events(self):
+        self._write_test(
+            "test_ok.py",
+            "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\n",
+        )
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+        result = registry.call("run_project_tests", command="python3 -m unittest discover -s tests", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+        self.assertIsNotNone(registry.diagnostics.event_store)
+        self.assertEqual(
+            [event.event_type for event in self._test_events()],
+            [TEST_RUN_FINISHED, TEST_RUN_STARTED],
+        )
 
 
 if __name__ == "__main__":

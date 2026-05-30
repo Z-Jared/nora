@@ -1,22 +1,84 @@
 import re
 import subprocess
 from pathlib import Path
+from typing import Optional
+
+from mini_agent.durable_events import (
+    TEST_RUN_BLOCKED,
+    TEST_RUN_ERROR,
+    TEST_RUN_FINISHED,
+    TEST_RUN_STARTED,
+)
 
 
 ALLOWED_TEST_COMMAND = "python3 -m unittest discover -s tests"
 
 
 class Diagnostics:
-    def __init__(self, root: Path, timeout_seconds: int = 60):
+    def __init__(self, root: Path, timeout_seconds: int = 60, event_store=None):
         self.root = root.resolve()
         self.timeout_seconds = timeout_seconds
+        self.event_store = event_store
+
+    def _record_test_run_event(
+        self,
+        event_type: str,
+        status: str = "",
+        exit_code: Optional[int] = None,
+        stdout_bytes: int = 0,
+        stderr_bytes: int = 0,
+        timeout: bool = False,
+        error: str = "",
+        max_output_chars: Optional[int] = None,
+    ) -> None:
+        if not self.event_store:
+            return
+        payload = {
+            "command_kind": "unittest_discover",
+            "status": status,
+            "exit_code": exit_code,
+            "timeout": timeout,
+            "stdout_bytes": stdout_bytes,
+            "stderr_bytes": stderr_bytes,
+            "error": error,
+        }
+        if max_output_chars is not None:
+            payload["max_output_chars"] = max_output_chars
+        try:
+            self.event_store.record(
+                event_type=event_type,
+                task_id=None,
+                source="diagnostics",
+                summary=f"{event_type}: unittest_discover",
+                severity="info" if event_type in (TEST_RUN_STARTED, TEST_RUN_FINISHED) else "warning",
+                payload=payload,
+            )
+        except Exception:
+            pass
+
+    def _byte_len(self, value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, bytes):
+            return len(value)
+        return len(str(value).encode("utf-8"))
+
+    def _text(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
 
     def run_tests(self, command: str = ALLOWED_TEST_COMMAND, max_output_chars: int = 12000, reason: str = "") -> str:
         command = command.strip() or ALLOWED_TEST_COMMAND
         if command != ALLOWED_TEST_COMMAND:
+            self._record_test_run_event(TEST_RUN_BLOCKED, status="blocked", error="disallowed_command")
             return "拒绝执行测试: 命令不在测试白名单内。"
 
         max_output_chars = max(500, min(max_output_chars, 50000))
+        self._record_test_run_event(TEST_RUN_STARTED, status="started", max_output_chars=max_output_chars)
+
         try:
             completed = subprocess.run(
                 command.split(),
@@ -26,12 +88,37 @@ class Diagnostics:
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as error:
-            output = "\n".join(part for part in (error.stdout, error.stderr) if part)
+            stdout = self._text(error.stdout)
+            stderr = self._text(error.stderr)
+            self._record_test_run_event(
+                TEST_RUN_ERROR, status="timeout", timeout=True,
+                stdout_bytes=self._byte_len(error.stdout),
+                stderr_bytes=self._byte_len(error.stderr),
+                error="timeout",
+                max_output_chars=max_output_chars,
+            )
+            output = "\n".join(part for part in (stdout, stderr) if part)
             return f"exit_code: timeout\nsummary: 测试超时\n{output[:max_output_chars]}".strip()
-        except OSError as error:
-            return f"测试执行失败: {error}"
+        except OSError:
+            self._record_test_run_event(
+                TEST_RUN_ERROR,
+                status="error",
+                error="os_error",
+                max_output_chars=max_output_chars,
+            )
+            return f"测试执行失败: OSError"
 
-        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        self._record_test_run_event(
+            TEST_RUN_FINISHED, status="finished",
+            exit_code=completed.returncode,
+            stdout_bytes=self._byte_len(stdout),
+            stderr_bytes=self._byte_len(stderr),
+            max_output_chars=max_output_chars,
+        )
+
+        output = "\n".join(part for part in (stdout, stderr) if part)
         summary = _summary(output, completed.returncode)
         diagnosis = self.diagnose_test_failure(output) if completed.returncode else ""
         sections = [f"exit_code: {completed.returncode}", f"summary: {summary}"]
