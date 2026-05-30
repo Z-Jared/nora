@@ -35,6 +35,10 @@ FILE_EDIT_STARTED = "file_edit_started"
 FILE_EDIT_FINISHED = "file_edit_finished"
 FILE_EDIT_BLOCKED = "file_edit_blocked"
 FILE_EDIT_ERROR = "file_edit_error"
+SHELL_COMMAND_STARTED = "shell_command_started"
+SHELL_COMMAND_FINISHED = "shell_command_finished"
+SHELL_COMMAND_ERROR = "shell_command_error"
+SHELL_COMMAND_BLOCKED = "shell_command_blocked"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -57,6 +61,10 @@ VALID_EVENT_TYPES = {
     FILE_EDIT_FINISHED,
     FILE_EDIT_BLOCKED,
     FILE_EDIT_ERROR,
+    SHELL_COMMAND_STARTED,
+    SHELL_COMMAND_FINISHED,
+    SHELL_COMMAND_ERROR,
+    SHELL_COMMAND_BLOCKED,
 }
 
 _DURABLE_EVENTS_TABLE = """

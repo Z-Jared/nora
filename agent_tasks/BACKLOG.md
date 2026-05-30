@@ -8,23 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-015: Durable shell-command event logging
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无
-- 目标: 为 `run_shell_command` / `ShellRunner.run` 记录 durable shell-command lifecycle events。
-- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 和 `python3 evals/run_evals.py` 通过。
-- 参考: `mini_agent/shell.py`；`mini_agent/toolkits/registry_builder.py` shell runner wiring；`mini_agent/durable_events.py` event constants；`tests/test_durable_events.py` file-edit/model/tool event patterns；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1。
-
 ### TASK-016: Eval coverage for shell-command events
 - 优先级: high
 - 预计: 1 小时
-- 依赖: 等待 TASK-015
+- 依赖: TASK-015 已完成
 - 目标: 为 durable shell-command event logging 增加 deterministic offline eval，覆盖 success、blocked/cancelled、timeout/error 和 event write failure isolation。
 - 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
 - 参考: `evals/run_evals.py` durable event/tool/model/file event eval 区域；TASK-015 新增行为。
 
 ## 已完成
+
+### TASK-015: Durable shell-command event logging ✅
+- 完成者: Claude A；Codex PM 移植到主工作区并加固 raw command handling
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 203 tests OK；`python3 evals/run_evals.py` 103 passed；`python3 -m unittest discover -s tests` 1183 tests OK；`git diff --check` OK。
+- 内容: `ShellRunner.run` 记录 shell-command started/finished/blocked/error durable events；registry wiring 注入 durable event store；payload 仅含 executable、argv_count、status、exit_code、timeout、stdout/stderr byte counts 和 generic error labels；sentinel tests 确认 raw command、raw args、stdout/stderr、raw exception、reason/secrets 不进入 summary/payload/serialized events；event-write failure isolation。
 
 ### TASK-014: Eval coverage for file-edit events ✅
 - 完成者: Claude B 因 stale worktree 阻塞；Codex PM 接管并在主工作区完成

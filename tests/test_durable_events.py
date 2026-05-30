@@ -18,6 +18,10 @@ from mini_agent.durable_events import (
     MODEL_CALL_ERROR,
     MODEL_CALL_FINISHED,
     MODEL_CALL_STARTED,
+    SHELL_COMMAND_BLOCKED,
+    SHELL_COMMAND_ERROR,
+    SHELL_COMMAND_FINISHED,
+    SHELL_COMMAND_STARTED,
     STEP_UPDATED,
     TASK_CREATED,
     TASK_FINISHED,
@@ -32,6 +36,7 @@ from mini_agent.durable_events import (
 from mini_agent.task_runner import TaskManager
 from mini_agent.tools import build_default_registry
 from mini_agent.toolkits.workspace import WorkspaceFiles
+from mini_agent.shell import ShellRunner
 from mini_agent.traces import TraceStore
 
 
@@ -1084,6 +1089,207 @@ class FileEditDurableEventTests(unittest.TestCase):
         events = self._file_events()
         self.assertEqual([event.event_type for event in events], [FILE_EDIT_BLOCKED])
         self.assertEqual(events[0].payload["error"], "empty_old_text")
+
+
+class ShellCommandDurableEventTests(unittest.TestCase):
+    """Tests for durable shell-command event logging."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _shell_events(self, event_type=None):
+        events = self.event_store.list_events()
+        shell_types = (SHELL_COMMAND_STARTED, SHELL_COMMAND_FINISHED, SHELL_COMMAND_ERROR, SHELL_COMMAND_BLOCKED)
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return [e for e in events if e.event_type in shell_types]
+
+    def _serialized_shell_events(self):
+        return json.dumps(
+            [event.to_dict() for event in self._shell_events()],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    def test_successful_command_records_started_and_finished(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        result = runner.run("pwd")
+
+        self.assertIn("exit_code: 0", result)
+        started = self._shell_events(SHELL_COMMAND_STARTED)
+        finished = self._shell_events(SHELL_COMMAND_FINISHED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(finished), 1)
+        self.assertEqual(started[0].payload["executable"], "pwd")
+        self.assertEqual(finished[0].payload["exit_code"], 0)
+        self.assertEqual(finished[0].payload["status"], "finished")
+        self.assertGreater(finished[0].payload["stdout_bytes"], 0)
+
+    def test_disallowed_command_records_blocked(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        result = runner.run("rm -rf /")
+
+        self.assertIn("拒绝", result)
+        blocked = self._shell_events(SHELL_COMMAND_BLOCKED)
+        started = self._shell_events(SHELL_COMMAND_STARTED)
+        finished = self._shell_events(SHELL_COMMAND_FINISHED)
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(len(started), 0)
+        self.assertEqual(len(finished), 0)
+        self.assertEqual(blocked[0].payload["error"], "disallowed_command")
+
+    def test_cancelled_command_records_blocked(self):
+        runner = ShellRunner(self.root, require_confirmation=True, confirm_action=lambda _: False, event_store=self.event_store)
+        result = runner.run("pwd")
+
+        self.assertIn("已取消", result)
+        started = self._shell_events(SHELL_COMMAND_STARTED)
+        blocked = self._shell_events(SHELL_COMMAND_BLOCKED)
+        self.assertEqual(len(started), 0)
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0].payload["error"], "cancelled")
+
+    def test_timeout_records_error_with_allowed_command(self):
+        # Use python3 main.py which is allowed, but create a script that sleeps
+        (self.root / "main.py").write_text("import time; time.sleep(30)")
+        runner = ShellRunner(self.root, require_confirmation=False, timeout_seconds=1, event_store=self.event_store)
+        result = runner.run("python3 main.py")
+
+        self.assertIn("timeout", result)
+        errors = self._shell_events(SHELL_COMMAND_ERROR)
+        started = self._shell_events(SHELL_COMMAND_STARTED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["error"], "timeout")
+        self.assertEqual(errors[0].payload["status"], "timeout")
+        self.assertTrue(errors[0].payload["timeout"])
+
+    def test_nonzero_exit_still_records_finished(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        result = runner.run("python3 -m py_compile nonexistent_file.py")
+
+        self.assertIn("exit_code:", result)
+        finished = self._shell_events(SHELL_COMMAND_FINISHED)
+        # py_compile on nonexistent file returns nonzero, but still finishes
+        self.assertEqual(len(finished), 1)
+        self.assertNotEqual(finished[0].payload["exit_code"], 0)
+
+    def test_no_raw_command_in_payload(self):
+        sentinel = "NORA_SHELL_ARG_SECRET_8842"
+        path = f"{sentinel}.py"
+        (self.root / path).write_text("x = 1\n", encoding="utf-8")
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        runner.run(f"python3 -m py_compile {path}")
+
+        serialized = self._serialized_shell_events()
+        self.assertNotIn(sentinel, serialized)
+        self.assertNotIn(path, serialized)
+        self.assertIn('"executable": "python3"', serialized)
+
+    def test_no_raw_output_in_serialized_events(self):
+        sentinel = "NORA_SHELL_STDOUT_SECRET_4921"
+        (self.root / sentinel).write_text("x", encoding="utf-8")
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        result = runner.run("ls")
+
+        self.assertIn(sentinel, result)
+        serialized = self._serialized_shell_events()
+        self.assertNotIn(sentinel, serialized)
+        finished = self._shell_events(SHELL_COMMAND_FINISHED)
+        self.assertGreater(finished[0].payload["stdout_bytes"], 0)
+
+    def test_no_raw_timeout_output_in_serialized_events(self):
+        sentinel = "NORA_SHELL_TIMEOUT_OUTPUT_SECRET_1173"
+        (self.root / "main.py").write_text(
+            f"import time\nprint('{sentinel}', flush=True)\ntime.sleep(30)\n",
+            encoding="utf-8",
+        )
+        runner = ShellRunner(self.root, require_confirmation=False, timeout_seconds=1, event_store=self.event_store)
+        result = runner.run("python3 main.py")
+
+        self.assertIn(sentinel, result)
+        serialized = self._serialized_shell_events()
+        self.assertNotIn(sentinel, serialized)
+        errors = self._shell_events(SHELL_COMMAND_ERROR)
+        self.assertEqual(errors[0].payload["error"], "timeout")
+        self.assertGreater(errors[0].payload["stdout_bytes"], 0)
+
+    def test_no_raw_os_error_in_serialized_events(self):
+        sentinel = "NORA_SHELL_OS_ERROR_SECRET_2048"
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+
+        with patch("mini_agent.shell.subprocess.run", side_effect=OSError(sentinel)):
+            result = runner.run("pwd")
+
+        self.assertIn("OSError", result)
+        self.assertNotIn(sentinel, result)
+        serialized = self._serialized_shell_events()
+        self.assertNotIn(sentinel, serialized)
+        errors = self._shell_events(SHELL_COMMAND_ERROR)
+        self.assertEqual(errors[0].payload["error"], "os_error")
+
+    def test_malformed_blocked_command_records_without_raw_command(self):
+        sentinel = "NORA_SHELL_BLOCKED_SECRET_7365"
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        result = runner.run(f"'{sentinel}")
+
+        self.assertIn("拒绝", result)
+        serialized = self._serialized_shell_events()
+        self.assertNotIn(sentinel, serialized)
+        blocked = self._shell_events(SHELL_COMMAND_BLOCKED)
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0].payload["executable"], "")
+        self.assertEqual(blocked[0].payload["argv_count"], 0)
+
+    def test_failure_isolation_broken_event_store(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("store broken")
+
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=BrokenEventStore())
+        result = runner.run("pwd")
+        self.assertIn("exit_code: 0", result)
+
+    def test_no_event_store_does_not_break_shell(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=None)
+        result = runner.run("pwd")
+        self.assertIn("exit_code: 0", result)
+
+    def test_shell_event_no_task_id(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        runner.run("pwd")
+
+        for event in self._shell_events():
+            self.assertIsNone(event.task_id)
+
+    def test_payload_has_executable_and_argv_count(self):
+        runner = ShellRunner(self.root, require_confirmation=False, event_store=self.event_store)
+        runner.run("ls -la")
+
+        started = self._shell_events(SHELL_COMMAND_STARTED)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(started[0].payload["executable"], "ls")
+        self.assertEqual(started[0].payload["argv_count"], 2)
+
+    def test_default_registry_wires_shell_events(self):
+        registry = build_default_registry(
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+            db=self.db,
+        )
+
+        result = registry.call("run_shell_command", command="pwd", reason="test")
+
+        self.assertIn("exit_code: 0", result)
+        events = self._shell_events()
+        self.assertEqual([event.event_type for event in events], [SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED])
 
 
 if __name__ == "__main__":

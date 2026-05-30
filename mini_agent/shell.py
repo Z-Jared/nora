@@ -3,6 +3,12 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
+from mini_agent.durable_events import (
+    SHELL_COMMAND_BLOCKED,
+    SHELL_COMMAND_ERROR,
+    SHELL_COMMAND_FINISHED,
+    SHELL_COMMAND_STARTED,
+)
 from mini_agent.tools_common import confirm_in_terminal
 
 
@@ -32,21 +38,76 @@ class ShellRunner:
         confirm_action: Optional[Callable[[str], bool]] = None,
         timeout_seconds: int = 20,
         require_confirmation: bool = True,
+        event_store=None,
     ):
         self.root = root.resolve()
         self.confirm_action = confirm_action or confirm_in_terminal
         self.timeout_seconds = timeout_seconds
         self.require_confirmation = require_confirmation
+        self.event_store = event_store
+
+    def _record_shell_event(
+        self,
+        event_type: str,
+        status: str = "",
+        parsed: Optional[list[str]] = None,
+        exit_code: Optional[int] = None,
+        stdout_bytes: int = 0,
+        stderr_bytes: int = 0,
+        error: str = "",
+    ) -> None:
+        if not self.event_store:
+            return
+        try:
+            parts = parsed or []
+            executable = parts[0] if parts else ""
+            self.event_store.record(
+                event_type=event_type,
+                task_id=None,
+                source="shell",
+                summary=f"{event_type}: {executable or 'unknown'}",
+                severity="info" if event_type in (SHELL_COMMAND_STARTED, SHELL_COMMAND_FINISHED) else "warning",
+                payload={
+                    "executable": executable,
+                    "argv_count": len(parts),
+                    "status": status,
+                    "exit_code": exit_code,
+                    "timeout": status == "timeout",
+                    "stdout_bytes": stdout_bytes,
+                    "stderr_bytes": stderr_bytes,
+                    "error": error,
+                },
+            )
+        except Exception:
+            pass
+
+    def _byte_len(self, value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, bytes):
+            return len(value)
+        return len(str(value).encode("utf-8"))
+
+    def _text(self, value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
 
     def run(self, command: str, reason: str = "") -> str:
         parsed = self._parse_allowed_command(command)
         if not parsed:
+            self._record_shell_event(SHELL_COMMAND_BLOCKED, status="blocked", error="disallowed_command")
             return "拒绝执行: 命令不在安全白名单内。"
 
         if self.require_confirmation:
             prompt = self._confirmation_prompt(command, reason)
             if not self.confirm_action(prompt):
+                self._record_shell_event(SHELL_COMMAND_BLOCKED, status="cancelled", parsed=parsed, error="cancelled")
                 return "已取消执行。"
+
+        self._record_shell_event(SHELL_COMMAND_STARTED, status="started", parsed=parsed)
 
         try:
             completed = subprocess.run(
@@ -58,11 +119,29 @@ class ShellRunner:
                 input="exit\n" if parsed == ["python3", "main.py"] else None,
             )
         except subprocess.TimeoutExpired as error:
-            stdout = error.stdout or ""
-            stderr = error.stderr or ""
+            stdout = self._text(error.stdout)
+            stderr = self._text(error.stderr)
+            self._record_shell_event(
+                SHELL_COMMAND_ERROR,
+                status="timeout",
+                parsed=parsed,
+                stdout_bytes=self._byte_len(error.stdout),
+                stderr_bytes=self._byte_len(error.stderr),
+                error="timeout",
+            )
             return self._format_result("timeout", stdout, stderr)
-        except OSError as error:
-            return f"执行失败: {error}"
+        except OSError:
+            self._record_shell_event(SHELL_COMMAND_ERROR, status="error", parsed=parsed, error="os_error")
+            return f"执行失败: OSError"
+
+        self._record_shell_event(
+            SHELL_COMMAND_FINISHED,
+            status="finished",
+            parsed=parsed,
+            exit_code=completed.returncode,
+            stdout_bytes=self._byte_len(completed.stdout),
+            stderr_bytes=self._byte_len(completed.stderr),
+        )
 
         return self._format_result(
             str(completed.returncode),

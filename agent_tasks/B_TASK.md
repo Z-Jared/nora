@@ -1,17 +1,15 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting
+Status: assigned
 
 ## Goal
 
-Prepare for TASK-016: eval coverage for durable shell-command event logging after Claude A completes TASK-015.
+Implement TASK-016: eval coverage for durable shell-command event logging.
 
 ## Instructions
 
-Do not start implementation until Codex PM explicitly dispatches this task after TASK-015 lands in the main worktree.
-
-Once TASK-015 is complete, add deterministic offline eval coverage for durable shell-command events in `evals/run_evals.py`.
+TASK-015 is complete, approved, and landing in the main worktree. Add deterministic offline eval coverage for durable shell-command events in `evals/run_evals.py`.
 
 Add eval cases for:
 
@@ -48,7 +46,7 @@ python3 -m unittest tests.test_durable_events tests.test_mini_agent
 
 ## Context
 
-- TASK-015 is expected to add `SHELL_COMMAND_STARTED`, `SHELL_COMMAND_FINISHED`, `SHELL_COMMAND_ERROR`, and `SHELL_COMMAND_BLOCKED`.
+- TASK-015 added `SHELL_COMMAND_STARTED`, `SHELL_COMMAND_FINISHED`, `SHELL_COMMAND_ERROR`, and `SHELL_COMMAND_BLOCKED`.
 - `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, and file-edit event evals.
 - Keep this task eval-only. Runtime changes belong to TASK-015 and should not be duplicated here.
 

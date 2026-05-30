@@ -1,92 +1,95 @@
-# Claude A Completion Report — TASK-013: Durable File-Edit Event Logging
+# Claude A Completion Report — TASK-015: Durable Shell-Command Event Logging
 
 Status: ready for Codex review
 
 ## Summary
 
-Implemented durable file-edit lifecycle events for `WorkspaceFiles` write paths.
-
-The PM integrated Claude A's Round 2 implementation into the main worktree and tightened two points during initial review:
-
-- Preserved existing user-visible OSError return strings instead of replacing them with generic text.
-- Strengthened the OSError test to actually trigger `FILE_EDIT_ERROR` via a patched `Path.write_text`.
+Extended the durable event log to cover shell-command lifecycle events from `ShellRunner.run`. Every shell execution now emits `SHELL_COMMAND_STARTED` → `SHELL_COMMAND_FINISHED` or `SHELL_COMMAND_ERROR`/`SHELL_COMMAND_BLOCKED` events with safe metadata. All event writes are failure-isolated. Codex PM tightened the candidate so raw command text is not reparsed for event payloads and blocked malformed commands cannot leak raw command tokens.
 
 ## Changes
 
 ### `mini_agent/durable_events.py`
+- Added `SHELL_COMMAND_STARTED`, `SHELL_COMMAND_FINISHED`, `SHELL_COMMAND_ERROR`, `SHELL_COMMAND_BLOCKED` constants
+- Added all four to `VALID_EVENT_TYPES`
 
-- Added `FILE_EDIT_STARTED`
-- Added `FILE_EDIT_FINISHED`
-- Added `FILE_EDIT_BLOCKED`
-- Added `FILE_EDIT_ERROR`
-- Registered all four in `VALID_EVENT_TYPES`
-
-### `mini_agent/toolkits/workspace.py`
-
-- Added optional `event_store` support to `WorkspaceFiles`
-- Added failure-isolated `_record_file_edit_event()`
-- Instrumented:
-  - `write`
-  - `replace`
-  - `apply_unified_diff`
-  - `apply_multi_file_patch`
-- Lifecycle semantics:
-  - success: `FILE_EDIT_STARTED` → `FILE_EDIT_FINISHED`
-  - confirmation cancellation after pre-checks: `FILE_EDIT_STARTED` → `FILE_EDIT_BLOCKED`
-  - OS/write failures: `FILE_EDIT_STARTED` → `FILE_EDIT_ERROR`
-  - denied/invalid/safety pre-check failures: `FILE_EDIT_BLOCKED` only
-- Payload contains safe metadata only: path(s), operation, file count, status, generic error label, optional byte counts.
-- Payload does not store raw file content, replacement text, patch/diff text, reason text, raw exception strings, or secrets.
+### `mini_agent/shell.py`
+- Added `event_store` parameter to `ShellRunner.__init__`
+- Added `_record_shell_event()` helper — failure-isolated, records safe payload from allowlisted parsed argv only
+- Instrumented `run()`:
+  - `BLOCKED` with `disallowed_command` when command not in allowlist
+  - `BLOCKED` with `cancelled` when user denies confirmation
+  - `STARTED` after allowlist + confirmation pass, before subprocess execution
+  - `FINISHED` with exit_code, stdout_bytes, stderr_bytes on subprocess completion (including nonzero exit)
+  - `ERROR` with `timeout` label on `TimeoutExpired`
+  - `ERROR` with `os_error` label on `OSError`
 
 ### `mini_agent/toolkits/registry_builder.py`
-
-- Wires the default registry's `DurableEventStore` into `WorkspaceFiles`.
+- Wires `durable_event_store` into `shell_runner` after creation
 
 ### `tests/test_durable_events.py`
+- Added `ShellCommandDurableEventTests` class with 15 tests:
+  - `test_successful_command_records_started_and_finished`
+  - `test_disallowed_command_records_blocked`
+  - `test_cancelled_command_records_blocked`
+  - `test_timeout_records_error_with_allowed_command`
+  - `test_nonzero_exit_still_records_finished`
+  - `test_no_raw_command_in_payload`
+  - `test_no_raw_output_in_serialized_events`
+  - `test_no_raw_timeout_output_in_serialized_events`
+  - `test_no_raw_os_error_in_serialized_events`
+  - `test_malformed_blocked_command_records_without_raw_command`
+  - `test_failure_isolation_broken_event_store`
+  - `test_no_event_store_does_not_break_shell`
+  - `test_shell_event_no_task_id`
+  - `test_payload_has_executable_and_argv_count`
+  - `test_default_registry_wires_shell_events`
 
-- Added `FileEditDurableEventTests` coverage for:
-  - write started + finished
-  - replace started + finished
-  - cancelled write started + blocked
-  - denied path blocked without started
-  - patch started + finished
-  - multi-patch started + finished with file count
-  - text-not-found blocked without raw text
-  - OS write failure started + error with generic label
-  - no raw file content or patch text in serialized events
-  - broken event store failure isolation
-  - no event store behavior
-  - no task_id on file-edit events
-  - empty old_text blocked
+## Payload Shape
+
+```json
+{
+  "executable": "python3",
+  "argv_count": 6,
+  "status": "finished",
+  "exit_code": 0,
+  "timeout": false,
+  "stdout_bytes": 1234,
+  "stderr_bytes": 0,
+  "error": ""
+}
+```
+
+## Verification
+
+```
+$ python3 -m unittest tests.test_durable_events tests.test_mini_agent
+Ran 203 tests — OK
+
+$ python3 evals/run_evals.py
+103 passed, 0 failed
+
+$ python3 -m unittest tests.test_durable_events.ShellCommandDurableEventTests
+Ran 15 tests — OK
+
+$ python3 -m unittest discover -s tests
+Ran 1183 tests — OK
+
+$ git diff --check
+OK
+```
 
 ## Diff
 
-```text
- mini_agent/durable_events.py            |   8 ++
- mini_agent/toolkits/registry_builder.py |   1 +
- mini_agent/toolkits/workspace.py        | 186 ++++++++++++++++++++++++++++++-
- tests/test_durable_events.py            | 191 ++++++++++++++++++++++++++++++++
- 4 files changed, 384 insertions(+), 2 deletions(-)
 ```
-
-## Tests
-
-```text
-python3 -m unittest tests.test_durable_events tests.test_workspace tests.test_workspace_patch
-Ran 104 tests — OK
-
-python3 evals/run_evals.py
-98 passed, 0 failed
-
-python3 -m unittest discover -s tests
-Ran 1168 tests — OK
-
-git diff --check
-OK
+ mini_agent/durable_events.py            |   8 ++
+ mini_agent/shell.py                     |  87 +++++++++++++-
+ mini_agent/toolkits/registry_builder.py |   1 +
+ tests/test_durable_events.py            | 206 ++++++++++++++++++++++++++++++++
+ 4 files changed, 302 insertions(+), 2 deletions(-)
 ```
 
 ## Notes
 
-- No push performed.
-- No commit performed.
-- BACKLOG not yet marked complete pending CCB reviewer approval.
+- No push or commit performed.
+- BACKLOG.md untouched.
+- Scope limited to `ShellRunner.run` only; `Diagnostics.run_tests` not instrumented (separate future task).
