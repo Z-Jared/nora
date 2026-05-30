@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
-from mini_agent.llm import LLMResponse, ToolCall
+from mini_agent.llm import LLMError, LLMResponse, ToolCall
 from mini_agent.memory import LongTermMemory
 from mini_agent.process_manager import ProcessManager
 from mini_agent.providers.anthropic import AnthropicClient
@@ -35,7 +36,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import DurableEventStore, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -140,6 +141,11 @@ def main() -> int:
         EvalCase("tool_call_event_error", eval_tool_call_event_error),
         EvalCase("tool_call_event_permission_blocked_or_cancelled", eval_tool_call_event_permission_blocked_or_cancelled),
         EvalCase("tool_call_event_failure_isolation", eval_tool_call_event_failure_isolation),
+        EvalCase("model_call_event_success", eval_model_call_event_success),
+        EvalCase("model_call_event_with_tool_calls", eval_model_call_event_with_tool_calls),
+        EvalCase("model_call_event_error", eval_model_call_event_error),
+        EvalCase("model_call_event_streaming", eval_model_call_event_streaming),
+        EvalCase("model_call_event_failure_isolation", eval_model_call_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -2205,6 +2211,257 @@ def eval_tool_call_event_failure_isolation():
         events_list = list(agent.run_events("计算 4 + 5"))
         # The stream should complete without raising
         assert len(events_list) > 0, "run_events should produce at least one event"
+
+
+def _assert_model_events_do_not_store_raw_context(events, forbidden_values: list[str]) -> None:
+    forbidden_payload_keys = {"messages", "tools", "tool_schema", "tool_schemas", "functions", "parameters"}
+    for event in events:
+        if event.event_type not in (MODEL_CALL_STARTED, MODEL_CALL_FINISHED, MODEL_CALL_ERROR):
+            continue
+        serialized = json.dumps(event.to_dict(), ensure_ascii=False)
+        for value in forbidden_values:
+            assert value not in serialized, f"model event stored forbidden raw context {value!r}: {serialized}"
+        payload_keys = set(event.payload)
+        leaked_keys = forbidden_payload_keys & payload_keys
+        assert not leaked_keys, f"model event stored raw context keys {sorted(leaked_keys)}: {event.payload}"
+
+
+def eval_model_call_event_success():
+    """Successful model call writes MODEL_CALL_STARTED and MODEL_CALL_FINISHED with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            sentinel_prompt = "RAW_PROMPT_SHOULD_NOT_BE_STORED_73F1"
+
+            class FakeLLM:
+                provider = "eval-provider"
+                model = "eval-model"
+                def chat(self, messages, tools=None):
+                    assert sentinel_prompt in messages[-1]["content"], "sentinel prompt must reach the model"
+                    return LLMResponse(content="eval answer 42")
+
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, llm=FakeLLM(), event_store=event_store)
+
+            result = agent.run(sentinel_prompt)
+
+            assert "eval answer 42" in result, f"expected answer in result, got: {result}"
+
+            events = event_store.list_events()
+            started = [e for e in events if e.event_type == MODEL_CALL_STARTED]
+            finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+
+            assert len(started) >= 1, f"expected >=1 started event, got {len(started)}"
+            assert len(finished) >= 1, f"expected >=1 finished event, got {len(finished)}"
+
+            s = started[0]
+            assert s.payload["status"] == "started"
+            assert s.payload["streaming"] is False
+            assert "message_count" in s.payload, f"missing message_count: {s.payload}"
+            assert s.severity == "info"
+            assert s.source == "controller"
+            assert "eval-provider/eval-model" in s.summary
+
+            f = finished[0]
+            assert f.payload["status"] == "ok"
+            assert f.payload["streaming"] is False
+            assert "latency_ms" in f.payload, f"missing latency_ms: {f.payload}"
+            assert f.payload["latency_ms"] >= 0
+            assert "response_preview" in f.payload, f"missing response_preview: {f.payload}"
+            assert "eval answer" in f.payload["response_preview"]
+            assert f.severity == "info"
+
+            _assert_model_events_do_not_store_raw_context(events, [sentinel_prompt])
+        finally:
+            db.close()
+
+
+def eval_model_call_event_with_tool_calls():
+    """Model call that returns tool calls records tool_call_count in finished event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            call_count = [0]
+            sentinel_prompt = "TOOL_PROMPT_SHOULD_NOT_BE_STORED_9A2B"
+            sentinel_tool_result = "TOOL_RESULT_SHOULD_NOT_BE_STORED_4C8D"
+            (tmpdir / "context.txt").write_text(sentinel_tool_result, encoding="utf-8")
+
+            class FakeToolLLM:
+                provider = "eval"
+                model = "tool-model"
+                def chat(self, messages, tools=None):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        assert sentinel_prompt in messages[-1]["content"], "sentinel prompt must reach the model"
+                        return LLMResponse(
+                            content="",
+                            tool_calls=[ToolCall(call_id="c1", name="read_project_file", arguments={"path": "context.txt"})],
+                        )
+                    assert any(sentinel_tool_result in str(m.get("content", "")) for m in messages), \
+                        "sentinel tool result must reach the follow-up model call"
+                    return LLMResponse(content="result is 2")
+
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, llm=FakeToolLLM(), event_store=event_store)
+
+            result = agent.run(sentinel_prompt)
+
+            assert "2" in result, f"expected 2 in result, got: {result}"
+
+            events = event_store.list_events()
+            finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+            assert len(finished) >= 1, f"expected >=1 finished event, got {len(finished)}"
+
+            # First finished event should have tool_call_count > 0
+            first_finished = finished[-1]  # oldest (reversed order)
+            assert first_finished.payload.get("tool_call_count", 0) >= 1, \
+                f"expected tool_call_count >= 1: {first_finished.payload}"
+
+            for event in events:
+                if event.event_type in (MODEL_CALL_STARTED, MODEL_CALL_FINISHED):
+                    assert event.task_id is None, "model event must not bind to unrelated task"
+            _assert_model_events_do_not_store_raw_context(events, [sentinel_prompt, sentinel_tool_result])
+        finally:
+            db.close()
+
+
+def eval_model_call_event_error():
+    """Model call that raises LLMError records MODEL_CALL_ERROR without crashing existing behavior."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            class FailingLLM:
+                provider = "eval"
+                model = "fail-model"
+                def chat(self, messages, tools=None):
+                    raise LLMError("simulated model failure")
+
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, llm=FailingLLM(), event_store=event_store)
+
+            # run() should not crash — returns error message
+            result = agent.run("hello")
+            assert "模型调用失败" in result, f"expected error message, got: {result}"
+
+            events = event_store.list_events()
+            started = [e for e in events if e.event_type == MODEL_CALL_STARTED]
+            errors = [e for e in events if e.event_type == MODEL_CALL_ERROR]
+            finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+
+            assert len(started) >= 1, f"expected >=1 started, got {len(started)}"
+            assert len(errors) >= 1, f"expected >=1 error, got {len(errors)}"
+            assert len(finished) == 0, f"error path must not emit finished, got {len(finished)}"
+
+            err = errors[0]
+            assert err.payload["status"] == "error"
+            assert err.payload["streaming"] is False
+            assert "simulated model failure" in err.payload.get("error", "")
+            assert err.severity == "warning"
+            assert err.source == "controller"
+        finally:
+            db.close()
+
+
+def eval_model_call_event_streaming():
+    """Streaming model call via stream_chat records model events with streaming=True."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            class FakeStreamingLLM:
+                provider = "eval"
+                model = "stream-model"
+                def chat(self, messages, tools=None):
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                def stream_chat(self, messages, tools=None):
+                    for word in ["streamed ", "answer ", "42"]:
+                        yield word
+
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            agent = MiniAgent(registry, llm=FakeStreamingLLM(), event_store=event_store)
+
+            result = agent.run("计算 1+1")
+
+            assert "streamed" in result or "42" in result, f"expected streamed content, got: {result}"
+
+            events = event_store.list_events()
+            started = [e for e in events if e.event_type == MODEL_CALL_STARTED]
+            finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+
+            # Should have both chat model events and streaming model events
+            assert len(started) >= 2, f"expected >=2 started events, got {len(started)}"
+            assert len(finished) >= 2, f"expected >=2 finished events, got {len(finished)}"
+
+            # Find the streaming started/finished pair
+            streaming_started = [e for e in started if e.payload.get("streaming") is True]
+            streaming_finished = [e for e in finished if e.payload.get("streaming") is True]
+
+            assert len(streaming_started) >= 1, f"expected >=1 streaming started, got {len(streaming_started)}"
+            assert len(streaming_finished) >= 1, f"expected >=1 streaming finished, got {len(streaming_finished)}"
+
+            sf = streaming_finished[0]
+            assert sf.payload["status"] == "ok"
+            assert "latency_ms" in sf.payload, f"missing latency_ms: {sf.payload}"
+            assert "response_preview" in sf.payload, f"missing response_preview: {sf.payload}"
+            assert "streamed answer 42" in sf.payload["response_preview"]
+        finally:
+            db.close()
+
+
+def eval_model_call_event_failure_isolation():
+    """Broken event store must not break model execution or streaming."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+        def get_event(self, event_id):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        class FakeLLM:
+            provider = "eval"
+            model = "iso-model"
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="survived")
+
+        class FakeStreamingLLM:
+            provider = "eval"
+            model = "iso-stream"
+            def chat(self, messages, tools=None):
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                )
+            def stream_chat(self, messages, tools=None):
+                yield "streamed ok"
+
+        registry = build_default_registry(workspace_root=tmpdir)
+
+        # 1. chat path survives broken event store
+        agent = MiniAgent(registry, llm=FakeLLM(), event_store=BrokenEventStore())
+        result = agent.run("hello")
+        assert "survived" in result, f"chat path failed: {result}"
+
+        # 2. run_events stream survives broken event store
+        events_list = list(agent.run_events("hello again"))
+        assert len(events_list) > 0, "run_events should produce events despite broken store"
+
+        # 3. streaming path survives broken event store
+        agent2 = MiniAgent(registry, llm=FakeStreamingLLM(), event_store=BrokenEventStore())
+        result2 = agent2.run("计算 1+1")
+        assert "ok" in result2 or "1" in result2, f"streaming path failed: {result2}"
 
 
 def _init_git_repo(root: Path) -> None:

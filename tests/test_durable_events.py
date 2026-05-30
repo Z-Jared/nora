@@ -10,6 +10,9 @@ from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
     DurableEvent,
     DurableEventStore,
+    MODEL_CALL_ERROR,
+    MODEL_CALL_FINISHED,
+    MODEL_CALL_STARTED,
     STEP_UPDATED,
     TASK_CREATED,
     TASK_FINISHED,
@@ -740,6 +743,156 @@ class EventSanitizationRegressionTests(unittest.TestCase):
         self.assertNotIn("super_secret_123", payload_json,
                           "value nested under sensitive key must be redacted in stored payload")
         self.assertIn("[redacted]", payload_json)
+
+
+class ModelCallDurableEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(db=self.db, workspace_root=self.root)
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def test_successful_chat_records_started_and_finished(self):
+        from mini_agent.providers.base import LLMResponse
+
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="hello world")
+
+        agent = MiniAgent(self.registry, llm=FakeLLM(), event_store=self.event_store)
+        agent.run("hi")
+
+        events = self.event_store.list_events()
+        started = [e for e in events if e.event_type == MODEL_CALL_STARTED]
+        finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+
+        self.assertGreaterEqual(len(started), 1)
+        self.assertGreaterEqual(len(finished), 1)
+        self.assertEqual(started[0].payload["status"], "started")
+        self.assertEqual(finished[0].payload["status"], "ok")
+        self.assertIn("latency_ms", finished[0].payload)
+        self.assertEqual(finished[0].payload["response_preview"], "hello world")
+
+    def test_tool_call_model_event_records_tool_call_count(self):
+        from mini_agent.providers.base import LLMResponse, ToolCall
+
+        call_count = [0]
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                return LLMResponse(content="2")
+
+        agent = MiniAgent(self.registry, llm=FakeLLM(), event_store=self.event_store)
+        agent.run("计算 1+1")
+
+        events = self.event_store.list_events()
+        finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+        self.assertGreaterEqual(len(finished), 1)
+        first_finished = finished[-1]  # earliest (reversed list)
+        self.assertEqual(first_finished.payload["tool_call_count"], 1)
+
+    def test_model_error_records_error_event(self):
+        from mini_agent.providers.base import LLMError
+
+        class FailingLLM:
+            def chat(self, messages, tools=None):
+                raise LLMError("connection timeout")
+
+        agent = MiniAgent(self.registry, llm=FailingLLM(), event_store=self.event_store)
+        agent.run("hello")
+
+        events = self.event_store.list_events()
+        errors = [e for e in events if e.event_type == MODEL_CALL_ERROR]
+        self.assertGreaterEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["status"], "error")
+        self.assertIn("connection timeout", errors[0].payload["error"])
+        self.assertEqual(errors[0].severity, "warning")
+
+    def test_streaming_model_event_records_started_and_finished(self):
+        from mini_agent.providers.base import LLMResponse, ToolCall
+
+        call_count = [0]
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="c1", name="calculate", arguments={"expression": "1+1"})],
+                    )
+                return LLMResponse(content="")
+
+            def stream_chat(self, messages, tools=None):
+                yield "streamed "
+                yield "answer"
+
+        agent = MiniAgent(self.registry, llm=FakeLLM(), event_store=self.event_store)
+        agent.run("计算 1+1")
+
+        events = self.event_store.list_events()
+        stream_finished = [
+            e for e in events
+            if e.event_type == MODEL_CALL_FINISHED and e.payload.get("streaming")
+        ]
+        self.assertGreaterEqual(len(stream_finished), 1)
+        self.assertTrue(stream_finished[0].payload["streaming"])
+        self.assertIn("streamed answer", stream_finished[0].payload["response_preview"])
+
+    def test_model_event_failure_does_not_break_execution(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        from mini_agent.providers.base import LLMResponse
+
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="still works")
+
+        agent = MiniAgent(self.registry, llm=FakeLLM(), event_store=BrokenEventStore())
+        result = agent.run("hello")
+        self.assertEqual(result, "still works")
+
+    def test_no_event_store_does_not_break_model_calls(self):
+        from mini_agent.providers.base import LLMResponse
+
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="ok")
+
+        agent = MiniAgent(self.registry, llm=FakeLLM())
+        result = agent.run("hello")
+        self.assertEqual(result, "ok")
+
+    def test_autonomous_model_call_records_events(self):
+        from mini_agent.providers.base import LLMResponse
+
+        class FakeLLM:
+            def chat(self, messages, tools=None):
+                return LLMResponse(content="done")
+
+        agent = MiniAgent(self.registry, llm=FakeLLM(), event_store=self.event_store)
+        agent.run_autonomous("test goal")
+
+        events = self.event_store.list_events()
+        started = [e for e in events if e.event_type == MODEL_CALL_STARTED]
+        finished = [e for e in events if e.event_type == MODEL_CALL_FINISHED]
+        self.assertGreaterEqual(len(started), 1)
+        self.assertGreaterEqual(len(finished), 1)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,13 @@
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Generator, Optional, Protocol
 
 from mini_agent.durable_events import (
+    MODEL_CALL_ERROR,
+    MODEL_CALL_FINISHED,
+    MODEL_CALL_STARTED,
     TOOL_CALL_BLOCKED,
     TOOL_CALL_BUDGET_EXCEEDED,
     TOOL_CALL_ERROR,
@@ -165,7 +169,8 @@ class MiniAgent:
 
             if self.llm:
                 try:
-                    yield from _collect(self._emit_answer(text, self.llm.complete(text)))
+                    answer = self._call_model_complete(text)
+                    yield from _collect(self._emit_answer(text, answer))
                     return
                 except LLMError as error:
                     yield from _collect(self._emit_blocked(text, f"模型调用失败: {error}"))
@@ -268,13 +273,73 @@ class MiniAgent:
             "failure": report.failure or "",
         }
 
+    def _call_model(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+        provider_model = self._provider_model_label()
+        msg_count = len(messages)
+        tool_count = len(tools) if tools else 0
+        self._record_model_event(
+            MODEL_CALL_STARTED, "started",
+            streaming=False, message_count=msg_count, tool_schema_count=tool_count,
+            provider_model=provider_model,
+        )
+        start = time.monotonic()
+        try:
+            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            latency_ms = (time.monotonic() - start) * 1000
+            tool_call_count = len(response.tool_calls) if response.tool_calls else 0
+            self._record_model_event(
+                MODEL_CALL_FINISHED, "ok",
+                latency_ms=latency_ms, streaming=False,
+                message_count=msg_count, tool_schema_count=tool_count,
+                tool_call_count=tool_call_count,
+                response_preview=response.content or "",
+                provider_model=provider_model,
+            )
+            return response
+        except Exception as error:
+            latency_ms = (time.monotonic() - start) * 1000
+            self._record_model_event(
+                MODEL_CALL_ERROR, "error",
+                latency_ms=latency_ms, streaming=False,
+                message_count=msg_count, tool_schema_count=tool_count,
+                error=str(error)[:500], provider_model=provider_model,
+            )
+            raise
+
+    def _call_model_complete(self, text: str) -> str:
+        provider_model = self._provider_model_label()
+        self._record_model_event(
+            MODEL_CALL_STARTED, "started",
+            streaming=False, message_count=1, provider_model=provider_model,
+        )
+        start = time.monotonic()
+        try:
+            result = self.llm.complete(text)
+            latency_ms = (time.monotonic() - start) * 1000
+            self._record_model_event(
+                MODEL_CALL_FINISHED, "ok",
+                latency_ms=latency_ms, streaming=False,
+                message_count=1, response_preview=result,
+                provider_model=provider_model,
+            )
+            return result
+        except Exception as error:
+            latency_ms = (time.monotonic() - start) * 1000
+            self._record_model_event(
+                MODEL_CALL_ERROR, "error",
+                latency_ms=latency_ms, streaming=False,
+                message_count=1, error=str(error)[:500],
+                provider_model=provider_model,
+            )
+            raise
+
     def _run_with_llm_tools_events(self, text: str) -> Generator[dict, None, None]:
         messages = self._messages_for_user_input(text)
         tools = self.tools.to_openai_tools()
         tool_calls_seen = False
 
         for _ in range(self.max_tool_rounds):
-            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            response = self._call_model(messages, tools=tools)
             if not response.tool_calls:
                 if tool_calls_seen and hasattr(self.llm, "stream_chat"):
                     yield from self._stream_answer(messages, [])
@@ -314,16 +379,42 @@ class MiniAgent:
         if _has_stream:
             yield from self._stream_answer(messages, [])
         else:
-            response = self.llm.chat(messages, tools=[])
+            response = self._call_model(messages, tools=[])
             if response.tool_calls:
                 raise LLMError("Tool call loop exceeded max rounds.")
             yield {"type": "delta", "content": response.content or self._help_message()}
 
     def _stream_answer(self, messages: list[dict], tools: list[dict]) -> Generator[dict, None, None]:
+        provider_model = self._provider_model_label()
+        msg_count = len(messages)
+        tool_count = len(tools) if tools else 0
+        self._record_model_event(
+            MODEL_CALL_STARTED, "started",
+            streaming=True, message_count=msg_count, tool_schema_count=tool_count,
+            provider_model=provider_model,
+        )
+        start = time.monotonic()
         full_content = ""
-        for chunk in self.llm.stream_chat(messages, tools=tools or None):
-            yield {"type": "delta", "content": chunk}
-            full_content += chunk
+        try:
+            for chunk in self.llm.stream_chat(messages, tools=tools or None):
+                yield {"type": "delta", "content": chunk}
+                full_content += chunk
+            latency_ms = (time.monotonic() - start) * 1000
+            self._record_model_event(
+                MODEL_CALL_FINISHED, "ok",
+                latency_ms=latency_ms, streaming=True,
+                message_count=msg_count, tool_schema_count=tool_count,
+                response_preview=full_content, provider_model=provider_model,
+            )
+        except Exception as error:
+            latency_ms = (time.monotonic() - start) * 1000
+            self._record_model_event(
+                MODEL_CALL_ERROR, "error",
+                latency_ms=latency_ms, streaming=True,
+                message_count=msg_count, tool_schema_count=tool_count,
+                error=str(error)[:500], provider_model=provider_model,
+            )
+            raise
         if not full_content.strip():
             yield {"type": "delta", "content": self._help_message()}
 
@@ -382,7 +473,7 @@ class MiniAgent:
 
         for step in range(1, step_limit + 1):
             try:
-                response: LLMResponse = self.llm.chat(messages, tools=tools)
+                response: LLMResponse = self._call_model(messages, tools=tools)
             except LLMError as error:
                 final_status = "blocked"
                 records.append(
@@ -462,7 +553,7 @@ class MiniAgent:
         tools = self.tools.to_openai_tools()
 
         for _ in range(self.max_tool_rounds):
-            response: LLMResponse = self.llm.chat(messages, tools=tools)
+            response = self._call_model(messages, tools=tools)
             if not response.tool_calls:
                 return response.content or self._help_message()
 
@@ -485,7 +576,7 @@ class MiniAgent:
                 "content": "工具调用轮数已用完。请只基于已有工具结果给出最终回答，不要再调用工具。",
             }
         )
-        response = self.llm.chat(messages, tools=[])
+        response = self._call_model(messages, tools=[])
         if response.tool_calls:
             raise LLMError("Tool call loop exceeded max rounds.")
         return response.content or self._help_message()
@@ -734,6 +825,62 @@ class MiniAgent:
             )
         except Exception:
             pass
+
+    def _record_model_event(
+        self,
+        event_type: str,
+        status: str,
+        latency_ms: Optional[float] = None,
+        streaming: bool = False,
+        message_count: Optional[int] = None,
+        tool_schema_count: Optional[int] = None,
+        tool_call_count: Optional[int] = None,
+        response_preview: str = "",
+        error: str = "",
+        provider_model: str = "",
+    ) -> None:
+        if not self.event_store:
+            return
+        try:
+            payload = {"status": status, "streaming": streaming}
+            if provider_model:
+                payload["provider_model"] = provider_model
+            if message_count is not None:
+                payload["message_count"] = message_count
+            if tool_schema_count is not None:
+                payload["tool_schema_count"] = tool_schema_count
+            if tool_call_count is not None:
+                payload["tool_call_count"] = tool_call_count
+            if response_preview:
+                payload["response_preview"] = self._shorten_trace_result(response_preview, limit=120)
+            if latency_ms is not None:
+                payload["latency_ms"] = round(latency_ms, 1)
+            if error:
+                payload["error"] = self._shorten_trace_result(error, limit=200)
+            summary = f"model {status}"
+            if provider_model:
+                summary += f" ({provider_model})"
+            self.event_store.record(
+                event_type=event_type,
+                task_id=None,
+                source="controller",
+                summary=summary,
+                severity="info" if event_type == MODEL_CALL_STARTED else ("warning" if event_type == MODEL_CALL_ERROR else "info"),
+                payload=payload,
+            )
+        except Exception:
+            pass
+
+    def _provider_model_label(self) -> str:
+        llm = self.llm
+        if not llm:
+            return ""
+        parts = []
+        for attr in ("provider", "model", "model_name"):
+            val = getattr(llm, attr, None)
+            if val:
+                parts.append(str(val))
+        return "/".join(parts) if parts else ""
 
     def _call_tool(self, name: str, arguments: dict) -> str:
         self._turn_tool_args[name] = arguments
