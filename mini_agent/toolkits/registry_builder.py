@@ -28,6 +28,7 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
 from mini_agent.durable_tasks import DurableTaskStore
+from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus
 from mini_agent.durable_events import (
     DurableEventStore,
     TASK_CREATED,
@@ -87,6 +88,7 @@ def build_default_registry(
     long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
     durable_task_store = DurableTaskStore(db=db)
     durable_event_store = DurableEventStore(db=db)
+    durable_worker_store = DurableWorkerStore(db=db)
     task_manager = TaskManager(
         path=task_state_path or Path("data/current_task.json"),
         history_path=task_history_path or Path("data/task_history.jsonl"),
@@ -134,6 +136,7 @@ def build_default_registry(
     registry.trace_store = trace_store
     registry.durable_task_store = durable_task_store
     registry.durable_event_store = durable_event_store
+    registry.durable_worker_store = durable_worker_store
     workspace_files.event_store = durable_event_store
     shell_runner.event_store = durable_event_store
     git_tools.event_store = durable_event_store
@@ -575,6 +578,123 @@ def build_default_registry(
             "required": ["task_id"],
         },
         permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
+    def _register_worker_json(worker_id: str, role: str = "", workspace_path: str = "") -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.register_worker(
+            worker_id=worker_id, role=role, workspace_path=workspace_path,
+        )
+        return _json.dumps(worker.to_dict(), ensure_ascii=False)
+
+    def _list_workers_json(limit: int = 20) -> str:
+        workers = durable_worker_store.list_workers(limit=limit)
+        return _json.dumps([w.to_dict() for w in workers], ensure_ascii=False)
+
+    def _get_worker_json(worker_id: str) -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        return _json.dumps(worker.to_dict(), ensure_ascii=False)
+
+    def _update_worker_status_json(worker_id: str, status: str, current_task_id: str = "") -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        valid_statuses = {s.value for s in WorkerStatus}
+        if status not in valid_statuses:
+            return _json.dumps({"error": f"无效状态: {status!r}，可选: {sorted(valid_statuses)}"}, ensure_ascii=False)
+        worker = durable_worker_store.update_status(
+            worker_id=worker_id, status=status,
+            current_task_id=current_task_id or None,
+        )
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        return _json.dumps(worker.to_dict(), ensure_ascii=False)
+
+    registry.register(
+        "register_worker",
+        "注册或更新一个 durable worker。worker_id 必填且不能为空。",
+        _register_worker_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id，例如 worker_1",
+                },
+                "role": {
+                    "type": "string",
+                    "description": "worker 角色，例如 worker、reviewer",
+                },
+                "workspace_path": {
+                    "type": "string",
+                    "description": "worker 的工作目录路径",
+                },
+            },
+            "required": ["worker_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "list_workers",
+        "列出已注册的 durable workers。",
+        _list_workers_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回多少条，默认 20，最大 100",
+                }
+            },
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "get_worker",
+        "按 worker_id 获取一条 durable worker 的完整信息。",
+        _get_worker_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id，例如 worker_1",
+                }
+            },
+            "required": ["worker_id"],
+        },
+        permission=ToolPermission(category="logs", risk="read"),
+    )
+    registry.register(
+        "update_worker_status",
+        "更新 worker 状态和当前任务分配。",
+        _update_worker_status_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id，例如 worker_1",
+                },
+                "status": {
+                    "type": "string",
+                    "description": f"新状态: {', '.join(s.value for s in WorkerStatus)}",
+                },
+                "current_task_id": {
+                    "type": "string",
+                    "description": "可选，当前分配的 durable task id",
+                },
+            },
+            "required": ["worker_id", "status"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
     )
 
     registry.register(

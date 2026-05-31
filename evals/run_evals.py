@@ -188,6 +188,10 @@ def main() -> int:
         EvalCase("task_action_event_registry_query", eval_task_action_event_registry_query),
         EvalCase("task_action_event_safety", eval_task_action_event_safety),
         EvalCase("task_action_event_failure_isolation", eval_task_action_event_failure_isolation),
+        EvalCase("worker_assignment_basics", eval_worker_assignment_basics),
+        EvalCase("worker_assignment_linked_events", eval_worker_assignment_linked_events),
+        EvalCase("worker_assignment_safety", eval_worker_assignment_safety),
+        EvalCase("worker_assignment_failure_isolation", eval_worker_assignment_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -4272,6 +4276,151 @@ def eval_task_action_event_failure_isolation():
             r3 = registry.call("delete_durable_task", task_id=task_id)
             parsed3 = _json.loads(r3)
             assert parsed3.get("deleted") is True, f"delete must work with broken store: {r3}"
+        finally:
+            db.close()
+
+
+# --- Worker assignment eval helpers ---
+
+_WORKER_SENTINEL_GOAL = "NORA_EVAL_WORKER_GOAL_SENTINEL_f0a2b4c6"
+_WORKER_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-worker-1d2e3f4a"
+
+
+def eval_worker_assignment_basics():
+    """Worker assignment basics: create with worker_id, assign, clear with empty/whitespace, list includes worker_id."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Create with worker_id
+            r = registry.call("create_durable_task", goal="test", steps="s1", worker_id="worker_a")
+            import json as _json
+            parsed = _json.loads(r)
+            task_id = parsed["task_id"]
+            assert parsed["worker_id"] == "worker_a", f"expected worker_a, got: {parsed['worker_id']}"
+
+            # list_durable_tasks includes worker_id
+            listing = registry.call("list_durable_tasks")
+            tasks = _json.loads(listing)
+            found = [t for t in tasks if t["task_id"] == task_id]
+            assert len(found) == 1
+            assert found[0]["worker_id"] == "worker_a", f"list missing worker_id: {found[0]}"
+
+            # assign_durable_task sets worker
+            r2 = registry.call("assign_durable_task", task_id=task_id, worker_id="worker_b")
+            parsed2 = _json.loads(r2)
+            assert parsed2["worker_id"] == "worker_b", f"expected worker_b, got: {parsed2['worker_id']}"
+
+            # Empty assignment clears worker
+            r3 = registry.call("assign_durable_task", task_id=task_id, worker_id="")
+            parsed3 = _json.loads(r3)
+            assert parsed3["worker_id"] is None or parsed3["worker_id"] == "", f"expected cleared, got: {parsed3['worker_id']}"
+
+            # Whitespace assignment clears worker
+            registry.call("assign_durable_task", task_id=task_id, worker_id="worker_c")
+            r4 = registry.call("assign_durable_task", task_id=task_id, worker_id="   ")
+            parsed4 = _json.loads(r4)
+            assert parsed4["worker_id"] is None or parsed4["worker_id"] == "", f"expected cleared by whitespace, got: {parsed4['worker_id']}"
+        finally:
+            db.close()
+
+
+def eval_worker_assignment_linked_events():
+    """Task action events include worker_id; assignment emits operation=assign; list_durable_events(worker_id=...) works."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+            import json as _json
+
+            # Create with worker
+            r = registry.call("create_durable_task", goal="linked", steps="s1", worker_id="worker_x")
+            task_id = _json.loads(r)["task_id"]
+
+            # Update with worker
+            registry.call("update_durable_task", task_id=task_id, status="running")
+
+            # Assign
+            registry.call("assign_durable_task", task_id=task_id, worker_id="worker_y")
+
+            # Check events have worker_id
+            events = event_store.list_events(task_id=task_id)
+            for evt in events:
+                if evt.event_type in ("task_created", "task_status_changed"):
+                    assert evt.worker_id is not None, f"event {evt.event_type} missing worker_id"
+
+            # Assignment event has operation=assign
+            assign_events = [e for e in events if e.payload.get("operation") == "assign"]
+            assert len(assign_events) == 1, f"expected 1 assign event, got {len(assign_events)}"
+            assert assign_events[0].payload["worker_id_present"] is True
+
+            # list_durable_events(worker_id=...) can query
+            result = registry.call("list_durable_events", worker_id="worker_x")
+            parsed = _json.loads(result)
+            # Should find the create event (before reassignment)
+            assert len(parsed) >= 1, f"expected >=1 event for worker_x, got {len(parsed)}"
+        finally:
+            db.close()
+
+
+def eval_worker_assignment_safety():
+    """Sentinel goal/secret must not leak into assignment events or list_durable_events output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+            import json as _json
+
+            goal = f"{_WORKER_SENTINEL_GOAL} {_WORKER_SENTINEL_SECRET}"
+            r = registry.call("create_durable_task", goal=goal, steps="s1", worker_id="w1")
+            task_id = _json.loads(r)["task_id"]
+
+            registry.call("assign_durable_task", task_id=task_id, worker_id="w2")
+
+            # Check serialized assignment events
+            events = event_store.list_events()
+            serialized = _json.dumps([e.to_dict() for e in events], ensure_ascii=False, sort_keys=True)
+            assert _WORKER_SENTINEL_GOAL not in serialized, "sentinel goal leaked into events"
+            assert _WORKER_SENTINEL_SECRET not in serialized, "sentinel secret leaked into events"
+
+            # Check registry output
+            result = registry.call("list_durable_events")
+            assert _WORKER_SENTINEL_GOAL not in result, "sentinel goal leaked through registry"
+            assert _WORKER_SENTINEL_SECRET not in result, "sentinel secret leaked through registry"
+        finally:
+            db.close()
+
+
+def eval_worker_assignment_failure_isolation():
+    """Broken event store must not change assign_durable_task behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+            import json as _json
+
+            # Create
+            r = registry.call("create_durable_task", goal="isolated", steps="s1", worker_id="w1")
+            task_id = _json.loads(r)["task_id"]
+
+            # Assign must still work
+            r2 = registry.call("assign_durable_task", task_id=task_id, worker_id="w2")
+            parsed2 = _json.loads(r2)
+            assert parsed2.get("worker_id") == "w2", f"assign must work with broken store: {r2}"
+
+            # Clear must still work
+            r3 = registry.call("assign_durable_task", task_id=task_id, worker_id="")
+            parsed3 = _json.loads(r3)
+            assert parsed3.get("worker_id") is None or parsed3.get("worker_id") == "", f"clear must work with broken store: {r3}"
         finally:
             db.close()
 
