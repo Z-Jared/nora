@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-038: Nora native memory record store v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-036 已完成
+- 目标: 增加本地 first-class structured memory records，让 Nora 可以保存 decision/preference/fact/task_learning/risk/note 等类型化记忆，不依赖外部服务。
+- 验证: `python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` memory/context compiler 方向；`mini_agent/memory.py` legacy memory pattern；`mini_agent/toolkits/register_state.py` registry pattern。
+
+### TASK-039: Eval coverage for native memory record store
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-038 runtime 存在后执行
+- 目标: 为 structured memory records 增加 deterministic offline eval，覆盖 basics、search/list/get/delete、安全边界、legacy memory compatibility 和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` memory eval 区域；TASK-038 新增工具。
 
 ## 已完成
 

@@ -1,38 +1,40 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-037: eval coverage for optional Supermemory memory toolkit.
+TASK-039: eval coverage for native memory record store.
 
-Add deterministic offline eval coverage for the Supermemory integration from TASK-036. The evals must prove the integration is optional, safe, bounded, and failure-isolated.
+Add deterministic offline eval coverage for TASK-038 structured memory records. The evals should prove the feature is local-first, bounded, safe, and does not break existing memory tools.
 
 ## Scope
 
-Edit `evals/run_evals.py` only unless you discover a real runtime bug. If TASK-036 is not present yet, wait or write `agent_tasks/B_DONE.md` as blocked by missing runtime.
+Edit `evals/run_evals.py` only unless you discover a real runtime bug. If TASK-038 is not present yet, wait or write `agent_tasks/B_DONE.md` as blocked by missing runtime.
 
-Do not call the real Supermemory API. Use monkeypatch/fake client/fake HTTP behavior as appropriate for the implementation.
+Do not call external APIs.
 
 Add eval cases covering:
 
-1. Optional configuration:
-   - With no `SUPERMEMORY_API_KEY`, Nora still starts and existing evals remain offline.
-   - Supermemory tools either are absent or return a clear JSON configuration error, matching TASK-036 behavior.
+1. Memory record basics:
+   - Save decision/preference/fact records.
+   - Search by query/tags/scope.
+   - List returns bounded summaries.
+   - Get returns the full selected record.
+   - Delete removes the record.
 
-2. Save behavior:
-   - `supermemory_save` stores only explicit content and namespace/container metadata.
-   - It must not include env vars, raw prompts, shell output, diffs, or unrelated task/event payloads.
+2. Safety:
+   - Secret-like content is rejected or redacted according to TASK-038 behavior.
+   - List/search summaries do not leak oversized content.
+   - No env vars, prompts, shell output, diffs, or unrelated event payloads appear in outputs.
 
-3. Search/profile behavior:
-   - Search/profile output is bounded.
-   - Large fake API payloads are truncated or summarized.
-   - Secret-like sentinel values are not leaked in returned summaries unless they are the explicit searched/saved content and the implementation intentionally returns them.
+3. Compatibility:
+   - Legacy `save_memory`/`search_memory` still work.
+   - Supermemory tools still remain optional/no-key safe.
 
 4. Failure isolation:
-   - Network/API error returns JSON error and does not crash registry calls.
-   - Existing memory tools still work without Supermemory configured.
+   - Broken/invalid input returns JSON errors, not crashes.
 
 Keep evals offline and deterministic.
 
@@ -42,7 +44,7 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_mini_agent tests.test_tool_cache
+python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
 git diff --check
 ```
 
