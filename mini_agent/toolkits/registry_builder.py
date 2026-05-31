@@ -28,7 +28,12 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
 from mini_agent.durable_tasks import DurableTaskStore
-from mini_agent.durable_events import DurableEventStore
+from mini_agent.durable_events import (
+    DurableEventStore,
+    TASK_CREATED,
+    TASK_STATUS_CHANGED,
+    TASK_RETRIED,
+)
 from mini_agent.web_tools import WebTools
 
 
@@ -336,23 +341,77 @@ def build_default_registry(
         parsed = [s.strip() for s in steps.splitlines() if s.strip()]
         step_dicts = [{"text": s} for s in parsed]
         task = durable_task_store.create_task(goal=goal, steps=step_dicts)
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_CREATED,
+                task_id=task.task_id,
+                summary="task created",
+                payload={
+                    "operation": "create",
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "step_count": len(task.steps),
+                    "max_retries": task.max_retries,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
         return _json.dumps(task.to_dict(), ensure_ascii=False)
 
     def _update_durable_task_json(task_id: str, status: str = "", failure_reason: str = "") -> str:
         if not status:
             return _json.dumps({"error": "status 参数必填"}, ensure_ascii=False)
+        existing = durable_task_store.get_task(task_id)
+        previous_status = existing.status if existing else ""
         try:
             task = durable_task_store.update_status(task_id, status, failure_reason=failure_reason)
         except ValueError as e:
             return _json.dumps({"error": str(e)}, ensure_ascii=False)
         if task is None:
             return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                summary="task status changed",
+                payload={
+                    "operation": "update",
+                    "task_id": task_id,
+                    "status": task.status,
+                    "previous_status": previous_status,
+                    "failure_reason_present": bool(failure_reason),
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
         return _json.dumps(task.to_dict(), ensure_ascii=False)
 
     def _delete_durable_task_json(task_id: str) -> str:
+        task = durable_task_store.get_task(task_id)
+        previous_status = task.status if task else ""
         deleted = durable_task_store.delete_task(task_id)
         if not deleted:
             return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                summary="task deleted",
+                payload={
+                    "operation": "delete",
+                    "task_id": task_id,
+                    "deleted": True,
+                    "previous_status": previous_status,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
         return _json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False)
 
     registry.register(
@@ -423,6 +482,23 @@ def build_default_registry(
             return _json.dumps({"error": str(e)}, ensure_ascii=False)
         if task is None:
             return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_RETRIED,
+                task_id=task_id,
+                summary="task retried",
+                payload={
+                    "operation": "retry",
+                    "task_id": task_id,
+                    "status": task.status,
+                    "retry_count": task.retry_count,
+                    "max_retries": task.max_retries,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
         return _json.dumps(task.to_dict(), ensure_ascii=False)
 
     registry.register(

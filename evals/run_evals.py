@@ -176,6 +176,11 @@ def main() -> int:
         EvalCase("handoff_event_safety", eval_handoff_event_safety),
         EvalCase("handoff_event_failure_isolation", eval_handoff_event_failure_isolation),
         EvalCase("handoff_event_registry_wiring", eval_handoff_event_registry_wiring),
+        EvalCase("event_query_filters_sqlite", eval_event_query_filters_sqlite),
+        EvalCase("event_query_filters_jsonl", eval_event_query_filters_jsonl),
+        EvalCase("event_query_filters_registry", eval_event_query_filters_registry),
+        EvalCase("event_query_semantics", eval_event_query_semantics),
+        EvalCase("event_query_safety", eval_event_query_safety),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -3767,6 +3772,196 @@ def eval_handoff_event_registry_wiring():
                 _HANDOFF_SENTINEL_GOAL, _HANDOFF_SENTINEL_SUMMARY,
                 _HANDOFF_SENTINEL_STEP, _HANDOFF_SENTINEL_SECRET,
             ])
+        finally:
+            db.close()
+
+
+# --- Event query filter eval helpers ---
+
+_QUERY_SENTINEL_PAYLOAD = "NORA_EVAL_QUERY_PAYLOAD_SENTINEL_a1b2c3d4"
+_QUERY_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-query-5e6f7a8b"
+
+
+def _seed_query_events(store: DurableEventStore) -> None:
+    """Seed a diverse set of events for filter testing."""
+    store.record("task_created", task_id="dtask_1", source="task_manager", severity="info",
+                 worker_id="worker_a", trace_id="trace_1", checkpoint_id="cp_1",
+                 summary="task created", payload={"note": _QUERY_SENTINEL_PAYLOAD})
+    store.record("step_updated", task_id="dtask_1", source="task_manager", severity="info",
+                 worker_id="worker_a", trace_id="trace_1", checkpoint_id="cp_2",
+                 summary="step updated")
+    store.record("tool_call_started", task_id="dtask_2", source="controller", severity="info",
+                 worker_id="worker_b", trace_id="trace_2",
+                 summary="tool started")
+    store.record("tool_call_error", task_id="dtask_2", source="controller", severity="warning",
+                 worker_id="worker_b", trace_id="trace_2",
+                 summary="tool error")
+    store.record("model_call_started", source="controller", severity="info",
+                 summary="model started")
+    store.record("approval_requested", source="registry", severity="info",
+                 summary="approval requested")
+
+
+def eval_event_query_filters_sqlite():
+    """SQLite event query filters: event_type, source, severity, worker_id, trace_id, checkpoint_id, combined."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            store = DurableEventStore(db=db)
+            _seed_query_events(store)
+
+            # Filter by event_type
+            result = store.list_events(event_type="tool_call_started")
+            assert len(result) == 1, f"expected 1 tool_call_started, got {len(result)}"
+            assert result[0].event_type == "tool_call_started"
+
+            # Filter by source
+            result = store.list_events(source="controller")
+            assert len(result) == 3, f"expected 3 controller events, got {len(result)}"
+
+            # Filter by severity
+            result = store.list_events(severity="warning")
+            assert len(result) == 1, f"expected 1 warning, got {len(result)}"
+            assert result[0].severity == "warning"
+
+            # Filter by worker_id
+            result = store.list_events(worker_id="worker_a")
+            assert len(result) == 2, f"expected 2 worker_a events, got {len(result)}"
+
+            # Filter by trace_id
+            result = store.list_events(trace_id="trace_2")
+            assert len(result) == 2, f"expected 2 trace_2 events, got {len(result)}"
+
+            # Filter by checkpoint_id
+            result = store.list_events(checkpoint_id="cp_1")
+            assert len(result) == 1, f"expected 1 cp_1 event, got {len(result)}"
+
+            # Combined filters
+            result = store.list_events(source="controller", severity="warning")
+            assert len(result) == 1, f"expected 1 combined, got {len(result)}"
+            assert result[0].event_type == "tool_call_error"
+        finally:
+            db.close()
+
+
+def eval_event_query_filters_jsonl():
+    """JSONL event query filters: event_type, source+severity, trace_id, checkpoint_id."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "events.jsonl"
+        store = DurableEventStore(path=path)
+        _seed_query_events(store)
+
+        # Filter by event_type
+        result = store.list_events(event_type="task_created")
+        assert len(result) == 1, f"expected 1 task_created, got {len(result)}"
+
+        # Filter by source + severity
+        result = store.list_events(source="controller", severity="info")
+        assert len(result) == 2, f"expected 2 controller+info, got {len(result)}"
+
+        # Filter by trace_id
+        result = store.list_events(trace_id="trace_1")
+        assert len(result) == 2, f"expected 2 trace_1, got {len(result)}"
+
+        # Filter by checkpoint_id
+        result = store.list_events(checkpoint_id="cp_2")
+        assert len(result) == 1, f"expected 1 cp_2, got {len(result)}"
+
+
+def eval_event_query_filters_registry():
+    """Registry list_durable_events accepts filters, includes source/severity, excludes payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            event_store = registry.durable_event_store
+            _seed_query_events(event_store)
+
+            # list_durable_events accepts filters
+            import json as _json
+            result = registry.call("list_durable_events", event_type="tool_call_error", severity="warning")
+            parsed = _json.loads(result)
+            assert len(parsed) == 1, f"expected 1 result, got {len(parsed)}"
+            assert parsed[0]["event_type"] == "tool_call_error"
+
+            # Output includes source and severity
+            assert "source" in parsed[0], f"missing source in output: {parsed[0].keys()}"
+            assert "severity" in parsed[0], f"missing severity in output: {parsed[0].keys()}"
+            assert parsed[0]["source"] == "controller"
+            assert parsed[0]["severity"] == "warning"
+
+            # Output does NOT include payload
+            assert "payload" not in parsed[0], f"payload should not be in output: {parsed[0].keys()}"
+
+            # Sentinel payload must not leak through registry output
+            result_str = registry.call("list_durable_events")
+            assert _QUERY_SENTINEL_PAYLOAD not in result_str, "sentinel payload leaked through registry"
+        finally:
+            db.close()
+
+
+def eval_event_query_semantics():
+    """Query semantics: filters compose with task_id, filtering before max_results, newest-first, empty filters."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            store = DurableEventStore(db=db)
+            _seed_query_events(store)
+
+            # Filters compose with task_id
+            result = store.list_events(task_id="dtask_1", source="task_manager")
+            assert len(result) == 2, f"expected 2 dtask_1+task_manager, got {len(result)}"
+
+            result = store.list_events(task_id="dtask_1", severity="warning")
+            assert len(result) == 0, f"expected 0 dtask_1+warning, got {len(result)}"
+
+            # Filtering happens before max_results
+            store.record("step_updated", task_id="dtask_3", source="task_manager", severity="info", summary="extra")
+            result = store.list_events(source="task_manager", max_results=2)
+            assert len(result) == 2, f"expected 2 with max_results=2, got {len(result)}"
+
+            # Results remain newest-first
+            result = store.list_events(task_id="dtask_1")
+            assert result[0].event_type == "step_updated", f"expected newest first, got {result[0].event_type}"
+
+            # Empty/whitespace filters behave like no filter
+            result_empty = store.list_events(event_type="", source="  ", severity="")
+            result_all = store.list_events()
+            assert len(result_empty) == len(result_all), f"empty filters should match no filter"
+
+            # task_id with whitespace
+            result = store.list_events(task_id="  dtask_1  ")
+            assert len(result) == 2, f"whitespace task_id should be stripped, got {len(result)}"
+        finally:
+            db.close()
+
+
+def eval_event_query_safety():
+    """Sentinel payload strings and secret must not leak through list_durable_events summaries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            event_store = registry.durable_event_store
+
+            # Record event with sentinel in payload
+            event_store.record(
+                "task_created", task_id="dtask_safe", source="task_manager", severity="info",
+                summary="safe task",
+                payload={"note": _QUERY_SENTINEL_PAYLOAD, "secret": _QUERY_SENTINEL_SECRET},
+            )
+
+            # Registry output must not contain sentinel values
+            result = registry.call("list_durable_events", task_id="dtask_safe")
+            assert _QUERY_SENTINEL_PAYLOAD not in result, "sentinel payload leaked through registry"
+            assert _QUERY_SENTINEL_SECRET not in result, "sentinel secret leaked through registry"
+
+            # Verify summary is present but payload is not
+            import json as _json
+            parsed = _json.loads(result)
+            assert len(parsed) == 1
+            assert parsed[0]["summary"] == "safe task"
+            assert "payload" not in parsed[0]
         finally:
             db.close()
 

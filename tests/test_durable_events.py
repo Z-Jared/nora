@@ -34,6 +34,7 @@ from mini_agent.durable_events import (
     STEP_UPDATED,
     TASK_CREATED,
     TASK_FINISHED,
+    TASK_RETRIED,
     TASK_STATUS_CHANGED,
     TEST_RUN_BLOCKED,
     TEST_RUN_ERROR,
@@ -2339,6 +2340,186 @@ class RegistryEventQueryFilterTests(unittest.TestCase):
 
         self.assertEqual(len(parsed), 1)
         self.assertEqual(parsed[0]["task_id"], "dtask_1")
+
+
+class RegistryTaskActionDurableEventTests(unittest.TestCase):
+    """Tests for durable task registry action event logging (TASK-026)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _task_action_events(self, event_type=None):
+        action_types = {TASK_CREATED, TASK_STATUS_CHANGED, TASK_RETRIED}
+        events = [e for e in self.event_store.list_events() if e.event_type in action_types]
+        events.reverse()
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return events
+
+    def test_create_durable_task_emits_task_created_event(self):
+        result = self.registry.call("create_durable_task", goal="build feature", steps="step one\nstep two")
+
+        parsed = json.loads(result)
+        self.assertIn("task_id", parsed)
+
+        events = self._task_action_events(TASK_CREATED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].task_id, parsed["task_id"])
+        self.assertEqual(events[0].source, "registry")
+        self.assertEqual(events[0].payload["operation"], "create")
+        self.assertEqual(events[0].payload["status"], "pending")
+        self.assertEqual(events[0].payload["step_count"], 2)
+        self.assertEqual(events[0].payload["max_retries"], 3)
+
+    def test_update_durable_task_emits_status_changed_event(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].task_id, task_id)
+        self.assertEqual(events[0].payload["operation"], "update")
+        self.assertEqual(events[0].payload["status"], "running")
+        self.assertEqual(events[0].payload["previous_status"], "pending")
+        self.assertFalse(events[0].payload["failure_reason_present"])
+
+    def test_update_durable_task_records_failure_reason_present(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="something broke")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        failed_event = next(e for e in events if e.payload.get("status") == "failed")
+        self.assertTrue(failed_event.payload["failure_reason_present"])
+
+    def test_retry_durable_task_emits_task_retried_event(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed")
+        self.registry.call("retry_durable_task", task_id=task_id)
+
+        events = self._task_action_events(TASK_RETRIED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].task_id, task_id)
+        self.assertEqual(events[0].payload["operation"], "retry")
+        self.assertEqual(events[0].payload["status"], "pending")
+        self.assertEqual(events[0].payload["retry_count"], 1)
+        self.assertEqual(events[0].payload["max_retries"], 3)
+
+    def test_delete_durable_task_emits_status_changed_event(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("delete_durable_task", task_id=task_id)
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        delete_events = [e for e in events if e.payload.get("operation") == "delete"]
+        self.assertEqual(len(delete_events), 1)
+        self.assertEqual(delete_events[0].task_id, task_id)
+        self.assertTrue(delete_events[0].payload["deleted"])
+        self.assertEqual(delete_events[0].payload["previous_status"], "pending")
+        self.assertEqual(delete_events[0].source, "registry")
+
+    def test_create_event_no_raw_goal_or_steps(self):
+        sentinel_goal = "SENTINEL_GOAL_registry_abc123"
+        sentinel_step = "SENTINEL_STEP_registry_def456"
+
+        self.registry.call("create_durable_task", goal=sentinel_goal, steps=sentinel_step)
+
+        events = self._task_action_events(TASK_CREATED)
+        self.assertEqual(len(events), 1)
+        full_json = json.dumps(events[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_goal, full_json,
+                         "raw goal must not appear in serialized task-created event")
+        self.assertNotIn(sentinel_step, full_json,
+                         "raw step text must not appear in serialized task-created event")
+
+    def test_update_event_no_raw_failure_reason(self):
+        sentinel_reason = "SENTINEL_FAILURE_REASON_xyz789"
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason=sentinel_reason)
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        for event in events:
+            full_json = json.dumps(event.to_dict(), ensure_ascii=False)
+            self.assertNotIn(sentinel_reason, full_json,
+                             "raw failure reason must not appear in serialized status-changed event")
+
+    def test_retry_event_no_raw_goal_or_steps(self):
+        sentinel_goal = "SENTINEL_RETRY_GOAL_ghi789"
+        create_result = self.registry.call("create_durable_task", goal=sentinel_goal, steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed")
+        self.registry.call("retry_durable_task", task_id=task_id)
+
+        events = self._task_action_events(TASK_RETRIED)
+        self.assertEqual(len(events), 1)
+        full_json = json.dumps(events[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_goal, full_json,
+                         "raw goal must not appear in serialized task-retried event")
+
+    def test_delete_event_no_raw_goal(self):
+        sentinel_goal = "SENTINEL_DELETE_GOAL_jkl012"
+        create_result = self.registry.call("create_durable_task", goal=sentinel_goal, steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("delete_durable_task", task_id=task_id)
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        delete_events = [e for e in events if e.payload.get("operation") == "delete"]
+        self.assertEqual(len(delete_events), 1)
+        full_json = json.dumps(delete_events[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_goal, full_json,
+                         "raw goal must not appear in serialized task-deleted event")
+
+    def test_broken_event_store_does_not_break_create(self):
+        with patch.object(self.event_store, "record", side_effect=RuntimeError("disk full")):
+            result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        parsed = json.loads(result)
+        self.assertIn("task_id", parsed)
+
+    def test_broken_event_store_does_not_break_update(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+
+        with patch.object(self.event_store, "record", side_effect=RuntimeError("disk full")):
+            result = self.registry.call("update_durable_task", task_id=task_id, status="running")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["status"], "running")
+
+    def test_broken_event_store_does_not_break_retry(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed")
+
+        with patch.object(self.event_store, "record", side_effect=RuntimeError("disk full")):
+            result = self.registry.call("retry_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["status"], "pending")
+
+    def test_broken_event_store_does_not_break_delete(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+
+        with patch.object(self.event_store, "record", side_effect=RuntimeError("disk full")):
+            result = self.registry.call("delete_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertTrue(parsed["deleted"])
 
 
 if __name__ == "__main__":

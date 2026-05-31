@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-026: Durable task registry action events
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-025 已完成
-- 目标: 为 durable task registry tools 的 create/update/retry/delete 操作记录安全 durable events，让任务状态变更也能被 PM/runtime 审计。
-- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 event log；`mini_agent/toolkits/registry_builder.py` durable task tool 区域；`mini_agent/durable_events.py` task lifecycle event types。
-
-### TASK-027: Eval coverage for durable event query filters
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-025 已完成
-- 目标: 为 `DurableEventStore.list_events` 和 `list_durable_events` 的过滤能力增加 deterministic offline eval，覆盖 SQLite、JSONL、registry wiring、filter-before-limit、newest-first 和 payload 不泄漏。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` durable event eval 区域；`mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`。
+（空）
 
 ## 已完成
+
+### TASK-027: Eval coverage for durable event query filters ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 132 passed；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 275 tests OK；`python3 -m unittest discover -s tests` 1255 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 SQLite/JSONL filter parity、registry wiring、source/severity 输出、payload 不输出、filter-before-limit、newest-first、task_id 组合过滤、空白过滤参数和 sentinel payload/secret 不泄漏。
+
+### TASK-026: Durable task registry action events ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 387 tests OK；`python3 evals/run_evals.py` 132 passed；`python3 -m unittest discover -s tests` 1255 tests OK；`git diff --check` OK。
+- 内容: `create_durable_task` 记录 `TASK_CREATED`，`update_durable_task` 记录带 `previous_status` 的 `TASK_STATUS_CHANGED`，`retry_durable_task` 记录 `TASK_RETRIED`，`delete_durable_task` 记录带 `operation="delete"` 的安全状态变更事件；payload 只含 operation/status/previous_status/step_count/retry_count/max_retries/failure_reason_present/deleted 等元数据，事件写入失败不影响工具行为。
 
 ### TASK-025: Durable event query filters ✅
 - 完成者: Claude A
