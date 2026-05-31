@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-031: eval coverage for durable task worker assignment.
+TASK-033: eval coverage for durable worker registry tools.
 
-TASK-028 added worker ownership metadata to durable task registry tools. Add deterministic offline eval coverage so worker assignment behavior and worker-linked task events remain stable.
+TASK-030 added the durable worker registry and registry tools. Add deterministic offline eval coverage so worker registration, lookup, listing, status updates, safety, and failure isolation stay stable.
 
 ## Scope
 
@@ -15,25 +15,27 @@ Edit `evals/run_evals.py` only unless you discover a real runtime bug. If you fi
 
 Add eval cases covering:
 
-1. Worker assignment basics:
-   - `create_durable_task(worker_id=...)` stores worker ownership.
-   - `assign_durable_task` sets worker ownership.
-   - Empty/whitespace assignment clears worker ownership.
-   - `list_durable_tasks` includes `worker_id`.
+1. Worker registry basics:
+   - `register_worker` stores `worker_id`, `role`, `workspace_path`, and default `status`.
+   - Re-registering an existing worker updates role/workspace metadata without creating a duplicate.
+   - `get_worker` returns the registered worker.
+   - `list_workers` includes registered workers.
 
-2. Worker-linked events:
-   - Task action events include top-level `worker_id` after create/update/retry/delete when assigned.
-   - Assignment emits a safe event with `operation="assign"`.
-   - `list_durable_events(worker_id=...)` can query worker-linked events.
+2. Worker status updates:
+   - `update_worker_status` sets `status` and `current_task_id`.
+   - Updating back to `idle` can clear `current_task_id`.
+   - Unknown worker returns a JSON error.
+   - Invalid status returns a JSON error.
 
 3. Safety:
-   - Use sentinel goal/step/secret values.
-   - Assert sentinels are absent from assignment events and `list_durable_events` output.
+   - Use sentinel role/path/current_task values that look secret-like.
+   - Assert worker registry outputs do not include environment variables, raw prompts, durable task goals, or unrelated event payloads.
+   - Do not add live LLM calls.
 
 4. Failure isolation:
-   - Broken event store must not change `assign_durable_task` behavior.
+   - Worker registry operations should still work if the durable event store is replaced with a broken object, because worker registry tools should not depend on event logging.
 
-Keep evals offline and deterministic. Do not call live LLM APIs.
+Keep evals offline and deterministic.
 
 ## Verification
 
@@ -41,7 +43,7 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
 git diff --check
 ```
 

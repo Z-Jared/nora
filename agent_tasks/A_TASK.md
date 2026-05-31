@@ -1,56 +1,49 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-030: durable worker registry v1.
+TASK-032: durable worker heartbeat and offline lifecycle v1.
 
-Nora now lets durable tasks carry `worker_id`, but workers themselves are still just strings. Add a minimal durable worker registry so PM/runtime can inspect worker identity, role, status, current task assignment, and workspace path as first-class runtime state.
+Nora now has a durable worker registry, but worker liveness is only implicit. Add a small heartbeat/offline lifecycle so the runtime can record that a worker is still alive and mark stale workers as offline without mutating durable task ownership.
 
 ## Scope
 
-Implement a narrow worker registry. Prefer following the existing durable store style in `mini_agent/durable_tasks.py`.
+Build narrowly on `mini_agent/durable_workers.py` and `mini_agent/toolkits/registry_builder.py`.
 
-1. Add durable worker data/storage:
-   - Create a small module such as `mini_agent/durable_workers.py`.
-   - Define a `DurableWorker` dataclass with at least:
-     - `worker_id`
-     - `role`
-     - `status`
-     - `current_task_id`
-     - `workspace_path`
-     - `created_at`
-     - `updated_at`
-     - `last_seen_at`
-   - Support SQLite via `NoraDB` and JSONL fallback.
-   - Provide focused store methods: upsert/register worker, get worker, list workers, update status/current task.
+1. Extend durable worker storage:
+   - Keep the existing `touch(worker_id)` behavior, but ensure it is covered by tests for SQLite and JSONL.
+   - Add a store method to mark stale workers offline, for example `mark_stale_workers_offline(max_age_seconds: int) -> list[DurableWorker]`.
+   - A worker is stale when `last_seen_at` is older than the threshold and status is not already `offline`.
+   - Mark stale workers with `status="offline"` and update `updated_at`.
+   - Do not change `last_seen_at` when marking offline; it should remain the last actual heartbeat timestamp.
+   - Do not mutate durable tasks or clear task ownership from durable tasks.
 
-2. Add registry tools in `mini_agent/toolkits/registry_builder.py`:
-   - `register_worker`
-   - `list_workers`
-   - `get_worker`
-   - `update_worker_status`
-   - Keep tool outputs bounded JSON summaries.
+2. Add registry tools:
+   - `touch_worker(worker_id)` updates `last_seen_at` for an existing worker and returns JSON.
+   - `mark_stale_workers_offline(max_age_seconds=300)` returns a bounded JSON summary of workers that changed status.
+   - Empty/unknown worker IDs should return JSON errors, not raise.
+   - Invalid threshold values should return JSON errors, not raise.
 
 3. Safety and compatibility:
-   - Do not change durable task status semantics.
-   - Do not implement scheduling or worktree creation yet.
-   - Do not expose environment variables, secrets, or raw prompts in worker records.
-   - Existing tests/evals must continue to pass.
-   - Worker ids should be stripped; empty ids should return a JSON error.
+   - Keep worker records as metadata only; do not expose env vars, prompts, secrets, shell output, or raw tool data.
+   - Do not implement scheduling, worktree creation, or task reassignment in this task.
+   - Existing durable task worker assignment semantics must stay unchanged.
 
 ## Suggested Tests
 
-Add focused unit tests, probably in a new `tests/test_durable_workers.py`:
+Add or extend focused tests in `tests/test_durable_workers.py`:
 
-1. SQLite store can register, get, list, and update a worker.
-2. JSONL fallback supports the same basics.
-3. Registry tools are registered and return expected JSON.
-4. Empty worker id returns an error through registry tools.
-5. Updating `current_task_id` does not mutate the durable task itself.
-6. Existing durable task worker assignment tests still pass.
+1. SQLite `touch` updates `last_seen_at` and `updated_at`.
+2. JSONL `touch` updates `last_seen_at` and `updated_at`.
+3. SQLite stale workers become `offline`; fresh workers do not.
+4. JSONL stale workers become `offline`; fresh workers do not.
+5. Already-offline workers are not returned as newly changed.
+6. Registry `touch_worker` and `mark_stale_workers_offline` return expected JSON.
+7. Registry invalid inputs return JSON errors.
+8. Marking a worker offline does not mutate the durable task that references that worker.
 
 ## Verification
 
