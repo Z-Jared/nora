@@ -1,54 +1,50 @@
-# Claude B Completion Report - TASK-016
+# Claude B Completion Report - TASK-018
 
-Status: ready for Codex review
+Status: completed, ready for Codex review
 
 ## Summary
 
-Added 5 deterministic offline eval cases for durable shell-command event logging (TASK-015 runtime at b1794fa). Codex PM tightened the candidate with explicit forbidden payload-key checks and a safe allowed-arg sentinel case.
+Added deterministic offline eval coverage for durable test-run event logging (TASK-017).
 
-1. **shell_command_event_success** — Exercises `pwd` via `ShellRunner`. Verifies `SHELL_COMMAND_STARTED` → `SHELL_COMMAND_FINISHED` with `executable`, `exit_code=0`, `stdout_bytes>0`, `severity=info`, `task_id=None`.
+Five new eval cases added to `evals/run_evals.py`:
 
-2. **shell_command_event_blocked** — Exercises `rm -rf /`. Verifies `SHELL_COMMAND_BLOCKED` with `error=disallowed_command`, no started/finished events. Runs a second malformed command with sentinel arg to assert raw command text absent from serialized events.
+1. **test_run_event_success** — Exercises allowed `python3 -m unittest discover -s tests` with a passing test that prints sentinel output. Verifies TEST_RUN_STARTED/FINISHED events with correct payload fields (command_kind, status, exit_code, stdout_bytes, stderr_bytes, max_output_chars). Confirms sentinel output is NOT stored in durable event payloads or serialized records.
 
-3. **shell_command_event_cancelled** — Exercises confirmation denial via `confirm_action=lambda _: False`. Verifies `SHELL_COMMAND_BLOCKED` with `error=cancelled`, no started or finished events.
+2. **test_run_event_failure** — Exercises a deterministic failing unittest. Verifies TEST_RUN_FINISHED records nonzero exit_code. Uses sentinel traceback text to confirm raw failure body is NOT stored in event payloads or serialized records.
 
-4. **shell_command_event_error** — Two sub-cases:
-   - **Timeout**: Sleeps 30s script with 1s timeout. Verifies `SHELL_COMMAND_ERROR` with `status=timeout`, `timeout=True`. Asserts sentinel stdout content absent from serialized events.
-   - **OSError**: Patches `subprocess.run` to raise `OSError(sentinel)`. Verifies `SHELL_COMMAND_ERROR` with `error=os_error`. Asserts sentinel OSError text absent from both user-visible result and serialized events.
+3. **test_run_event_blocked** — Exercises a disallowed command (`rm -rf /`). Verifies TEST_RUN_BLOCKED is emitted with error="disallowed_command" and no TEST_RUN_STARTED/FINISHED recorded. Also tests a sentinel command string to confirm raw command text is not persisted.
 
-5. **shell_command_event_failure_isolation** — Broken event store and `event_store=None` both must not break shell execution.
+4. **test_run_event_timeout_or_error** — Exercises timeout (1s timeout with 30s sleep) and patched OSError. Verifies TEST_RUN_ERROR is emitted for both cases with correct status/timeout/error fields. Uses sentinel output and exception strings to confirm no raw data leaks into events.
+
+5. **test_run_event_failure_isolation** — Verifies that a broken event store does not change existing diagnostics behavior: run_tests still succeeds, blocked commands still reject, and diagnose_test_failure still works.
 
 ## Safety Assertions
 
-All evals use named sentinels and assert absence from `event.to_dict()` serialized output:
-- `_SHELL_SENTINEL_CMD` — raw command path/arg
-- `_SHELL_SENTINEL_OUTPUT` — raw stdout content
-- `os_sentinel` — raw OSError text
-- Forbidden payload keys: no `stdout`, `stderr`, `command`, `args`, `argv`, `output`, `result`, `reason`, `exception`, or `traceback` keys stored
+- Sentinel strings used for: raw stdout output (in success, failure, and timeout paths), traceback text, raw exception text, raw command text, and a secret-like token
+- All sentinels verified absent from: event.payload, event.summary, event.to_dict() serialized JSON
+- Forbidden payload keys checked: stdout, stderr, output, result, reason, exception, traceback, command, args
 
 ## Diff
 
 ```text
- evals/run_evals.py | 215 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 214 insertions(+), 1 deletion(-)
+ evals/run_evals.py | 242 +++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 242 insertions(+), 1 deletion(-)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-108 passed, 0 failed
+113 passed, 0 failed
 
-python3 -m unittest tests.test_durable_events tests.test_mini_agent
-Ran 203 tests — OK
-
-git diff --check
+python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent
+Ran 237 tests in 5.093s
 OK
 ```
 
 ## Notes
 
-- No runtime code changed (TASK-015 was already complete at b1794fa).
-- No fallback imports or shims added.
-- Eval count increased from 103 to 108.
+- No runtime code changed — eval only as instructed.
+- TASK-017 implementation was already complete and approved.
 - No commit or push performed.
+- Known limitations: none.

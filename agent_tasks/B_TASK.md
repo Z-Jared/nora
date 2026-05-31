@@ -1,17 +1,15 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting
+Status: completed
 
 ## Goal
 
-Prepare for TASK-018: eval coverage for durable test-run event logging after Claude A completes TASK-017.
+TASK-018: eval coverage for durable test-run event logging.
 
 ## Instructions
 
-Do not start implementation until Codex PM explicitly dispatches this task after TASK-017 lands in the main worktree.
-
-Once TASK-017 is complete, add deterministic offline eval coverage for durable test-run events in `evals/run_evals.py`.
+TASK-017 is complete and approved. Add deterministic offline eval coverage for durable test-run events in `evals/run_evals.py`.
 
 Add eval cases for:
 
@@ -48,7 +46,7 @@ python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_
 
 ## Context
 
-- TASK-017 is expected to add `TEST_RUN_STARTED`, `TEST_RUN_FINISHED`, `TEST_RUN_ERROR`, and `TEST_RUN_BLOCKED`.
+- TASK-017 added `TEST_RUN_STARTED`, `TEST_RUN_FINISHED`, `TEST_RUN_ERROR`, and `TEST_RUN_BLOCKED`.
 - `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, file-edit, and shell-command event evals.
 - Keep this task eval-only. Runtime changes belong to TASK-017 and should not be duplicated here.
 

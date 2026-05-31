@@ -4,19 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-018: Eval coverage for test-run events
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-017 已完成
-- 目标: 为 durable test-run event logging 增加 deterministic offline eval，覆盖 success、failure、blocked、timeout/error 和 event-write failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；必要时补 focused unittest。
-- 参考: `evals/run_evals.py` durable event eval 区域；TASK-017 新增行为。
+（空）
 
 ## 进行中
 
 （空 — 当前无进行中任务）
 
 ## 已完成
+
+### TASK-019: Durable approval event logging ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent` 237 tests OK；`python3 evals/run_evals.py` 113 passed；`git diff --check` OK。
+- 内容: `ToolRegistry.call` 对 permissioned tool confirmation 记录 approval requested/decided durable events；payload 仅含 tool_name、permission category/risk、requires_confirmation、argument_count、argument_keys、reason_present、decision status 等安全元数据；不持久化 raw arguments、reason text、confirmation prompt 或 secrets；event-write failure isolation；default registry wiring 完成；focused tests 覆盖 approved、denied、non-permissioned、broken/no event store、serialized safety。
+
+### TASK-018: Eval coverage for test-run events ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 113 passed；`python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent` 237 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 test-run success、failure、blocked、timeout/OSError、event-write failure isolation；用 sentinel 和 forbidden payload key 断言确认 raw stdout/stderr、traceback/failure body、command args、reason、raw exception、secret-like values 不进入 payload/summary/serialized durable events；eval-only。
 
 ### TASK-017: Durable test-run event logging ✅
 - 完成者: Claude A incomplete 后 Codex PM 接管整理

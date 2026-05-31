@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED
 from mini_agent.tools_common import confirm_in_terminal
 
 
@@ -36,12 +37,14 @@ class ToolRegistry:
         confirm_action: Optional[Callable[[str], bool]] = None,
         disabled_tools: Optional[set[str]] = None,
         permission_overrides: Optional[dict[str, bool]] = None,
+        event_store=None,
     ):
         self._tools: dict[str, Tool] = {}
         self.logger = logger
         self.confirm_action = confirm_action or confirm_in_terminal
         self.disabled_tools = disabled_tools or set()
         self.permission_overrides = permission_overrides or {}
+        self.event_store = event_store
 
     def register(
         self,
@@ -79,7 +82,10 @@ class ToolRegistry:
 
         tool = self._tools[tool_name]
         if tool.permission.requires_confirmation:
-            if not self.confirm_action(self._confirmation_prompt(tool, kwargs)):
+            self._record_approval_requested(tool, kwargs)
+            approved = self.confirm_action(self._confirmation_prompt(tool, kwargs))
+            self._record_approval_decided(tool, kwargs, approved)
+            if not approved:
                 if self.logger:
                     self.logger.record(tool_name, kwargs, "cancelled")
                 return "已取消操作。"
@@ -95,6 +101,52 @@ class ToolRegistry:
             self.logger.record(tool_name, kwargs, "ok", result)
 
         return result
+
+    def _record_approval_requested(self, tool: Tool, arguments: dict) -> None:
+        if not self.event_store:
+            return
+        try:
+            self.event_store.record(
+                event_type=APPROVAL_REQUESTED,
+                source="registry",
+                summary=f"approval requested: {tool.name}",
+                severity="info",
+                payload={
+                    "tool_name": tool.name,
+                    "category": tool.permission.category,
+                    "risk": tool.permission.risk,
+                    "requires_confirmation": tool.permission.requires_confirmation,
+                    "argument_count": len(arguments),
+                    "argument_keys": sorted(str(k) for k in arguments.keys()),
+                    "reason_present": bool(str(arguments.get("reason") or "").strip()),
+                },
+            )
+        except Exception:
+            pass
+
+    def _record_approval_decided(self, tool: Tool, arguments: dict, approved: bool) -> None:
+        if not self.event_store:
+            return
+        try:
+            status = "approved" if approved else "denied"
+            self.event_store.record(
+                event_type=APPROVAL_DECIDED,
+                source="registry",
+                summary=f"approval {status}: {tool.name}",
+                severity="info" if approved else "warning",
+                payload={
+                    "tool_name": tool.name,
+                    "category": tool.permission.category,
+                    "risk": tool.permission.risk,
+                    "requires_confirmation": tool.permission.requires_confirmation,
+                    "status": status,
+                    "argument_count": len(arguments),
+                    "argument_keys": sorted(str(k) for k in arguments.keys()),
+                    "reason_present": bool(str(arguments.get("reason") or "").strip()),
+                },
+            )
+        except Exception:
+            pass
 
     def describe(self) -> str:
         return "\n".join(

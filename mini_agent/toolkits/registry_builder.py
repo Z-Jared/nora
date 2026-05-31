@@ -99,6 +99,7 @@ def build_default_registry(
         confirm_action=confirm_action,
         disabled_tools=disabled_tools,
         permission_overrides=permission_overrides,
+        event_store=durable_event_store,
     )
 
     register_core_tools(registry, notes, workspace_files)

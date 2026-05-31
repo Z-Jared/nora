@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -157,6 +157,11 @@ def main() -> int:
         EvalCase("shell_command_event_cancelled", eval_shell_command_event_cancelled),
         EvalCase("shell_command_event_error", eval_shell_command_event_error),
         EvalCase("shell_command_event_failure_isolation", eval_shell_command_event_failure_isolation),
+        EvalCase("test_run_event_success", eval_test_run_event_success),
+        EvalCase("test_run_event_failure", eval_test_run_event_failure),
+        EvalCase("test_run_event_blocked", eval_test_run_event_blocked),
+        EvalCase("test_run_event_timeout_or_error", eval_test_run_event_timeout_or_error),
+        EvalCase("test_run_event_failure_isolation", eval_test_run_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -2885,6 +2890,242 @@ def eval_shell_command_event_failure_isolation():
         runner2 = ShellRunner(tmpdir, require_confirmation=False, event_store=None)
         result2 = runner2.run("pwd")
         assert "exit_code: 0" in result2, f"shell must work without event store, got: {result2}"
+
+
+# --- Test-run event eval helpers ---
+
+_TEST_SENTINEL_OUTPUT = "NORA_EVAL_TEST_OUTPUT_SENTINEL_e5a7b3c1"
+_TEST_SENTINEL_TRACEBACK = "NORA_EVAL_TEST_TRACEBACK_SENTINEL_f9d2c4e8"
+_TEST_SENTINEL_EXCEPTION = "NORA_EVAL_TEST_EXCEPTION_SENTINEL_a1b6d9f3"
+_TEST_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-test-9f8e7d6c5b4a"
+_TEST_FORBIDDEN_PAYLOAD_KEYS = {"stdout", "stderr", "output", "result", "reason", "exception", "traceback", "command", "args"}
+
+
+def _test_run_events(event_store, event_type=None):
+    events = event_store.list_events()
+    test_types = (TEST_RUN_STARTED, TEST_RUN_FINISHED, TEST_RUN_ERROR, TEST_RUN_BLOCKED)
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in test_types]
+
+
+def _serialized_test_run_events(event_store):
+    import json as _json
+    return _json.dumps(
+        [event.to_dict() for event in _test_run_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_test_run_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_test_run_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"test-run event stored forbidden raw value {value!r}: {serialized[:500]}"
+    for event in _test_run_events(event_store):
+        leaked_keys = _TEST_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"test-run event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_test_run_event_success():
+    """Successful test run records started/finished with safe metadata. No raw output persisted."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            # Create a passing test file that prints sentinel output
+            tests_dir = tmpdir / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_pass.py").write_text(
+                f"import unittest\nprint('{_TEST_SENTINEL_OUTPUT}', flush=True)\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+
+            event_store = DurableEventStore(db=db)
+            diag = Diagnostics(tmpdir, event_store=event_store)
+            result = diag.run_tests()
+
+            assert "exit_code: 0" in result, f"expected exit_code 0, got: {result}"
+            # User-visible result may contain the sentinel output
+            # (this proves the test actually ran and produced output)
+
+            started = _test_run_events(event_store, TEST_RUN_STARTED)
+            finished = _test_run_events(event_store, TEST_RUN_FINISHED)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(finished) == 1, f"expected 1 finished, got {len(finished)}"
+
+            assert started[0].payload["status"] == "started"
+            assert started[0].payload["command_kind"] == "unittest_discover"
+            assert started[0].severity == "info"
+            assert started[0].task_id is None
+            assert "max_output_chars" in started[0].payload
+
+            assert finished[0].payload["status"] == "finished"
+            assert finished[0].payload["exit_code"] == 0
+            assert finished[0].payload["stdout_bytes"] + finished[0].payload["stderr_bytes"] > 0
+            assert finished[0].severity == "info"
+            assert finished[0].task_id is None
+
+            # Sentinel output must NOT appear in durable events
+            _assert_test_run_events_safe(event_store, [_TEST_SENTINEL_OUTPUT])
+        finally:
+            db.close()
+
+
+def eval_test_run_event_failure():
+    """Failing test run records finished with nonzero exit_code. No raw failure body or traceback in events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            tests_dir = tmpdir / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_fail.py").write_text(
+                f"import unittest\n\nclass T(unittest.TestCase):\n    def test_fail(self):\n        self.fail('{_TEST_SENTINEL_TRACEBACK}')\n",
+                encoding="utf-8",
+            )
+
+            event_store = DurableEventStore(db=db)
+            diag = Diagnostics(tmpdir, event_store=event_store)
+            result = diag.run_tests()
+
+            assert "exit_code:" in result, f"expected exit_code in result, got: {result}"
+            assert "1" in result.split("exit_code:")[1].split("\n")[0], f"expected nonzero exit_code, got: {result}"
+
+            finished = _test_run_events(event_store, TEST_RUN_FINISHED)
+            assert len(finished) == 1, f"expected 1 finished, got {len(finished)}"
+            assert finished[0].payload["exit_code"] != 0
+            assert finished[0].payload["status"] == "finished"
+            assert finished[0].severity == "info"
+
+            # Sentinel traceback text must not appear in events
+            _assert_test_run_events_safe(event_store, [_TEST_SENTINEL_TRACEBACK])
+        finally:
+            db.close()
+
+
+def eval_test_run_event_blocked():
+    """Disallowed command records blocked event with no started/finished."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            diag = Diagnostics(tmpdir, event_store=event_store)
+            result = diag.run_tests(command="rm -rf /")
+
+            assert "拒绝" in result, f"expected rejection, got: {result}"
+
+            blocked = _test_run_events(event_store, TEST_RUN_BLOCKED)
+            started = _test_run_events(event_store, TEST_RUN_STARTED)
+            finished = _test_run_events(event_store, TEST_RUN_FINISHED)
+            assert len(blocked) == 1, f"expected 1 blocked, got {len(blocked)}"
+            assert len(started) == 0, f"expected 0 started, got {len(started)}"
+            assert len(finished) == 0, f"expected 0 finished, got {len(finished)}"
+
+            assert blocked[0].payload["status"] == "blocked"
+            assert blocked[0].payload["error"] == "disallowed_command"
+            assert blocked[0].severity == "warning"
+
+            # Safety: raw command must not leak
+            sentinel_cmd = "NORA_EVAL_BLOCKED_CMD_SENTINEL_b7c9d1e3"
+            diag2 = Diagnostics(tmpdir, event_store=event_store)
+            diag2.run_tests(command=sentinel_cmd)
+            _assert_test_run_events_safe(event_store, [sentinel_cmd])
+        finally:
+            db.close()
+
+
+def eval_test_run_event_timeout_or_error():
+    """Timeout and OSError emit error events. No raw output or exception text in payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            # --- timeout ---
+            tests_dir = tmpdir / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_slow.py").write_text(
+                f"import unittest, time\nprint('{_TEST_SENTINEL_OUTPUT}', flush=True)\nclass T(unittest.TestCase):\n    def test_slow(self):\n        time.sleep(30)\n",
+                encoding="utf-8",
+            )
+
+            event_store = DurableEventStore(db=db)
+            diag = Diagnostics(tmpdir, timeout_seconds=1, event_store=event_store)
+            result = diag.run_tests()
+
+            assert "timeout" in result, f"expected timeout in result, got: {result}"
+
+            errors = _test_run_events(event_store, TEST_RUN_ERROR)
+            started = _test_run_events(event_store, TEST_RUN_STARTED)
+            assert len(started) == 1, f"timeout should record started, got {len(started)}"
+            assert len(errors) == 1, f"expected 1 error, got {len(errors)}"
+            assert errors[0].payload["error"] == "timeout"
+            assert errors[0].payload["status"] == "timeout"
+            assert errors[0].payload["timeout"] is True
+            assert errors[0].severity == "warning"
+
+            # Sentinel output must not appear in events
+            _assert_test_run_events_safe(event_store, [_TEST_SENTINEL_OUTPUT])
+
+            # --- OSError ---
+            db2 = NoraDB(tmpdir / "test2.db")
+            try:
+                event_store2 = DurableEventStore(db=db2)
+                diag2 = Diagnostics(tmpdir, event_store=event_store2)
+                with patch("mini_agent.diagnostics.subprocess.run", side_effect=OSError(_TEST_SENTINEL_EXCEPTION)):
+                    result2 = diag2.run_tests()
+
+                assert "OSError" in result2, f"expected OSError in result, got: {result2}"
+                assert _TEST_SENTINEL_EXCEPTION not in result2, "raw OSError leaked to user"
+
+                errors2 = _test_run_events(event_store2, TEST_RUN_ERROR)
+                assert len(errors2) == 1
+                assert errors2[0].payload["error"] == "os_error"
+                assert errors2[0].severity == "warning"
+                _assert_test_run_events_safe(event_store2, [_TEST_SENTINEL_EXCEPTION])
+            finally:
+                db2.close()
+        finally:
+            db.close()
+
+
+def eval_test_run_event_failure_isolation():
+    """Broken event store must not change existing diagnostics behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        # Create a passing test
+        tests_dir = tmpdir / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_pass.py").write_text(
+            "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+            encoding="utf-8",
+        )
+
+        # 1. Broken event store: run_tests must still succeed
+        diag = Diagnostics(tmpdir, event_store=BrokenEventStore())
+        result = diag.run_tests()
+        assert "exit_code: 0" in result, f"diagnostics must work with broken event store, got: {result}"
+
+        # 2. No event store: run_tests must still succeed
+        diag2 = Diagnostics(tmpdir, event_store=None)
+        result2 = diag2.run_tests()
+        assert "exit_code: 0" in result2, f"diagnostics must work without event store, got: {result2}"
+
+        # 3. Blocked command with broken store must still reject
+        diag3 = Diagnostics(tmpdir, event_store=BrokenEventStore())
+        result3 = diag3.run_tests(command="rm -rf /")
+        assert "拒绝" in result3, f"blocked command must still reject with broken store, got: {result3}"
+
+        # 4. diagnose_test_failure must work regardless of event store
+        diag4 = Diagnostics(tmpdir, event_store=BrokenEventStore())
+        diagnosis = diag4.diagnose_test_failure("FAIL: test_x (tests.test_x.TestX.test_x)\nAssertionError: 1 != 2")
+        assert "FAIL" in diagnosis, f"diagnose_test_failure must work, got: {diagnosis}"
 
 
 def _init_git_repo(root: Path) -> None:

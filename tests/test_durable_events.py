@@ -8,6 +8,8 @@ from unittest.mock import patch
 from mini_agent.controller import MiniAgent, RunReport, ToolRunRecord
 from mini_agent.database import NoraDB
 from mini_agent.durable_events import (
+    APPROVAL_DECIDED,
+    APPROVAL_REQUESTED,
     CHECKPOINT_ADDED,
     DurableEvent,
     DurableEventStore,
@@ -39,6 +41,7 @@ from mini_agent.durable_events import (
 )
 from mini_agent.task_runner import TaskManager
 from mini_agent.tools import build_default_registry
+from mini_agent.registry import ToolPermission, ToolRegistry
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.shell import ShellRunner
 from mini_agent.diagnostics import Diagnostics
@@ -1480,6 +1483,217 @@ class TestRunDurableEventTests(unittest.TestCase):
             [event.event_type for event in self._test_events()],
             [TEST_RUN_FINISHED, TEST_RUN_STARTED],
         )
+
+
+class ApprovalDurableEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def test_approval_emits_requested_and_decided_approved(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+
+        result = registry.call("git_commit_staged", message="test commit", reason="testing approvals")
+
+        self.assertNotEqual(result, "已取消操作。")
+        events = self.event_store.list_events()
+        requested = [e for e in events if e.event_type == APPROVAL_REQUESTED]
+        decided = [e for e in events if e.event_type == APPROVAL_DECIDED]
+        self.assertEqual(len(requested), 1)
+        self.assertEqual(len(decided), 1)
+        self.assertEqual(requested[0].payload["tool_name"], "git_commit_staged")
+        self.assertEqual(decided[0].payload["status"], "approved")
+        self.assertTrue(decided[0].payload["reason_present"])
+
+    def test_approval_emits_requested_and_decided_denied(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: False,
+        )
+
+        result = registry.call("git_commit_staged", message="test commit", reason="testing denials")
+
+        self.assertEqual(result, "已取消操作。")
+        events = self.event_store.list_events()
+        requested = [e for e in events if e.event_type == APPROVAL_REQUESTED]
+        decided = [e for e in events if e.event_type == APPROVAL_DECIDED]
+        self.assertEqual(len(requested), 1)
+        self.assertEqual(len(decided), 1)
+        self.assertEqual(requested[0].payload["tool_name"], "git_commit_staged")
+        self.assertEqual(decided[0].payload["status"], "denied")
+        self.assertEqual(decided[0].severity, "warning")
+
+    def test_non_permissioned_tool_emits_no_approval_events(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+        )
+
+        result = registry.call("calculate", expression="2 + 3")
+
+        self.assertEqual(result, "5")
+        events = self.event_store.list_events()
+        approval_events = [e for e in events if e.event_type in (APPROVAL_REQUESTED, APPROVAL_DECIDED)]
+        self.assertEqual(len(approval_events), 0, "non-confirmation tools must not emit approval events")
+
+    def test_broken_event_store_does_not_break_approved_tool(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+        registry.event_store = BrokenEventStore()
+
+        result = registry.call("git_commit_staged", message="test", reason="test")
+
+        self.assertNotEqual(result, "已取消操作。")
+
+    def test_broken_event_store_does_not_break_denied_tool(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: False,
+        )
+        registry.event_store = BrokenEventStore()
+
+        result = registry.call("git_commit_staged", message="test", reason="test")
+
+        self.assertEqual(result, "已取消操作。")
+
+    def test_approval_event_no_raw_argument_values(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+
+        sentinel_secret = "sk-sentinel_secret_98765"
+        sentinel_reason = "my_secret_reason_for_approval"
+        sentinel_arg_value = "secret commit body with payload"
+
+        registry.call(
+            "git_commit_staged",
+            message=f"{sentinel_arg_value} {sentinel_secret}",
+            reason=sentinel_reason,
+        )
+
+        events = self.event_store.list_events()
+        approval_events = [e for e in events if e.event_type in (APPROVAL_REQUESTED, APPROVAL_DECIDED)]
+        self.assertGreaterEqual(len(approval_events), 1)
+
+        for event in approval_events:
+            # Full event serialization — must not leak raw data anywhere
+            full_json = json.dumps(event.to_dict(), ensure_ascii=False)
+
+            self.assertNotIn(sentinel_secret, full_json,
+                             "secret sentinel must not appear in serialized approval event")
+            self.assertNotIn(sentinel_reason, full_json,
+                             "raw reason text must not appear in serialized approval event")
+            self.assertNotIn(sentinel_arg_value, full_json,
+                             "raw argument value must not appear in serialized approval event")
+
+            # Confirmation prompt contains reason — must not leak
+            self.assertNotIn("是否继续", full_json,
+                             "confirmation prompt fragment must not appear in serialized approval event")
+            self.assertNotIn("未提供", full_json,
+                             "confirmation prompt default reason must not appear in serialized approval event")
+
+            # Payload-level assertions (defense in depth)
+            payload_str = json.dumps(event.payload)
+            self.assertNotIn(sentinel_secret, payload_str)
+            self.assertNotIn(sentinel_reason, payload_str)
+            self.assertNotIn(sentinel_arg_value, payload_str)
+
+    def test_approval_event_contains_safe_metadata(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+
+        registry.call("git_commit_staged", message="test", reason="has reason")
+
+        events = self.event_store.list_events()
+        requested = [e for e in events if e.event_type == APPROVAL_REQUESTED]
+        self.assertEqual(len(requested), 1)
+        payload = requested[0].payload
+        self.assertIn("tool_name", payload)
+        self.assertIn("category", payload)
+        self.assertIn("risk", payload)
+        self.assertIn("requires_confirmation", payload)
+        self.assertIn("argument_count", payload)
+        self.assertIn("argument_keys", payload)
+        self.assertIn("reason_present", payload)
+        self.assertTrue(payload["reason_present"])
+        self.assertEqual(payload["tool_name"], "git_commit_staged")
+
+    def test_default_registry_wires_approval_events(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+
+        self.assertIsNotNone(registry.event_store, "default registry must wire event_store")
+        registry.call("git_commit_staged", message="test", reason="test")
+
+        events = registry.event_store.list_events()
+        approval_events = [e for e in events if e.event_type in (APPROVAL_REQUESTED, APPROVAL_DECIDED)]
+        self.assertEqual(len(approval_events), 2)
+
+    def test_no_event_store_does_not_break_confirmation(self):
+        registry = ToolRegistry(
+            confirm_action=lambda _: True,
+        )
+        registry.register(
+            "test_tool", "test tool", lambda: "ok",
+            permission=ToolPermission(category="test", risk="write", requires_confirmation=True),
+        )
+
+        result = registry.call("test_tool")
+
+        self.assertEqual(result, "ok")
+
+    def test_approval_event_reason_present_false_when_no_reason(self):
+        registry = build_default_registry(
+            db=self.db,
+            workspace_root=self.root,
+            confirm_action=lambda _: True,
+        )
+
+        registry.call("git_commit_staged", message="test")
+
+        events = self.event_store.list_events()
+        requested = [e for e in events if e.event_type == APPROVAL_REQUESTED]
+        self.assertEqual(len(requested), 1)
+        self.assertFalse(requested[0].payload["reason_present"])
 
 
 if __name__ == "__main__":

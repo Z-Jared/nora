@@ -43,6 +43,8 @@ TEST_RUN_STARTED = "test_run_started"
 TEST_RUN_FINISHED = "test_run_finished"
 TEST_RUN_ERROR = "test_run_error"
 TEST_RUN_BLOCKED = "test_run_blocked"
+APPROVAL_REQUESTED = "approval_requested"
+APPROVAL_DECIDED = "approval_decided"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -73,6 +75,8 @@ VALID_EVENT_TYPES = {
     TEST_RUN_FINISHED,
     TEST_RUN_ERROR,
     TEST_RUN_BLOCKED,
+    APPROVAL_REQUESTED,
+    APPROVAL_DECIDED,
 }
 
 _DURABLE_EVENTS_TABLE = """
