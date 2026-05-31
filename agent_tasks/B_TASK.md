@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-027: eval coverage for durable event query filters.
+TASK-029: eval coverage for durable task action events.
 
-TASK-025 added query filters to `DurableEventStore.list_events(...)` and the `list_durable_events` registry tool. Add deterministic offline eval coverage so future event-log changes cannot silently break PM/reviewer/runtime audit queries.
+TASK-026 added durable events for durable task registry actions. Add deterministic offline eval coverage so future runtime changes cannot silently stop auditing create/update/retry/delete task operations or leak raw task content into those events.
 
 ## Scope
 
@@ -15,27 +15,23 @@ Edit `evals/run_evals.py` only unless you discover a real runtime bug. If you fi
 
 Add eval cases covering:
 
-1. SQLite event query filters:
-   - Filter by `event_type`, `source`, `severity`, `worker_id`, `trace_id`, and `checkpoint_id`.
-   - Combined filters narrow results correctly.
+1. Task action event creation:
+   - `create_durable_task` emits `TASK_CREATED`.
+   - `update_durable_task` emits `TASK_STATUS_CHANGED` with `previous_status` and new `status`.
+   - `retry_durable_task` emits `TASK_RETRIED`.
+   - `delete_durable_task` emits an auditable delete event.
 
-2. JSONL event query filters:
-   - At least `event_type`, `source` + `severity`, and `trace_id`/`checkpoint_id`.
+2. Registry/event query wiring:
+   - Use `list_durable_events` to query these events by `task_id` and `event_type`.
+   - Verify source/severity are present and payload is not exposed by `list_durable_events`.
 
-3. Registry wiring:
-   - `list_durable_events` accepts the new filters.
-   - Registry output includes `source` and `severity`.
-   - Registry output does not include `payload`.
+3. Safety assertions:
+   - Use sentinel strings for raw goal, raw step text, raw failure reason, and a secret-like value.
+   - Assert those sentinels are absent from serialized task-action events and from `list_durable_events` output.
+   - Check forbidden payload keys such as `goal`, `steps`, `step_text`, `failure_reason`, `raw`, `prompt`, `content`, and `secret`.
 
-4. Query semantics:
-   - Filters compose with `task_id`.
-   - Filtering happens before `max_results` slicing.
-   - Results remain newest-first.
-   - Empty/whitespace filters behave like no filter.
-
-5. Safety:
-   - Use sentinel payload strings and a secret-like value.
-   - Verify `list_durable_events` summaries do not expose event payloads or sentinel values.
+4. Failure isolation:
+   - Broken event store must not change create/update/retry/delete registry tool behavior.
 
 Keep evals offline and deterministic. Do not call live LLM APIs.
 
@@ -45,7 +41,7 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_events tests.test_mini_agent
+python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
 git diff --check
 ```
 

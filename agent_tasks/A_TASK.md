@@ -1,45 +1,48 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-026: durable task registry action events.
+TASK-028: durable task worker assignment metadata.
 
-Nora now has a queryable durable event log, but durable task CRUD/control operations performed through registry tools are not yet consistently audited as durable events. Add safe event logging around the durable task registry tools so the PM/runtime can answer who created, changed, retried, or deleted durable tasks without exposing raw task content.
+Nora's durable tasks already have a `worker_id` field, and durable events can now be filtered by `worker_id`, but the registry task tools do not expose worker assignment as a first-class runtime operation. Add a narrow worker-assignment layer so PM/runtime can answer which worker owns a durable task and query task-action events by that worker.
 
 ## Scope
 
-Update `mini_agent/toolkits/registry_builder.py` and supporting code/tests as needed.
+Update `mini_agent/toolkits/registry_builder.py` and focused tests.
 
-1. Record durable events for registry durable task actions:
-   - `create_durable_task` records `TASK_CREATED`.
-   - `update_durable_task` records `TASK_STATUS_CHANGED`.
-   - `retry_durable_task` records `TASK_RETRIED`.
-   - `delete_durable_task` records an auditable task deletion event. Prefer a clear new event type only if needed; otherwise use an existing task lifecycle event with an explicit safe `operation`.
+1. Expose worker ownership in durable task registry tools:
+   - `create_durable_task` accepts optional `worker_id` and stores it on the created `DurableTask`.
+   - Add an `assign_durable_task` registry tool that updates a task's `worker_id` without changing task status.
+   - `list_durable_tasks` summary includes `worker_id`.
+   - `get_durable_task` behavior stays backward-compatible.
 
-2. Event safety requirements:
-   - Do not persist raw `goal`, raw step text, raw `steps`, raw failure reason, raw prompt/content, or secret-like values in event payloads or summaries.
-   - Payloads should contain bounded metadata only, for example `operation`, `status`, `previous_status`, `step_count`, `retry_count`, `max_retries`, `failure_reason_present`, and `deleted`.
-   - Include `task_id`, `source`, and `severity` consistently.
-   - Event write failures must not change registry tool behavior.
+2. Event linkage:
+   - Registry task action events from TASK-026 should set top-level `worker_id` when the task has an assigned worker.
+   - Assignment should record a safe durable event using an existing task lifecycle event type, with payload metadata such as `operation`, `task_id`, `worker_id_present`, and `previous_worker_id_present`.
+   - Do not persist raw goal, raw step text, raw note/summary, or secret-like values in event payloads or summaries.
 
-3. Keep behavior backward-compatible:
-   - Existing registry tool return JSON must remain unchanged except for intentional task state changes.
-   - Existing `DurableTaskStore` storage semantics and transition validation should not be weakened.
+3. Compatibility and safety:
+   - Existing callers that omit `worker_id` must behave exactly as before.
+   - Unknown `task_id` returns the same JSON error style as existing durable task tools.
+   - Empty/whitespace `worker_id` should clear assignment or be rejected explicitly; pick one behavior and test it.
+   - Event write failures must not change create/assign/update/retry/delete behavior.
+   - Keep this task narrow; do not build scheduler/worktree isolation yet.
    - Do not add eval coverage in this task.
 
 ## Suggested Tests
 
 Add focused unit coverage in `tests/test_durable_tasks.py` and/or `tests/test_durable_events.py`:
 
-1. `create_durable_task` emits one safe task-created event.
-2. `update_durable_task` emits safe status-change metadata and records previous/new status.
-3. `retry_durable_task` emits safe retry metadata and increments retry count as before.
-4. `delete_durable_task` emits an auditable deletion event without raw task content.
-5. Broken event store does not break create/update/retry/delete registry tools.
-6. Serialized event safety: sentinel goal/steps/failure reason/secret strings are absent from event payloads, summaries, and `event.to_dict()`.
+1. `create_durable_task(worker_id=...)` persists worker ownership and `list_durable_tasks` includes it.
+2. `assign_durable_task` sets or clears worker ownership and returns the updated task JSON.
+3. Unknown task assignment returns an error JSON.
+4. Task action events include top-level `worker_id` after assignment.
+5. Assignment emits a safe event without raw task content.
+6. Broken event store does not break assignment.
+7. Existing create/list/update/retry/delete tests still pass without `worker_id`.
 
 ## Verification
 
