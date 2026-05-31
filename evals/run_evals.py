@@ -196,6 +196,11 @@ def main() -> int:
         EvalCase("worker_registry_status_updates", eval_worker_registry_status_updates),
         EvalCase("worker_registry_safety", eval_worker_registry_safety),
         EvalCase("worker_registry_failure_isolation", eval_worker_registry_failure_isolation),
+        EvalCase("worker_heartbeat_basics", eval_worker_heartbeat_basics),
+        EvalCase("worker_offline_lifecycle", eval_worker_offline_lifecycle),
+        EvalCase("worker_offline_task_isolation", eval_worker_offline_task_isolation),
+        EvalCase("worker_heartbeat_safety", eval_worker_heartbeat_safety),
+        EvalCase("worker_heartbeat_failure_isolation", eval_worker_heartbeat_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -4608,6 +4613,218 @@ def eval_worker_registry_failure_isolation():
             r4 = registry.call("update_worker_status", worker_id="w_iso", status="running", current_task_id="dtask_iso")
             parsed4 = json.loads(r4)
             assert parsed4["status"] == "running", f"update failed: {r4}"
+        finally:
+            db.close()
+
+
+# --- Worker heartbeat/offline eval helpers ---
+
+_WORKER_HEARTBEAT_SENTINEL_ROLE = "NORA_EVAL_WORKER_ROLE_SENTINEL_b2c4d6e8"
+_WORKER_HEARTBEAT_SENTINEL_PATH = "/NORA_EVAL_WORKER_PATH_SENTINEL_c3d5e7f9"
+_WORKER_HEARTBEAT_SENTINEL_GOAL = "NORA_EVAL_WORKER_GOAL_SENTINEL_d4e6f8a0"
+_WORKER_HEARTBEAT_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-heartbeat-5f6a7b8c"
+
+
+def eval_worker_heartbeat_basics():
+    """touch_worker updates last_seen_at; unknown/empty worker returns error."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Register worker
+            registry.call("register_worker", worker_id="w_hb", role="coder")
+
+            # Get initial last_seen_at
+            r1 = registry.call("get_worker", worker_id="w_hb")
+            initial = json.loads(r1)
+            initial_ts = initial["last_seen_at"]
+
+            # touch_worker updates last_seen_at
+            import time; time.sleep(0.01)
+            r2 = registry.call("touch_worker", worker_id="w_hb")
+            touched = json.loads(r2)
+            assert touched["last_seen_at"] >= initial_ts, f"last_seen_at not updated: {touched['last_seen_at']}"
+            assert touched["worker_id"] == "w_hb"
+
+            # Unknown worker returns error
+            r3 = registry.call("touch_worker", worker_id="w_unknown")
+            parsed3 = json.loads(r3)
+            assert "error" in parsed3, f"expected error for unknown worker: {parsed3}"
+
+            # Empty worker_id returns error
+            r4 = registry.call("touch_worker", worker_id="")
+            parsed4 = json.loads(r4)
+            assert "error" in parsed4, f"expected error for empty worker_id: {parsed4}"
+
+            # Whitespace worker_id returns error
+            r5 = registry.call("touch_worker", worker_id="   ")
+            parsed5 = json.loads(r5)
+            assert "error" in parsed5, f"expected error for whitespace worker_id: {parsed5}"
+        finally:
+            db.close()
+
+
+def eval_worker_offline_lifecycle():
+    """Stale worker marked offline; fresh worker not; already-offline not counted; preserves current_task_id."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            store = registry.durable_worker_store
+
+            # Register workers
+            store.register_worker("w_stale", role="coder")
+            store.register_worker("w_fresh", role="coder")
+            store.register_worker("w_already_offline", role="coder")
+
+            # Set w_stale last_seen_at to old timestamp
+            stale = store.get_worker("w_stale")
+            stale.last_seen_at = "2020-01-01T00:00:00+00:00"
+            store._save(stale)
+
+            # Set w_already_offline to offline
+            already_off = store.get_worker("w_already_offline")
+            already_off.status = "offline"
+            store._save(already_off)
+
+            # Set w_fresh with task to test preservation
+            fresh = store.get_worker("w_fresh")
+            fresh.current_task_id = "dtask_42"
+            store._save(fresh)
+
+            # Mark stale workers offline
+            r = registry.call("mark_stale_workers_offline", max_age_seconds=300)
+            result = json.loads(r)
+
+            # w_stale should be marked offline
+            assert result["changed_count"] >= 1, f"expected >=1 changed, got {result['changed_count']}"
+            stale_ids = [w["worker_id"] for w in result["workers"]]
+            assert "w_stale" in stale_ids, f"w_stale not in changed: {stale_ids}"
+
+            # w_fresh should NOT be in changed
+            assert "w_fresh" not in stale_ids, f"w_fresh should not be marked offline: {stale_ids}"
+
+            # w_already_offline should NOT be in changed (already offline)
+            assert "w_already_offline" not in stale_ids, f"w_already_offline should not be counted: {stale_ids}"
+
+            # w_fresh preserves current_task_id
+            fresh_after = store.get_worker("w_fresh")
+            assert fresh_after.current_task_id == "dtask_42", f"task_id not preserved: {fresh_after.current_task_id}"
+        finally:
+            db.close()
+
+
+def eval_worker_offline_task_isolation():
+    """Marking worker offline does not mutate durable task ownership or status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            store = registry.durable_worker_store
+            task_store = registry.durable_task_store
+
+            # Create task and assign to worker
+            r = registry.call("create_durable_task", goal="isolation test", steps="s1", worker_id="w_iso")
+            task_id = json.loads(r)["task_id"]
+            registry.call("update_durable_task", task_id=task_id, status="running")
+
+            # Register worker with stale timestamp
+            store.register_worker("w_iso", role="coder")
+            worker = store.get_worker("w_iso")
+            worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+            worker.current_task_id = task_id
+            store._save(worker)
+
+            # Mark stale workers offline
+            registry.call("mark_stale_workers_offline", max_age_seconds=300)
+
+            # Task ownership and status must NOT change
+            task = task_store.get_task(task_id)
+            assert task.worker_id == "w_iso", f"task worker_id changed: {task.worker_id}"
+            assert task.status == "running", f"task status changed: {task.status}"
+        finally:
+            db.close()
+
+
+def eval_worker_heartbeat_safety():
+    """Sentinel role/path/goal/secret must not leak into heartbeat/offline outputs or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+            store = registry.durable_worker_store
+
+            # Register worker with sentinel values
+            store.register_worker("w_safe", role=_WORKER_HEARTBEAT_SENTINEL_ROLE,
+                                  workspace_path=_WORKER_HEARTBEAT_SENTINEL_PATH)
+
+            # Create task with sentinel goal
+            r = registry.call("create_durable_task",
+                              goal=f"{_WORKER_HEARTBEAT_SENTINEL_GOAL} {_WORKER_HEARTBEAT_SENTINEL_SECRET}",
+                              steps="s1", worker_id="w_safe")
+
+            # Touch worker
+            r2 = registry.call("touch_worker", worker_id="w_safe")
+            output = r2
+            assert _WORKER_HEARTBEAT_SENTINEL_GOAL not in output, "sentinel goal leaked in touch output"
+            assert _WORKER_HEARTBEAT_SENTINEL_SECRET not in output, "sentinel secret leaked in touch output"
+
+            # Make stale and mark offline
+            worker = store.get_worker("w_safe")
+            worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+            store._save(worker)
+
+            r3 = registry.call("mark_stale_workers_offline", max_age_seconds=300)
+            assert _WORKER_HEARTBEAT_SENTINEL_GOAL not in r3, "sentinel goal leaked in offline output"
+            assert _WORKER_HEARTBEAT_SENTINEL_SECRET not in r3, "sentinel secret leaked in offline output"
+
+            # Events must not leak
+            events = event_store.list_events()
+            import json as _json
+            serialized = _json.dumps([e.to_dict() for e in events], ensure_ascii=False, sort_keys=True)
+            assert _WORKER_HEARTBEAT_SENTINEL_GOAL not in serialized, "sentinel goal leaked in events"
+            assert _WORKER_HEARTBEAT_SENTINEL_SECRET not in serialized, "sentinel secret leaked in events"
+        finally:
+            db.close()
+
+
+def eval_worker_heartbeat_failure_isolation():
+    """Broken event store must not change touch_worker or mark_stale_workers_offline behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+        def get_event(self, event_id):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+            store = registry.durable_worker_store
+
+            # Register worker
+            store.register_worker("w_iso_hb", role="coder")
+
+            # touch_worker must still work
+            r = registry.call("touch_worker", worker_id="w_iso_hb")
+            parsed = json.loads(r)
+            assert parsed.get("worker_id") == "w_iso_hb", f"touch failed with broken store: {r}"
+
+            # Make stale
+            worker = store.get_worker("w_iso_hb")
+            worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+            store._save(worker)
+
+            # mark_stale_workers_offline must still work
+            r2 = registry.call("mark_stale_workers_offline", max_age_seconds=300)
+            parsed2 = json.loads(r2)
+            assert parsed2.get("changed_count") >= 1, f"mark_stale failed with broken store: {r2}"
         finally:
             db.close()
 

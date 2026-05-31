@@ -4,10 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mini_agent.database import NoraDB
 from mini_agent.durable_workers import DurableWorkerStore, DurableWorker, WorkerStatus
 from mini_agent.tools import build_default_registry
+from mini_agent.durable_events import DurableEventStore, TASK_STATUS_CHANGED
 
 
 class DurableWorkerStoreSqliteTests(unittest.TestCase):
@@ -405,6 +407,162 @@ class DurableWorkerHeartbeatTests(unittest.TestCase):
                 self.assertIsNone(result)
             finally:
                 db.close()
+
+
+class DurableWorkerClaimTests(unittest.TestCase):
+    """Tests for claim_durable_task registry tool (TASK-034)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_task(self, goal="test task", steps="step one"):
+        result = self.registry.call("create_durable_task", goal=goal, steps=steps)
+        return json.loads(result)
+
+    def _register_worker(self, worker_id, role="worker"):
+        result = self.registry.call("register_worker", worker_id=worker_id, role=role)
+        return json.loads(result)
+
+    def test_idle_worker_claims_oldest_pending_task(self):
+        self._register_worker("w1")
+        t1 = self._create_task(goal="first task")
+        t2 = self._create_task(goal="second task")
+
+        result = self.registry.call("claim_durable_task", worker_id="w1")
+        parsed = json.loads(result)
+
+        self.assertTrue(parsed["claimed"])
+        self.assertEqual(parsed["task_id"], t1["task_id"])
+
+    def test_claim_updates_task_worker_id_and_worker_state(self):
+        self._register_worker("w1")
+        task = self._create_task()
+
+        self.registry.call("claim_durable_task", worker_id="w1")
+
+        task_result = json.loads(self.registry.call("get_durable_task", task_id=task["task_id"]))
+        self.assertEqual(task_result["worker_id"], "w1")
+
+        worker_result = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker_result["status"], "assigned")
+        self.assertEqual(worker_result["current_task_id"], task["task_id"])
+
+    def test_claim_does_not_change_task_status(self):
+        self._register_worker("w1")
+        task = self._create_task()
+
+        self.registry.call("claim_durable_task", worker_id="w1")
+
+        task_result = json.loads(self.registry.call("get_durable_task", task_id=task["task_id"]))
+        self.assertEqual(task_result["status"], "pending")
+
+    def test_unknown_worker_returns_error(self):
+        result = self.registry.call("claim_durable_task", worker_id="w999")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_offline_worker_returns_error(self):
+        self._register_worker("w1")
+        # Manually mark offline via store
+        store = self.registry.durable_worker_store
+        store.update_status("w1", WorkerStatus.OFFLINE)
+
+        result = self.registry.call("claim_durable_task", worker_id="w1")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_worker_with_current_task_returns_existing(self):
+        self._register_worker("w1")
+        t1 = self._create_task(goal="first")
+        t2 = self._create_task(goal="second")
+
+        # Claim first task
+        self.registry.call("claim_durable_task", worker_id="w1")
+        # Try to claim again
+        result = self.registry.call("claim_durable_task", worker_id="w1")
+        parsed = json.loads(result)
+
+        self.assertTrue(parsed["claimed"])
+        self.assertTrue(parsed["already_assigned"])
+        self.assertEqual(parsed["task_id"], t1["task_id"])
+
+    def test_no_available_task_returns_claimed_false(self):
+        self._register_worker("w1")
+
+        result = self.registry.call("claim_durable_task", worker_id="w1")
+        parsed = json.loads(result)
+
+        self.assertFalse(parsed["claimed"])
+        self.assertNotIn("task_id", parsed)
+
+    def test_no_available_task_does_not_mutate_worker(self):
+        self._register_worker("w1")
+
+        self.registry.call("claim_durable_task", worker_id="w1")
+
+        worker_result = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker_result["status"], "idle")
+        self.assertIsNone(worker_result.get("current_task_id"))
+
+    def test_claim_emits_safe_event(self):
+        self._register_worker("w1")
+        self._create_task(goal="sensitive goal", steps="secret steps")
+
+        self.registry.call("claim_durable_task", worker_id="w1")
+
+        events = self.registry.durable_event_store.list_events(max_results=10)
+        claim_events = [e for e in events if e.payload and e.payload.get("operation") == "claim"]
+        self.assertEqual(len(claim_events), 1)
+
+        payload = claim_events[0].payload
+        self.assertEqual(payload["operation"], "claim")
+        self.assertIn("task_id", payload)
+        self.assertIn("worker_id_present", payload)
+        self.assertIn("previous_worker_id_present", payload)
+        # Must not leak raw content
+        self.assertNotIn("sensitive goal", json.dumps(payload))
+        self.assertNotIn("secret steps", json.dumps(payload))
+        self.assertNotIn("goal", payload)
+        self.assertNotIn("steps", payload)
+
+    def test_broken_event_store_does_not_prevent_claim(self):
+        self._register_worker("w1")
+        task = self._create_task()
+
+        with patch.object(self.registry.durable_event_store, "record", side_effect=RuntimeError("boom")):
+            result = self.registry.call("claim_durable_task", worker_id="w1")
+
+        parsed = json.loads(result)
+        self.assertTrue(parsed["claimed"])
+        self.assertEqual(parsed["task_id"], task["task_id"])
+
+        # Verify task was actually assigned
+        task_result = json.loads(self.registry.call("get_durable_task", task_id=task["task_id"]))
+        self.assertEqual(task_result["worker_id"], "w1")
+
+        # Verify worker state was updated
+        worker_result = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker_result["status"], "assigned")
+        self.assertEqual(worker_result["current_task_id"], task["task_id"])
+
+    def test_claim_empty_worker_id_returns_error(self):
+        result = self.registry.call("claim_durable_task", worker_id="")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_claim_whitespace_worker_id_returns_error(self):
+        result = self.registry.call("claim_durable_task", worker_id="   ")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
 
 
 if __name__ == "__main__":

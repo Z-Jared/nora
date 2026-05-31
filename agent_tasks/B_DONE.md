@@ -1,43 +1,52 @@
-# Claude B Completion Report - TASK-033
+# Claude B Completion Report - TASK-035
 
-Status: ready for Codex review
+Status: completed, ready for Codex review
 
 ## Summary
 
-Added 4 deterministic offline eval cases for durable worker registry tools (TASK-030 runtime).
+Added deterministic offline eval coverage for durable worker heartbeat/offline lifecycle (TASK-032).
 
-1. **worker_registry_basics** — Exercises `register_worker`, `get_worker`, `list_workers` via registry tools. Verifies: worker_id/role/workspace_path/default status stored; get returns registered worker; list includes worker; re-register updates role/workspace without creating duplicate; unknown worker returns error.
+Five new eval cases added to `evals/run_evals.py`:
 
-2. **worker_registry_status_updates** — Exercises `update_worker_status`. Verifies: status and current_task_id set correctly; updating to idle clears current_task_id; unknown worker_id returns error; invalid status returns error with localized message.
+1. **worker_heartbeat_basics** — `touch_worker` updates `last_seen_at` for existing worker. Unknown, empty, and whitespace worker IDs return JSON errors.
 
-3. **worker_registry_safety** — Registers worker with sentinel role/path/task values. Asserts: no env vars (LLM_API_KEY, OPENAI_API_KEY) in registry outputs; no cross-contamination between workers; no durable task goal text leaking into worker registry output.
+2. **worker_offline_lifecycle** — Stale worker is marked offline. Fresh worker is not. Already-offline worker is not counted as newly changed. Marking offline preserves `current_task_id`.
 
-4. **worker_registry_failure_isolation** — Replaces event store with broken object. Verifies register/get/list/update all still succeed.
+3. **worker_offline_task_isolation** — Marking worker offline does not mutate durable task ownership (`worker_id`) or task status.
+
+4. **worker_heartbeat_safety** — Sentinel role/path/goal/secret values injected. Asserts sentinels absent from touch output, offline output, and serialized events.
+
+5. **worker_heartbeat_failure_isolation** — Broken event store must not change `touch_worker` or `mark_stale_workers_offline` behavior.
+
+## Safety Assertions
+
+- Sentinel strings used for: worker role, workspace path, task goal, and a secret-like token
+- All sentinels verified absent from: touch output, offline output, and serialized durable events
 
 ## Diff
 
 ```text
- evals/run_evals.py | 187 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 187 insertions(+)
+ evals/run_evals.py | 217 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 217 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-147 passed, 0 failed
+152 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
-Ran 427 tests in 7.419s — OK
+Ran 441 tests in 8.218s
+OK
 
 git diff --check
-OK
+(clean)
 ```
 
 ## Notes
 
-- No runtime code changed (TASK-030 was already complete).
-- No fallback imports or shims added.
-- Eval count increased from 143 to 147.
+- No runtime code changed — eval only as instructed.
+- TASK-032 implementation was already complete and approved.
 - No commit or push performed.
-- No runtime bugs discovered.
+- Known limitations: none.

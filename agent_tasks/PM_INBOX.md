@@ -7,7 +7,6 @@ Claude A/B append review requests here by running `agent_tasks/notify_codex.sh A
 Status: ready for Codex review
 
 Review file: agent_tasks/A_DONE.md
-
 ## 2026-05-31T11:34:59Z Claude B
 
 Status: ready for Codex review
@@ -516,5 +515,16 @@ Review file: agent_tasks/B_DONE.md
 ## 2026-05-31T11:20:54Z Claude A
 
 Status: done
+
+Review file: agent_tasks/A_DONE.md
+## 2026-05-31T12:08:00Z Claude B
+
+Status: completed, ready for Codex review
+
+Review file: agent_tasks/B_DONE.md
+
+## 2026-05-31T12:11:25Z Claude A
+
+Status: ready for Codex review
 
 Review file: agent_tasks/A_DONE.md

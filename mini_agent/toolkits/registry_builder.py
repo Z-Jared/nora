@@ -715,6 +715,62 @@ def build_default_registry(
             ensure_ascii=False,
         )
 
+    def _claim_durable_task_json(worker_id: str) -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        if worker.status == WorkerStatus.OFFLINE:
+            return _json.dumps({"error": f"worker {worker_id} 已离线，无法认领任务"}, ensure_ascii=False)
+        if worker.current_task_id:
+            existing_task = durable_task_store.get_task(worker.current_task_id)
+            if existing_task:
+                return _json.dumps({
+                    "claimed": True,
+                    "already_assigned": True,
+                    "task_id": existing_task.task_id,
+                    "task": existing_task.to_dict(),
+                }, ensure_ascii=False)
+        pending_tasks = [
+            t for t in durable_task_store.list_tasks(limit=500)
+            if t.status == "pending" and not t.worker_id
+        ]
+        if not pending_tasks:
+            return _json.dumps({"claimed": False}, ensure_ascii=False)
+        oldest = sorted(pending_tasks, key=lambda t: t.created_at)[0]
+        previous_worker_id_present = bool(oldest.worker_id)
+        task = durable_task_store.assign_worker(oldest.task_id, worker_id)
+        if task is None:
+            return _json.dumps({"error": f"任务分配失败: {oldest.task_id}"}, ensure_ascii=False)
+        durable_worker_store.update_status(
+            worker_id=worker_id, status=WorkerStatus.ASSIGNED,
+            current_task_id=task.task_id,
+        )
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task.task_id,
+                worker_id=worker_id,
+                summary="task claimed by worker",
+                payload={
+                    "operation": "claim",
+                    "task_id": task.task_id,
+                    "worker_id_present": True,
+                    "previous_worker_id_present": previous_worker_id_present,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "claimed": True,
+            "task_id": task.task_id,
+            "task": task.to_dict(),
+        }, ensure_ascii=False)
+
     registry.register(
         "touch_worker",
         "更新 worker 的 last_seen_at 时间戳，表示 worker 仍然存活。",
@@ -743,6 +799,22 @@ def build_default_registry(
                     "description": "心跳超时阈值（秒），默认 300",
                 }
             },
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "claim_durable_task",
+        "让已注册且在线的 worker 认领最早的待分配持久任务。返回认领结果。",
+        _claim_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "执行认领的 worker id",
+                }
+            },
+            "required": ["worker_id"],
         },
         permission=ToolPermission(category="task", risk="write"),
     )
