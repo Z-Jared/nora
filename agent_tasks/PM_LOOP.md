@@ -8,10 +8,30 @@
 2. 如果「待分配」为空，进入**任务生成流程**（见下方）
 3. 通过 `/ask` 把任务分配给指定 agent
 4. 等待 agent 完成（收到 completion report）
-5. 审查结果，更新 BACKLOG.md：
+5. **PM 初审**：运行测试和 eval，检查基本质量
+   - 如果失败 → 要求 agent 修复，回到步骤 4
+   - 如果通过 → 进入步骤 6
+6. **发送给 Reviewer**：把 diff 和 completion report 发给 reviewer
+   ```
+   /ask reviewer 请 review 以下代码变更：
+   任务: [TASK-XXX: 标题]
+   Worker: Claude A/B
+   [附上 completion report 的关键内容]
+   请阅读 agent_tasks/A_DONE.md 或 B_DONE.md，审查代码变更，输出 review 报告到 agent_tasks/REVIEW.md。
+   ```
+7. 等待 Reviewer 完成（收到 REVIEW.md）
+8. **处理 Review 结果**：
+   - **APPROVED** → 更新 BACKLOG.md，标记任务完成，回到步骤 1
+   - **CHANGES_REQUESTED** → 把 reviewer 反馈发给 worker，要求修复
+     ```
+     /ask claude-a Reviewer 反馈如下，请修复后重新提交：
+     [reviewer 的 findings]
+     ```
+     → 回到步骤 4
+9. 更新 BACKLOG.md：
    - 把完成的任务移到「已完成」
    - 更新任务描述或添加新发现的任务
-6. 回到步骤 1，分配下一个任务
+10. 回到步骤 1，分配下一个任务
 
 ## 任务生成流程
 
@@ -82,13 +102,22 @@ git diff --stat origin/main..HEAD 2>/dev/null
   - 测试/eval/质量 → Claude B
   - 两者可并行时同时分配
 
-## 审查标准
+## PM 初审标准
 
-- 检查 agent 的 completion report
+- 检查 agent 的 completion report 格式是否完整
 - 运行测试验证：`python3 -m unittest discover tests`
 - 运行 eval 验证：`python3 evals/run_evals.py`
 - 如果失败，要求 agent 修复后重新提交
-- 审查通过后，检查是否需要更新 `docs/knowledge/DECISIONS.md`
+- 初审通过后，转交给 Reviewer 做深度 review
+
+## Reviewer 工作标准
+
+Review 检查清单见 `CLAUDE.md` 的「Reviewer Role」部分。
+PM 发送给 reviewer 时应包含：
+- 任务编号和标题
+- Worker 名称（Claude A/B）
+- Completion report 的摘要
+- 关键文件的 diff
 
 ## 通信格式
 

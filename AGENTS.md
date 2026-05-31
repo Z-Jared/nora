@@ -1,34 +1,40 @@
-# Nora Codex Collaboration Rules
+# Nora Multi-Agent Collaboration Rules
 
-Codex is the project manager, reviewer, and committer for this repository. Codex windows are implementation workers.
+Codex is the project manager, reviewer, and committer for this repository. Claude Code windows are implementation workers.
 
-## Worker Identity
+## Roles
 
-At the start of a Codex window, identify yourself as either:
+- Codex PM: plans, assigns, reviews, runs checks, commits, and pushes after approval.
+- Codex Reviewer: performs read-only code review and writes `agent_tasks/REVIEW.md`.
+- Claude A: implementation worker for `agent_tasks/A_TASK.md`.
+- Claude B: implementation worker for `agent_tasks/B_TASK.md`.
 
-- Codex A
-- Codex B
+Codex PM/Reviewer windows do not identify as A/B workers. Claude Code worker windows must identify as either:
+
+- Claude A
+- Claude B
 
 Then follow only the matching task file:
 
-- Codex A reads `agent_tasks/A_TASK.md`
-- Codex B reads `agent_tasks/B_TASK.md`
+- Claude A reads `agent_tasks/A_TASK.md`
+- Claude B reads `agent_tasks/B_TASK.md`
 
 ## Task Flow
 
 0. Read `docs/knowledge/PROJECT_WAKEUP.md`, `docs/knowledge/DECISIONS.md`, and `docs/knowledge/CHAT_INDEX.md` so you inherit the project context from prior windows.
-1. Read your assigned task file.
-2. Inspect the current git worktree before editing.
-3. Implement only your assigned scope.
-4. Run the required checks listed in your task file.
-5. Write your completion report:
-   - Codex A writes `agent_tasks/A_DONE.md`
-   - Codex B writes `agent_tasks/B_DONE.md`
-6. Notify Codex PM:
-   - Codex A runs `agent_tasks/notify_codex.sh A`
-   - Codex B runs `agent_tasks/notify_codex.sh B`
-7. Do not push.
-8. Do not commit unless Codex explicitly asks.
+1. Codex PM reads `agent_tasks/PM_LOOP.md` and `agent_tasks/BACKLOG.md`.
+2. Claude workers read their assigned task file.
+3. Inspect the current git worktree before editing.
+4. Implement only the assigned scope.
+5. Run the required checks listed in the task file.
+6. Write a completion report:
+   - Claude A writes `agent_tasks/A_DONE.md`
+   - Claude B writes `agent_tasks/B_DONE.md`
+7. Notify Codex PM:
+   - Claude A runs `agent_tasks/notify_codex.sh A`
+   - Claude B runs `agent_tasks/notify_codex.sh B`
+8. Codex PM runs initial checks, sends approved candidates to Codex Reviewer, then decides integration.
+9. Workers do not push or commit unless Codex explicitly asks.
 
 ## Boundaries
 
@@ -43,7 +49,7 @@ Then follow only the matching task file:
 Use this structure:
 
 ```markdown
-# Codex A/B Completion Report
+# Claude A/B Completion Report
 
 Status: ready for Codex review
 
