@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空 — 当前无进行中任务）
+### TASK-024: Eval coverage for handoff events
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-023 已完成
+- 目标: 为 durable handoff event logging 增加 deterministic offline eval，覆盖 finish handoff_created、restore handoff_accepted、serialized safety、failure isolation 和 registry wiring。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable event eval 区域；TASK-023 新增 `HANDOFF_CREATED` / `HANDOFF_ACCEPTED`。
+
+### TASK-025: Durable event query filters
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: 无
+- 目标: 为 `DurableEventStore.list_events` 和 `list_durable_events` 工具增加 event_type/source/severity/worker_id/trace_id/checkpoint_id 过滤能力，让事件日志更适合审计。
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 queryable event log；`mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`。
 
 ## 已完成
 

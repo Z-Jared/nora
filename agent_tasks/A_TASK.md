@@ -1,85 +1,71 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-023: durable handoff event logging.
+TASK-025: durable event query filters.
 
-Nora is moving toward an Agent OS / Durable Runtime. Handoff artifacts should become auditable durable events so future agents can see when a task was packaged for continuation and when a prior task history item was restored.
+Nora is moving toward an Agent OS / Durable Runtime. The event log now records many lifecycle events; the next step is making those events queryable by the dimensions a PM/reviewer/runtime needs for auditing.
 
 ## Scope
 
-Add a narrow vertical slice for handoff lifecycle events around the existing task history handoff path.
+Add filter support to durable event listing, preserving existing behavior.
 
-1. Add event constants in `mini_agent/durable_events.py`:
-   - `HANDOFF_CREATED`
-   - `HANDOFF_ACCEPTED`
-   - Include them in valid event type validation.
+1. Extend `mini_agent/durable_events.py` `DurableEventStore.list_events(...)`:
+   - Keep existing `task_id` and `max_results` behavior backward-compatible.
+   - Add optional filters:
+     - `event_type`
+     - `source`
+     - `severity`
+     - `worker_id`
+     - `trace_id`
+     - `checkpoint_id`
+   - Support both SQLite and JSONL backends.
+   - Return newest-first, still clamped to max 500.
+   - Use parameterized SQL for SQLite.
 
-2. Instrument `mini_agent/task_runner.py`:
-   - `TaskManager.finish(...)` should record `HANDOFF_CREATED` after the task is appended to history.
-   - `TaskManager.restore(...)` should record `HANDOFF_ACCEPTED` after a task history item is restored into the active task slot.
-   - Reuse the existing event-store failure isolation pattern.
-   - Preserve the existing user-visible return strings as much as possible.
+2. Update `mini_agent/toolkits/registry_builder.py`:
+   - Expose the new filters on the `list_durable_events` registry tool.
+   - Include `source` and `severity` in each returned event summary.
+   - Preserve existing callers that only pass `task_id` or `max_results`.
 
 3. Keep the task narrow:
-   - Do not create a new handoff file format.
-   - Do not alter `agent_tasks/` worker workflow.
-   - Do not implement replay/resume UI.
+   - Do not change event recording behavior.
+   - Do not add new event types.
+   - Do not change `get_durable_event`.
    - Do not add eval coverage in this task.
 
-## Payload Requirements
+## Safety / Compatibility Requirements
 
-Event payloads must contain safe metadata only. Good examples:
-
-- artifact_type, e.g. `task_history`
-- history_id, e.g. `task_1`
-- status: created / accepted
-- step_count
-- done_step_count
-- blocked_step_count
-- summary_present boolean
-- restored_from_present boolean
-
-Do not store:
-
-- raw goal text
-- raw task summary text
-- raw step text
-- raw note text
-- raw task history JSON
-- raw user prompt or model output
-- API keys or secret-like values
-- unbounded strings
-
-Event writes must be failure-isolated. A broken durable event store must not change task finish/restore behavior.
-
-Existing `task_finished` / `task_status_changed` events may still contain their current payloads; this task's new handoff events must use safe metadata only.
+- Filtering must not load or expose payloads through `list_durable_events`; summaries remain bounded metadata.
+- Invalid/empty filters should behave like no filter after stripping whitespace.
+- Filtering by one dimension should compose with `task_id` and `max_results`.
+- Existing tests and evals must continue to pass.
 
 ## Suggested Tests
 
-Add focused unit coverage in `tests/test_durable_events.py`, `tests/test_task_runner.py`, and/or existing registry tests:
+Add focused unit coverage in `tests/test_durable_events.py` and/or existing registry tests:
 
-1. `finish_task` emits `HANDOFF_CREATED` with safe metadata and preserves the existing finish result.
-2. `restore_task` emits `HANDOFF_ACCEPTED` with safe metadata and preserves existing restore behavior.
-3. Full serialized handoff events do not contain sentinel goal text, summary text, step text, note text, or secret-like values.
-4. Broken event store does not break finish or restore.
-5. Direct `TaskManager(...)` without an event store still behaves as before.
-6. Default registry task tools emit the handoff events through the existing `TaskManager` wiring.
+1. SQLite backend filters by `event_type`, `source`, `severity`, `worker_id`, `trace_id`, and `checkpoint_id`.
+2. JSONL backend supports the same filters.
+3. Combined filters narrow results correctly.
+4. `max_results` is still clamped and newest-first.
+5. `list_durable_events` registry tool accepts the new filters and includes `source`/`severity` in its summary output.
+6. Backward compatibility: existing `list_events(task_id=..., max_results=...)` and registry calls still work.
 
 ## Verification
 
 Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent
+python3 -m unittest tests.test_durable_events tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-If task state behavior changes broadly, also run:
+If event-store behavior changes broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests
