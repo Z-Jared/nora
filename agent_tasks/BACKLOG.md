@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空 — 当前无进行中任务）
+### TASK-022: Eval coverage for review-gate events
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-021 已完成
+- 目标: 为 durable review-gate event logging 增加 deterministic offline eval，覆盖 no_diff、present diff、sensitive blocked、error、failure isolation 和 serialized safety。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable event eval 区域；TASK-021 新增 `REVIEW_GATE_*`。
+
+### TASK-023: Durable handoff event logging
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: 无
+- 目标: 在 `finish_task` 和 `restore_task` 任务历史交接路径记录 handoff created/accepted durable events，作为 Agent OS handoff artifact 的第一条 runtime slice。
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 handoff events；`mini_agent/task_runner.py`；`mini_agent/toolkits/register_state.py`。
 
 ## 已完成
 

@@ -1,87 +1,85 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-021: durable review-gate event logging.
+TASK-023: durable handoff event logging.
 
-Nora is moving toward an Agent OS / Durable Runtime. Review gates should become auditable durable runtime events, so future PM/reviewer workflows can inspect when staged changes were reviewed before integration.
+Nora is moving toward an Agent OS / Durable Runtime. Handoff artifacts should become auditable durable events so future agents can see when a task was packaged for continuation and when a prior task history item was restored.
 
 ## Scope
 
-Add a narrow vertical slice for review-gate lifecycle events around the existing staged-diff review path.
+Add a narrow vertical slice for handoff lifecycle events around the existing task history handoff path.
 
 1. Add event constants in `mini_agent/durable_events.py`:
-   - `REVIEW_GATE_STARTED`
-   - `REVIEW_GATE_FINISHED`
-   - `REVIEW_GATE_BLOCKED`
-   - `REVIEW_GATE_ERROR`
+   - `HANDOFF_CREATED`
+   - `HANDOFF_ACCEPTED`
    - Include them in valid event type validation.
 
-2. Extend `mini_agent/git_tools.py`:
-   - Let `GitTools` optionally receive or be assigned an `event_store`.
-   - Add failure-isolated review-gate event recording.
-   - Instrument `GitTools.review_staged_diff(...)`:
-     - record started before inspecting staged changes
-     - record finished when review output is produced, including the no-staged-diff path
-     - record error if Git command execution reports a generic Git failure
+2. Instrument `mini_agent/task_runner.py`:
+   - `TaskManager.finish(...)` should record `HANDOFF_CREATED` after the task is appended to history.
+   - `TaskManager.restore(...)` should record `HANDOFF_ACCEPTED` after a task history item is restored into the active task slot.
+   - Reuse the existing event-store failure isolation pattern.
    - Preserve the existing user-visible return strings as much as possible.
 
-3. Wire the durable event store in `mini_agent/toolkits/registry_builder.py`:
-   - `build_default_registry(...)` should pass or assign the same `DurableEventStore` to `GitTools`.
-   - Direct `GitTools(...)` construction must remain compatible without an event store.
+3. Keep the task narrow:
+   - Do not create a new handoff file format.
+   - Do not alter `agent_tasks/` worker workflow.
+   - Do not implement replay/resume UI.
+   - Do not add eval coverage in this task.
 
 ## Payload Requirements
 
 Event payloads must contain safe metadata only. Good examples:
 
-- gate_name, e.g. `staged_diff_review`
-- status: started / finished / no_diff / error / blocked
-- has_staged_diff boolean
-- file_count integer
-- sensitive_path_count integer
-- max_chars integer
-- generic error label, if any
+- artifact_type, e.g. `task_history`
+- history_id, e.g. `task_1`
+- status: created / accepted
+- step_count
+- done_step_count
+- blocked_step_count
+- summary_present boolean
+- restored_from_present boolean
 
 Do not store:
 
-- raw diff content
-- raw file names or paths
-- raw Git command strings
-- raw Git stdout/stderr
-- raw sensitive path warning text
-- raw exception text
+- raw goal text
+- raw task summary text
+- raw step text
+- raw note text
+- raw task history JSON
+- raw user prompt or model output
 - API keys or secret-like values
 - unbounded strings
 
-Event writes must be failure-isolated. A broken durable event store must not change review output or Git tool behavior.
+Event writes must be failure-isolated. A broken durable event store must not change task finish/restore behavior.
 
-Keep this task narrow. Do not implement reviewer agents, merge gates, commit blocking, UI, policy engines, or eval coverage in this task.
+Existing `task_finished` / `task_status_changed` events may still contain their current payloads; this task's new handoff events must use safe metadata only.
 
 ## Suggested Tests
 
-Add focused unit coverage in `tests/test_durable_events.py`, `tests/test_git_tools.py`, and/or existing CLI/registry tests:
+Add focused unit coverage in `tests/test_durable_events.py`, `tests/test_task_runner.py`, and/or existing registry tests:
 
-1. Empty staged diff emits started + finished/no_diff review-gate events.
-2. Present staged diff emits started + finished events and preserves the existing review output.
-3. Serialized review-gate events do not contain sentinel file content, raw diff text, raw file paths, sensitive path warning text, or secret-like values.
-4. Broken event store does not break `review_staged_diff`.
-5. Default registry wires `GitTools` to the durable event store so `git_review_staged_diff` emits review-gate events.
-6. Direct `GitTools(...)` without an event store still behaves as before.
+1. `finish_task` emits `HANDOFF_CREATED` with safe metadata and preserves the existing finish result.
+2. `restore_task` emits `HANDOFF_ACCEPTED` with safe metadata and preserves existing restore behavior.
+3. Full serialized handoff events do not contain sentinel goal text, summary text, step text, note text, or secret-like values.
+4. Broken event store does not break finish or restore.
+5. Direct `TaskManager(...)` without an event store still behaves as before.
+6. Default registry task tools emit the handoff events through the existing `TaskManager` wiring.
 
 ## Verification
 
 Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli
+python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-If Git tool or registry wiring changes broadly, also run:
+If task state behavior changes broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests
