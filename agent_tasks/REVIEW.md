@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-026 Durable task registry action events; TASK-027 Eval coverage for durable event query filters
-Workers: Claude A (TASK-026), Claude B (TASK-027)
+Reviewed: TASK-028 Durable task worker assignment metadata; TASK-029 Eval coverage for durable task action events
+Workers: Claude A (TASK-028), Claude B (TASK-029)
 Status: APPROVED
 
 ## Findings
@@ -12,27 +12,24 @@ Status: APPROVED
 
 ### Notes
 
-- Previous TASK-026 blockers were fixed: update events now include `previous_status`, broken event-store tests patch the actual event store `record` method, and `A_DONE.md` is complete.
-- TASK-026 records safe task registry action events for create, update, retry, and delete without raw goal, steps, failure reason, prompt/content, or secret-like values.
-- TASK-027 eval coverage looks aligned with the task: SQLite, JSONL, registry wiring, query semantics, newest-first behavior, filter-before-limit behavior, and payload exclusion are covered.
+- Previous TASK-028 blocker was fixed: `create_durable_task` now strips whitespace `worker_id` and clears it to `None`; regression coverage was added.
+- Previous TASK-029 blocker was fixed: broken event-store failure isolation now covers create, update, retry, and delete.
+- The worker assignment shape is good: assignment is status-preserving, `list_durable_tasks` exposes `worker_id`, and task action events now set top-level `worker_id`.
+- TASK-029 covers task action event creation, update previous/new status, retry, delete, registry query output, payload exclusion, sentinel safety, and failure isolation.
 - `git diff --check` initially failed only because `agent_tasks/PM_INBOX.md` had a trailing blank line from the notify script; Codex PM removed it while writing this review.
 
 ## Checks Run
 
 ```text
 python3 evals/run_evals.py
-132 passed, 0 failed
-
-python3 -m unittest tests.test_durable_events tests.test_mini_agent
-Ran 275 tests in 6.811s
-OK
+139 passed, 0 failed
 
 python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 387 tests in 7.638s
+Ran 402 tests in 8.048s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1255 tests in 106.230s
+Ran 1270 tests in 106.092s
 OK
 
 git diff --check

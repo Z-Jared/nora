@@ -181,6 +181,13 @@ def main() -> int:
         EvalCase("event_query_filters_registry", eval_event_query_filters_registry),
         EvalCase("event_query_semantics", eval_event_query_semantics),
         EvalCase("event_query_safety", eval_event_query_safety),
+        EvalCase("task_action_event_create", eval_task_action_event_create),
+        EvalCase("task_action_event_update", eval_task_action_event_update),
+        EvalCase("task_action_event_retry", eval_task_action_event_retry),
+        EvalCase("task_action_event_delete", eval_task_action_event_delete),
+        EvalCase("task_action_event_registry_query", eval_task_action_event_registry_query),
+        EvalCase("task_action_event_safety", eval_task_action_event_safety),
+        EvalCase("task_action_event_failure_isolation", eval_task_action_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -3962,6 +3969,309 @@ def eval_event_query_safety():
             assert len(parsed) == 1
             assert parsed[0]["summary"] == "safe task"
             assert "payload" not in parsed[0]
+        finally:
+            db.close()
+
+
+# --- Task action event eval helpers ---
+
+_TASK_ACTION_SENTINEL_GOAL = "NORA_EVAL_TASK_GOAL_SENTINEL_c4d6e8f0"
+_TASK_ACTION_SENTINEL_STEP = "NORA_EVAL_TASK_STEP_SENTINEL_d5e7f9a1"
+_TASK_ACTION_SENTINEL_REASON = "NORA_EVAL_TASK_REASON_SENTINEL_e6f8a2b3"
+_TASK_ACTION_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-task-7c8d9e0f"
+_TASK_ACTION_FORBIDDEN_PAYLOAD_KEYS = {
+    "goal", "steps", "step_text", "failure_reason", "raw", "prompt", "content", "secret",
+}
+
+
+def _task_action_events(event_store, event_type=None):
+    events = event_store.list_events()
+    action_types = ("task_created", "task_status_changed", "task_retried")
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in action_types]
+
+
+def _serialized_task_action_events(event_store):
+    import json as _json
+    return _json.dumps(
+        [event.to_dict() for event in _task_action_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_task_action_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_task_action_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"task action event stored forbidden raw value {value!r}: {serialized[:500]}"
+    for event in _task_action_events(event_store):
+        leaked_keys = _TASK_ACTION_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"task action event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_task_action_event_create():
+    """create_durable_task emits TASK_CREATED with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            goal = f"{_TASK_ACTION_SENTINEL_GOAL} {_TASK_ACTION_SENTINEL_SECRET}"
+            steps = f"{_TASK_ACTION_SENTINEL_STEP}\nstep two"
+            result = registry.call("create_durable_task", goal=goal, steps=steps)
+
+            import json as _json
+            parsed = _json.loads(result)
+            assert "task_id" in parsed, f"missing task_id: {parsed}"
+            task_id = parsed["task_id"]
+
+            created = _task_action_events(event_store, "task_created")
+            assert len(created) == 1, f"expected 1 task_created, got {len(created)}"
+
+            evt = created[0]
+            assert evt.payload["operation"] == "create"
+            assert evt.payload["task_id"] == task_id
+            assert evt.payload["step_count"] == 2
+            assert evt.source == "registry"
+            assert evt.severity == "info"
+
+            # Safety
+            _assert_task_action_events_safe(event_store, [
+                _TASK_ACTION_SENTINEL_GOAL, _TASK_ACTION_SENTINEL_STEP, _TASK_ACTION_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
+
+
+def eval_task_action_event_update():
+    """update_durable_task emits TASK_STATUS_CHANGED with previous_status and new status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            # Create task
+            create_result = registry.call("create_durable_task", goal="test goal", steps="step one")
+            import json as _json
+            task_id = _json.loads(create_result)["task_id"]
+
+            # Update pending -> running
+            registry.call("update_durable_task", task_id=task_id, status="running")
+            # Update running -> failed with reason
+            reason = f"{_TASK_ACTION_SENTINEL_REASON} {_TASK_ACTION_SENTINEL_SECRET}"
+            registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason=reason)
+
+            status_events = _task_action_events(event_store, "task_status_changed")
+            assert len(status_events) == 2, f"expected 2 status_changed, got {len(status_events)}"
+
+            # Events are newest-first: first is running->failed, second is pending->running
+            first = status_events[0]
+            assert first.payload["previous_status"] == "running"
+            assert first.payload["status"] == "failed"
+            assert first.payload["failure_reason_present"] is True
+
+            second = status_events[1]
+            assert second.payload["previous_status"] == "pending"
+            assert second.payload["status"] == "running"
+            assert second.payload["operation"] == "update"
+
+            # Safety
+            _assert_task_action_events_safe(event_store, [
+                _TASK_ACTION_SENTINEL_REASON, _TASK_ACTION_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
+
+
+def eval_task_action_event_retry():
+    """retry_durable_task emits TASK_RETRIED with retry_count."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            # Create, run, fail
+            create_result = registry.call("create_durable_task", goal="retry test", steps="step one")
+            import json as _json
+            task_id = _json.loads(create_result)["task_id"]
+            registry.call("update_durable_task", task_id=task_id, status="running")
+            registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="timeout")
+
+            # Retry
+            registry.call("retry_durable_task", task_id=task_id)
+
+            retried = _task_action_events(event_store, "task_retried")
+            assert len(retried) == 1, f"expected 1 task_retried, got {len(retried)}"
+
+            evt = retried[0]
+            assert evt.payload["operation"] == "retry"
+            assert evt.payload["task_id"] == task_id
+            assert evt.payload["retry_count"] == 1
+            assert evt.payload["status"] == "pending"
+            assert evt.source == "registry"
+            assert evt.severity == "info"
+        finally:
+            db.close()
+
+
+def eval_task_action_event_delete():
+    """delete_durable_task emits auditable delete event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            create_result = registry.call("create_durable_task", goal="delete test", steps="step one")
+            import json as _json
+            task_id = _json.loads(create_result)["task_id"]
+
+            # Delete
+            registry.call("delete_durable_task", task_id=task_id)
+
+            status_events = _task_action_events(event_store, "task_status_changed")
+            delete_events = [e for e in status_events if e.payload.get("operation") == "delete"]
+            assert len(delete_events) == 1, f"expected 1 delete event, got {len(delete_events)}"
+
+            evt = delete_events[0]
+            assert evt.payload["task_id"] == task_id
+            assert evt.payload["deleted"] is True
+            assert evt.payload["previous_status"] == "pending"
+            assert evt.source == "registry"
+        finally:
+            db.close()
+
+
+def eval_task_action_event_registry_query():
+    """list_durable_events can query task action events by task_id and event_type."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            # Create two tasks
+            r1 = registry.call("create_durable_task", goal="task A", steps="s1")
+            r2 = registry.call("create_durable_task", goal="task B", steps="s1")
+            import json as _json
+            tid_a = _json.loads(r1)["task_id"]
+            tid_b = _json.loads(r2)["task_id"]
+
+            # Update task A
+            registry.call("update_durable_task", task_id=tid_a, status="running")
+
+            # Query by task_id
+            result = registry.call("list_durable_events", task_id=tid_a)
+            parsed = _json.loads(result)
+            assert len(parsed) == 2, f"expected 2 events for task A, got {len(parsed)}"
+
+            # Query by event_type
+            result = registry.call("list_durable_events", event_type="task_created")
+            parsed = _json.loads(result)
+            assert len(parsed) == 2, f"expected 2 task_created, got {len(parsed)}"
+
+            # Combined query
+            result = registry.call("list_durable_events", task_id=tid_b, event_type="task_created")
+            parsed = _json.loads(result)
+            assert len(parsed) == 1, f"expected 1 combined, got {len(parsed)}"
+            assert parsed[0]["task_id"] == tid_b
+
+            # Output includes source/severity, excludes payload
+            for item in parsed:
+                assert "source" in item, f"missing source: {item.keys()}"
+                assert "severity" in item, f"missing severity: {item.keys()}"
+                assert "payload" not in item, f"payload should not be exposed: {item.keys()}"
+        finally:
+            db.close()
+
+
+def eval_task_action_event_safety():
+    """Sentinel strings in goal/steps/reason/secret must not leak into task action events or registry output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            event_store = registry.durable_event_store
+
+            goal = f"goal {_TASK_ACTION_SENTINEL_SECRET} end"
+            steps = f"{_TASK_ACTION_SENTINEL_STEP}\nstep two"
+            reason = f"reason {_TASK_ACTION_SENTINEL_SECRET} end"
+
+            # Create
+            r = registry.call("create_durable_task", goal=goal, steps=steps)
+            import json as _json
+            task_id = _json.loads(r)["task_id"]
+
+            # Update with failure reason
+            registry.call("update_durable_task", task_id=task_id, status="running")
+            registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason=reason)
+
+            # Retry
+            registry.call("retry_durable_task", task_id=task_id)
+
+            # All sentinels must be absent from serialized task action events
+            _assert_task_action_events_safe(event_store, [
+                _TASK_ACTION_SENTINEL_GOAL, _TASK_ACTION_SENTINEL_STEP,
+                _TASK_ACTION_SENTINEL_REASON, _TASK_ACTION_SENTINEL_SECRET,
+            ])
+
+            # Registry output must also not contain sentinels
+            result = registry.call("list_durable_events")
+            assert _TASK_ACTION_SENTINEL_GOAL not in result, "sentinel goal leaked through registry"
+            assert _TASK_ACTION_SENTINEL_STEP not in result, "sentinel step leaked through registry"
+            assert _TASK_ACTION_SENTINEL_SECRET not in result, "sentinel secret leaked through registry"
+        finally:
+            db.close()
+
+
+def eval_task_action_event_failure_isolation():
+    """Broken event store must not change create/update/retry/delete registry tool behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+        def get_event(self, event_id):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            registry.event_store = BrokenEventStore()
+            # Also break the durable_event_store used by registry tools
+            registry.durable_event_store = BrokenEventStore()
+
+            # Create must still work
+            import json as _json
+            r = registry.call("create_durable_task", goal="isolated", steps="s1")
+            parsed = _json.loads(r)
+            assert "task_id" in parsed, f"create must work with broken store: {r}"
+            task_id = parsed["task_id"]
+
+            # Update must still work
+            r2 = registry.call("update_durable_task", task_id=task_id, status="running")
+            parsed2 = _json.loads(r2)
+            assert parsed2.get("status") == "running", f"update must work with broken store: {r2}"
+
+            # Update to failed so retry is possible
+            r2b = registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="timeout")
+            parsed2b = _json.loads(r2b)
+            assert parsed2b.get("status") == "failed", f"update to failed must work with broken store: {r2b}"
+
+            # Retry must still work
+            r2c = registry.call("retry_durable_task", task_id=task_id)
+            parsed2c = _json.loads(r2c)
+            assert parsed2c.get("status") == "pending", f"retry must work with broken store: {r2c}"
+
+            # Delete must still work
+            r3 = registry.call("delete_durable_task", task_id=task_id)
+            parsed3 = _json.loads(r3)
+            assert parsed3.get("deleted") is True, f"delete must work with broken store: {r3}"
         finally:
             db.close()
 

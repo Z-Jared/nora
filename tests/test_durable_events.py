@@ -2522,5 +2522,186 @@ class RegistryTaskActionDurableEventTests(unittest.TestCase):
         self.assertTrue(parsed["deleted"])
 
 
+class RegistryWorkerAssignmentTests(unittest.TestCase):
+    """Tests for TASK-028: durable task worker assignment metadata."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _task_action_events(self, event_type=None):
+        action_types = {TASK_CREATED, TASK_STATUS_CHANGED, TASK_RETRIED}
+        events = [e for e in self.event_store.list_events() if e.event_type in action_types]
+        events.reverse()
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return events
+
+    def test_create_with_worker_id_persists_ownership(self):
+        result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_42")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["worker_id"], "worker_42")
+
+        listed = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["worker_id"], "worker_42")
+
+    def test_create_without_worker_id_stays_none(self):
+        result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        parsed = json.loads(result)
+
+        self.assertIsNone(parsed["worker_id"])
+
+        listed = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(listed[0]["worker_id"], None)
+
+    def test_create_with_whitespace_worker_id_clears_to_none(self):
+        result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="   ")
+        parsed = json.loads(result)
+
+        self.assertIsNone(parsed["worker_id"])
+
+        events = self._task_action_events(TASK_CREATED)
+        self.assertEqual(len(events), 1)
+        self.assertIsNone(events[0].worker_id)
+        self.assertFalse(events[0].payload["worker_id_present"])
+
+    def test_assign_durable_task_sets_worker(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+
+        result = self.registry.call("assign_durable_task", task_id=task_id, worker_id="worker_7")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["worker_id"], "worker_7")
+        self.assertEqual(parsed["status"], "pending")
+
+    def test_assign_durable_task_clears_worker(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_1")
+        task_id = json.loads(create_result)["task_id"]
+
+        result = self.registry.call("assign_durable_task", task_id=task_id, worker_id="")
+        parsed = json.loads(result)
+
+        self.assertIsNone(parsed["worker_id"])
+
+    def test_assign_unknown_task_returns_error(self):
+        result = self.registry.call("assign_durable_task", task_id="dtask_999", worker_id="worker_1")
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_list_durable_tasks_includes_worker_id(self):
+        self.registry.call("create_durable_task", goal="task A", steps="s1", worker_id="w1")
+        self.registry.call("create_durable_task", goal="task B", steps="s2")
+
+        listed = json.loads(self.registry.call("list_durable_tasks"))
+
+        self.assertEqual(len(listed), 2)
+        worker_map = {t["goal"]: t["worker_id"] for t in listed}
+        self.assertEqual(worker_map["task A"], "w1")
+        self.assertIsNone(worker_map["task B"])
+
+    def test_create_event_sets_top_level_worker_id(self):
+        self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_5")
+
+        events = self._task_action_events(TASK_CREATED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].worker_id, "worker_5")
+        self.assertTrue(events[0].payload["worker_id_present"])
+
+    def test_assign_emits_status_changed_event(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="worker_3")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        assign_events = [e for e in events if e.payload.get("operation") == "assign"]
+        self.assertEqual(len(assign_events), 1)
+        self.assertEqual(assign_events[0].task_id, task_id)
+        self.assertEqual(assign_events[0].worker_id, "worker_3")
+        self.assertTrue(assign_events[0].payload["worker_id_present"])
+        self.assertFalse(assign_events[0].payload["previous_worker_id_present"])
+
+    def test_assign_clear_event_has_no_worker_id(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_1")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        assign_events = [e for e in events if e.payload.get("operation") == "assign"]
+        self.assertEqual(len(assign_events), 1)
+        self.assertIsNone(assign_events[0].worker_id)
+        self.assertFalse(assign_events[0].payload["worker_id_present"])
+        self.assertTrue(assign_events[0].payload["previous_worker_id_present"])
+
+    def test_assign_event_no_raw_goal_or_steps(self):
+        sentinel_goal = "SENTINEL_ASSIGN_GOAL_xyz"
+        create_result = self.registry.call("create_durable_task", goal=sentinel_goal, steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="worker_1")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        assign_events = [e for e in events if e.payload.get("operation") == "assign"]
+        self.assertEqual(len(assign_events), 1)
+        full_json = json.dumps(assign_events[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_goal, full_json,
+                         "raw goal must not appear in serialized assign event")
+
+    def test_update_event_sets_top_level_worker_id(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_2")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+
+        events = self._task_action_events(TASK_STATUS_CHANGED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].worker_id, "worker_2")
+        self.assertTrue(events[0].payload["worker_id_present"])
+
+    def test_retry_event_sets_top_level_worker_id(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="worker_4")
+        task_id = json.loads(create_result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed")
+        self.registry.call("retry_durable_task", task_id=task_id)
+
+        events = self._task_action_events(TASK_RETRIED)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].worker_id, "worker_4")
+        self.assertTrue(events[0].payload["worker_id_present"])
+
+    def test_broken_event_store_does_not_break_assign(self):
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one")
+        task_id = json.loads(create_result)["task_id"]
+
+        with patch.object(self.event_store, "record", side_effect=RuntimeError("disk full")):
+            result = self.registry.call("assign_durable_task", task_id=task_id, worker_id="worker_1")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["worker_id"], "worker_1")
+
+    def test_existing_crud_tests_still_pass_without_worker_id(self):
+        result = self.registry.call("create_durable_task", goal="compat test", steps="step one")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed")
+        self.registry.call("retry_durable_task", task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="completed")
+
+        detail = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(detail["status"], "completed")
+        self.assertIsNone(detail["worker_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

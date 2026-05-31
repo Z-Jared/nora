@@ -373,6 +373,25 @@ class DurableTaskStore:
 
         return task
 
+    def assign_worker(self, task_id: str, worker_id: str) -> Optional[DurableTask]:
+        """Update a task's worker_id without changing status.
+
+        Returns the updated task, or None if not found.
+        """
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+
+        task.worker_id = worker_id or None
+        task.updated_at = _now_iso()
+
+        if self.db:
+            self._update_db(task)
+        else:
+            self._rewrite_jsonl(task)
+
+        return task
+
     def upsert_task(self, task: DurableTask) -> None:
         """Insert or update a DurableTask. Overwrites if task_id already exists."""
         if self.db:

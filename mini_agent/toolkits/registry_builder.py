@@ -294,6 +294,7 @@ def build_default_registry(
                 "goal": t.goal,
                 "current_step": t.current_step,
                 "checkpoint_count": len(t.checkpoints),
+                "worker_id": t.worker_id,
             }
             for t in tasks
         ]
@@ -337,14 +338,16 @@ def build_default_registry(
         permission=ToolPermission(category="logs", risk="read"),
     )
 
-    def _create_durable_task_json(goal: str, steps: str) -> str:
+    def _create_durable_task_json(goal: str, steps: str, worker_id: str = "") -> str:
         parsed = [s.strip() for s in steps.splitlines() if s.strip()]
         step_dicts = [{"text": s} for s in parsed]
-        task = durable_task_store.create_task(goal=goal, steps=step_dicts)
+        worker_id = worker_id.strip()
+        task = durable_task_store.create_task(goal=goal, steps=step_dicts, worker_id=worker_id or None)
         try:
             registry.durable_event_store.record(
                 event_type=TASK_CREATED,
                 task_id=task.task_id,
+                worker_id=task.worker_id,
                 summary="task created",
                 payload={
                     "operation": "create",
@@ -352,6 +355,7 @@ def build_default_registry(
                     "status": task.status,
                     "step_count": len(task.steps),
                     "max_retries": task.max_retries,
+                    "worker_id_present": bool(task.worker_id),
                 },
                 source="registry",
                 severity="info",
@@ -375,6 +379,7 @@ def build_default_registry(
             registry.durable_event_store.record(
                 event_type=TASK_STATUS_CHANGED,
                 task_id=task_id,
+                worker_id=task.worker_id,
                 summary="task status changed",
                 payload={
                     "operation": "update",
@@ -382,6 +387,7 @@ def build_default_registry(
                     "status": task.status,
                     "previous_status": previous_status,
                     "failure_reason_present": bool(failure_reason),
+                    "worker_id_present": bool(task.worker_id),
                 },
                 source="registry",
                 severity="info",
@@ -400,12 +406,14 @@ def build_default_registry(
             registry.durable_event_store.record(
                 event_type=TASK_STATUS_CHANGED,
                 task_id=task_id,
+                worker_id=task.worker_id if task else None,
                 summary="task deleted",
                 payload={
                     "operation": "delete",
                     "task_id": task_id,
                     "deleted": True,
                     "previous_status": previous_status,
+                    "worker_id_present": bool(task.worker_id) if task else False,
                 },
                 source="registry",
                 severity="info",
@@ -414,9 +422,34 @@ def build_default_registry(
             pass
         return _json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False)
 
+    def _assign_durable_task_json(task_id: str, worker_id: str = "") -> str:
+        existing = durable_task_store.get_task(task_id)
+        previous_worker_id_present = bool(existing.worker_id) if existing else False
+        task = durable_task_store.assign_worker(task_id, worker_id.strip())
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                worker_id=task.worker_id,
+                summary="task worker assigned",
+                payload={
+                    "operation": "assign",
+                    "task_id": task_id,
+                    "worker_id_present": bool(task.worker_id),
+                    "previous_worker_id_present": previous_worker_id_present,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps(task.to_dict(), ensure_ascii=False)
+
     registry.register(
         "create_durable_task",
-        "创建一个新的 durable task。goal 是任务目标，steps 是每行一个步骤的文本。",
+        "创建一个新的 durable task。goal 是任务目标，steps 是每行一个步骤的文本。可选 worker_id 指定负责 worker。",
         _create_durable_task_json,
         parameters={
             "type": "object",
@@ -429,8 +462,32 @@ def build_default_registry(
                     "type": "string",
                     "description": "每行一个步骤的文本",
                 },
+                "worker_id": {
+                    "type": "string",
+                    "description": "可选 worker id，指定负责此任务的 worker",
+                },
             },
             "required": ["goal", "steps"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+    registry.register(
+        "assign_durable_task",
+        "将 durable task 分配给指定 worker（或清除分配）。不会改变任务状态。",
+        _assign_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id；为空则清除分配",
+                },
+            },
+            "required": ["task_id"],
         },
         permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
     )
@@ -486,6 +543,7 @@ def build_default_registry(
             registry.durable_event_store.record(
                 event_type=TASK_RETRIED,
                 task_id=task_id,
+                worker_id=task.worker_id,
                 summary="task retried",
                 payload={
                     "operation": "retry",
@@ -493,6 +551,7 @@ def build_default_registry(
                     "status": task.status,
                     "retry_count": task.retry_count,
                     "max_retries": task.max_retries,
+                    "worker_id_present": bool(task.worker_id),
                 },
                 source="registry",
                 severity="info",
