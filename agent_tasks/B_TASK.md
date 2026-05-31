@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-029: eval coverage for durable task action events.
+TASK-031: eval coverage for durable task worker assignment.
 
-TASK-026 added durable events for durable task registry actions. Add deterministic offline eval coverage so future runtime changes cannot silently stop auditing create/update/retry/delete task operations or leak raw task content into those events.
+TASK-028 added worker ownership metadata to durable task registry tools. Add deterministic offline eval coverage so worker assignment behavior and worker-linked task events remain stable.
 
 ## Scope
 
@@ -15,23 +15,23 @@ Edit `evals/run_evals.py` only unless you discover a real runtime bug. If you fi
 
 Add eval cases covering:
 
-1. Task action event creation:
-   - `create_durable_task` emits `TASK_CREATED`.
-   - `update_durable_task` emits `TASK_STATUS_CHANGED` with `previous_status` and new `status`.
-   - `retry_durable_task` emits `TASK_RETRIED`.
-   - `delete_durable_task` emits an auditable delete event.
+1. Worker assignment basics:
+   - `create_durable_task(worker_id=...)` stores worker ownership.
+   - `assign_durable_task` sets worker ownership.
+   - Empty/whitespace assignment clears worker ownership.
+   - `list_durable_tasks` includes `worker_id`.
 
-2. Registry/event query wiring:
-   - Use `list_durable_events` to query these events by `task_id` and `event_type`.
-   - Verify source/severity are present and payload is not exposed by `list_durable_events`.
+2. Worker-linked events:
+   - Task action events include top-level `worker_id` after create/update/retry/delete when assigned.
+   - Assignment emits a safe event with `operation="assign"`.
+   - `list_durable_events(worker_id=...)` can query worker-linked events.
 
-3. Safety assertions:
-   - Use sentinel strings for raw goal, raw step text, raw failure reason, and a secret-like value.
-   - Assert those sentinels are absent from serialized task-action events and from `list_durable_events` output.
-   - Check forbidden payload keys such as `goal`, `steps`, `step_text`, `failure_reason`, `raw`, `prompt`, `content`, and `secret`.
+3. Safety:
+   - Use sentinel goal/step/secret values.
+   - Assert sentinels are absent from assignment events and `list_durable_events` output.
 
 4. Failure isolation:
-   - Broken event store must not change create/update/retry/delete registry tool behavior.
+   - Broken event store must not change `assign_durable_task` behavior.
 
 Keep evals offline and deterministic. Do not call live LLM APIs.
 
@@ -45,7 +45,7 @@ python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.tes
 git diff --check
 ```
 
-If you touch anything outside `evals/run_evals.py`, also run the focused tests for those files.
+If you touch anything outside `evals/run_evals.py`, also run focused tests for those files.
 
 ## Completion Report
 

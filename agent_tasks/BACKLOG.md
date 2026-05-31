@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-030: Durable worker registry v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-028 已完成
+- 目标: 新增 durable worker registry，让 worker_id/role/status/current_task_id/workspace_path/last_seen 等成为可查询的 runtime state。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 worker isolation；`mini_agent/durable_tasks.py` store pattern；`mini_agent/toolkits/registry_builder.py` registry tool pattern。
+
+### TASK-031: Eval coverage for durable task worker assignment
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-028 已完成
+- 目标: 为 durable task worker assignment 增加 deterministic offline eval，覆盖 create/assign/clear/list、worker-linked events、worker_id event query、安全不泄漏和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable event eval 区域；TASK-028 新增的 worker assignment 行为。
 
 ## 已完成
 
