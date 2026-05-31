@@ -1,68 +1,69 @@
-# Claude A Completion Report — TASK-034: Durable Worker Task Claim v1
+# Claude A Completion Report — TASK-036 Review Fix: Supermemory Metadata Bounding & Container Tag Config
 
 Status: ready for Codex review
 
 ## Summary
 
-Added `claim_durable_task(worker_id)` registry tool that lets a registered online worker claim the oldest pending, unassigned durable task. On claim, the task's `worker_id` is updated and the worker transitions to `assigned` status with `current_task_id` set. A safe durable event is recorded on success.
+Fixed CHANGES_REQUESTED review items for TASK-036: bounded metadata in search/profile output, added `SUPERMEMORY_CONTAINER_TAG` env var support, and updated docs.
 
 ## Changes
 
-### `mini_agent/toolkits/registry_builder.py`
-- Added `_claim_durable_task_json(worker_id)` handler (lines 718–772):
-  - Strips and validates `worker_id`, returns JSON error if empty
-  - Looks up worker; returns JSON error if unknown or offline
-  - If worker already has `current_task_id`, returns existing assignment (`already_assigned: true`)
-  - Finds oldest pending task with empty `worker_id` from `list_tasks(limit=500)`
-  - Returns `{claimed: false}` if no task available (no mutation)
-  - Calls `durable_task_store.assign_worker()` to set task `worker_id` without changing status
-  - Updates worker to `status=assigned` and `current_task_id`
-  - Records `TASK_STATUS_CHANGED` event with safe metadata only
-  - Event write failure is caught and does not prevent the claim
-- Registered `claim_durable_task` tool with `ToolPermission(category="task", risk="write")`
+### 1. Metadata bounding (`mini_agent/toolkits/register_supermemory.py`)
+- Added `_bound_metadata(meta)` function that sanitizes metadata before returning:
+  - Keeps only JSON-safe scalars: `bool`, `int`, `float`, `str`
+  - Drops nested dicts, lists, and other non-scalar values
+  - Truncates string values to 300 chars (`_METADATA_VALUE_MAX_CHARS`)
+  - Limits to 20 fields max (`_METADATA_MAX_FIELDS`)
+  - Filters out secret-like keys (`secret`, `token`, `api_key`, `password`, `authorization`, `bearer`)
+  - Filters out secret-like values (patterns like `sk-`, `bearer `, `api_key`, `password`, `secret`)
+- `_bound_search_output` now calls `_bound_metadata(item["metadata"])` instead of passing raw metadata through
 
-### `tests/test_durable_workers.py`
-- Added `DurableWorkerClaimTests` class with 12 tests:
-  - `test_idle_worker_claims_oldest_pending_task`
-  - `test_claim_updates_task_worker_id_and_worker_state`
-  - `test_claim_does_not_change_task_status`
-  - `test_unknown_worker_returns_error`
-  - `test_offline_worker_returns_error`
-  - `test_worker_with_current_task_returns_existing`
-  - `test_no_available_task_returns_claimed_false`
-  - `test_no_available_task_does_not_mutate_worker`
-  - `test_claim_emits_safe_event`
-  - `test_broken_event_store_does_not_prevent_claim`
-  - `test_claim_empty_worker_id_returns_error`
-  - `test_claim_whitespace_worker_id_returns_error`
+### 2. Container tag configuration (`mini_agent/toolkits/supermemory.py`)
+- `from_env()` now reads `SUPERMEMORY_CONTAINER_TAG` env var
+- Falls back to the `container_tag` parameter (default `"nora"`) when unset
+
+### 3. Documentation (`docs/knowledge/SUPERMEMORY.md`)
+- Added `SUPERMEDIA_CONTAINER_TAG` to config table
+- Added production/multi-project recommendation for project-level tags
+- Updated tool descriptions to reference "configured container tag" instead of hardcoded "nora"
+- Updated privacy boundary section to mention metadata sanitization
+
+### 4. Tests (`tests/test_supermemory.py`)
+- Added `MetadataBoundingTests` class with 8 tests:
+  - `test_keeps_scalar_strings`, `test_keeps_numbers_and_bools`
+  - `test_truncates_long_strings` (value capped at 300 chars)
+  - `test_drops_nested_dicts`, `test_drops_lists`
+  - `test_limits_field_count` (max 20 fields)
+  - `test_empty_metadata`
+  - `test_search_output_uses_bounded_metadata` (integration test)
+  - `test_drops_secret_like_metadata` (added by linter)
+- Added `test_from_env_custom_container_tag` and `test_from_env_default_container_tag` to `SupermemoryClientTests`
 
 ## Verification
 
 ```
-$ python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 453 tests — OK
+$ python3 -m unittest tests.test_supermemory tests.test_mini_agent tests.test_tool_cache
+Ran 171 tests — OK
 
 $ python3 evals/run_evals.py
-152 passed, 0 failed
+159 passed, 0 failed
 
-$ python3 -m unittest discover -s tests
-Ran 1321 tests — OK
-
-$ git diff --check -- mini_agent/toolkits/registry_builder.py tests/test_durable_workers.py
-OK
+$ git diff --check — OK
 ```
 
 ## Diff
 
 ```
- mini_agent/toolkits/registry_builder.py |  72 +++++++++++++++
- tests/test_durable_workers.py           | 158 ++++++++++++++++++++++++++++++++
- 2 files changed, 230 insertions(+)
+ mini_agent/toolkits/supermemory.py          | 101 lines (new)
+ mini_agent/toolkits/register_supermemory.py | 193 lines (new)
+ tests/test_supermemory.py                   | 388 lines (new)
+ docs/knowledge/SUPERMEMORY.md               |  28 lines (new)
+ 4 files, 710 lines total
 ```
 
 ## Notes
 
 - No push or commit performed.
-- Does not run or execute tasks, create worktrees, or change task status transition rules.
-- Claim event payload contains only safe metadata: `operation`, `task_id`, `worker_id_present`, `previous_worker_id_present`.
-- Existing durable task and worker semantics unchanged.
+- No eval changes needed.
+- GitHub radar files untouched.
+- Linter added `_looks_sensitive_key`/`_looks_sensitive_value` helpers and `test_drops_secret_like_metadata` test — all pass.

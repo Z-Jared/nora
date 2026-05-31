@@ -24,6 +24,8 @@ from mini_agent.toolkits.register_developer import register_developer_tools
 from mini_agent.toolkits.register_external import register_external_tools
 from mini_agent.toolkits.register_git import register_git_tools
 from mini_agent.toolkits.register_state import register_state_tools
+from mini_agent.toolkits.register_supermemory import register_supermemory_tools
+from mini_agent.toolkits.supermemory import SupermemoryClient
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
@@ -131,6 +133,8 @@ def build_default_registry(
         long_term_memory,
         task_manager,
     )
+    supermemory_client = SupermemoryClient.from_env()
+    register_supermemory_tools(registry, supermemory_client)
     registry.task_manager = task_manager
     registry.long_term_memory = long_term_memory
     registry.trace_store = trace_store

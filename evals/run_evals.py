@@ -201,6 +201,13 @@ def main() -> int:
         EvalCase("worker_offline_task_isolation", eval_worker_offline_task_isolation),
         EvalCase("worker_heartbeat_safety", eval_worker_heartbeat_safety),
         EvalCase("worker_heartbeat_failure_isolation", eval_worker_heartbeat_failure_isolation),
+        EvalCase("supermemory_optional_config", eval_supermemory_optional_config),
+        EvalCase("supermemory_save_behavior", eval_supermemory_save_behavior),
+        EvalCase("supermemory_search_profile_bounded", eval_supermemory_search_profile_bounded),
+        EvalCase("supermemory_metadata_bounding", eval_supermemory_metadata_bounding),
+        EvalCase("supermemory_container_tag_config", eval_supermemory_container_tag_config),
+        EvalCase("supermemory_failure_isolation", eval_supermemory_failure_isolation),
+        EvalCase("supermemory_existing_memory_tools", eval_supermemory_existing_memory_tools),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -4825,6 +4832,347 @@ def eval_worker_heartbeat_failure_isolation():
             r2 = registry.call("mark_stale_workers_offline", max_age_seconds=300)
             parsed2 = json.loads(r2)
             assert parsed2.get("changed_count") >= 1, f"mark_stale failed with broken store: {r2}"
+        finally:
+            db.close()
+
+
+# --- Supermemory eval helpers ---
+
+_SUPERMEMORY_SENTINEL_CONTENT = "NORA_EVAL_SM_CONTENT_SENTINEL_a1b2c3d4"
+_SUPERMEMORY_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-sm-5e6f7a8b"
+
+
+class _FakeSupermemoryClient:
+    """Fake client that records calls without making network requests."""
+
+    def __init__(self, save_response=None, search_response=None, profile_response=None, raise_error=None):
+        self.save_calls = []
+        self.search_calls = []
+        self.profile_calls = []
+        self._save_response = save_response or {"id": "fake_id", "status": "ok"}
+        self._search_response = search_response or {"results": [], "total": 0}
+        self._profile_response = profile_response or {"profile": {"static": [], "dynamic": []}}
+        self._raise_error = raise_error
+
+    def save(self, content, metadata=None):
+        if self._raise_error:
+            raise self._raise_error
+        self.save_calls.append({"content": content, "metadata": metadata})
+        return self._save_response
+
+    def search(self, query, limit=5, threshold=0.5):
+        if self._raise_error:
+            raise self._raise_error
+        self.search_calls.append({"query": query, "limit": limit, "threshold": threshold})
+        return self._search_response
+
+    def profile(self, query=None, threshold=0.5):
+        if self._raise_error:
+            raise self._raise_error
+        self.profile_calls.append({"query": query, "threshold": threshold})
+        return self._profile_response
+
+
+def _patch_supermemory_client(registry, fake_client):
+    """Replace the SupermemoryClient used by registered tools via closure variable patching."""
+    from mini_agent.toolkits.supermemory import SupermemoryClient
+    for tool_name in ("supermemory_save", "supermemory_search", "supermemory_profile"):
+        tool = registry._tools.get(tool_name)
+        if tool and hasattr(tool.handler, "__closure__"):
+            # The handler closures capture 'client' - we need to find and replace it
+            closure = tool.handler.__closure__
+            if closure:
+                for cell in closure:
+                    try:
+                        if isinstance(cell.cell_contents, SupermemoryClient):
+                            # Can't directly set cell_contents, so we replace the handler
+                            break
+                    except ValueError:
+                        continue
+    # Since we can't mutate closure cells, rebuild the tools with the fake client
+    from mini_agent.toolkits.register_supermemory import register_supermemory_tools
+    # Remove existing supermemory tools
+    for name in ("supermemory_save", "supermemory_search", "supermemory_profile"):
+        if name in registry._tools:
+            del registry._tools[name]
+    # Re-register with fake client
+    register_supermemory_tools(registry, fake_client)
+
+
+def eval_supermemory_optional_config():
+    """With no API key, tools return clear JSON configuration error.
+    Deterministic: temporarily clears all Supermemory env vars."""
+    from unittest.mock import patch as _patch
+    # Clear all Supermemory env vars to ensure deterministic no-key behavior
+    env_override = {
+        "SUPERMEMORY_API_KEY": "",
+        "SUPERMEMORY_BASE_URL": "",
+        "SUPERMEMORY_CONTAINER_TAG": "",
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            with _patch.dict(os.environ, env_override, clear=False):
+                # Remove keys entirely so os.environ.get returns ""
+                for k in env_override:
+                    os.environ.pop(k, None)
+
+                registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+                # The tools should still be registered
+                tools = registry.to_openai_tools()
+                tool_names = [t["function"]["name"] for t in tools]
+                assert "supermemory_save" in tool_names, "supermemory_save not registered"
+                assert "supermemory_search" in tool_names, "supermemory_search not registered"
+                assert "supermemory_profile" in tool_names, "supermemory_profile not registered"
+
+                # Calls return configuration error
+                r1 = registry.call("supermemory_save", content="test")
+                parsed1 = json.loads(r1)
+                assert "error" in parsed1, f"expected config error: {parsed1}"
+                assert "API_KEY" in parsed1["error"] or "配置" in parsed1["error"], f"wrong error: {parsed1}"
+
+                r2 = registry.call("supermemory_search", query="test")
+                parsed2 = json.loads(r2)
+                assert "error" in parsed2, f"expected config error: {parsed2}"
+
+                r3 = registry.call("supermemory_profile")
+                parsed3 = json.loads(r3)
+                assert "error" in parsed3, f"expected config error: {parsed3}"
+        finally:
+            db.close()
+
+
+def eval_supermemory_save_behavior():
+    """supermemory_save stores only explicit content and metadata, not env vars or raw prompts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            fake_client = _FakeSupermemoryClient()
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            # Monkeypatch the client used by the registered tools
+            # Find and replace the client in the save tool's closure
+            _patch_supermemory_client(registry, fake_client)
+
+            # Save with content and metadata
+            content = f"{_SUPERMEMORY_SENTINEL_CONTENT} {_SUPERMEMORY_SENTINEL_SECRET}"
+            metadata = '{"category": "test"}'
+            r = registry.call("supermemory_save", content=content, metadata=metadata)
+            parsed = json.loads(r)
+            assert "error" not in parsed, f"save failed: {parsed}"
+
+            # Verify what was sent to the API
+            assert len(fake_client.save_calls) == 1
+            call = fake_client.save_calls[0]
+            assert call["content"] == content, f"content mismatch: {call['content']}"
+            assert call["metadata"] == {"category": "test"}, f"metadata mismatch: {call['metadata']}"
+
+            # Verify no env vars leaked into the call
+            call_str = json.dumps(call)
+            assert "SUPERMEMORY_API_KEY" not in call_str, "env var leaked into save call"
+        finally:
+            db.close()
+
+
+def eval_supermemory_search_profile_bounded():
+    """Search/profile output is bounded; large payloads truncated; secrets not leaked."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            # Create large fake search response
+            large_memory = "x" * 5000
+            large_chunk = "y" * 5000
+            fake_search = {
+                "results": [
+                    {"id": "r1", "memory": large_memory, "similarity": 0.9, "metadata": {"k": "v"}},
+                    {"id": "r2", "chunk": large_chunk, "similarity": 0.8},
+                ],
+                "total": 2,
+            }
+            fake_client = _FakeSupermemoryClient(search_response=fake_search)
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            _patch_supermemory_client(registry, fake_client)
+
+            r = registry.call("supermemory_search", query="test", limit=5)
+            parsed = json.loads(r)
+
+            # Output should be bounded
+            assert "results" in parsed, f"missing results: {parsed}"
+            assert len(parsed["results"]) <= 20, f"too many results: {len(parsed['results'])}"
+
+            # Memory should be truncated to 2000 chars
+            for item in parsed["results"]:
+                if "memory" in item:
+                    assert len(item["memory"]) <= 2000, f"memory not bounded: {len(item['memory'])}"
+                if "chunk_preview" in item:
+                    assert len(item["chunk_preview"]) <= 500, f"chunk not bounded: {len(item['chunk_preview'])}"
+
+            # Profile with large payload
+            large_static = ["s" * 5000] * 30
+            large_dynamic = ["d" * 5000] * 30
+            fake_profile = {"profile": {"static": large_static, "dynamic": large_dynamic}}
+            fake_client._profile_response = fake_profile
+
+            r2 = registry.call("supermemory_profile")
+            parsed2 = json.loads(r2)
+            assert "profile" in parsed2, f"missing profile: {parsed2}"
+            for s in parsed2["profile"]["static"]:
+                assert len(s) <= 1000, f"static not bounded: {len(s)}"
+            for d in parsed2["profile"]["dynamic"]:
+                assert len(d) <= 1000, f"dynamic not bounded: {len(d)}"
+            assert len(parsed2["profile"]["static"]) <= 20, f"too many static: {len(parsed2['profile']['static'])}"
+            assert len(parsed2["profile"]["dynamic"]) <= 20, f"too many dynamic: {len(parsed2['profile']['dynamic'])}"
+        finally:
+            db.close()
+
+
+def eval_supermemory_metadata_bounding():
+    """Search output bounds metadata: strings truncated, non-scalars skipped, fields limited."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            _METADATA_LARGE_STRING = "Z" * 5000
+            _METADATA_NESTED_SECRET = "NORA_EVAL_META_SECRET_sk-9f8e7d6c5b4a"
+
+            fake_search = {
+                "results": [
+                    {
+                        "id": "r_meta",
+                        "memory": "short memory",
+                        "similarity": 0.9,
+                        "metadata": {
+                            "short_key": "ok",
+                            "huge_value": _METADATA_LARGE_STRING,
+                            "token": "sk-meta-should-not-leak",
+                            "nested": {"deep": {"secret": _METADATA_NESTED_SECRET}},
+                            "list_field": ["x" * 2000, "y" * 2000],
+                            "int_val": 42,
+                            "bool_val": True,
+                        },
+                    },
+                ],
+                "total": 1,
+            }
+            fake_client = _FakeSupermemoryClient(search_response=fake_search)
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            _patch_supermemory_client(registry, fake_client)
+
+            r = registry.call("supermemory_search", query="test")
+            parsed = json.loads(r)
+            assert "results" in parsed, f"missing results: {parsed}"
+            assert len(parsed["results"]) == 1
+
+            item = parsed["results"][0]
+            meta = item.get("metadata", {})
+            output_str = json.dumps(item, ensure_ascii=False)
+
+            # Nested objects should be skipped entirely (not exposed)
+            assert _METADATA_NESTED_SECRET not in output_str, "nested secret metadata leaked"
+            assert "sk-meta-should-not-leak" not in output_str, "secret-like metadata value leaked"
+            assert "nested" not in meta, f"nested object not skipped: {meta}"
+            assert "list_field" not in meta, f"list not skipped: {meta}"
+            assert "token" not in meta, f"secret-like metadata key not skipped: {meta}"
+
+            # Large strings should be truncated to 300 chars
+            if "huge_value" in meta:
+                assert len(meta["huge_value"]) <= 300, f"huge_value not truncated: {len(meta['huge_value'])}"
+            # The raw 5000-char string must not appear
+            assert _METADATA_LARGE_STRING not in output_str, "large metadata string leaked raw"
+
+            # Scalar values should be preserved
+            assert meta.get("short_key") == "ok", f"short string lost: {meta}"
+            assert meta.get("int_val") == 42, f"int lost: {meta}"
+            assert meta.get("bool_val") is True, f"bool lost: {meta}"
+        finally:
+            db.close()
+
+
+def eval_supermemory_container_tag_config():
+    """SUPERMEMORY_CONTAINER_TAG env var configures the container tag used by the client."""
+    from unittest.mock import patch as _patch
+    from mini_agent.toolkits.supermemory import SupermemoryClient
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            # Test with custom container tag
+            with _patch.dict(os.environ, {
+                "SUPERMEMORY_API_KEY": "test-key-12345",
+                "SUPERMEMORY_CONTAINER_TAG": "my_custom_tag",
+            }, clear=False):
+                client = SupermemoryClient.from_env()
+                assert client is not None, "client should be created with valid API key"
+                assert client.container_tag == "my_custom_tag", f"container tag mismatch: {client.container_tag}"
+
+            # Test default container tag
+            with _patch.dict(os.environ, {
+                "SUPERMEMORY_API_KEY": "test-key-12345",
+            }, clear=False):
+                os.environ.pop("SUPERMEMORY_CONTAINER_TAG", None)
+                client2 = SupermemoryClient.from_env()
+                assert client2 is not None, "client should be created with valid API key"
+                assert client2.container_tag == "nora", f"default container tag mismatch: {client2.container_tag}"
+
+            # Test no API key returns None
+            with _patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SUPERMEMORY_API_KEY", None)
+                os.environ.pop("SUPERMEMORY_BASE_URL", None)
+                os.environ.pop("SUPERMEMORY_CONTAINER_TAG", None)
+                client3 = SupermemoryClient.from_env()
+                assert client3 is None, f"client should be None without API key: {client3}"
+        finally:
+            db.close()
+
+
+def eval_supermemory_failure_isolation():
+    """Network/API error returns JSON error and does not crash registry calls."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            import urllib.error
+            fake_client = _FakeSupermemoryClient(raise_error=urllib.error.URLError("connection refused"))
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            _patch_supermemory_client(registry, fake_client)
+
+            # Save should return JSON error, not crash
+            r1 = registry.call("supermemory_save", content="test")
+            parsed1 = json.loads(r1)
+            assert "error" in parsed1, f"expected error for save: {parsed1}"
+
+            # Search should return JSON error
+            r2 = registry.call("supermemory_search", query="test")
+            parsed2 = json.loads(r2)
+            assert "error" in parsed2, f"expected error for search: {parsed2}"
+
+            # Profile should return JSON error
+            r3 = registry.call("supermemory_profile")
+            parsed3 = json.loads(r3)
+            assert "error" in parsed3, f"expected error for profile: {parsed3}"
+
+            # Registry still works for other tools
+            r4 = registry.call("calculate", expression="2 + 3")
+            assert "5" in r4, f"registry broken after supermemory error: {r4}"
+        finally:
+            db.close()
+
+
+def eval_supermemory_existing_memory_tools():
+    """Existing memory tools still work without Supermemory configured."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Save note works
+            r1 = registry.call("save_note", text="eval note content")
+            assert "已保存" in r1 or "saved" in r1.lower(), f"save_note failed: {r1}"
+
+            # Read notes works
+            r2 = registry.call("read_notes")
+            assert "eval note" in r2, f"read_notes failed: {r2}"
+
+            # calculate still works (basic registry sanity)
+            r3 = registry.call("calculate", expression="2 + 3")
+            assert "5" in r3, f"calculate failed: {r3}"
         finally:
             db.close()
 

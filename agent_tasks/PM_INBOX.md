@@ -12,7 +12,6 @@ Review file: agent_tasks/A_DONE.md
 Status: ready for Codex review
 
 Review file: agent_tasks/B_DONE.md
-
 ## 2026-05-31T11:39:19Z Claude A
 
 Status: ready for Codex review
@@ -68,7 +67,6 @@ Review file: agent_tasks/A_DONE.md
 Status: ready for Codex review
 
 Review file: agent_tasks/B_DONE.md
-
 ## 2026-05-27T13:31:59Z Claude A
 
 Status: ready for Codex review
@@ -528,3 +526,31 @@ Review file: agent_tasks/B_DONE.md
 Status: ready for Codex review
 
 Review file: agent_tasks/A_DONE.md
+## 2026-05-31T13:22:26Z Claude B
+
+Status: **BLOCKED** — TASK-036 runtime not present
+
+Review file: agent_tasks/B_DONE.md
+
+## 2026-05-31T13:40:58Z Claude A
+
+Status: ready for Codex review
+
+Review file: agent_tasks/A_DONE.md
+
+## 2026-05-31T14:01:55Z Claude B
+
+Status: completed, ready for Codex review
+
+Review file: agent_tasks/B_DONE.md
+## 2026-05-31T14:11:51Z Claude A
+
+Status: ready for Codex review
+
+Review file: agent_tasks/A_DONE.md
+
+## 2026-05-31T14:14:54Z Claude B
+
+Status: completed, ready for Codex review
+
+Review file: agent_tasks/B_DONE.md
