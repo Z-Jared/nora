@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空 — 当前无进行中任务）
+### TASK-020: Eval coverage for approval events
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-019 已完成
+- 目标: 为 durable approval event logging 增加 deterministic offline eval，覆盖 approved、denied、non-permissioned、failure isolation 和 serialized safety。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable event eval 区域；TASK-019 新增 `APPROVAL_REQUESTED` / `APPROVAL_DECIDED`。
+
+### TASK-021: Durable review-gate event logging
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: 无
+- 目标: 让 `git_review_staged_diff` 审查路径记录 review-gate durable events，作为 Agent OS review gate 的第一条 runtime slice。
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 review events；`mini_agent/git_tools.py`；`mini_agent/toolkits/registry_builder.py`。
 
 ## 已完成
 

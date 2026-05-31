@@ -1,54 +1,55 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-018: eval coverage for durable test-run event logging.
+TASK-020: eval coverage for durable approval event logging.
 
 ## Instructions
 
-TASK-017 is complete and approved. Add deterministic offline eval coverage for durable test-run events in `evals/run_evals.py`.
+TASK-019 is complete and approved. Add deterministic offline eval coverage for durable approval events in `evals/run_evals.py`.
 
 Add eval cases for:
 
-1. Successful test run:
-   - Exercise allowed `python3 -m unittest discover -s tests` in a temp project.
-   - Verify durable event log records started/finished events with safe test metadata.
+1. Approved permissioned tool:
+   - Exercise a permissioned tool with `confirm_action=lambda _: True`.
+   - Verify approval requested + decided events are recorded.
+   - Verify decided status is approved and existing tool behavior still succeeds.
 
-2. Failing test run:
-   - Exercise a deterministic failing unittest.
-   - Verify finished event records nonzero exit_code without raw failure body or traceback.
+2. Denied permissioned tool:
+   - Exercise a permissioned tool with `confirm_action=lambda _: False`.
+   - Verify approval requested + decided events are recorded.
+   - Verify decided status is denied, severity is warning, and cancellation result remains `已取消操作。`.
 
-3. Blocked command:
-   - Exercise a disallowed command.
-   - Verify blocked event is emitted and no started/finished event is recorded.
+3. Non-permissioned tool:
+   - Exercise a read/non-confirmation tool.
+   - Verify no approval events are emitted.
 
-4. Timeout or execution error:
-   - Exercise timeout and/or patched `OSError`.
-   - Verify error event is emitted while preserving existing operation behavior.
+4. Failure isolation:
+   - Broken/null event store should not change approved or denied confirmation behavior.
 
-5. Failure isolation:
-   - Broken/null event store should not change existing diagnostics behavior.
+5. Safety assertions:
+   - Use sentinel strings that would fail the eval if raw argument values, commit/message content, reason text, confirmation prompt text, or secret-like values are persisted in durable event payloads, summaries, or serialized records.
+   - Check forbidden payload keys such as `args`, `arguments`, `message`, `reason`, `prompt`, `raw_args`, `content`, `secret`, and `command`.
 
-6. Safety assertions:
-   - Use sentinel strings that would fail the eval if raw stdout/stderr, traceback text, raw exception text, reason text, full command text, or secret-like values are persisted in durable event payloads or serialized records.
-
-Keep evals offline and deterministic. Do not call live LLM APIs and do not reimplement TASK-017 runtime behavior in eval-only code.
+Keep evals offline and deterministic. Do not call live LLM APIs and do not reimplement TASK-019 runtime behavior in eval-only code. If you find a real runtime bug while writing evals, stop and report it in `agent_tasks/B_DONE.md` instead of silently changing runtime code.
 
 Suggested verification:
 
 ```bash
 python3 evals/run_evals.py
 python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent
+git diff --check
 ```
 
 ## Context
 
-- TASK-017 added `TEST_RUN_STARTED`, `TEST_RUN_FINISHED`, `TEST_RUN_ERROR`, and `TEST_RUN_BLOCKED`.
-- `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, file-edit, and shell-command event evals.
-- Keep this task eval-only. Runtime changes belong to TASK-017 and should not be duplicated here.
+- TASK-019 added `APPROVAL_REQUESTED` and `APPROVAL_DECIDED`.
+- Runtime tests already cover approval durable events in `tests/test_durable_events.py`.
+- `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, file-edit, shell-command, and test-run event evals.
+- Keep this task eval-only. Runtime changes belong to TASK-019 and should not be duplicated here.
 
 ## Completion Report
 
