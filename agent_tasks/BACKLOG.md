@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-036: Supermemory optional memory toolkit v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: 无
+- 目标: 增加可选 Supermemory-backed memory toolkit，让 Nora 在配置 `SUPERMEMORY_API_KEY` 时可以保存/检索外部长期记忆，同时保持核心 agent 离线可用。
+- 验证: `python3 -m unittest tests.test_mini_agent tests.test_tool_cache tests.test_durable_workers` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: Supermemory README/API docs；`mini_agent/toolkits/register_state.py` memory tool pattern；`mini_agent/toolkits/registry_builder.py` registry wiring。
+
+### TASK-037: Eval coverage for optional Supermemory memory toolkit
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-036 runtime 存在后执行
+- 目标: 为 Supermemory integration 增加 deterministic offline eval，覆盖 optional config、save/search/profile、安全边界、bounded output 和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` memory/tool eval 区域；TASK-036 新增工具。
 
 ## 已完成
 
