@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-026: Durable task registry action events
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-025 已完成
+- 目标: 为 durable task registry tools 的 create/update/retry/delete 操作记录安全 durable events，让任务状态变更也能被 PM/runtime 审计。
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 event log；`mini_agent/toolkits/registry_builder.py` durable task tool 区域；`mini_agent/durable_events.py` task lifecycle event types。
+
+### TASK-027: Eval coverage for durable event query filters
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-025 已完成
+- 目标: 为 `DurableEventStore.list_events` 和 `list_durable_events` 的过滤能力增加 deterministic offline eval，覆盖 SQLite、JSONL、registry wiring、filter-before-limit、newest-first 和 payload 不泄漏。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable event eval 区域；`mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`。
 
 ## 已完成
 

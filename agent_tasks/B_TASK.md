@@ -1,53 +1,55 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-024: eval coverage for durable handoff event logging.
+TASK-027: eval coverage for durable event query filters.
 
-## Instructions
+TASK-025 added query filters to `DurableEventStore.list_events(...)` and the `list_durable_events` registry tool. Add deterministic offline eval coverage so future event-log changes cannot silently break PM/reviewer/runtime audit queries.
 
-TASK-023 is complete and approved. Add deterministic offline eval coverage for durable handoff events in `evals/run_evals.py`.
+## Scope
 
-Add eval cases for:
+Edit `evals/run_evals.py` only unless you discover a real runtime bug. If you find a runtime bug, stop and report it in `agent_tasks/B_DONE.md` instead of fixing runtime code in this task.
 
-1. Handoff created:
-   - Exercise task finish through `TaskManager` or the default registry task tools.
-   - Verify `HANDOFF_CREATED` is recorded with safe metadata.
+Add eval cases covering:
 
-2. Handoff accepted:
-   - Finish a task into history, then restore it.
-   - Verify `HANDOFF_ACCEPTED` is recorded with safe metadata.
+1. SQLite event query filters:
+   - Filter by `event_type`, `source`, `severity`, `worker_id`, `trace_id`, and `checkpoint_id`.
+   - Combined filters narrow results correctly.
 
-3. Safety assertions:
-   - Use sentinel strings for raw goal, summary, step text, note text, and a secret-like value.
-   - Verify those sentinels are absent from event payloads, summaries, and full serialized `event.to_dict()` output for handoff events.
-   - Check forbidden payload keys such as `goal`, `summary`, `steps`, `step_text`, `note`, `history_json`, `raw`, `prompt`, `content`, and `secret`.
+2. JSONL event query filters:
+   - At least `event_type`, `source` + `severity`, and `trace_id`/`checkpoint_id`.
 
-4. Failure isolation:
-   - Broken/null event store should not change finish or restore behavior.
+3. Registry wiring:
+   - `list_durable_events` accepts the new filters.
+   - Registry output includes `source` and `severity`.
+   - Registry output does not include `payload`.
 
-5. Registry wiring:
-   - Through `build_default_registry`, verify task tools produce handoff events via the same durable event store.
+4. Query semantics:
+   - Filters compose with `task_id`.
+   - Filtering happens before `max_results` slicing.
+   - Results remain newest-first.
+   - Empty/whitespace filters behave like no filter.
 
-Keep evals offline and deterministic. Do not call live LLM APIs and do not reimplement TASK-023 runtime behavior in eval-only code. If you find a real runtime bug while writing evals, stop and report it in `agent_tasks/B_DONE.md` instead of silently changing runtime code.
+5. Safety:
+   - Use sentinel payload strings and a secret-like value.
+   - Verify `list_durable_events` summaries do not expose event payloads or sentinel values.
 
-Suggested verification:
+Keep evals offline and deterministic. Do not call live LLM APIs.
+
+## Verification
+
+Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent
+python3 -m unittest tests.test_durable_events tests.test_mini_agent
 git diff --check
 ```
 
-## Context
-
-- TASK-023 added `HANDOFF_CREATED` and `HANDOFF_ACCEPTED`.
-- Runtime tests already cover handoff durable events in `tests/test_durable_events.py`.
-- `evals/run_evals.py` already has durable event lifecycle, tool-call, model-call, file-edit, shell-command, test-run, approval, and review-gate event evals.
-- Keep this task eval-only. Runtime changes belong to TASK-023 and should not be duplicated here.
+If you touch anything outside `evals/run_evals.py`, also run the focused tests for those files.
 
 ## Completion Report
 
