@@ -2126,5 +2126,220 @@ class HandoffDurableEventTests(unittest.TestCase):
         self.assertIn("已恢复任务: task_1", restore_result)
 
 
+class EventQueryFilterTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _seed_events(self):
+        self.store.record("task_created", task_id="dtask_1", source="task_manager", severity="info", summary="a")
+        self.store.record("tool_call_started", task_id="dtask_1", source="controller", severity="info", summary="b")
+        self.store.record("tool_call_error", task_id="dtask_2", source="controller", severity="warning", summary="c")
+        self.store.record("model_call_finished", task_id="dtask_2", source="controller", severity="info",
+                          trace_id="trace_1", summary="d")
+        self.store.record("approval_decided", source="registry", severity="warning",
+                          worker_id="worker_1", checkpoint_id="cp_1", summary="e")
+
+    def test_filter_by_event_type(self):
+        self._seed_events()
+
+        results = self.store.list_events(event_type="tool_call_started")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].event_type, "tool_call_started")
+        self.assertEqual(results[0].summary, "b")
+
+    def test_filter_by_source(self):
+        self._seed_events()
+
+        results = self.store.list_events(source="registry")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].source, "registry")
+
+    def test_filter_by_severity(self):
+        self._seed_events()
+
+        results = self.store.list_events(severity="warning")
+
+        self.assertEqual(len(results), 2)
+        for r in results:
+            self.assertEqual(r.severity, "warning")
+
+    def test_filter_by_worker_id(self):
+        self._seed_events()
+
+        results = self.store.list_events(worker_id="worker_1")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].worker_id, "worker_1")
+
+    def test_filter_by_trace_id(self):
+        self._seed_events()
+
+        results = self.store.list_events(trace_id="trace_1")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].trace_id, "trace_1")
+
+    def test_filter_by_checkpoint_id(self):
+        self._seed_events()
+
+        results = self.store.list_events(checkpoint_id="cp_1")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].checkpoint_id, "cp_1")
+
+    def test_combined_filters(self):
+        self._seed_events()
+
+        results = self.store.list_events(task_id="dtask_1", event_type="tool_call_started")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].task_id, "dtask_1")
+        self.assertEqual(results[0].event_type, "tool_call_started")
+
+    def test_combined_filters_no_match(self):
+        self._seed_events()
+
+        results = self.store.list_events(task_id="dtask_1", severity="warning")
+
+        self.assertEqual(len(results), 0)
+
+    def test_max_results_still_clamped(self):
+        for i in range(10):
+            self.store.record("task_created", summary=f"e{i}")
+
+        results = self.store.list_events(max_results=3)
+
+        self.assertEqual(len(results), 3)
+
+    def test_newest_first_order(self):
+        self._seed_events()
+
+        results = self.store.list_events()
+
+        self.assertEqual(results[0].summary, "e")
+        self.assertEqual(results[-1].summary, "a")
+
+    def test_empty_filter_behaves_as_no_filter(self):
+        self._seed_events()
+
+        all_results = self.store.list_events()
+        filtered = self.store.list_events(event_type="", source="", severity="")
+
+        self.assertEqual(len(all_results), len(filtered))
+
+    def test_backward_compatibility_task_id_only(self):
+        self._seed_events()
+
+        results = self.store.list_events(task_id="dtask_1")
+
+        self.assertEqual(len(results), 2)
+        for r in results:
+            self.assertEqual(r.task_id, "dtask_1")
+
+
+class EventQueryFilterJsonlTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.store = DurableEventStore(path=self.root / "events.jsonl")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _seed_events(self):
+        self.store.record("task_created", task_id="dtask_1", source="task_manager", severity="info", summary="a")
+        self.store.record("tool_call_started", task_id="dtask_1", source="controller", severity="info", summary="b")
+        self.store.record("tool_call_error", task_id="dtask_2", source="controller", severity="warning", summary="c")
+        self.store.record("model_call_finished", task_id="dtask_2", source="controller", severity="info",
+                          trace_id="trace_1", summary="d")
+        self.store.record("approval_decided", source="registry", severity="warning",
+                          worker_id="worker_1", checkpoint_id="cp_1", summary="e")
+
+    def test_jsonl_filter_by_event_type(self):
+        self._seed_events()
+
+        results = self.store.list_events(event_type="tool_call_error")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].event_type, "tool_call_error")
+
+    def test_jsonl_filter_by_source_and_severity(self):
+        self._seed_events()
+
+        results = self.store.list_events(source="controller", severity="warning")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].summary, "c")
+
+    def test_jsonl_filter_by_trace_id(self):
+        self._seed_events()
+
+        results = self.store.list_events(trace_id="trace_1")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].trace_id, "trace_1")
+
+    def test_jsonl_backward_compatibility(self):
+        self._seed_events()
+
+        results = self.store.list_events(task_id="dtask_2")
+
+        self.assertEqual(len(results), 2)
+
+
+class RegistryEventQueryFilterTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(db=self.db, workspace_root=self.root)
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def test_registry_tool_accepts_new_filters(self):
+        self.event_store.record("task_created", task_id="dtask_1", source="task_manager", severity="info", summary="a")
+        self.event_store.record("tool_call_error", task_id="dtask_2", source="controller", severity="warning", summary="b")
+
+        result = self.registry.call("list_durable_events", event_type="tool_call_error", severity="warning")
+        parsed = json.loads(result)
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["event_type"], "tool_call_error")
+
+    def test_registry_tool_includes_source_and_severity(self):
+        self.event_store.record("task_created", source="task_manager", severity="info", summary="test")
+
+        result = self.registry.call("list_durable_events")
+        parsed = json.loads(result)
+
+        self.assertEqual(len(parsed), 1)
+        self.assertIn("source", parsed[0])
+        self.assertIn("severity", parsed[0])
+        self.assertEqual(parsed[0]["source"], "task_manager")
+        self.assertEqual(parsed[0]["severity"], "info")
+
+    def test_registry_tool_backward_compatible(self):
+        self.event_store.record("task_created", task_id="dtask_1", summary="a")
+        self.event_store.record("tool_call_started", task_id="dtask_2", summary="b")
+
+        result = self.registry.call("list_durable_events", task_id="dtask_1")
+        parsed = json.loads(result)
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["task_id"], "dtask_1")
+
+
 if __name__ == "__main__":
     unittest.main()

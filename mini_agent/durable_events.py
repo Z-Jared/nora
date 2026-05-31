@@ -216,6 +216,34 @@ def _sanitize_summary(text: str) -> str:
         return text[:_SUMMARY_LIMIT] + "..."
     return text
 
+@dataclass(frozen=True)
+class _Filters:
+    task_id: str = ""
+    event_type: str = ""
+    source: str = ""
+    severity: str = ""
+    worker_id: str = ""
+    trace_id: str = ""
+    checkpoint_id: str = ""
+
+
+def _apply_jsonl_filters(events: list[DurableEvent], filters: _Filters) -> list[DurableEvent]:
+    if filters.task_id:
+        events = [e for e in events if e.task_id == filters.task_id]
+    if filters.event_type:
+        events = [e for e in events if e.event_type == filters.event_type]
+    if filters.source:
+        events = [e for e in events if e.source == filters.source]
+    if filters.severity:
+        events = [e for e in events if e.severity == filters.severity]
+    if filters.worker_id:
+        events = [e for e in events if e.worker_id == filters.worker_id]
+    if filters.trace_id:
+        events = [e for e in events if e.trace_id == filters.trace_id]
+    if filters.checkpoint_id:
+        events = [e for e in events if e.checkpoint_id == filters.checkpoint_id]
+    return events
+
 
 class DurableEventStore:
     """Append-only event store with SQLite and JSONL backends."""
@@ -256,13 +284,31 @@ class DurableEventStore:
             self._append_jsonl(event)
         return event
 
-    def list_events(self, task_id: str = "", max_results: int = 50) -> list[DurableEvent]:
+    def list_events(
+        self,
+        task_id: str = "",
+        max_results: int = 50,
+        event_type: str = "",
+        source: str = "",
+        severity: str = "",
+        worker_id: str = "",
+        trace_id: str = "",
+        checkpoint_id: str = "",
+    ) -> list[DurableEvent]:
         max_results = max(1, min(int(max_results or 50), 500))
+        filters = _Filters(
+            task_id=task_id.strip(),
+            event_type=event_type.strip(),
+            source=source.strip(),
+            severity=severity.strip(),
+            worker_id=worker_id.strip(),
+            trace_id=trace_id.strip(),
+            checkpoint_id=checkpoint_id.strip(),
+        )
         if self.db:
-            return self._list_db(task_id=task_id.strip(), max_results=max_results)
+            return self._list_db(filters, max_results)
         events = self._read_jsonl()
-        if task_id.strip():
-            events = [event for event in events if event.task_id == task_id.strip()]
+        events = _apply_jsonl_filters(events, filters)
         return events[-max_results:][::-1]
 
     def get_event(self, event_id: str) -> Optional[DurableEvent]:
@@ -302,27 +348,41 @@ class DurableEventStore:
         )
         self.db.conn.commit()
 
-    def _list_db(self, task_id: str, max_results: int) -> list[DurableEvent]:
+    def _list_db(self, filters: "_Filters", max_results: int) -> list[DurableEvent]:
         self._ensure_table()
-        if task_id:
-            rows = self.db.conn.execute(
-                """SELECT event_id, task_id, event_type, created_at, summary,
-                          payload_json, trace_id, checkpoint_id, worker_id,
-                          source, severity
-                   FROM durable_events
-                   WHERE task_id = ?
-                   ORDER BY rowid DESC LIMIT ?""",
-                (task_id, max_results),
-            ).fetchall()
-        else:
-            rows = self.db.conn.execute(
-                """SELECT event_id, task_id, event_type, created_at, summary,
-                          payload_json, trace_id, checkpoint_id, worker_id,
-                          source, severity
-                   FROM durable_events
-                   ORDER BY rowid DESC LIMIT ?""",
-                (max_results,),
-            ).fetchall()
+        conditions = []
+        params: list = []
+        if filters.task_id:
+            conditions.append("task_id = ?")
+            params.append(filters.task_id)
+        if filters.event_type:
+            conditions.append("event_type = ?")
+            params.append(filters.event_type)
+        if filters.source:
+            conditions.append("source = ?")
+            params.append(filters.source)
+        if filters.severity:
+            conditions.append("severity = ?")
+            params.append(filters.severity)
+        if filters.worker_id:
+            conditions.append("worker_id = ?")
+            params.append(filters.worker_id)
+        if filters.trace_id:
+            conditions.append("trace_id = ?")
+            params.append(filters.trace_id)
+        if filters.checkpoint_id:
+            conditions.append("checkpoint_id = ?")
+            params.append(filters.checkpoint_id)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(max_results)
+        rows = self.db.conn.execute(
+            f"""SELECT event_id, task_id, event_type, created_at, summary,
+                       payload_json, trace_id, checkpoint_id, worker_id,
+                       source, severity
+                FROM durable_events{where}
+                ORDER BY rowid DESC LIMIT ?""",
+            params,
+        ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def _get_db(self, event_id: str) -> Optional[DurableEvent]:

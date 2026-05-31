@@ -32,7 +32,6 @@ Review file: agent_tasks/B_DONE.md
 Status: ready for Codex review
 
 Review file: agent_tasks/A_DONE.md
-
 ## 2026-05-27T12:29:38Z Claude B
 
 Status: ready for Codex review
@@ -454,3 +453,14 @@ Review file: agent_tasks/A_DONE.md
 Status: completed, ready for Codex review
 
 Review file: agent_tasks/B_DONE.md
+## 2026-05-31T09:01:56Z Claude B
+
+Status: completed, ready for Codex review
+
+Review file: agent_tasks/B_DONE.md
+
+## 2026-05-31T09:02:07Z Claude A
+
+Status: DONE
+
+Review file: agent_tasks/A_DONE.md

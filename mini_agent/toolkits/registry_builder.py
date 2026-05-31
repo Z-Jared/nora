@@ -177,8 +177,26 @@ def build_default_registry(
         permission=ToolPermission(category="logs", risk="read"),
     )
 
-    def _list_durable_events_json(task_id: str = "", max_results: int = 50) -> str:
-        events = durable_event_store.list_events(task_id=task_id or "", max_results=max_results)
+    def _list_durable_events_json(
+        task_id: str = "",
+        max_results: int = 50,
+        event_type: str = "",
+        source: str = "",
+        severity: str = "",
+        worker_id: str = "",
+        trace_id: str = "",
+        checkpoint_id: str = "",
+    ) -> str:
+        events = durable_event_store.list_events(
+            task_id=task_id or "",
+            max_results=max_results,
+            event_type=event_type or "",
+            source=source or "",
+            severity=severity or "",
+            worker_id=worker_id or "",
+            trace_id=trace_id or "",
+            checkpoint_id=checkpoint_id or "",
+        )
         summary = [
             {
                 "event_id": event.event_id,
@@ -189,6 +207,8 @@ def build_default_registry(
                 "trace_id": event.trace_id,
                 "checkpoint_id": event.checkpoint_id,
                 "worker_id": event.worker_id,
+                "source": event.source,
+                "severity": event.severity,
             }
             for event in events
         ]
@@ -202,7 +222,7 @@ def build_default_registry(
 
     registry.register(
         "list_durable_events",
-        "列出 durable event log 中最近的事件，可按 task_id 过滤。",
+        "列出 durable event log 中最近的事件，可按 task_id、event_type、source、severity、worker_id、trace_id、checkpoint_id 过滤。",
         _list_durable_events_json,
         parameters={
             "type": "object",
@@ -214,6 +234,30 @@ def build_default_registry(
                 "max_results": {
                     "type": "integer",
                     "description": "最多返回多少条，默认 50，最大 500",
+                },
+                "event_type": {
+                    "type": "string",
+                    "description": "可选事件类型过滤，例如 tool_call_started、model_call_finished",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "可选事件来源过滤，例如 controller、registry、task_manager",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "可选严重级别过滤：info、warning",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "可选 worker id 过滤",
+                },
+                "trace_id": {
+                    "type": "string",
+                    "description": "可选 trace id 过滤",
+                },
+                "checkpoint_id": {
+                    "type": "string",
+                    "description": "可选 checkpoint id 过滤",
                 },
             },
         },

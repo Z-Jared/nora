@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-024: Eval coverage for handoff events
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-023 已完成
-- 目标: 为 durable handoff event logging 增加 deterministic offline eval，覆盖 finish handoff_created、restore handoff_accepted、serialized safety、failure isolation 和 registry wiring。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` durable event eval 区域；TASK-023 新增 `HANDOFF_CREATED` / `HANDOFF_ACCEPTED`。
-
-### TASK-025: Durable event query filters
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: 无
-- 目标: 为 `DurableEventStore.list_events` 和 `list_durable_events` 工具增加 event_type/source/severity/worker_id/trace_id/checkpoint_id 过滤能力，让事件日志更适合审计。
-- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 queryable event log；`mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`。
+（空）
 
 ## 已完成
+
+### TASK-025: Durable event query filters ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_mini_agent` 262 tests OK；`python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 395 tests OK；`python3 evals/run_evals.py` 127 passed；`python3 -m unittest discover -s tests` 1242 tests OK；`git diff --check` OK。
+- 内容: `DurableEventStore.list_events` 支持 event_type、source、severity、worker_id、trace_id、checkpoint_id 过滤，SQLite 和 JSONL 后端一致；过滤与 task_id/max_results 组合，结果保持 newest-first 且上限 500；`list_durable_events` 工具暴露新过滤参数并在摘要中返回 source/severity，同时仍不暴露 payload。
+
+### TASK-024: Eval coverage for handoff events ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 127 passed；`python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 395 tests OK；`python3 -m unittest discover -s tests` 1242 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 handoff_created、handoff_accepted、serialized safety、broken/no event store failure isolation 和 registry wiring；用 goal、summary、step、note、secret sentinel 与 forbidden payload keys 断言 handoff events 不泄漏原始任务内容。
 
 ### TASK-023: Durable handoff event logging ✅
 - 完成者: Claude A

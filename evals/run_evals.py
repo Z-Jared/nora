@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -171,6 +171,11 @@ def main() -> int:
         EvalCase("review_gate_event_sensitive_path", eval_review_gate_event_sensitive_path),
         EvalCase("review_gate_event_git_error", eval_review_gate_event_git_error),
         EvalCase("review_gate_event_failure_isolation", eval_review_gate_event_failure_isolation),
+        EvalCase("handoff_event_created", eval_handoff_event_created),
+        EvalCase("handoff_event_accepted", eval_handoff_event_accepted),
+        EvalCase("handoff_event_safety", eval_handoff_event_safety),
+        EvalCase("handoff_event_failure_isolation", eval_handoff_event_failure_isolation),
+        EvalCase("handoff_event_registry_wiring", eval_handoff_event_registry_wiring),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -3542,6 +3547,228 @@ def eval_review_gate_event_failure_isolation():
         git4 = GitTools(tmpdir, event_store=None)
         result4 = git4.review_staged_diff()
         assert "README.md" in result4, f"review must work without event store, got: {result4}"
+
+
+# --- Handoff event eval helpers ---
+
+_HANDOFF_SENTINEL_GOAL = "NORA_EVAL_HANDOFF_GOAL_SENTINEL_b5d7f9a1"
+_HANDOFF_SENTINEL_SUMMARY = "NORA_EVAL_HANDOFF_SUMMARY_SENTINEL_c6e8b2d4"
+_HANDOFF_SENTINEL_STEP = "NORA_EVAL_HANDOFF_STEP_SENTINEL_d7f9c3e5"
+_HANDOFF_SENTINEL_NOTE = "NORA_EVAL_HANDOFF_NOTE_SENTINEL_e8a1d4f6"
+_HANDOFF_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-handoff-3b2a1c9e"
+_HANDOFF_FORBIDDEN_PAYLOAD_KEYS = {
+    "goal", "summary", "steps", "step_text", "note", "history_json",
+    "raw", "prompt", "content", "secret", "command", "args",
+}
+
+
+def _handoff_events(event_store, event_type=None):
+    events = event_store.list_events()
+    handoff_types = (HANDOFF_CREATED, HANDOFF_ACCEPTED)
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in handoff_types]
+
+
+def _serialized_handoff_events(event_store):
+    import json as _json
+    return _json.dumps(
+        [event.to_dict() for event in _handoff_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_handoff_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_handoff_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"handoff event stored forbidden raw value {value!r}: {serialized[:500]}"
+    for event in _handoff_events(event_store):
+        leaked_keys = _HANDOFF_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"handoff event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_handoff_event_created():
+    """Task finish records HANDOFF_CREATED with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            manager = TaskManager(
+                tmpdir / "task.json",
+                history_path=tmpdir / "history.jsonl",
+                event_store=event_store,
+            )
+            manager.start(_HANDOFF_SENTINEL_GOAL, f"{_HANDOFF_SENTINEL_STEP}\nstep two")
+            manager.update_step(1, "done", summary=_HANDOFF_SENTINEL_SUMMARY)
+            result = manager.finish(_HANDOFF_SENTINEL_SUMMARY)
+
+            assert "已完成任务" in result, f"expected finish message, got: {result}"
+
+            created = _handoff_events(event_store, HANDOFF_CREATED)
+            assert len(created) == 1, f"expected 1 handoff_created, got {len(created)}"
+
+            evt = created[0]
+            assert evt.payload["artifact_type"] == "task_history"
+            assert evt.payload["status"] == "created"
+            assert evt.payload["step_count"] == 2
+            assert evt.payload["done_step_count"] == 1
+            assert evt.payload["summary_present"] is True
+            assert evt.severity == "info"
+
+            # Safety: raw goal/summary/step must not leak
+            _assert_handoff_events_safe(event_store, [
+                _HANDOFF_SENTINEL_GOAL, _HANDOFF_SENTINEL_SUMMARY,
+                _HANDOFF_SENTINEL_STEP, _HANDOFF_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
+
+
+def eval_handoff_event_accepted():
+    """Finish then restore records HANDOFF_ACCEPTED with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            manager = TaskManager(
+                tmpdir / "task.json",
+                history_path=tmpdir / "history.jsonl",
+                event_store=event_store,
+            )
+            manager.start(_HANDOFF_SENTINEL_GOAL, "step one\nstep two")
+            manager.update_step(1, "done", note=_HANDOFF_SENTINEL_NOTE)
+            manager.finish(_HANDOFF_SENTINEL_SUMMARY)
+
+            # Restore from history
+            result = manager.restore("task_1")
+            assert "已恢复任务" in result, f"expected restore message, got: {result}"
+
+            accepted = _handoff_events(event_store, HANDOFF_ACCEPTED)
+            assert len(accepted) == 1, f"expected 1 handoff_accepted, got {len(accepted)}"
+
+            evt = accepted[0]
+            assert evt.payload["artifact_type"] == "task_history"
+            assert evt.payload["status"] == "accepted"
+            assert evt.payload["step_count"] == 2
+            assert evt.payload["restored_from_present"] is True
+            assert evt.severity == "info"
+
+            # Safety: raw goal/summary/note must not leak
+            _assert_handoff_events_safe(event_store, [
+                _HANDOFF_SENTINEL_GOAL, _HANDOFF_SENTINEL_SUMMARY,
+                _HANDOFF_SENTINEL_NOTE, _HANDOFF_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
+
+
+def eval_handoff_event_safety():
+    """Sentinel strings in goal/summary/steps/notes must not appear in serialized handoff events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            event_store = DurableEventStore(db=db)
+            manager = TaskManager(
+                tmpdir / "task.json",
+                history_path=tmpdir / "history.jsonl",
+                event_store=event_store,
+            )
+            # Inject all sentinels
+            goal = f"goal {_HANDOFF_SENTINEL_SECRET} end"
+            steps = f"{_HANDOFF_SENTINEL_STEP}\nstep two"
+            summary = f"summary {_HANDOFF_SENTINEL_SECRET} done"
+            note = f"note {_HANDOFF_SENTINEL_SECRET} text"
+
+            manager.start(goal, steps)
+            manager.update_step(1, "done", note=note, summary=summary)
+            manager.finish(summary)
+            manager.restore("task_1")
+
+            # All sentinels must be absent from serialized handoff events
+            _assert_handoff_events_safe(event_store, [
+                _HANDOFF_SENTINEL_GOAL, _HANDOFF_SENTINEL_SUMMARY,
+                _HANDOFF_SENTINEL_STEP, _HANDOFF_SENTINEL_NOTE,
+                _HANDOFF_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
+
+
+def eval_handoff_event_failure_isolation():
+    """Broken/null event store must not change finish or restore behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+
+        # 1. Finish with broken event store
+        manager = TaskManager(
+            tmpdir / "task1.json",
+            history_path=tmpdir / "history1.jsonl",
+            event_store=BrokenEventStore(),
+        )
+        manager.start("goal one", "step one")
+        result = manager.finish("done")
+        assert "已完成任务" in result, f"finish must work with broken store, got: {result}"
+
+        # 2. Restore with broken event store
+        result2 = manager.restore("task_1")
+        assert "已恢复任务" in result2, f"restore must work with broken store, got: {result2}"
+
+        # 3. Finish with no event store
+        manager2 = TaskManager(
+            tmpdir / "task2.json",
+            history_path=tmpdir / "history2.jsonl",
+            event_store=None,
+        )
+        manager2.start("goal two", "step one")
+        result3 = manager2.finish("done")
+        assert "已完成任务" in result3, f"finish must work without event store, got: {result3}"
+
+        # 4. Restore with no event store
+        result4 = manager2.restore("task_1")
+        assert "已恢复任务" in result4, f"restore must work without event store, got: {result4}"
+
+
+def eval_handoff_event_registry_wiring():
+    """Through build_default_registry, task tools produce handoff events via the same durable event store."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+
+            # Use registry task tools
+            registry.call("start_task", goal=_HANDOFF_SENTINEL_GOAL, steps=_HANDOFF_SENTINEL_STEP)
+            registry.call("update_task_step", step_id=1, status="done", summary=_HANDOFF_SENTINEL_SUMMARY)
+            registry.call("finish_task", summary=_HANDOFF_SENTINEL_SUMMARY)
+
+            created = _handoff_events(event_store, HANDOFF_CREATED)
+            assert len(created) == 1, f"expected 1 handoff_created via registry, got {len(created)}"
+            assert created[0].payload["artifact_type"] == "task_history"
+            assert created[0].payload["status"] == "created"
+
+            # Restore via registry
+            registry.call("restore_task", history_id="task_1")
+
+            accepted = _handoff_events(event_store, HANDOFF_ACCEPTED)
+            assert len(accepted) == 1, f"expected 1 handoff_accepted via registry, got {len(accepted)}"
+            assert accepted[0].payload["status"] == "accepted"
+
+            # Safety: sentinels must not leak
+            _assert_handoff_events_safe(event_store, [
+                _HANDOFF_SENTINEL_GOAL, _HANDOFF_SENTINEL_SUMMARY,
+                _HANDOFF_SENTINEL_STEP, _HANDOFF_SENTINEL_SECRET,
+            ])
+        finally:
+            db.close()
 
 
 def _init_git_repo(root: Path) -> None:
