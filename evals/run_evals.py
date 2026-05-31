@@ -212,6 +212,11 @@ def main() -> int:
         EvalCase("memory_record_safety", eval_memory_record_safety),
         EvalCase("memory_record_compatibility", eval_memory_record_compatibility),
         EvalCase("memory_record_failure_isolation", eval_memory_record_failure_isolation),
+        EvalCase("mcp_optional_dependency", eval_mcp_optional_dependency),
+        EvalCase("mcp_tool_export_basics", eval_mcp_tool_export_basics),
+        EvalCase("mcp_safety_allowlist", eval_mcp_safety_allowlist),
+        EvalCase("mcp_compatibility", eval_mcp_compatibility),
+        EvalCase("mcp_failure_isolation", eval_mcp_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -5421,6 +5426,223 @@ def eval_memory_record_failure_isolation():
             # Registry still works after errors
             r7 = registry.call("calculate", expression="2 + 3")
             assert "5" in r7, f"registry broken after errors: {r7}"
+        finally:
+            db.close()
+
+
+# --- MCP eval helpers ---
+
+_MCP_SENTINEL_OUTPUT = "NORA_EVAL_MCP_OUTPUT_SENTINEL_a1b2c3d4"
+
+
+def eval_mcp_optional_dependency():
+    """MCP module is importable without mcp package; create_server raises clear ImportError."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            # Module must be importable without mcp installed
+            import importlib
+            mod = importlib.import_module("mini_agent.mcp_server")
+            assert hasattr(mod, "DEFAULT_ALLOWLIST"), "missing DEFAULT_ALLOWLIST"
+            assert hasattr(mod, "create_server"), "missing create_server"
+            assert hasattr(mod, "main"), "missing main"
+            assert hasattr(mod, "registry_to_mcp_tools"), "missing registry_to_mcp_tools"
+            assert hasattr(mod, "call_mcp_tool"), "missing call_mcp_tool"
+
+            # create_server raises ImportError with clear guidance
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            try:
+                mod.create_server(registry)
+                # If mcp is installed, that's fine too
+            except ImportError as exc:
+                msg = str(exc)
+                assert "mcp" in msg.lower(), f"error should mention mcp: {msg}"
+                assert "pip install" in msg or "安装" in msg, f"error should mention install: {msg}"
+        finally:
+            db.close()
+
+
+def eval_mcp_tool_export_basics():
+    """Allowed tools appear in MCP metadata with stable names/descriptions/schemas."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            from mini_agent.mcp_server import registry_to_mcp_tools, DEFAULT_ALLOWLIST
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Get MCP tool metadata
+            tools = registry_to_mcp_tools(registry)
+            assert len(tools) > 0, "should export at least one tool"
+
+            # Check allowed tools appear
+            names = {t["name"] for t in tools}
+            for allowed in DEFAULT_ALLOWLIST:
+                # Only check if the tool is actually registered
+                if allowed in {fn["function"]["name"] for fn in registry.to_openai_tools()}:
+                    assert allowed in names, f"{allowed} should be in MCP metadata"
+
+            # Check metadata structure is stable and JSON-serializable
+            for tool in tools:
+                assert "name" in tool, f"missing name: {tool}"
+                assert "description" in tool, f"missing description: {tool}"
+                assert "inputSchema" in tool, f"missing inputSchema: {tool}"
+                assert isinstance(tool["name"], str), f"name not string: {tool['name']}"
+                assert isinstance(tool["description"], str), f"description not string"
+                assert isinstance(tool["inputSchema"], dict), f"inputSchema not dict"
+
+            # Must be JSON-serializable
+            serialized = json.dumps(tools, ensure_ascii=False)
+            assert len(serialized) > 0, "serialization failed"
+
+            # Verify specific tools
+            calc = next((t for t in tools if t["name"] == "calculate"), None)
+            assert calc is not None, "calculate should be in MCP metadata"
+            assert calc["inputSchema"]["type"] == "object"
+            assert "expression" in calc["inputSchema"]["properties"]
+        finally:
+            db.close()
+
+
+def eval_mcp_safety_allowlist():
+    """High-risk tools not exposed by default; disallowed calls return JSON errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            from mini_agent.mcp_server import (
+                registry_to_mcp_tools, is_tool_allowed, call_mcp_tool, DEFAULT_ALLOWLIST,
+            )
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # High-risk tools NOT in default allowlist
+            high_risk = ["run_shell_command", "write_file", "git_commit", "git_push",
+                         "browser_click", "process_start"]
+            for name in high_risk:
+                assert not is_tool_allowed(name), f"{name} should NOT be allowed"
+
+            # High-risk tools NOT in exported metadata
+            tools = registry_to_mcp_tools(registry)
+            names = {t["name"] for t in tools}
+            for name in high_risk:
+                assert name not in names, f"{name} should NOT be in MCP metadata"
+
+            # Disallowed tool call returns JSON error, not exception
+            result = call_mcp_tool(registry, "run_shell_command", {"command": "pwd"})
+            parsed = json.loads(result)
+            assert "error" in parsed, f"expected error for disallowed tool: {parsed}"
+            assert "未在允许列表中" in parsed["error"]
+
+            # Output bounded
+            long_output = "Y" * 10000
+            registry.register("long_mcp_tool", "long", lambda: long_output,
+                              parameters={"type": "object", "properties": {}})
+            result2 = call_mcp_tool(registry, "long_mcp_tool", {},
+                                    allowlist={"long_mcp_tool"})
+            assert _MCP_SENTINEL_OUTPUT not in result2, "sentinel leaked"
+            assert long_output not in result2, "long output not truncated"
+        finally:
+            db.close()
+
+
+def eval_mcp_compatibility():
+    """Existing ToolRegistry and memory tools work through the adapter."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            from mini_agent.mcp_server import call_mcp_tool, registry_to_mcp_tools
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Existing OpenAI-style tool metadata still works
+            openai_tools = registry.to_openai_tools()
+            assert len(openai_tools) > 0, "OpenAI tools should still work"
+            calc_openai = next((t for t in openai_tools if t["function"]["name"] == "calculate"), None)
+            assert calc_openai is not None, "calculate in OpenAI tools"
+
+            # MCP metadata works alongside OpenAI metadata
+            mcp_tools = registry_to_mcp_tools(registry)
+            calc_mcp = next((t for t in mcp_tools if t["name"] == "calculate"), None)
+            assert calc_mcp is not None, "calculate in MCP tools"
+
+            # Memory tools work through adapter
+            save_result = call_mcp_tool(registry, "save_memory",
+                                        {"text": "mcp eval memory", "tags": "test"},
+                                        allowlist={"save_memory"})
+            assert "已保存" in save_result, f"save_memory failed: {save_result}"
+
+            search_result = call_mcp_tool(registry, "search_memory",
+                                          {"query": "mcp eval memory"},
+                                          allowlist={"search_memory"})
+            assert "mcp eval memory" in search_result, f"search_memory failed: {search_result}"
+
+            # Memory record tools work through adapter
+            record_result = call_mcp_tool(registry, "save_memory_record",
+                                          {"kind": "fact", "title": "mcp test", "content": "via adapter"},
+                                          allowlist={"save_memory_record"})
+            parsed = json.loads(record_result)
+            assert "record_id" in parsed, f"save_memory_record failed: {parsed}"
+        finally:
+            db.close()
+
+
+def eval_mcp_failure_isolation():
+    """Unknown tool, malformed args, handler errors → deterministic JSON errors.
+    Handler exception with secret sentinel does not leak into MCP output."""
+    _MCP_SECRET_SENTINEL = "NORA_EVAL_MCP_SECRET_sk-9f8e7d6c5b4a"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            from mini_agent.mcp_server import call_mcp_tool
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Unknown tool
+            r1 = call_mcp_tool(registry, "nonexistent_tool", {},
+                               allowlist={"nonexistent_tool"})
+            parsed1 = json.loads(r1)
+            assert "error" in parsed1, f"expected error for unknown tool: {parsed1}"
+            assert "未知工具" in parsed1["error"]
+
+            # Malformed args (missing required)
+            r2 = call_mcp_tool(registry, "calculate", {},
+                               allowlist={"calculate"})
+            parsed2 = json.loads(r2)
+            # calculate has no required args, but let's test with a tool that does
+            registry.register("strict_mcp_tool", "requires n",
+                              lambda n: f"got:{n}",
+                              parameters={"type": "object", "properties": {"n": {"type": "integer"}},
+                                          "required": ["n"]})
+            r3 = call_mcp_tool(registry, "strict_mcp_tool", {},
+                               allowlist={"strict_mcp_tool"})
+            parsed3 = json.loads(r3)
+            assert "error" in parsed3, f"expected error for missing required: {parsed3}"
+
+            # Handler error (basic)
+            def _raise():
+                raise RuntimeError("test error")
+            registry.register("error_mcp_tool", "raises", _raise,
+                              parameters={"type": "object", "properties": {}})
+            r4 = call_mcp_tool(registry, "error_mcp_tool", {},
+                               allowlist={"error_mcp_tool"})
+            parsed4 = json.loads(r4)
+            assert "error" in parsed4, f"expected error for handler error: {parsed4}"
+            assert "工具调用失败" in parsed4["error"]
+
+            # Handler error with secret sentinel — must not leak
+            def _raise_secret():
+                raise RuntimeError(f"internal failure: {_MCP_SECRET_SENTINEL}")
+            registry.register("secret_error_tool", "raises secret", _raise_secret,
+                              parameters={"type": "object", "properties": {}})
+            r5 = call_mcp_tool(registry, "secret_error_tool", {},
+                               allowlist={"secret_error_tool"})
+            parsed5 = json.loads(r5)
+            assert "error" in parsed5, f"expected error for secret error: {parsed5}"
+            assert _MCP_SECRET_SENTINEL not in r5, f"secret sentinel leaked in MCP output: {r5}"
+
+            # All errors are JSON-serializable
+            for r in [r1, r2, r3, r4, r5]:
+                json.loads(r)  # must not raise
+
+            # Registry still works after errors
+            r6 = registry.call("calculate", expression="2 + 3")
+            assert "5" in r6, f"registry broken after errors: {r6}"
         finally:
             db.close()
 

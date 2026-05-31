@@ -9,10 +9,14 @@ setup(
     package_data={"mini_agent": ["static/*.html"]},
     include_package_data=True,
     install_requires=["playwright==1.60.0"],
+    extras_require={
+        "mcp": ["mcp>=1.0"],
+    },
     entry_points={
         "console_scripts": [
             "nora=mini_agent.app:main",
             "nora-serve=mini_agent.app:serve",
+            "nora-mcp=mini_agent.mcp_server:main",
         ]
     },
 )

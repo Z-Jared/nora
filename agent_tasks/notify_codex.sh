@@ -24,7 +24,6 @@ timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo "${status_line:-Status: unknown}"
   echo
   echo "Review file: ${done_file}"
-  echo
 } >> agent_tasks/PM_INBOX.md
 
 echo "Notified Codex PM via agent_tasks/PM_INBOX.md"

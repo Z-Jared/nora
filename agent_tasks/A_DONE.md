@@ -1,62 +1,57 @@
-# Claude A Completion Report — TASK-038 Review Fix: Scope Validation & Search Filters
+# Claude A Completion Report
 
-Status: ready for Codex review
+Task: TASK-040 — Optional MCP server adapter for Nora ToolRegistry
+Status: completed (review fix x2 applied)
 
 ## Summary
 
-Fixed CHANGES_REQUESTED review items for TASK-038: added scope validation, scope/tags search filters, PM_INBOX trailing whitespace fix, and corresponding tests.
+Added an optional MCP (Model Context Protocol) server adapter that exposes
+selected `ToolRegistry` tools to MCP-capable clients over stdio transport.
+The `mcp` package is an optional extra — all core logic works without it.
 
-## Changes
+## Review fix 1: extract `call_mcp_tool` helper
 
-### 1. PM_INBOX.md trailing whitespace
-- Removed blank line at EOF that caused `git diff --check` failure.
+Extracted dispatch logic from `create_server()` into a pure-Python
+`call_mcp_tool()` helper. `create_server()` now delegates to it (one line).
 
-### 2. Scope validation (`mini_agent/memory_records.py`)
-- Added `VALID_SCOPES = ("project", "user", "global")`
-- Updated `_validate_create()` to accept `scope` parameter and reject invalid scope values
-- `create()` now passes `scope` to validation
+## Review fix 2: sanitize handler errors
 
-### 3. Search scope/tags filtering (`mini_agent/memory_records.py`)
-- `search()` now accepts `scope` and `tags` parameters
-- `tags` is a comma-separated string; all specified tags must match (AND logic)
-- `_search_db` adds `scope = ?` and `tags LIKE ?` clauses to SQL
-- `_search_jsonl` filters by scope equality and tag substring matching
-- Updated `_search_db` and `_search_jsonl` signatures to accept `scope` and `tag_list`
+`call_mcp_tool()` no longer returns raw exception text for non-TypeError
+handler errors. Returns a generic `{"error": "工具调用失败"}` instead,
+preventing secret/token leakage through MCP responses.
 
-### 4. Registry tool update (`mini_agent/toolkits/register_memory_records.py`)
-- `_search_memory_records` now accepts `scope` and `tags` parameters
-- Search tool schema updated with `scope` and `tags` properties
-- Imported `VALID_SCOPES` for schema description
+Also fixed `notify_codex.sh` to stop reintroducing PM_INBOX trailing
+whitespace on every run.
 
-### 5. Tests (`tests/test_memory_records.py`)
-- Added 12 new tests (50 total, up from 38):
-  - `test_create_invalid_scope` — rejects bad scope
-  - `test_create_valid_scopes` — accepts project/user/global
-  - `test_search_filter_scope` — scope filtering in search (SQLite)
-  - `test_search_filter_tags` — tag filtering in search (SQLite)
-  - `test_search_filter_tags_all_must_match` — AND logic for tags (SQLite)
-  - `test_search_combined_filters` — kind+scope+tags combined (SQLite)
-  - `test_search_filter_scope_jsonl` — scope filtering (JSONL)
-  - `test_search_filter_tags_jsonl` — tag filtering (JSONL)
-  - `test_invalid_scope_rejected_jsonl` — scope validation (JSONL)
-  - `test_search_with_scope_filter` — registry tool scope filter
-  - `test_search_with_tags_filter` — registry tool tags filter
-  - `test_save_invalid_scope_returns_error` — registry scope validation error
+## Files changed
 
-## Verification
+| File | Action |
+|------|--------|
+| `mini_agent/mcp_server.py` | new — adapter module with `call_mcp_tool` helper |
+| `tests/test_mcp_server.py` | new — 25 tests (all pass without mcp) |
+| `docs/knowledge/MCP_INTEGRATION.md` | new — usage & design docs |
+| `pyproject.toml` | modified — optional dep + entrypoint |
+| `setup.py` | modified — extras_require + entrypoint |
+| `agent_tasks/notify_codex.sh` | fixed — no longer adds trailing blank line |
+| `agent_tasks/PM_INBOX.md` | fixed trailing blank line at EOF |
+
+## Verification run
 
 ```
-$ python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
-Ran 184 tests — OK
+python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
+  → 159 tests OK
 
-$ python3 evals/run_evals.py
-163 passed, 0 failed
+python3 evals/run_evals.py
+  → 168 passed, 0 failed
 
-$ git diff --check — OK (no whitespace errors)
+git diff --check
+  → clean
 ```
 
-## Notes
+## Known limitations
 
-- No commit or push performed.
-- Existing tests all still pass.
-- Scope validation applies to `create()` only; `search`/`list` accept any scope string for filtering without validation (correct behavior — you want to search, not reject).
+- Server-side only (v1): no MCP client for calling external MCP tools.
+- MCP SDK requires Python >= 3.10; on 3.9 the module imports but
+  `create_server()` raises at runtime.
+- The `mcp` package is not installed in the current test environment, so
+  the MCP SDK integration path (server.run over stdio) was not live-tested.

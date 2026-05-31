@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-040: Optional MCP server adapter for Nora ToolRegistry
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-038/039 已完成
-- 目标: 把 Nora 现有 `ToolRegistry` 以 optional MCP server 形式暴露给 MCP clients，先做 stdio server 和安全 allowlist，不改变主 agent loop。
-- 验证: `python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: official MCP Python SDK `modelcontextprotocol/python-sdk`；package `mcp`；Nora `mini_agent/registry.py` 和 `ToolRegistry.to_openai_tools()`。
-
-### TASK-041: Deterministic eval coverage for Nora MCP server adapter
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-040 runtime 存在后执行
-- 目标: 为 MCP adapter 增加 deterministic offline eval，覆盖 optional dependency、安全 allowlist、metadata export、adapter calls、compatibility 和 failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` Supermemory/memory_record eval pattern；TASK-040 新增 adapter。
+（空）
 
 ## 已完成
+
+### TASK-041: Deterministic eval coverage for Nora MCP server adapter ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 168 passed；`python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 159 tests OK；`python3 -m unittest discover -s tests` 1433 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval，覆盖 MCP optional dependency、metadata export、safe allowlist、bounded adapter output、memory/structured-memory compatibility、unknown/malformed/handler-error failure isolation，以及 handler exception secret sentinel 不泄漏。
+
+### TASK-040: Optional MCP server adapter for Nora ToolRegistry ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 159 tests OK；`python3 evals/run_evals.py` 168 passed；`python3 -m unittest discover -s tests` 1433 tests OK；`git diff --check` OK。
+- 内容: 新增 optional MCP server adapter `mini_agent/mcp_server.py`，支持 `nora-mcp` stdio entrypoint、optional `mcp` extra、safe default allowlist、OpenAI tool metadata 到 MCP tool metadata 转换、纯 Python `call_mcp_tool` adapter dispatch、bounded output、generic handler error；新增 `tests/test_mcp_server.py` 和 `docs/knowledge/MCP_INTEGRATION.md`。
 
 ### TASK-039: Eval coverage for native memory record store ✅
 - 完成者: Claude B

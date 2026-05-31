@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-038 Nora native memory record store v1; TASK-039 eval coverage for native memory record store
-Workers: Claude A (TASK-038), Claude B (TASK-039)
+Reviewed: TASK-040 Optional MCP server adapter for Nora ToolRegistry; TASK-041 deterministic eval coverage
+Workers: Claude A (TASK-040), Claude B (TASK-041)
 Status: APPROVED
 
 ## Findings
@@ -12,8 +12,9 @@ Status: APPROVED
 
 ### Notes
 
-- Previous blockers are fixed: `scope` validation exists, `search_memory_records` supports `scope` and `tags`, TASK-039 evals cover `query/scope/tags`, legacy `save_memory/search_memory`, and deterministic Supermemory no-key behavior.
-- Runtime shape is aligned with the task: SQLite/JSONL backends, bounded search/list summaries without `content`, full content only through get, obvious secret-like content rejection, and existing long-term memory tools preserved.
+- Previous blockers are fixed: `call_mcp_tool()` is a pure-Python adapter call helper, `create_server()` delegates to it, and handler exceptions no longer leak raw exception text.
+- TASK-041 evals cover optional dependency behavior, metadata export, safe allowlist, memory compatibility, failure isolation, output bounding, and secret-sentinel non-leakage.
+- The MCP SDK live stdio path remains untested because `mcp` is not installed in this environment; the integration is intentionally optional.
 - Full test suite passed.
 
 ## Checks Run
@@ -23,23 +24,23 @@ Reviewed:
 - git status --short --branch
 - agent_tasks/A_DONE.md
 - agent_tasks/B_DONE.md
-- mini_agent/memory_records.py
-- mini_agent/toolkits/register_memory_records.py
-- mini_agent/database.py
-- mini_agent/toolkits/registry_builder.py
-- tests/test_memory_records.py
+- mini_agent/mcp_server.py
+- tests/test_mcp_server.py
 - evals/run_evals.py
-- docs/knowledge/MEMORY_KERNEL.md
+- docs/knowledge/MCP_INTEGRATION.md
+- pyproject.toml
+- setup.py
+- agent_tasks/notify_codex.sh
 
-python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
-Ran 184 tests in 4.194s
+python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
+Ran 159 tests in 3.865s
 OK
 
 python3 evals/run_evals.py
-163 passed, 0 failed
+168 passed, 0 failed
 
 python3 -m unittest discover -s tests
-Ran 1408 tests in 111.738s
+Ran 1433 tests in 108.735s
 OK
 Warning: failed to load plugin broken.py: bad
 

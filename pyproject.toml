@@ -15,6 +15,10 @@ dependencies = [
 [project.scripts]
 nora = "mini_agent.app:main"
 nora-serve = "mini_agent.app:serve"
+nora-mcp = "mini_agent.mcp_server:main"
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
 
 [tool.setuptools]
 packages = ["mini_agent", "mini_agent.providers", "mini_agent.toolkits"]
