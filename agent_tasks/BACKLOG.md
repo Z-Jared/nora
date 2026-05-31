@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-022: Eval coverage for review-gate events
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-021 已完成
-- 目标: 为 durable review-gate event logging 增加 deterministic offline eval，覆盖 no_diff、present diff、sensitive blocked、error、failure isolation 和 serialized safety。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` durable event eval 区域；TASK-021 新增 `REVIEW_GATE_*`。
-
-### TASK-023: Durable handoff event logging
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: 无
-- 目标: 在 `finish_task` 和 `restore_task` 任务历史交接路径记录 handoff created/accepted durable events，作为 Agent OS handoff artifact 的第一条 runtime slice。
-- 验证: `python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 handoff events；`mini_agent/task_runner.py`；`mini_agent/toolkits/register_state.py`。
+（空 — 当前无进行中任务）
 
 ## 已完成
+
+### TASK-023: Durable handoff event logging ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent` 376 tests OK；`python3 evals/run_evals.py` 122 passed；`git diff --check` OK。
+- 内容: `finish_task` 记录 handoff_created，`restore_task` 记录 handoff_accepted；payload 仅含 artifact_type、history_id、status、step_count、done_step_count、blocked_step_count、summary_present/restored_from_present 等安全元数据；不持久化 raw goal、summary、step、note、history JSON 或 secret-like values；focused tests 覆盖 finish、restore、serialized safety、broken/no event store、registry wiring 和返回文案兼容。
+
+### TASK-022: Eval coverage for review-gate events ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 122 passed；`python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli` 170 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 review-gate no_diff、present diff、sensitive path blocked、Git error、event-store failure isolation；present diff eval 将 sentinel 写入 staged README 并断言不进入 serialized review-gate events；sensitive path 和 raw Git error sentinel 也覆盖不泄露；eval-only。
 
 ### TASK-021: Durable review-gate event logging ✅
 - 完成者: Claude A

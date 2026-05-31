@@ -49,6 +49,8 @@ REVIEW_GATE_STARTED = "review_gate_started"
 REVIEW_GATE_FINISHED = "review_gate_finished"
 REVIEW_GATE_BLOCKED = "review_gate_blocked"
 REVIEW_GATE_ERROR = "review_gate_error"
+HANDOFF_CREATED = "handoff_created"
+HANDOFF_ACCEPTED = "handoff_accepted"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -85,6 +87,8 @@ VALID_EVENT_TYPES = {
     REVIEW_GATE_FINISHED,
     REVIEW_GATE_BLOCKED,
     REVIEW_GATE_ERROR,
+    HANDOFF_CREATED,
+    HANDOFF_ACCEPTED,
 }
 
 _DURABLE_EVENTS_TABLE = """

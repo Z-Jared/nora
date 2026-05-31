@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from mini_agent.durable_events import HANDOFF_ACCEPTED, HANDOFF_CREATED
 from mini_agent.tools_common import read_jsonl
 
 
@@ -168,13 +169,28 @@ class TaskManager:
         task["finished_at"] = datetime.now(timezone.utc).isoformat()
         task["summary"] = summary.strip()
         self._write(task)
-        self._append_history(task)
+        history_id = self._append_history(task)
         sync_result = self._shadow_sync_to_durable(task)
         self._record_event(
             "task_finished",
             task_id=sync_result.get("task_id"),
             summary=task["goal"],
             payload={"goal": task["goal"], "summary": task["summary"]},
+        )
+        steps = task.get("steps") or []
+        self._record_event(
+            HANDOFF_CREATED,
+            task_id=sync_result.get("task_id"),
+            summary=f"handoff created: {history_id}",
+            payload={
+                "artifact_type": "task_history",
+                "history_id": history_id,
+                "status": "created",
+                "step_count": len(steps),
+                "done_step_count": sum(1 for s in steps if s.get("status") == "done"),
+                "blocked_step_count": sum(1 for s in steps if s.get("status") == "blocked"),
+                "summary_present": bool(task.get("summary", "").strip()),
+            },
         )
         return f"已完成任务: {task['goal']}\n总结: {task['summary']}"
 
@@ -305,6 +321,21 @@ class TaskManager:
             task_id=sync_result.get("task_id"),
             summary=f"restored from {history_id}",
             payload={"restored_from": history_id, "status": "active"},
+        )
+        steps = task.get("steps") or []
+        self._record_event(
+            HANDOFF_ACCEPTED,
+            task_id=sync_result.get("task_id"),
+            summary=f"handoff accepted: {history_id}",
+            payload={
+                "artifact_type": "task_history",
+                "history_id": history_id,
+                "status": "accepted",
+                "step_count": len(steps),
+                "done_step_count": sum(1 for s in steps if s.get("status") == "done"),
+                "blocked_step_count": sum(1 for s in steps if s.get("status") == "blocked"),
+                "restored_from_present": bool(history_id),
+            },
         )
         return f"已恢复任务: {history_id}\n{self._format(task)}"
 

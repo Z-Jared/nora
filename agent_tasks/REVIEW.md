@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-020 Eval coverage for approval events; TASK-021 Durable review-gate event logging
-Workers: Claude B (TASK-020), Claude A (TASK-021)
+Reviewed: TASK-022 Eval coverage for review-gate events; TASK-023 Durable handoff event logging
+Workers: Claude B (TASK-022), Claude A (TASK-023)
 Status: APPROVED
 
 ## Findings
@@ -12,23 +12,22 @@ Status: APPROVED
 
 ### Notes
 
-- Previous TASK-020 blocker was fixed: approval evals now use a real permissioned approved path and assert `git_commit_staged` creates a local commit.
-- Previous secret-sentinel gap was fixed: approval evals inject a secret-like sentinel into the raw commit message and assert it is absent from serialized approval events.
-- Previous TASK-021 test gap was fixed: review-gate error events now have deterministic timeout/failure tests and assert raw error text is not serialized.
-- Review-gate event payloads remain safe metadata only: gate_name, status, has_staged_diff, file_count, sensitive_path_count, max_chars, and generic error_label.
+- Previous TASK-022 blocker was fixed: `_REVIEW_GATE_SENTINEL_DIFF` is now written into the staged README content before the review-gate event safety assertion runs.
+- TASK-023 handoff events use safe metadata only and preserve existing `finish_task` / `restore_task` behavior.
+- Handoff event coverage includes finish, restore, serialized safety, broken/no event store, registry wiring, and return-string compatibility.
 
 ## Checks Run
 
 ```text
 python3 evals/run_evals.py
-117 passed, 0 failed
+122 passed, 0 failed
 
-python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli
-Ran 160 tests in 7.648s
+python3 -m unittest tests.test_durable_events tests.test_task_runner tests.test_durable_tasks tests.test_mini_agent
+Ran 376 tests in 7.932s
 OK
 
-python3 -m unittest tests.test_durable_events tests.test_diagnostics tests.test_mini_agent
-Ran 247 tests in 6.870s
+python3 -m unittest tests.test_durable_events tests.test_git_tools tests.test_cli
+Ran 170 tests in 7.912s
 OK
 
 git diff --check

@@ -18,6 +18,8 @@ from mini_agent.durable_events import (
     FILE_EDIT_ERROR,
     FILE_EDIT_FINISHED,
     FILE_EDIT_STARTED,
+    HANDOFF_ACCEPTED,
+    HANDOFF_CREATED,
     MODEL_CALL_ERROR,
     MODEL_CALL_FINISHED,
     MODEL_CALL_STARTED,
@@ -1900,6 +1902,228 @@ class ReviewGateDurableEventTests(unittest.TestCase):
                          "raw error text must not appear in serialized review-gate error event")
         # error_label should be generic, not the raw message
         self.assertEqual(errors[0].payload["error_label"], "git_command_failure")
+
+
+class HandoffDurableEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _handoff_events(self, event_type=None):
+        event_types = {HANDOFF_CREATED, HANDOFF_ACCEPTED}
+        events = [e for e in self.event_store.list_events() if e.event_type in event_types]
+        events.reverse()
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return events
+
+    def test_finish_emits_handoff_created(self):
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start("build feature", "step one\nstep two")
+        manager.update_step(1, "done", summary="done")
+        manager.update_step(2, "done", summary="done too")
+
+        result = manager.finish("all done")
+
+        self.assertIn("已完成任务", result)
+        events = self._handoff_events(HANDOFF_CREATED)
+        self.assertEqual(len(events), 1)
+        payload = events[0].payload
+        self.assertEqual(payload["artifact_type"], "task_history")
+        self.assertEqual(payload["status"], "created")
+        self.assertEqual(payload["step_count"], 2)
+        self.assertEqual(payload["done_step_count"], 2)
+        self.assertEqual(payload["blocked_step_count"], 0)
+        self.assertTrue(payload["summary_present"])
+        self.assertTrue(payload["history_id"].startswith("task_"))
+
+    def test_restore_emits_handoff_accepted(self):
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start("build feature", "step one\nstep two")
+        manager.update_step(1, "done", summary="done")
+        manager.finish("all done")
+
+        result = manager.restore("task_1")
+
+        self.assertIn("已恢复任务", result)
+        events = self._handoff_events(HANDOFF_ACCEPTED)
+        self.assertEqual(len(events), 1)
+        payload = events[0].payload
+        self.assertEqual(payload["artifact_type"], "task_history")
+        self.assertEqual(payload["history_id"], "task_1")
+        self.assertEqual(payload["status"], "accepted")
+        self.assertTrue(payload["restored_from_present"])
+        self.assertEqual(payload["step_count"], 2)
+
+    def test_handoff_event_no_raw_goal_or_summary(self):
+        sentinel_goal = "SENTINEL_GOAL_TEXT_xyz789"
+        sentinel_summary = "SENTINEL_SUMMARY_TEXT_abc123"
+        sentinel_step = "SENTINEL_STEP_TEXT_def456"
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start(sentinel_goal, sentinel_step)
+        manager.finish(sentinel_summary)
+
+        events = self._handoff_events()
+        for event in events:
+            full_json = json.dumps(event.to_dict(), ensure_ascii=False)
+            self.assertNotIn(sentinel_goal, full_json,
+                             "raw goal text must not appear in serialized handoff event")
+            self.assertNotIn(sentinel_summary, full_json,
+                             "raw summary text must not appear in serialized handoff event")
+            self.assertNotIn(sentinel_step, full_json,
+                             "raw step text must not appear in serialized handoff event")
+
+    def test_handoff_restore_no_raw_goal_or_summary(self):
+        sentinel_goal = "SENTINEL_GOAL_restore_xyz"
+        sentinel_summary = "SENTINEL_SUMMARY_restore_abc"
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start(sentinel_goal, "step one")
+        manager.finish(sentinel_summary)
+
+        manager.restore("task_1")
+
+        events = self._handoff_events(HANDOFF_ACCEPTED)
+        self.assertEqual(len(events), 1)
+        full_json = json.dumps(events[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_goal, full_json,
+                         "raw goal text must not appear in serialized handoff accepted event")
+        self.assertNotIn(sentinel_summary, full_json,
+                         "raw summary text must not appear in serialized handoff accepted event")
+
+    def test_broken_event_store_does_not_break_finish(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=BrokenEventStore(),
+        )
+        manager.start("goal", "step one")
+
+        result = manager.finish("done")
+
+        self.assertIn("已完成任务", result)
+
+    def test_broken_event_store_does_not_break_restore(self):
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=BrokenEventStore(),
+        )
+        manager.start("goal", "step one")
+        manager.finish("done")
+
+        result = manager.restore("task_1")
+
+        self.assertIn("已恢复任务", result)
+
+    def test_no_event_store_does_not_break_finish_or_restore(self):
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+        )
+        manager.start("goal", "step one")
+
+        result = manager.finish("done")
+        self.assertIn("已完成任务", result)
+
+        result = manager.restore("task_1")
+        self.assertIn("已恢复任务", result)
+
+    def test_default_registry_emits_handoff_events(self):
+        registry = build_default_registry(db=self.db, workspace_root=self.root)
+        registry.task_manager.start("goal", "step one\nstep two")
+        registry.task_manager.update_step(1, "done", summary="done")
+        registry.task_manager.update_step(2, "done", summary="done too")
+
+        registry.task_manager.finish("all done")
+
+        events = registry.durable_event_store.list_events()
+        handoff_events = [e for e in events if e.event_type in (HANDOFF_CREATED, HANDOFF_ACCEPTED)]
+        self.assertGreaterEqual(len(handoff_events), 1)
+        created = [e for e in handoff_events if e.event_type == HANDOFF_CREATED]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].payload["artifact_type"], "task_history")
+
+    def test_handoff_event_payload_fields(self):
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start("goal", "step one\nstep two\nstep three")
+        manager.update_step(1, "done", summary="done")
+        manager.update_step(2, "blocked", summary="blocked")
+
+        manager.finish("partial")
+
+        events = self._handoff_events(HANDOFF_CREATED)
+        self.assertEqual(len(events), 1)
+        payload = events[0].payload
+        self.assertEqual(payload["step_count"], 3)
+        self.assertEqual(payload["done_step_count"], 1)
+        self.assertEqual(payload["blocked_step_count"], 1)
+        self.assertTrue(payload["summary_present"])
+
+    def test_handoff_finish_and_restore_preserves_result_strings(self):
+        manager = TaskManager(
+            path=self.root / "task.json",
+            history_path=self.root / "history.jsonl",
+            db=None,
+            event_store=self.event_store,
+        )
+        manager.start("build X", "step A\nstep B")
+
+        finish_result = manager.finish("built X")
+        self.assertIn("已完成任务: build X", finish_result)
+        self.assertIn("built X", finish_result)
+
+        restore_result = manager.restore("task_1")
+        self.assertIn("已恢复任务: task_1", restore_result)
 
 
 if __name__ == "__main__":

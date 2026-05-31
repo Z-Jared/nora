@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -166,6 +166,11 @@ def main() -> int:
         EvalCase("approval_event_denied", eval_approval_event_denied),
         EvalCase("approval_event_non_permissioned", eval_approval_event_non_permissioned),
         EvalCase("approval_event_failure_isolation", eval_approval_event_failure_isolation),
+        EvalCase("review_gate_event_no_diff", eval_review_gate_event_no_diff),
+        EvalCase("review_gate_event_present_diff", eval_review_gate_event_present_diff),
+        EvalCase("review_gate_event_sensitive_path", eval_review_gate_event_sensitive_path),
+        EvalCase("review_gate_event_git_error", eval_review_gate_event_git_error),
+        EvalCase("review_gate_event_failure_isolation", eval_review_gate_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -3325,6 +3330,218 @@ def eval_approval_event_failure_isolation():
         registry4.event_store = None
         result4 = registry4.call("git_commit_staged", message="test commit", reason="test")
         assert result4 == "已取消操作。", f"denied tool must still cancel without event store, got: {result4}"
+
+
+# --- Review-gate event eval helpers ---
+
+_REVIEW_GATE_SENTINEL_DIFF = "NORA_EVAL_REVIEW_DIFF_SENTINEL_a3c5e7b9"
+_REVIEW_GATE_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-review-7d6c5b4a"
+_REVIEW_GATE_SENTINEL_ERROR = "NORA_EVAL_GIT_ERROR_SENTINEL_f2d4c6e8"
+_REVIEW_GATE_FORBIDDEN_PAYLOAD_KEYS = {
+    "diff", "patch", "path", "paths", "files", "stdout", "stderr",
+    "command", "args", "error", "exception", "traceback", "output",
+}
+
+
+def _review_gate_events(event_store, event_type=None):
+    events = event_store.list_events()
+    gate_types = (REVIEW_GATE_STARTED, REVIEW_GATE_FINISHED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR)
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in gate_types]
+
+
+def _serialized_review_gate_events(event_store):
+    import json as _json
+    return _json.dumps(
+        [event.to_dict() for event in _review_gate_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_review_gate_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_review_gate_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"review-gate event stored forbidden raw value {value!r}: {serialized[:500]}"
+    for event in _review_gate_events(event_store):
+        leaked_keys = _REVIEW_GATE_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"review-gate event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_review_gate_event_no_diff():
+    """No staged diff records started + finished(no_diff) with safe metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            _init_git_repo(tmpdir)
+            event_store = DurableEventStore(db=db)
+            git = GitTools(tmpdir, event_store=event_store)
+            result = git.review_staged_diff()
+
+            assert "没有 staged diff" in result, f"expected no diff message, got: {result}"
+
+            started = _review_gate_events(event_store, REVIEW_GATE_STARTED)
+            finished = _review_gate_events(event_store, REVIEW_GATE_FINISHED)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(finished) == 1, f"expected 1 finished, got {len(finished)}"
+
+            assert started[0].payload["gate_name"] == "staged_diff_review"
+            assert started[0].payload["status"] == "started"
+            assert started[0].severity == "info"
+
+            assert finished[0].payload["status"] == "no_diff"
+            assert finished[0].payload["has_staged_diff"] is False
+            assert finished[0].payload["file_count"] == 0
+            assert finished[0].severity == "info"
+
+            _assert_review_gate_events_safe(event_store, [])
+        finally:
+            db.close()
+
+
+def eval_review_gate_event_present_diff():
+    """Present staged diff records started + finished with safe metadata.
+    Sentinel diff content is written into the staged file but must NOT leak into events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            _init_git_repo(tmpdir)
+            # Stage a change containing the sentinel diff content
+            (tmpdir / "README.md").write_text(f"changed content\n{_REVIEW_GATE_SENTINEL_DIFF}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+
+            event_store = DurableEventStore(db=db)
+            git = GitTools(tmpdir, event_store=event_store)
+            result = git.review_staged_diff()
+
+            # User-visible output must include the staged file
+            assert "README.md" in result, f"expected README.md in review output, got: {result}"
+            assert "staged diff" in result, f"expected staged diff header, got: {result}"
+
+            started = _review_gate_events(event_store, REVIEW_GATE_STARTED)
+            finished = _review_gate_events(event_store, REVIEW_GATE_FINISHED)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(finished) == 1, f"expected 1 finished, got {len(finished)}"
+
+            assert finished[0].payload["status"] == "finished"
+            assert finished[0].payload["has_staged_diff"] is True
+            assert finished[0].payload["file_count"] >= 1
+            assert finished[0].severity == "info"
+
+            # Sentinel diff content must NOT leak into serialized events
+            _assert_review_gate_events_safe(event_store, [_REVIEW_GATE_SENTINEL_DIFF])
+        finally:
+            db.close()
+
+
+def eval_review_gate_event_sensitive_path():
+    """Sensitive staged path records blocked event with only counts/generic metadata, no raw path names."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            _init_git_repo(tmpdir)
+            # Stage a denied/sensitive path using git add -f
+            (tmpdir / ".env").write_text(f"SECRET={_REVIEW_GATE_SENTINEL_SECRET}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-f", ".env"], cwd=tmpdir, check=True)
+
+            event_store = DurableEventStore(db=db)
+            git = GitTools(tmpdir, event_store=event_store)
+            result = git.review_staged_diff()
+
+            # User-visible output should mention sensitive paths
+            assert ".env" in result, f"expected .env in review output, got: {result}"
+
+            started = _review_gate_events(event_store, REVIEW_GATE_STARTED)
+            blocked = _review_gate_events(event_store, REVIEW_GATE_BLOCKED)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(blocked) == 1, f"expected 1 blocked, got {len(blocked)}"
+
+            assert blocked[0].payload["status"] == "blocked"
+            assert blocked[0].payload["has_staged_diff"] is True
+            assert blocked[0].payload["sensitive_path_count"] >= 1
+            assert blocked[0].severity == "warning"
+
+            # Safety: raw sensitive path name and secret must not leak into events
+            _assert_review_gate_events_safe(event_store, [_REVIEW_GATE_SENTINEL_SECRET, ".env"])
+        finally:
+            db.close()
+
+
+def eval_review_gate_event_git_error():
+    """Git command error records error event with generic error_label, no raw error text."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            _init_git_repo(tmpdir)
+            event_store = DurableEventStore(db=db)
+            git = GitTools(tmpdir, event_store=event_store)
+
+            # Patch _run to return a sentinel error
+            sentinel_error = f"Git 命令失败: {_REVIEW_GATE_SENTINEL_ERROR}"
+            original_run = git._run
+            def patched_run(command, max_chars=12000):
+                if "diff" in command:
+                    return sentinel_error
+                return original_run(command, max_chars)
+            git._run = patched_run
+
+            result = git.review_staged_diff()
+
+            assert "Git 命令失败" in result, f"expected error message, got: {result}"
+
+            started = _review_gate_events(event_store, REVIEW_GATE_STARTED)
+            errors = _review_gate_events(event_store, REVIEW_GATE_ERROR)
+            assert len(started) == 1, f"expected 1 started, got {len(started)}"
+            assert len(errors) == 1, f"expected 1 error, got {len(errors)}"
+
+            assert errors[0].payload["status"] == "error"
+            assert errors[0].payload["error_label"] == "git_command_failure"
+            assert errors[0].severity == "warning"
+
+            # Safety: raw error text with sentinel must not leak into events
+            _assert_review_gate_events_safe(event_store, [_REVIEW_GATE_SENTINEL_ERROR, sentinel_error])
+        finally:
+            db.close()
+
+
+def eval_review_gate_event_failure_isolation():
+    """Broken/null event store must not change review_staged_diff behavior."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        _init_git_repo(tmpdir)
+
+        # 1. No diff with broken event store
+        git = GitTools(tmpdir, event_store=BrokenEventStore())
+        result = git.review_staged_diff()
+        assert "没有 staged diff" in result, f"review must work with broken store, got: {result}"
+
+        # 2. Present diff with broken event store
+        (tmpdir / "README.md").write_text("changed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        git2 = GitTools(tmpdir, event_store=BrokenEventStore())
+        result2 = git2.review_staged_diff()
+        assert "README.md" in result2, f"review must work with broken store, got: {result2}"
+
+        # 3. No diff with no event store
+        subprocess.run(["git", "reset", "HEAD", "README.md"], cwd=tmpdir, capture_output=True)
+        git3 = GitTools(tmpdir, event_store=None)
+        result3 = git3.review_staged_diff()
+        assert "没有 staged diff" in result3, f"review must work without event store, got: {result3}"
+
+        # 4. Present diff with no event store
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        git4 = GitTools(tmpdir, event_store=None)
+        result4 = git4.review_staged_diff()
+        assert "README.md" in result4, f"review must work without event store, got: {result4}"
 
 
 def _init_git_repo(root: Path) -> None:
