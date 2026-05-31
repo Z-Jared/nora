@@ -1,50 +1,43 @@
-# Claude B Completion Report - TASK-031
+# Claude B Completion Report - TASK-033
 
-Status: completed, ready for Codex review
+Status: ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for durable task worker assignment (TASK-028).
+Added 4 deterministic offline eval cases for durable worker registry tools (TASK-030 runtime).
 
-Four new eval cases added to `evals/run_evals.py`:
+1. **worker_registry_basics** — Exercises `register_worker`, `get_worker`, `list_workers` via registry tools. Verifies: worker_id/role/workspace_path/default status stored; get returns registered worker; list includes worker; re-register updates role/workspace without creating duplicate; unknown worker returns error.
 
-1. **worker_assignment_basics** — Tests `create_durable_task(worker_id=...)` stores ownership, `assign_durable_task` sets ownership, empty/whitespace clears ownership, `list_durable_tasks` includes `worker_id`.
+2. **worker_registry_status_updates** — Exercises `update_worker_status`. Verifies: status and current_task_id set correctly; updating to idle clears current_task_id; unknown worker_id returns error; invalid status returns error with localized message.
 
-2. **worker_assignment_linked_events** — Verifies task action events include top-level `worker_id` after create/update/assign. Assignment event has `operation="assign"` and `worker_id_present=True`. `list_durable_events(worker_id=...)` can query worker-linked events.
+3. **worker_registry_safety** — Registers worker with sentinel role/path/task values. Asserts: no env vars (LLM_API_KEY, OPENAI_API_KEY) in registry outputs; no cross-contamination between workers; no durable task goal text leaking into worker registry output.
 
-3. **worker_assignment_safety** — Injects sentinel goal/secret into task. Asserts sentinels absent from serialized events and `list_durable_events` output.
-
-4. **worker_assignment_failure_isolation** — Broken event store must not change `assign_durable_task` behavior: assign and clear both succeed.
-
-## Safety Assertions
-
-- Sentinel strings used for: raw goal and a secret-like token
-- All sentinels verified absent from: serialized events and `list_durable_events` registry output
+4. **worker_registry_failure_isolation** — Replaces event store with broken object. Verifies register/get/list/update all still succeed.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 149 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 149 insertions(+)
+ evals/run_evals.py | 187 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 187 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-143 passed, 0 failed
+147 passed, 0 failed
 
-python3 -m unittest tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
-Ran 402 tests in 7.984s
-OK
+python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent
+Ran 427 tests in 7.419s — OK
 
 git diff --check
-(clean)
+OK
 ```
 
 ## Notes
 
-- No runtime code changed — eval only as instructed.
-- TASK-028 implementation was already complete and approved.
+- No runtime code changed (TASK-030 was already complete).
+- No fallback imports or shims added.
+- Eval count increased from 143 to 147.
 - No commit or push performed.
-- Known limitations: none.
+- No runtime bugs discovered.

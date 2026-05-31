@@ -153,6 +153,24 @@ class DurableWorkerStore:
         self._save(worker)
         return worker
 
+    def mark_stale_workers_offline(self, max_age_seconds: int = 300) -> list[DurableWorker]:
+        now = datetime.now(timezone.utc)
+        threshold = now.timestamp() - max(1, max_age_seconds)
+        changed = []
+        for worker in self.list_workers(limit=500):
+            if worker.status == WorkerStatus.OFFLINE:
+                continue
+            try:
+                last_seen = datetime.fromisoformat(worker.last_seen_at)
+                if last_seen.timestamp() < threshold:
+                    worker.status = WorkerStatus.OFFLINE
+                    worker.updated_at = _now_iso()
+                    self._save(worker)
+                    changed.append(worker)
+            except (ValueError, TypeError):
+                continue
+        return changed
+
     def _save(self, worker: DurableWorker) -> None:
         if self.db:
             self._upsert_db(worker)

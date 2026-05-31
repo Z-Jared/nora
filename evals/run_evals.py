@@ -192,6 +192,10 @@ def main() -> int:
         EvalCase("worker_assignment_linked_events", eval_worker_assignment_linked_events),
         EvalCase("worker_assignment_safety", eval_worker_assignment_safety),
         EvalCase("worker_assignment_failure_isolation", eval_worker_assignment_failure_isolation),
+        EvalCase("worker_registry_basics", eval_worker_registry_basics),
+        EvalCase("worker_registry_status_updates", eval_worker_registry_status_updates),
+        EvalCase("worker_registry_safety", eval_worker_registry_safety),
+        EvalCase("worker_registry_failure_isolation", eval_worker_registry_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -4421,6 +4425,189 @@ def eval_worker_assignment_failure_isolation():
             r3 = registry.call("assign_durable_task", task_id=task_id, worker_id="")
             parsed3 = _json.loads(r3)
             assert parsed3.get("worker_id") is None or parsed3.get("worker_id") == "", f"clear must work with broken store: {r3}"
+        finally:
+            db.close()
+
+
+_WORKER_REGISTRY_SENTINEL_ROLE = "NORA_EVAL_WORKER_ROLE_SECRET_sk-9a8b7c6d"
+_WORKER_REGISTRY_SENTINEL_PATH = "/NORA_EVAL_WORKER_PATH_SECRET_3e2f1d0c"
+_WORKER_REGISTRY_SENTINEL_TASK = "dtask_NORA_EVAL_SENTINEL_5f4e3d2c"
+
+
+def eval_worker_registry_basics():
+    """register_worker stores fields, re-register updates metadata without duplicate, get_worker and list_workers work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # register_worker stores worker_id, role, workspace_path, default status
+            r = registry.call("register_worker", worker_id="w1", role="coder", workspace_path="/work/w1")
+            parsed = json.loads(r)
+            assert parsed["worker_id"] == "w1", f"worker_id: {parsed}"
+            assert parsed["role"] == "coder", f"role: {parsed}"
+            assert parsed["workspace_path"] == "/work/w1", f"workspace_path: {parsed}"
+            assert parsed["status"] == "idle", f"default status: {parsed}"
+
+            # get_worker returns the registered worker
+            r2 = registry.call("get_worker", worker_id="w1")
+            parsed2 = json.loads(r2)
+            assert parsed2["worker_id"] == "w1"
+            assert parsed2["role"] == "coder"
+            assert "error" not in parsed2
+
+            # list_workers includes registered worker
+            r3 = registry.call("list_workers")
+            workers = json.loads(r3)
+            assert len(workers) >= 1, f"expected >=1 worker, got {len(workers)}"
+            assert any(w["worker_id"] == "w1" for w in workers), f"w1 not in {workers}"
+
+            # Re-registering updates role/workspace without duplicate
+            r4 = registry.call("register_worker", worker_id="w1", role="reviewer", workspace_path="/work/w1v2")
+            parsed4 = json.loads(r4)
+            assert parsed4["worker_id"] == "w1"
+            assert parsed4["role"] == "reviewer", f"role not updated: {parsed4}"
+            assert parsed4["workspace_path"] == "/work/w1v2", f"workspace not updated: {parsed4}"
+
+            # list_workers still has exactly 1 entry for w1
+            r5 = registry.call("list_workers")
+            w1_entries = [w for w in json.loads(r5) if w["worker_id"] == "w1"]
+            assert len(w1_entries) == 1, f"duplicate created: {w1_entries}"
+
+            # get_worker for unknown worker returns error
+            r6 = registry.call("get_worker", worker_id="w_unknown")
+            parsed6 = json.loads(r6)
+            assert "error" in parsed6, f"expected error for unknown worker: {parsed6}"
+        finally:
+            db.close()
+
+
+def eval_worker_registry_status_updates():
+    """update_worker_status sets status/task, clears task on idle, returns errors for unknown/invalid."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            registry.call("register_worker", worker_id="w1", role="coder")
+
+            # Set status to running with task
+            r = registry.call("update_worker_status", worker_id="w1", status="running", current_task_id="dtask_42")
+            parsed = json.loads(r)
+            assert parsed["status"] == "running", f"status: {parsed}"
+            assert parsed["current_task_id"] == "dtask_42", f"task_id: {parsed}"
+
+            # Set to assigned
+            r2 = registry.call("update_worker_status", worker_id="w1", status="assigned", current_task_id="dtask_99")
+            parsed2 = json.loads(r2)
+            assert parsed2["status"] == "assigned"
+            assert parsed2["current_task_id"] == "dtask_99"
+
+            # Update to idle clears current_task_id
+            r3 = registry.call("update_worker_status", worker_id="w1", status="idle")
+            parsed3 = json.loads(r3)
+            assert parsed3["status"] == "idle", f"idle status: {parsed3}"
+            assert parsed3["current_task_id"] is None, f"task not cleared: {parsed3}"
+
+            # Unknown worker returns error
+            r4 = registry.call("update_worker_status", worker_id="w_unknown", status="idle")
+            parsed4 = json.loads(r4)
+            assert "error" in parsed4, f"expected error for unknown worker: {parsed4}"
+
+            # Invalid status returns error
+            r5 = registry.call("update_worker_status", worker_id="w1", status="bogus_status")
+            parsed5 = json.loads(r5)
+            assert "error" in parsed5, f"expected error for invalid status: {parsed5}"
+            assert "无效" in parsed5["error"] or "invalid" in parsed5["error"].lower()
+        finally:
+            db.close()
+
+
+def eval_worker_registry_safety():
+    """Sentinel role/path/task values must not appear in registry outputs; no env vars or task goals leak."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Register with sentinel role and path
+            registry.call(
+                "register_worker",
+                worker_id="w_sentinel",
+                role=_WORKER_REGISTRY_SENTINEL_ROLE,
+                workspace_path=_WORKER_REGISTRY_SENTINEL_PATH,
+            )
+            registry.call(
+                "update_worker_status",
+                worker_id="w_sentinel",
+                status="running",
+                current_task_id=_WORKER_REGISTRY_SENTINEL_TASK,
+            )
+
+            # get_worker output must not contain env-like sentinel
+            r = registry.call("get_worker", worker_id="w_sentinel")
+            parsed = json.loads(r)
+            assert parsed["role"] == _WORKER_REGISTRY_SENTINEL_ROLE, "role should be stored as-is"
+
+            # Serialized output must not contain env vars or unrelated task goals
+            serialized = json.dumps(parsed, ensure_ascii=False)
+            assert "LLM_API_KEY" not in serialized, "env var leaked"
+            assert "OPENAI_API_KEY" not in serialized, "env var leaked"
+
+            # list_workers output should be safe
+            r2 = registry.call("list_workers")
+            list_serialized = r2
+            assert "LLM_API_KEY" not in list_serialized, "env var in list output"
+            assert "OPENAI_API_KEY" not in list_serialized, "env var in list output"
+
+            # Register another worker with a secret-like role — the sentinel role
+            # from w_sentinel should not contaminate unrelated get_worker calls
+            registry.call("register_worker", worker_id="w_other", role="clean")
+            r3 = registry.call("get_worker", worker_id="w_other")
+            parsed3 = json.loads(r3)
+            assert parsed3["role"] == "clean", f"cross-contamination: {parsed3}"
+
+            # Verify durable task goals do not appear in worker registry outputs
+            # (the worker registry should be independent of task content)
+            store = registry.durable_task_store
+            store.create_task(goal=_WORKER_SENTINEL_GOAL, steps=[{"text": "s1"}])
+            r4 = registry.call("get_worker", worker_id="w_sentinel")
+            assert _WORKER_SENTINEL_GOAL not in r4, "task goal leaked into worker output"
+        finally:
+            db.close()
+
+
+def eval_worker_registry_failure_isolation():
+    """Worker registry tools must work even if event store is broken."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+
+            # register_worker must still work
+            r = registry.call("register_worker", worker_id="w_iso", role="isolated")
+            parsed = json.loads(r)
+            assert parsed["worker_id"] == "w_iso", f"register failed: {r}"
+
+            # get_worker must still work
+            r2 = registry.call("get_worker", worker_id="w_iso")
+            parsed2 = json.loads(r2)
+            assert parsed2["role"] == "isolated", f"get failed: {r2}"
+
+            # list_workers must still work
+            r3 = registry.call("list_workers")
+            workers = json.loads(r3)
+            assert any(w["worker_id"] == "w_iso" for w in workers), f"list failed: {r3}"
+
+            # update_worker_status must still work
+            r4 = registry.call("update_worker_status", worker_id="w_iso", status="running", current_task_id="dtask_iso")
+            parsed4 = json.loads(r4)
+            assert parsed4["status"] == "running", f"update failed: {r4}"
         finally:
             db.close()
 

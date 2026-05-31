@@ -1,54 +1,70 @@
-# Claude A Completion Report
+# Claude A Completion Report — TASK-032: Durable Worker Heartbeat and Offline Lifecycle v1
 
-Owner: Claude A
-Task: TASK-030 — Durable worker registry v1
-Status: done
+Status: ready for Codex review
 
 ## Summary
 
-Implemented a minimal durable worker registry so PM/runtime can inspect worker identity, role, status, current task assignment, and workspace path.
+Added heartbeat and stale→offline lifecycle to the durable worker registry. Workers can be touched (heartbeat) and stale workers can be automatically marked offline without mutating durable task ownership.
 
-**New module** `mini_agent/durable_workers.py`:
-- `DurableWorker` dataclass: `worker_id`, `role`, `status`, `current_task_id`, `workspace_path`, `created_at`, `updated_at`, `last_seen_at`.
-- `WorkerStatus` enum: `idle`, `assigned`, `running`, `paused`, `offline`.
-- `DurableWorkerStore` with SQLite and JSONL backends: `register_worker` (upsert), `get_worker`, `list_workers`, `update_status`, `touch`.
+## Changes
 
-**Registry tools** (`mini_agent/toolkits/registry_builder.py`):
-- `register_worker` — register or update a worker (strips worker_id, rejects empty).
-- `list_workers` — list registered workers.
-- `get_worker` — get worker by id.
-- `update_worker_status` — update status and optionally set `current_task_id`.
+### `mini_agent/durable_workers.py`
+- Added `mark_stale_workers_offline(max_age_seconds: int = 300) -> list[DurableWorker]` method
+- Iterates all workers, finds those with `last_seen_at` older than threshold and status != offline
+- Sets `status="offline"` and updates `updated_at`; preserves `last_seen_at` (last actual heartbeat)
+- Does not mutate durable tasks or clear task ownership
 
-**25 new tests** in `tests/test_durable_workers.py`:
-- SQLite: register/get, upsert, list, update status, clear task, unknown returns None, touch, round-trip.
-- JSONL: register/get, list, update status, upsert.
-- Registry tools: register, list, get, update, empty/whitespace id errors, invalid status error, update does not mutate durable task, durable task assignment still works.
+### `mini_agent/toolkits/registry_builder.py`
+- Added `touch_worker(worker_id)` registry tool — updates `last_seen_at`, returns JSON
+- Added `mark_stale_workers_offline(max_age_seconds=300)` registry tool — returns JSON summary of changed workers
+- Both handle empty/unknown IDs and invalid thresholds as JSON errors
 
-## Diff Stat
+### `tests/test_durable_workers.py`
+- Added `DurableWorkerHeartbeatTests` class with 8 tests:
+  - `test_sqlite_touch_updates_last_seen_and_updated`
+  - `test_jsonl_touch_updates_last_seen_and_updated`
+  - `test_sqlite_stale_workers_become_offline`
+  - `test_jsonl_stale_workers_become_offline`
+  - `test_fresh_workers_not_marked_offline`
+  - `test_already_offline_workers_not_returned_as_changed`
+  - `test_mark_offline_preserves_current_task_id`
+  - `test_touch_unknown_returns_none`
+- Added registry tool tests to `RegistryWorkerToolTests`:
+  - `test_touch_worker_returns_json`
+  - `test_touch_worker_unknown_returns_error`
+  - `test_touch_worker_empty_id_returns_error`
+  - `test_mark_stale_workers_offline_returns_json`
+  - `test_mark_stale_workers_offline_invalid_threshold_returns_error`
+  - `test_mark_offline_does_not_mutate_durable_task`
+
+## Verification
 
 ```
- mini_agent/durable_workers.py           | 256 ++++++++++++++++++++++++++++++++
- mini_agent/toolkits/registry_builder.py | 120 +++++++++++++++++
- tests/test_durable_workers.py           | 245 ++++++++++++++++++++++++++++++
- 3 files changed, 621 insertions(+)
+$ python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+Ran 441 tests — OK
+
+$ python3 evals/run_evals.py
+143 passed, 0 failed
+
+$ python3 -m unittest discover -s tests
+Ran 1309 tests — OK
+
+$ git diff --check
+OK
 ```
 
-## Checks Run
+## Diff
 
 ```
-python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-# 427 tests OK
-
-python3 evals/run_evals.py
-# 143 passed, 0 failed
-
-git diff --check -- mini_agent/ tests/
-# clean
+ mini_agent/durable_workers.py           |  18 ++++
+ mini_agent/toolkits/registry_builder.py |  50 ++++++++++
+ tests/test_durable_workers.py           | 166 ++++++++++++++++++++++++++++++++
+ 3 files changed, 234 insertions(+)
 ```
 
-## Known Risks / Limitations
+## Notes
 
-- `register_worker` upserts: re-registering updates role/workspace_path but preserves status unless explicitly changed.
-- No scheduling or worktree isolation implemented yet.
-- No durable event logging for worker operations (not requested).
-- No eval coverage added per task instruction.
+- No push or commit performed.
+- BACKLOG.md untouched.
+- Does not implement scheduling, worktree creation, or task reassignment.
+- Existing durable task worker assignment semantics unchanged.

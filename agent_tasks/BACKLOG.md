@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-032: Durable worker heartbeat and offline lifecycle v1
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-030 已完成
-- 目标: 为 durable worker registry 增加 heartbeat/touch 与 stale→offline 生命周期，让 worker liveness 成为可查询 runtime state。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 worker isolation；`mini_agent/durable_workers.py`；`mini_agent/toolkits/registry_builder.py`。
-
-### TASK-033: Eval coverage for durable worker registry tools
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-030 已完成
-- 目标: 为 durable worker registry tools 增加 deterministic offline eval，覆盖 register/get/list/update、错误返回、安全不泄漏和 event-store failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` durable eval 区域；TASK-030 新增的 `register_worker`、`list_workers`、`get_worker`、`update_worker_status`。
+（空）
 
 ## 已完成
+
+### TASK-033: Eval coverage for durable worker registry tools ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 147 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent` 427 tests OK；`python3 -m unittest discover -s tests` 1309 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 worker registry register/get/list/upsert、status/current_task_id 更新、未知 worker 和非法 status 错误、安全隔离，以及 broken event store 下 registry 工具行为不变。
+
+### TASK-032: Durable worker heartbeat and offline lifecycle v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 441 tests OK；`python3 evals/run_evals.py` 147 passed；`python3 -m unittest discover -s tests` 1309 tests OK；`git diff --check` OK。
+- 内容: `DurableWorkerStore` 新增 stale worker 标记 offline 能力；registry 新增 `touch_worker` 和 `mark_stale_workers_offline`；offline 标记保留 `last_seen_at` 和 `current_task_id`，不改变 durable task ownership；新增 SQLite/JSONL 和 registry focused tests。
 
 ### TASK-031: Eval coverage for durable task worker assignment ✅
 - 完成者: Claude B

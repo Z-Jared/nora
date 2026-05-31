@@ -697,6 +697,56 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _touch_worker_json(worker_id: str) -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.touch(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        return _json.dumps(worker.to_dict(), ensure_ascii=False)
+
+    def _mark_stale_workers_offline_json(max_age_seconds: int = 300) -> str:
+        if max_age_seconds < 1:
+            return _json.dumps({"error": "max_age_seconds 必须 >= 1"}, ensure_ascii=False)
+        changed = durable_worker_store.mark_stale_workers_offline(max_age_seconds=max_age_seconds)
+        return _json.dumps(
+            {"changed_count": len(changed), "workers": [w.to_dict() for w in changed]},
+            ensure_ascii=False,
+        )
+
+    registry.register(
+        "touch_worker",
+        "更新 worker 的 last_seen_at 时间戳，表示 worker 仍然存活。",
+        _touch_worker_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id，例如 worker_1",
+                }
+            },
+            "required": ["worker_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "mark_stale_workers_offline",
+        "将超过指定时间未心跳的 worker 标记为 offline。返回状态变更的 worker 列表。",
+        _mark_stale_workers_offline_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_age_seconds": {
+                    "type": "integer",
+                    "description": "心跳超时阈值（秒），默认 300",
+                }
+            },
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

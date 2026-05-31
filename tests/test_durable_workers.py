@@ -240,6 +240,172 @@ class RegistryWorkerToolTests(unittest.TestCase):
         assigned = json.loads(assign_result)
         self.assertEqual(assigned["worker_id"], "w2")
 
+    def test_touch_worker_returns_json(self):
+        self.registry.call("register_worker", worker_id="w1", role="worker")
+        result = self.registry.call("touch_worker", worker_id="w1")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["worker_id"], "w1")
+        self.assertIn("last_seen_at", parsed)
+
+    def test_touch_worker_unknown_returns_error(self):
+        result = self.registry.call("touch_worker", worker_id="w999")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_touch_worker_empty_id_returns_error(self):
+        result = self.registry.call("touch_worker", worker_id="")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_mark_stale_workers_offline_returns_json(self):
+        self.registry.call("register_worker", worker_id="w1")
+        result = self.registry.call("mark_stale_workers_offline", max_age_seconds=1)
+        parsed = json.loads(result)
+        self.assertIn("changed_count", parsed)
+        self.assertIn("workers", parsed)
+
+    def test_mark_stale_workers_offline_invalid_threshold_returns_error(self):
+        result = self.registry.call("mark_stale_workers_offline", max_age_seconds=0)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_mark_offline_does_not_mutate_durable_task(self):
+        self.registry.call("register_worker", worker_id="w1")
+        create_result = self.registry.call("create_durable_task", goal="my task", steps="step one", worker_id="w1")
+        task_id = json.loads(create_result)["task_id"]
+
+        # Mark worker offline (won't actually change since it was just registered, but verify task untouched)
+        self.registry.call("mark_stale_workers_offline", max_age_seconds=999999)
+
+        task_result = self.registry.call("get_durable_task", task_id=task_id)
+        task = json.loads(task_result)
+        self.assertEqual(task["worker_id"], "w1")
+        self.assertEqual(task["status"], "pending")
+
+
+class DurableWorkerHeartbeatTests(unittest.TestCase):
+    """Tests for heartbeat and stale→offline lifecycle."""
+
+    def test_sqlite_touch_updates_last_seen_and_updated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                store.register_worker(worker_id="w1")
+                before = store.get_worker("w1")
+                worker = store.touch("w1")
+
+                self.assertGreaterEqual(worker.last_seen_at, before.last_seen_at)
+                self.assertGreaterEqual(worker.updated_at, before.updated_at)
+
+                after = store.get_worker("w1")
+                self.assertEqual(after.last_seen_at, worker.last_seen_at)
+            finally:
+                db.close()
+
+    def test_jsonl_touch_updates_last_seen_and_updated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DurableWorkerStore(path=Path(tmpdir) / "workers.jsonl")
+            store.register_worker(worker_id="w1")
+            before = store.get_worker("w1")
+            worker = store.touch("w1")
+
+            self.assertGreaterEqual(worker.last_seen_at, before.last_seen_at)
+            self.assertGreaterEqual(worker.updated_at, before.updated_at)
+
+    def test_sqlite_stale_workers_become_offline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                store.register_worker(worker_id="w1")
+                # Manually set last_seen_at to old timestamp
+                worker = store.get_worker("w1")
+                worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+                store._save(worker)
+
+                changed = store.mark_stale_workers_offline(max_age_seconds=60)
+                self.assertEqual(len(changed), 1)
+                self.assertEqual(changed[0].worker_id, "w1")
+                self.assertEqual(changed[0].status, WorkerStatus.OFFLINE)
+
+                # last_seen_at should remain the old timestamp
+                after = store.get_worker("w1")
+                self.assertEqual(after.last_seen_at, "2020-01-01T00:00:00+00:00")
+                self.assertEqual(after.status, WorkerStatus.OFFLINE)
+            finally:
+                db.close()
+
+    def test_jsonl_stale_workers_become_offline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = DurableWorkerStore(path=Path(tmpdir) / "workers.jsonl")
+            store.register_worker(worker_id="w1")
+            worker = store.get_worker("w1")
+            worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+            store._save(worker)
+
+            changed = store.mark_stale_workers_offline(max_age_seconds=60)
+            self.assertEqual(len(changed), 1)
+            self.assertEqual(changed[0].status, WorkerStatus.OFFLINE)
+
+    def test_fresh_workers_not_marked_offline(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                store.register_worker(worker_id="w1")
+
+                changed = store.mark_stale_workers_offline(max_age_seconds=300)
+                self.assertEqual(len(changed), 0)
+
+                worker = store.get_worker("w1")
+                self.assertEqual(worker.status, WorkerStatus.IDLE)
+            finally:
+                db.close()
+
+    def test_already_offline_workers_not_returned_as_changed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                store.register_worker(worker_id="w1")
+                worker = store.get_worker("w1")
+                worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+                worker.status = WorkerStatus.OFFLINE
+                store._save(worker)
+
+                changed = store.mark_stale_workers_offline(max_age_seconds=60)
+                self.assertEqual(len(changed), 0)
+            finally:
+                db.close()
+
+    def test_mark_offline_preserves_current_task_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                store.register_worker(worker_id="w1")
+                store.update_status("w1", WorkerStatus.RUNNING, current_task_id="dtask_1")
+                worker = store.get_worker("w1")
+                worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+                store._save(worker)
+
+                changed = store.mark_stale_workers_offline(max_age_seconds=60)
+                self.assertEqual(len(changed), 1)
+                self.assertEqual(changed[0].current_task_id, "dtask_1")
+            finally:
+                db.close()
+
+    def test_touch_unknown_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                store = DurableWorkerStore(db=db)
+                result = store.touch("w999")
+                self.assertIsNone(result)
+            finally:
+                db.close()
+
 
 if __name__ == "__main__":
     unittest.main()
