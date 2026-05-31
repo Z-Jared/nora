@@ -131,6 +131,7 @@ def build_default_registry(
     registry.durable_event_store = durable_event_store
     workspace_files.event_store = durable_event_store
     shell_runner.event_store = durable_event_store
+    git_tools.event_store = durable_event_store
     diagnostics.event_store = durable_event_store
     registry.diagnostics = diagnostics
 

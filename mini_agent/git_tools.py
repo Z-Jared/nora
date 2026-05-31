@@ -3,6 +3,13 @@ import subprocess
 from pathlib import Path
 from typing import Union
 
+from mini_agent.durable_events import (
+    REVIEW_GATE_BLOCKED,
+    REVIEW_GATE_ERROR,
+    REVIEW_GATE_FINISHED,
+    REVIEW_GATE_STARTED,
+)
+
 
 DENIED_FILE_NAMES = {".env", ".env.local", ".env.production"}
 DENIED_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", "data", "logs"}
@@ -11,9 +18,10 @@ BRANCH_DENIED_PATTERN = re.compile(r"[\s\x00-\x1f~^:?*\[\\]")
 
 
 class GitTools:
-    def __init__(self, root: Path, timeout_seconds: int = 10):
+    def __init__(self, root: Path, timeout_seconds: int = 10, event_store=None):
         self.root = root.resolve()
         self.timeout_seconds = timeout_seconds
+        self.event_store = event_store
 
     def status(self) -> str:
         return self._run(["git", "status", "--short"])
@@ -63,11 +71,28 @@ class GitTools:
 
     def review_staged_diff(self, max_chars: int = 12000) -> str:
         max_chars = max(500, min(max_chars, 50000))
+        self._record_review_gate_event(REVIEW_GATE_STARTED, "started")
         names = self._run(["git", "diff", "--cached", "--name-status", "--"])
+        if names.startswith("Git 命令失败") or names.startswith("Git 命令超时"):
+            self._record_review_gate_event(REVIEW_GATE_ERROR, "error", error_label="git_command_failure")
+            return names
         if names == "没有 Git 输出。":
+            self._record_review_gate_event(
+                REVIEW_GATE_FINISHED, "no_diff",
+                has_staged_diff=False, file_count=0, max_chars=max_chars,
+            )
             return "没有 staged diff。"
         stat = self._run(["git", "diff", "--cached", "--stat", "--"])
         sensitive = _sensitive_path_warnings(names)
+        file_count = len([line for line in names.splitlines() if line.strip()])
+        sensitive_path_count = len(sensitive.split(", ")) if sensitive else 0
+        status = "blocked" if sensitive else "finished"
+        event_type = REVIEW_GATE_BLOCKED if sensitive else REVIEW_GATE_FINISHED
+        self._record_review_gate_event(
+            event_type, status,
+            has_staged_diff=True, file_count=file_count,
+            sensitive_path_count=sensitive_path_count, max_chars=max_chars,
+        )
         lines = [
             "staged diff 审查:",
             "## files",
@@ -79,6 +104,35 @@ class GitTools:
             f"- sensitive paths: {sensitive or '未发现明显敏感路径'}",
         ]
         return "\n".join(lines)[:max_chars]
+
+    def _record_review_gate_event(
+        self, event_type: str, status: str,
+        has_staged_diff: bool = False, file_count: int = 0,
+        sensitive_path_count: int = 0, max_chars: int = 0,
+        error_label: str = "",
+    ) -> None:
+        if not self.event_store:
+            return
+        try:
+            payload = {
+                "gate_name": "staged_diff_review",
+                "status": status,
+                "has_staged_diff": has_staged_diff,
+                "file_count": file_count,
+                "sensitive_path_count": sensitive_path_count,
+                "max_chars": max_chars,
+            }
+            if error_label:
+                payload["error_label"] = error_label
+            self.event_store.record(
+                event_type=event_type,
+                source="git_tools",
+                summary=f"review gate {status}: staged_diff_review",
+                severity="info" if event_type in (REVIEW_GATE_STARTED, REVIEW_GATE_FINISHED) else "warning",
+                payload=payload,
+            )
+        except Exception:
+            pass
 
     def check_before_commit(self, max_chars: int = 12000) -> str:
         max_chars = max(500, min(max_chars, 50000))

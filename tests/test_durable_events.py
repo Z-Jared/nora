@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -20,6 +21,10 @@ from mini_agent.durable_events import (
     MODEL_CALL_ERROR,
     MODEL_CALL_FINISHED,
     MODEL_CALL_STARTED,
+    REVIEW_GATE_BLOCKED,
+    REVIEW_GATE_ERROR,
+    REVIEW_GATE_FINISHED,
+    REVIEW_GATE_STARTED,
     SHELL_COMMAND_BLOCKED,
     SHELL_COMMAND_ERROR,
     SHELL_COMMAND_FINISHED,
@@ -39,6 +44,7 @@ from mini_agent.durable_events import (
     TOOL_CALL_STARTED,
     TRACE_LINKED,
 )
+from mini_agent.git_tools import GitTools
 from mini_agent.task_runner import TaskManager
 from mini_agent.tools import build_default_registry
 from mini_agent.registry import ToolPermission, ToolRegistry
@@ -1694,6 +1700,206 @@ class ApprovalDurableEventTests(unittest.TestCase):
         requested = [e for e in events if e.event_type == APPROVAL_REQUESTED]
         self.assertEqual(len(requested), 1)
         self.assertFalse(requested[0].payload["reason_present"])
+
+
+def _init_git_repo(root: Path) -> None:
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    (root / "README.md").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=root, check=True, capture_output=True)
+
+
+class ReviewGateDurableEventTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.event_store = DurableEventStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _review_events(self, event_type=None):
+        event_types = {REVIEW_GATE_STARTED, REVIEW_GATE_FINISHED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR}
+        events = [e for e in self.event_store.list_events() if e.event_type in event_types]
+        events.reverse()
+        if event_type:
+            return [e for e in events if e.event_type == event_type]
+        return events
+
+    def test_empty_staged_diff_emits_started_and_no_diff(self):
+        _init_git_repo(self.root)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        result = git.review_staged_diff()
+
+        self.assertIn("没有 staged diff", result)
+        events = self._review_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].event_type, REVIEW_GATE_STARTED)
+        self.assertEqual(events[1].event_type, REVIEW_GATE_FINISHED)
+        self.assertEqual(events[1].payload["status"], "no_diff")
+        self.assertFalse(events[1].payload["has_staged_diff"])
+        self.assertEqual(events[1].payload["file_count"], 0)
+
+    def test_present_staged_diff_emits_started_and_finished(self):
+        _init_git_repo(self.root)
+        (self.root / "new_file.txt").write_text("new content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "new_file.txt"], cwd=self.root, check=True)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        result = git.review_staged_diff()
+
+        self.assertIn("staged diff 审查", result)
+        self.assertIn("new_file.txt", result)
+        events = self._review_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].event_type, REVIEW_GATE_STARTED)
+        self.assertEqual(events[1].event_type, REVIEW_GATE_FINISHED)
+        self.assertTrue(events[1].payload["has_staged_diff"])
+        self.assertGreaterEqual(events[1].payload["file_count"], 1)
+        self.assertEqual(events[1].payload["gate_name"], "staged_diff_review")
+
+    def test_review_gate_event_no_raw_diff_or_paths(self):
+        _init_git_repo(self.root)
+        sentinel_content = "SENTINEL_SECRET_CONTENT_12345"
+        (self.root / "source.py").write_text(f"# {sentinel_content}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "source.py"], cwd=self.root, check=True)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        git.review_staged_diff()
+
+        events = self._review_events()
+        for event in events:
+            full_json = json.dumps(event.to_dict(), ensure_ascii=False)
+            self.assertNotIn(sentinel_content, full_json,
+                             "raw file content must not appear in serialized review-gate event")
+            self.assertNotIn("source.py", full_json,
+                             "raw file paths must not appear in serialized review-gate event")
+            # Also check no raw diff fragments
+            self.assertNotIn("@@", full_json,
+                             "raw diff markers must not appear in serialized review-gate event")
+
+    def test_sensitive_path_emits_blocked_event(self):
+        _init_git_repo(self.root)
+        (self.root / ".env").write_text("SECRET=abc\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-f", ".env"], cwd=self.root, check=True)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        result = git.review_staged_diff()
+
+        self.assertIn("staged diff 审查", result)
+        events = self._review_events()
+        blocked = [e for e in events if e.event_type == REVIEW_GATE_BLOCKED]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0].payload["status"], "blocked")
+        self.assertGreaterEqual(blocked[0].payload["sensitive_path_count"], 1)
+        # Must not leak sensitive path names
+        full_json = json.dumps(blocked[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(".env", full_json,
+                         "sensitive path names must not appear in serialized review-gate event")
+
+    def test_broken_event_store_does_not_break_review(self):
+        _init_git_repo(self.root)
+        (self.root / "new.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "new.txt"], cwd=self.root, check=True)
+
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("disk full")
+            def list_events(self, **kwargs):
+                return []
+            def get_event(self, event_id):
+                return None
+
+        git = GitTools(self.root, event_store=BrokenEventStore())
+
+        result = git.review_staged_diff()
+
+        self.assertIn("staged diff 审查", result)
+        self.assertIn("new.txt", result)
+
+    def test_no_event_store_does_not_break_review(self):
+        _init_git_repo(self.root)
+        git = GitTools(self.root)
+
+        result = git.review_staged_diff()
+
+        self.assertIn("没有 staged diff", result)
+
+    def test_default_registry_wires_review_gate_events(self):
+        _init_git_repo(self.root)
+        (self.root / "new.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "new.txt"], cwd=self.root, check=True)
+        registry = build_default_registry(db=self.db, workspace_root=self.root)
+
+        self.assertIsNotNone(registry.durable_event_store)
+        result = registry.call("git_review_staged_diff")
+
+        self.assertIn("staged diff 审查", result)
+        events = registry.durable_event_store.list_events()
+        review_events = [e for e in events if e.event_type in (
+            REVIEW_GATE_STARTED, REVIEW_GATE_FINISHED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR,
+        )]
+        self.assertGreaterEqual(len(review_events), 2)
+
+    def test_event_payload_safe_metadata_fields(self):
+        _init_git_repo(self.root)
+        (self.root / "new.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "new.txt"], cwd=self.root, check=True)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        git.review_staged_diff()
+
+        events = self._review_events()
+        for event in events:
+            payload = event.payload
+            self.assertIn("gate_name", payload)
+            self.assertIn("status", payload)
+            self.assertIn("has_staged_diff", payload)
+            self.assertIn("file_count", payload)
+            self.assertIn("sensitive_path_count", payload)
+            self.assertIn("max_chars", payload)
+            self.assertEqual(payload["gate_name"], "staged_diff_review")
+
+    def test_git_timeout_emits_review_gate_error(self):
+        _init_git_repo(self.root)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        sentinel_error = "SENTINEL_RAW_ERROR_TEXT_98765"
+        with patch.object(git, "_run", return_value=f"Git 命令超时。"):
+            result = git.review_staged_diff()
+
+        self.assertIn("Git 命令超时", result)
+        events = self._review_events()
+        errors = [e for e in events if e.event_type == REVIEW_GATE_ERROR]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["error_label"], "git_command_failure")
+        self.assertEqual(errors[0].severity, "warning")
+
+    def test_git_failure_emits_review_gate_error_no_raw_text(self):
+        _init_git_repo(self.root)
+        git = GitTools(self.root, event_store=self.event_store)
+
+        sentinel_error = "SENTINEL_RAW_GIT_FAILURE_abc123"
+        with patch.object(git, "_run", return_value=f"Git 命令失败: {sentinel_error}"):
+            result = git.review_staged_diff()
+
+        self.assertIn("Git 命令失败", result)
+        events = self._review_events()
+        errors = [e for e in events if e.event_type == REVIEW_GATE_ERROR]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].payload["error_label"], "git_command_failure")
+
+        # Full event serialization must not leak raw error text
+        full_json = json.dumps(errors[0].to_dict(), ensure_ascii=False)
+        self.assertNotIn(sentinel_error, full_json,
+                         "raw error text must not appear in serialized review-gate error event")
+        # error_label should be generic, not the raw message
+        self.assertEqual(errors[0].payload["error_label"], "git_command_failure")
 
 
 if __name__ == "__main__":

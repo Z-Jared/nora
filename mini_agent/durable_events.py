@@ -45,6 +45,10 @@ TEST_RUN_ERROR = "test_run_error"
 TEST_RUN_BLOCKED = "test_run_blocked"
 APPROVAL_REQUESTED = "approval_requested"
 APPROVAL_DECIDED = "approval_decided"
+REVIEW_GATE_STARTED = "review_gate_started"
+REVIEW_GATE_FINISHED = "review_gate_finished"
+REVIEW_GATE_BLOCKED = "review_gate_blocked"
+REVIEW_GATE_ERROR = "review_gate_error"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -77,6 +81,10 @@ VALID_EVENT_TYPES = {
     TEST_RUN_BLOCKED,
     APPROVAL_REQUESTED,
     APPROVAL_DECIDED,
+    REVIEW_GATE_STARTED,
+    REVIEW_GATE_FINISHED,
+    REVIEW_GATE_BLOCKED,
+    REVIEW_GATE_ERROR,
 }
 
 _DURABLE_EVENTS_TABLE = """

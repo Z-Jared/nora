@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -162,6 +162,10 @@ def main() -> int:
         EvalCase("test_run_event_blocked", eval_test_run_event_blocked),
         EvalCase("test_run_event_timeout_or_error", eval_test_run_event_timeout_or_error),
         EvalCase("test_run_event_failure_isolation", eval_test_run_event_failure_isolation),
+        EvalCase("approval_event_approved", eval_approval_event_approved),
+        EvalCase("approval_event_denied", eval_approval_event_denied),
+        EvalCase("approval_event_non_permissioned", eval_approval_event_non_permissioned),
+        EvalCase("approval_event_failure_isolation", eval_approval_event_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -3126,6 +3130,201 @@ def eval_test_run_event_failure_isolation():
         diag4 = Diagnostics(tmpdir, event_store=BrokenEventStore())
         diagnosis = diag4.diagnose_test_failure("FAIL: test_x (tests.test_x.TestX.test_x)\nAssertionError: 1 != 2")
         assert "FAIL" in diagnosis, f"diagnose_test_failure must work, got: {diagnosis}"
+
+
+# --- Approval event eval helpers ---
+
+_APPROVAL_SENTINEL_REASON = "NORA_EVAL_APPROVAL_REASON_SENTINEL_c3e5a7b1"
+_APPROVAL_SENTINEL_MESSAGE = "NORA_EVAL_APPROVAL_MESSAGE_SENTINEL_d9f2c4e6"
+_APPROVAL_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-approval-8e7d6c5b"
+_APPROVAL_FORBIDDEN_PAYLOAD_KEYS = {
+    "args", "arguments", "message", "reason", "prompt", "raw_args",
+    "content", "secret", "command", "password", "api_key",
+}
+
+
+def _approval_events(event_store, event_type=None):
+    events = event_store.list_events()
+    approval_types = (APPROVAL_REQUESTED, APPROVAL_DECIDED)
+    if event_type:
+        return [e for e in events if e.event_type == event_type]
+    return [e for e in events if e.event_type in approval_types]
+
+
+def _serialized_approval_events(event_store):
+    import json as _json
+    return _json.dumps(
+        [event.to_dict() for event in _approval_events(event_store)],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _assert_approval_events_safe(event_store, forbidden_values: list[str]) -> None:
+    serialized = _serialized_approval_events(event_store)
+    for value in forbidden_values:
+        assert value not in serialized, f"approval event stored forbidden raw value {value!r}: {serialized[:500]}"
+    for event in _approval_events(event_store):
+        leaked_keys = _APPROVAL_FORBIDDEN_PAYLOAD_KEYS & set(event.payload)
+        assert not leaked_keys, f"approval event payload leaked forbidden keys {leaked_keys}: {event.payload}"
+
+
+def eval_approval_event_approved():
+    """Approved permissioned tool records requested + decided with status=approved.
+    Tool actually succeeds (not just 'not cancelled'). Secret sentinel in arguments must not leak."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            _init_git_repo(tmpdir)
+            # Stage a change so git_commit_staged has something to commit
+            (tmpdir / "README.md").write_text("changed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+
+            registry = build_default_registry(
+                workspace_root=tmpdir, db=db,
+                confirm_action=lambda _: True,
+            )
+            event_store = registry.durable_event_store
+            # Inject secret sentinel into message and reason
+            secret_message = f"commit {_APPROVAL_SENTINEL_SECRET} done"
+            result = registry.call(
+                "git_commit_staged",
+                message=secret_message,
+                reason=_APPROVAL_SENTINEL_REASON,
+            )
+            # Tool must actually succeed, not just 'not cancelled'
+            assert "已创建本地提交" in result, f"tool should succeed, got: {result}"
+
+            requested = _approval_events(event_store, APPROVAL_REQUESTED)
+            decided = _approval_events(event_store, APPROVAL_DECIDED)
+            assert len(requested) == 1, f"expected 1 requested, got {len(requested)}"
+            assert len(decided) == 1, f"expected 1 decided, got {len(decided)}"
+
+            assert requested[0].payload["tool_name"] == "git_commit_staged"
+            assert requested[0].payload["requires_confirmation"] is True
+            assert requested[0].severity == "info"
+            assert requested[0].task_id is None
+
+            assert decided[0].payload["status"] == "approved"
+            assert decided[0].payload["tool_name"] == "git_commit_staged"
+            assert decided[0].severity == "info"
+            assert decided[0].task_id is None
+
+            # Safety: raw message/reason/secret must not leak into events
+            _assert_approval_events_safe(event_store, [
+                _APPROVAL_SENTINEL_MESSAGE, _APPROVAL_SENTINEL_REASON,
+                _APPROVAL_SENTINEL_SECRET, secret_message,
+            ])
+        finally:
+            db.close()
+
+
+def eval_approval_event_denied():
+    """Denied permissioned tool records requested + decided with status=denied, severity=warning."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(
+                workspace_root=tmpdir, db=db,
+                confirm_action=lambda _: False,
+            )
+            event_store = registry.durable_event_store
+            result = registry.call(
+                "git_commit_staged",
+                message=_APPROVAL_SENTINEL_MESSAGE,
+                reason=_APPROVAL_SENTINEL_REASON,
+            )
+            assert result == "已取消操作。", f"expected cancel, got: {result}"
+
+            requested = _approval_events(event_store, APPROVAL_REQUESTED)
+            decided = _approval_events(event_store, APPROVAL_DECIDED)
+            assert len(requested) == 1, f"expected 1 requested, got {len(requested)}"
+            assert len(decided) == 1, f"expected 1 decided, got {len(decided)}"
+
+            assert decided[0].payload["status"] == "denied"
+            assert decided[0].severity == "warning"
+
+            # Safety: raw message/reason must not leak
+            _assert_approval_events_safe(event_store, [_APPROVAL_SENTINEL_MESSAGE, _APPROVAL_SENTINEL_REASON])
+        finally:
+            db.close()
+
+
+def eval_approval_event_non_permissioned():
+    """Non-permissioned tool emits no approval events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        db = NoraDB(tmpdir / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=tmpdir, db=db)
+            event_store = registry.durable_event_store
+            result = registry.call("calculate", expression="2 + 3")
+            assert "5" in result, f"expected 5, got: {result}"
+
+            requested = _approval_events(event_store, APPROVAL_REQUESTED)
+            decided = _approval_events(event_store, APPROVAL_DECIDED)
+            assert len(requested) == 0, f"non-permissioned tool must not emit requested, got {len(requested)}"
+            assert len(decided) == 0, f"non-permissioned tool must not emit decided, got {len(decided)}"
+        finally:
+            db.close()
+
+
+def eval_approval_event_failure_isolation():
+    """Broken/null event store must not change approved or denied confirmation behavior.
+    Uses a real permissioned tool (git_commit_staged) to exercise the approval path."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        _init_git_repo(tmpdir)
+
+        # 1. Approved with broken event store — must actually succeed
+        (tmpdir / "README.md").write_text("change1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        registry = build_default_registry(
+            workspace_root=tmpdir,
+            confirm_action=lambda _: True,
+        )
+        registry.event_store = BrokenEventStore()
+        result = registry.call("git_commit_staged", message="test commit", reason="test")
+        assert "已创建本地提交" in result, f"approved tool must succeed with broken store, got: {result}"
+
+        # 2. Denied with broken event store — must still cancel
+        (tmpdir / "README.md").write_text("change2\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        registry2 = build_default_registry(
+            workspace_root=tmpdir,
+            confirm_action=lambda _: False,
+        )
+        registry2.event_store = BrokenEventStore()
+        result2 = registry2.call("git_commit_staged", message="test commit", reason="test")
+        assert result2 == "已取消操作。", f"denied tool must still cancel with broken store, got: {result2}"
+
+        # 3. Approved with no event store — must actually succeed
+        (tmpdir / "README.md").write_text("change3\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        registry3 = build_default_registry(
+            workspace_root=tmpdir,
+            confirm_action=lambda _: True,
+        )
+        registry3.event_store = None
+        result3 = registry3.call("git_commit_staged", message="test commit", reason="test")
+        assert "已创建本地提交" in result3, f"approved tool must succeed without event store, got: {result3}"
+
+        # 4. Denied with no event store — must still cancel
+        (tmpdir / "README.md").write_text("change4\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmpdir, check=True)
+        registry4 = build_default_registry(
+            workspace_root=tmpdir,
+            confirm_action=lambda _: False,
+        )
+        registry4.event_store = None
+        result4 = registry4.call("git_commit_staged", message="test commit", reason="test")
+        assert result4 == "已取消操作。", f"denied tool must still cancel without event store, got: {result4}"
 
 
 def _init_git_repo(root: Path) -> None:
