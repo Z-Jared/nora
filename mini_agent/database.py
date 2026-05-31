@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS durable_events (
     source TEXT NOT NULL DEFAULT '',
     severity TEXT NOT NULL DEFAULT 'info'
 );
+
+CREATE TABLE IF NOT EXISTS memory_records (
+    record_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'project',
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    related_task_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 _INDEXES = """
@@ -107,6 +121,12 @@ CREATE INDEX IF NOT EXISTS idx_de_task ON durable_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_de_type ON durable_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_de_trace ON durable_events(trace_id);
 CREATE INDEX IF NOT EXISTS idx_de_checkpoint ON durable_events(checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS idx_mr_kind ON memory_records(kind);
+CREATE INDEX IF NOT EXISTS idx_mr_scope ON memory_records(scope);
+CREATE INDEX IF NOT EXISTS idx_mr_created ON memory_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_mr_updated ON memory_records(updated_at);
+CREATE INDEX IF NOT EXISTS idx_mr_task ON memory_records(related_task_id);
 """
 
 

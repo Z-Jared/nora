@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-038: Nora native memory record store v1
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-036 已完成
-- 目标: 增加本地 first-class structured memory records，让 Nora 可以保存 decision/preference/fact/task_learning/risk/note 等类型化记忆，不依赖外部服务。
-- 验证: `python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` memory/context compiler 方向；`mini_agent/memory.py` legacy memory pattern；`mini_agent/toolkits/register_state.py` registry pattern。
-
-### TASK-039: Eval coverage for native memory record store
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-038 runtime 存在后执行
-- 目标: 为 structured memory records 增加 deterministic offline eval，覆盖 basics、search/list/get/delete、安全边界、legacy memory compatibility 和 failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` memory eval 区域；TASK-038 新增工具。
+（空）
 
 ## 已完成
+
+### TASK-039: Eval coverage for native memory record store ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 163 passed；`python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 184 tests OK；`python3 -m unittest discover -s tests` 1408 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval，覆盖 structured memory record basics、query/scope/tags search、bounded list/search summaries、get/delete、安全拒绝 secret-like 内容、大内容不泄漏、legacy `save_memory`/`search_memory` compatibility、Supermemory no-key deterministic safety，以及 invalid input failure isolation。
+
+### TASK-038: Nora native memory record store v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 184 tests OK；`python3 evals/run_evals.py` 163 passed；`python3 -m unittest discover -s tests` 1408 tests OK；`git diff --check` OK。
+- 内容: 新增 Nora local-first structured memory record store，支持 SQLite/JSONL backend、`decision/preference/fact/task_learning/risk/note` 类型、`project/user/global` scope 校验、CRUD/list/search/delete、scope/tags filters、bounded registry summaries、secret-like 内容拒绝；registry 新增 `save_memory_record`、`search_memory_records`、`list_memory_records`、`get_memory_record`、`delete_memory_record`；新增 `docs/knowledge/MEMORY_KERNEL.md`。
 
 ### TASK-037: Eval coverage for optional Supermemory memory toolkit ✅
 - 完成者: Claude B；Codex PM 补强 deterministic env/containerTag/metadata assertions

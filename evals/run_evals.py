@@ -208,6 +208,10 @@ def main() -> int:
         EvalCase("supermemory_container_tag_config", eval_supermemory_container_tag_config),
         EvalCase("supermemory_failure_isolation", eval_supermemory_failure_isolation),
         EvalCase("supermemory_existing_memory_tools", eval_supermemory_existing_memory_tools),
+        EvalCase("memory_record_basics", eval_memory_record_basics),
+        EvalCase("memory_record_safety", eval_memory_record_safety),
+        EvalCase("memory_record_compatibility", eval_memory_record_compatibility),
+        EvalCase("memory_record_failure_isolation", eval_memory_record_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -5173,6 +5177,250 @@ def eval_supermemory_existing_memory_tools():
             # calculate still works (basic registry sanity)
             r3 = registry.call("calculate", expression="2 + 3")
             assert "5" in r3, f"calculate failed: {r3}"
+        finally:
+            db.close()
+
+
+# --- Memory record eval helpers ---
+
+_MEMORY_RECORD_SENTINEL_TITLE = "NORA_EVAL_MR_TITLE_SENTINEL_a1b2c3d4"
+_MEMORY_RECORD_SENTINEL_CONTENT = "NORA_EVAL_MR_CONTENT_SENTINEL_e5f6a7b8"
+_MEMORY_RECORD_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-mr-9c8d7e6f"
+
+
+def eval_memory_record_basics():
+    """Save, search, list, get, delete memory records."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Save decision record
+            r1 = registry.call("save_memory_record",
+                               kind="decision",
+                               title=_MEMORY_RECORD_SENTINEL_TITLE,
+                               content=_MEMORY_RECORD_SENTINEL_CONTENT,
+                               scope="project",
+                               tags="arch,backend",
+                               confidence=0.9)
+            parsed1 = json.loads(r1)
+            assert "record_id" in parsed1, f"missing record_id: {parsed1}"
+            assert parsed1["kind"] == "decision", f"kind mismatch: {parsed1}"
+            assert parsed1["title"] == _MEMORY_RECORD_SENTINEL_TITLE
+            record_id = parsed1["record_id"]
+
+            # Save preference record
+            r1b = registry.call("save_memory_record",
+                                kind="preference",
+                                title="Use dark mode",
+                                content="Prefer dark theme for all IDEs",
+                                scope="user",
+                                tags="ui")
+            parsed1b = json.loads(r1b)
+            assert "record_id" in parsed1b
+
+            # Search by query
+            r2 = registry.call("search_memory_records", query="sentinel", max_results=5)
+            parsed2 = json.loads(r2)
+            assert isinstance(parsed2, list), f"expected list: {parsed2}"
+            assert len(parsed2) >= 1, f"expected >=1 result, got {len(parsed2)}"
+            # Search returns summaries without content
+            assert "content" not in parsed2[0], f"content leaked in search: {parsed2[0].keys()}"
+
+            # Search by kind
+            r2b = registry.call("search_memory_records", query="dark", kind="preference")
+            parsed2b = json.loads(r2b)
+            assert len(parsed2b) >= 1, f"expected >=1 preference result"
+
+            # Search by scope
+            r2c = registry.call("search_memory_records", query="sentinel", scope="project")
+            parsed2c = json.loads(r2c)
+            assert len(parsed2c) >= 1, f"expected >=1 project result"
+            assert all(item["scope"] == "project" for item in parsed2c), f"scope filter failed: {parsed2c}"
+
+            # Search by tags
+            r2d = registry.call("search_memory_records", query="sentinel", tags="arch")
+            parsed2d = json.loads(r2d)
+            assert len(parsed2d) >= 1, f"expected >=1 arch-tagged result"
+
+            # List returns bounded summaries
+            r3 = registry.call("list_memory_records", max_results=10)
+            parsed3 = json.loads(r3)
+            assert isinstance(parsed3, list), f"expected list: {parsed3}"
+            assert len(parsed3) >= 2, f"expected >=2 records, got {len(parsed3)}"
+            # List returns summaries without content
+            for item in parsed3:
+                assert "content" not in item, f"content leaked in list: {item.keys()}"
+
+            # List filtered by kind
+            r3b = registry.call("list_memory_records", kind="decision")
+            parsed3b = json.loads(r3b)
+            assert all(item["kind"] == "decision" for item in parsed3b), f"kind filter failed: {parsed3b}"
+
+            # Get returns full record
+            r4 = registry.call("get_memory_record", record_id=record_id)
+            parsed4 = json.loads(r4)
+            assert parsed4["record_id"] == record_id
+            assert parsed4["content"] == _MEMORY_RECORD_SENTINEL_CONTENT, f"content mismatch: {parsed4}"
+
+            # Delete removes record
+            r5 = registry.call("delete_memory_record", record_id=record_id)
+            parsed5 = json.loads(r5)
+            assert parsed5.get("ok") is True, f"delete failed: {parsed5}"
+
+            # Get after delete returns error
+            r6 = registry.call("get_memory_record", record_id=record_id)
+            parsed6 = json.loads(r6)
+            assert "error" in parsed6, f"expected error after delete: {parsed6}"
+        finally:
+            db.close()
+
+
+def eval_memory_record_safety():
+    """Secret-like content is rejected; list/search summaries do not leak oversized content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Secret-like content should be rejected
+            r1 = registry.call("save_memory_record",
+                               kind="fact",
+                               title="test",
+                               content=f"API_KEY={_MEMORY_RECORD_SENTINEL_SECRET}")
+            parsed1 = json.loads(r1)
+            assert "error" in parsed1, f"expected error for secret content: {parsed1}"
+
+            # Secret in title should be rejected
+            r2 = registry.call("save_memory_record",
+                               kind="fact",
+                               title=f"secret {_MEMORY_RECORD_SENTINEL_SECRET}",
+                               content="normal content")
+            parsed2 = json.loads(r2)
+            assert "error" in parsed2, f"expected error for secret title: {parsed2}"
+
+            # Save a record with large content
+            large_content = "X" * 10000
+            r3 = registry.call("save_memory_record",
+                               kind="note",
+                               title="large record",
+                               content=large_content)
+            parsed3 = json.loads(r3)
+            assert "record_id" in parsed3, f"save large failed: {parsed3}"
+
+            # Search/list summaries should not contain full content
+            r4 = registry.call("search_memory_records", query="large record")
+            parsed4 = json.loads(r4)
+            output_str = json.dumps(parsed4)
+            assert large_content not in output_str, "large content leaked in search"
+
+            r5 = registry.call("list_memory_records")
+            parsed5 = json.loads(r5)
+            output_str2 = json.dumps(parsed5)
+            assert large_content not in output_str2, "large content leaked in list"
+
+            # No env vars in outputs
+            assert "SUPERMEMORY_API_KEY" not in output_str, "env var leaked in search"
+            assert "SUPERMEMORY_API_KEY" not in output_str2, "env var leaked in list"
+        finally:
+            db.close()
+
+
+def eval_memory_record_compatibility():
+    """Legacy save_memory/search_memory still work; Supermemory tools remain optional (deterministic)."""
+    from unittest.mock import patch as _patch
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            # Clear Supermemory env vars BEFORE building registry so from_env() sees no-key
+            env_override = {
+                "SUPERMEMORY_API_KEY": "",
+                "SUPERMEMORY_BASE_URL": "",
+                "SUPERMEMORY_CONTAINER_TAG": "",
+            }
+            with _patch.dict(os.environ, env_override, clear=False):
+                for k in env_override:
+                    os.environ.pop(k, None)
+
+                registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+                # Legacy save_memory works
+                r1 = registry.call("save_memory", text="eval compat memory content", tags="compat,test")
+                assert "已保存" in r1, f"save_memory failed: {r1}"
+
+                # Legacy search_memory works
+                r2 = registry.call("search_memory", query="compat memory")
+                assert "eval compat memory content" in r2, f"search_memory failed: {r2}"
+
+                # Memory record tools work alongside legacy
+                r3 = registry.call("save_memory_record",
+                                   kind="fact",
+                                   title="compat test",
+                                   content="works alongside legacy")
+                parsed3 = json.loads(r3)
+                assert "record_id" in parsed3, f"save_memory_record failed: {parsed3}"
+
+                # Supermemory tools return config error (deterministic no-key)
+                r4 = registry.call("supermemory_save", content="test")
+                parsed4 = json.loads(r4)
+                assert "error" in parsed4, f"expected config error for supermemory_save: {parsed4}"
+
+                r5 = registry.call("supermemory_search", query="test")
+                parsed5 = json.loads(r5)
+                assert "error" in parsed5, f"expected config error for supermemory_search: {parsed5}"
+        finally:
+            db.close()
+
+
+def eval_memory_record_failure_isolation():
+    """Broken/invalid input returns JSON errors, not crashes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Invalid kind returns error
+            r1 = registry.call("save_memory_record",
+                               kind="invalid_kind",
+                               title="test",
+                               content="test")
+            parsed1 = json.loads(r1)
+            assert "error" in parsed1, f"expected error for invalid kind: {parsed1}"
+
+            # Empty title returns error
+            r2 = registry.call("save_memory_record",
+                               kind="fact",
+                               title="",
+                               content="test")
+            parsed2 = json.loads(r2)
+            assert "error" in parsed2, f"expected error for empty title: {parsed2}"
+
+            # Empty content returns error
+            r3 = registry.call("save_memory_record",
+                               kind="fact",
+                               title="test",
+                               content="")
+            parsed3 = json.loads(r3)
+            assert "error" in parsed3, f"expected error for empty content: {parsed3}"
+
+            # Get non-existent record returns error
+            r4 = registry.call("get_memory_record", record_id="mrec_99999")
+            parsed4 = json.loads(r4)
+            assert "error" in parsed4, f"expected error for missing record: {parsed4}"
+
+            # Delete non-existent record returns error
+            r5 = registry.call("delete_memory_record", record_id="mrec_99999")
+            parsed5 = json.loads(r5)
+            assert "error" in parsed5, f"expected error for missing delete: {parsed5}"
+
+            # Search with empty query returns empty list
+            r6 = registry.call("search_memory_records", query="")
+            parsed6 = json.loads(r6)
+            assert parsed6 == [], f"expected empty list for empty query: {parsed6}"
+
+            # Registry still works after errors
+            r7 = registry.call("calculate", expression="2 + 3")
+            assert "5" in r7, f"registry broken after errors: {r7}"
         finally:
             db.close()
 

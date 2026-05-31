@@ -1,55 +1,51 @@
-# Claude B Completion Report - TASK-037 (review fix)
+# Claude B Completion Report - TASK-039 (review fix)
 
 Status: completed, ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for optional Supermemory memory toolkit (TASK-036).
+Added deterministic offline eval coverage for native memory record store (TASK-038).
 
-Seven eval cases in `evals/run_evals.py`:
+Four eval cases in `evals/run_evals.py`:
 
-1. **supermemory_optional_config** — Deterministic: temporarily clears all Supermemory env vars (SUPERMEMORY_API_KEY, SUPERMEMORY_BASE_URL, SUPERMEMORY_CONTAINER_TAG). Tools are still registered and calls return clear JSON configuration error.
+1. **memory_record_basics** — Save decision/preference/fact records. Search by query, kind, scope, and tags. List returns bounded summaries (no content). Get returns full record. Delete removes record and subsequent get returns error.
 
-2. **supermemory_save_behavior** — `supermemory_save` stores only explicit content and metadata. Uses fake client to verify content and metadata passed through correctly. Confirms no env vars leak into save call.
+2. **memory_record_safety** — Secret-like content (API_KEY=...) in content or title is rejected with JSON error. Large content (10000 chars) does not leak in search/list summaries. No env vars in outputs.
 
-3. **supermemory_search_profile_bounded** — Search output bounded: memory truncated to 2000 chars, chunk_preview to 500 chars, max 20 results. Profile output bounded: static/dynamic entries truncated to 1000 chars, max 20 entries each.
+3. **memory_record_compatibility** — Legacy `save_memory`/`search_memory` still work. Memory record tools work alongside legacy. Supermemory tools deterministic no-key check: env cleanup wraps `build_default_registry()` so `SupermemoryClient.from_env()` sees no-key environment.
 
-4. **supermemory_metadata_bounding** — Search output bounds metadata: large strings truncated to 300 chars, nested objects/lists skipped entirely, scalar values (str/int/bool) preserved. Secret sentinel in nested metadata does not leak.
-
-5. **supermemory_container_tag_config** — SUPERMEMORY_CONTAINER_TAG env var configures container tag. Custom tag, default tag ("nora"), and no-API-key-returns-None cases verified.
-
-6. **supermemory_failure_isolation** — Network/API errors (URLError) return JSON error, do not crash registry calls. Other registry tools still work.
-
-7. **supermemory_existing_memory_tools** — Existing memory tools (save_note, read_notes, calculate) work without Supermemory configured.
+4. **memory_record_failure_isolation** — Invalid kind, empty title, empty content return JSON errors. Non-existent record get/delete return errors. Empty query returns empty list. Registry still works after errors.
 
 ## Review Fixes Applied
 
-- ✅ `eval_supermemory_optional_config`: now deterministic via `patch.dict` + `os.environ.pop` for all Supermemory env vars
-- ✅ `eval_supermemory_metadata_bounding`: new eval verifying metadata truncation (300 chars), nested/list skipping, scalar preservation
-- ✅ `eval_supermemory_container_tag_config`: new eval verifying custom tag, default tag, and no-key behavior
+- ✅ Added scope and tags search evals in `eval_memory_record_basics`
+- ✅ Changed compatibility eval to use `save_memory`/`search_memory` instead of `save_note`/`read_notes`
+- ✅ Made Supermemory no-key check deterministic: env cleanup wraps `build_default_registry()` so `from_env()` sees no-key at registry build time
+- ✅ Fixed `agent_tasks/PM_INBOX.md` trailing whitespace
 
 ## Safety Assertions
 
-- Sentinel strings used for: content, secret-like token, nested metadata secret
-- Verified no env vars leak into API calls
-- Verified output bounds for search and profile responses
-- Verified metadata bounding: strings truncated, non-scalars skipped
+- Sentinel strings used for: title, content, secret-like token
+- Secret content in title or content → rejected
+- Large content not leaked in search/list summaries
+- No env vars in tool outputs
 
 ## Diff
 
 ```text
- evals/run_evals.py | 348 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 348 insertions(+)
+ agent_tasks/PM_INBOX.md |  21 +++
+ evals/run_evals.py      | 246 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 267 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-159 passed, 0 failed
+163 passed, 0 failed
 
-python3 -m unittest tests.test_supermemory tests.test_mini_agent tests.test_tool_cache
-Ran 171 tests in 3.434s
+python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+Ran 184 tests in 3.863s
 OK
 
 git diff --check
@@ -59,7 +55,6 @@ git diff --check
 ## Notes
 
 - No runtime code changed — eval only as instructed.
-- TASK-036 implementation was already complete.
-- Uses fake client via `_patch_supermemory_client` to avoid real API calls.
+- TASK-038 implementation was already complete.
 - No commit or push performed.
 - Known limitations: none.

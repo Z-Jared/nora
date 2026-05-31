@@ -1,69 +1,62 @@
-# Claude A Completion Report — TASK-036 Review Fix: Supermemory Metadata Bounding & Container Tag Config
+# Claude A Completion Report — TASK-038 Review Fix: Scope Validation & Search Filters
 
 Status: ready for Codex review
 
 ## Summary
 
-Fixed CHANGES_REQUESTED review items for TASK-036: bounded metadata in search/profile output, added `SUPERMEMORY_CONTAINER_TAG` env var support, and updated docs.
+Fixed CHANGES_REQUESTED review items for TASK-038: added scope validation, scope/tags search filters, PM_INBOX trailing whitespace fix, and corresponding tests.
 
 ## Changes
 
-### 1. Metadata bounding (`mini_agent/toolkits/register_supermemory.py`)
-- Added `_bound_metadata(meta)` function that sanitizes metadata before returning:
-  - Keeps only JSON-safe scalars: `bool`, `int`, `float`, `str`
-  - Drops nested dicts, lists, and other non-scalar values
-  - Truncates string values to 300 chars (`_METADATA_VALUE_MAX_CHARS`)
-  - Limits to 20 fields max (`_METADATA_MAX_FIELDS`)
-  - Filters out secret-like keys (`secret`, `token`, `api_key`, `password`, `authorization`, `bearer`)
-  - Filters out secret-like values (patterns like `sk-`, `bearer `, `api_key`, `password`, `secret`)
-- `_bound_search_output` now calls `_bound_metadata(item["metadata"])` instead of passing raw metadata through
+### 1. PM_INBOX.md trailing whitespace
+- Removed blank line at EOF that caused `git diff --check` failure.
 
-### 2. Container tag configuration (`mini_agent/toolkits/supermemory.py`)
-- `from_env()` now reads `SUPERMEMORY_CONTAINER_TAG` env var
-- Falls back to the `container_tag` parameter (default `"nora"`) when unset
+### 2. Scope validation (`mini_agent/memory_records.py`)
+- Added `VALID_SCOPES = ("project", "user", "global")`
+- Updated `_validate_create()` to accept `scope` parameter and reject invalid scope values
+- `create()` now passes `scope` to validation
 
-### 3. Documentation (`docs/knowledge/SUPERMEMORY.md`)
-- Added `SUPERMEDIA_CONTAINER_TAG` to config table
-- Added production/multi-project recommendation for project-level tags
-- Updated tool descriptions to reference "configured container tag" instead of hardcoded "nora"
-- Updated privacy boundary section to mention metadata sanitization
+### 3. Search scope/tags filtering (`mini_agent/memory_records.py`)
+- `search()` now accepts `scope` and `tags` parameters
+- `tags` is a comma-separated string; all specified tags must match (AND logic)
+- `_search_db` adds `scope = ?` and `tags LIKE ?` clauses to SQL
+- `_search_jsonl` filters by scope equality and tag substring matching
+- Updated `_search_db` and `_search_jsonl` signatures to accept `scope` and `tag_list`
 
-### 4. Tests (`tests/test_supermemory.py`)
-- Added `MetadataBoundingTests` class with 8 tests:
-  - `test_keeps_scalar_strings`, `test_keeps_numbers_and_bools`
-  - `test_truncates_long_strings` (value capped at 300 chars)
-  - `test_drops_nested_dicts`, `test_drops_lists`
-  - `test_limits_field_count` (max 20 fields)
-  - `test_empty_metadata`
-  - `test_search_output_uses_bounded_metadata` (integration test)
-  - `test_drops_secret_like_metadata` (added by linter)
-- Added `test_from_env_custom_container_tag` and `test_from_env_default_container_tag` to `SupermemoryClientTests`
+### 4. Registry tool update (`mini_agent/toolkits/register_memory_records.py`)
+- `_search_memory_records` now accepts `scope` and `tags` parameters
+- Search tool schema updated with `scope` and `tags` properties
+- Imported `VALID_SCOPES` for schema description
+
+### 5. Tests (`tests/test_memory_records.py`)
+- Added 12 new tests (50 total, up from 38):
+  - `test_create_invalid_scope` — rejects bad scope
+  - `test_create_valid_scopes` — accepts project/user/global
+  - `test_search_filter_scope` — scope filtering in search (SQLite)
+  - `test_search_filter_tags` — tag filtering in search (SQLite)
+  - `test_search_filter_tags_all_must_match` — AND logic for tags (SQLite)
+  - `test_search_combined_filters` — kind+scope+tags combined (SQLite)
+  - `test_search_filter_scope_jsonl` — scope filtering (JSONL)
+  - `test_search_filter_tags_jsonl` — tag filtering (JSONL)
+  - `test_invalid_scope_rejected_jsonl` — scope validation (JSONL)
+  - `test_search_with_scope_filter` — registry tool scope filter
+  - `test_search_with_tags_filter` — registry tool tags filter
+  - `test_save_invalid_scope_returns_error` — registry scope validation error
 
 ## Verification
 
 ```
-$ python3 -m unittest tests.test_supermemory tests.test_mini_agent tests.test_tool_cache
-Ran 171 tests — OK
+$ python3 -m unittest tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+Ran 184 tests — OK
 
 $ python3 evals/run_evals.py
-159 passed, 0 failed
+163 passed, 0 failed
 
-$ git diff --check — OK
-```
-
-## Diff
-
-```
- mini_agent/toolkits/supermemory.py          | 101 lines (new)
- mini_agent/toolkits/register_supermemory.py | 193 lines (new)
- tests/test_supermemory.py                   | 388 lines (new)
- docs/knowledge/SUPERMEMORY.md               |  28 lines (new)
- 4 files, 710 lines total
+$ git diff --check — OK (no whitespace errors)
 ```
 
 ## Notes
 
-- No push or commit performed.
-- No eval changes needed.
-- GitHub radar files untouched.
-- Linter added `_looks_sensitive_key`/`_looks_sensitive_value` helpers and `test_drops_secret_like_metadata` test — all pass.
+- No commit or push performed.
+- Existing tests all still pass.
+- Scope validation applies to `create()` only; `search`/`list` accept any scope string for filtering without validation (correct behavior — you want to search, not reject).

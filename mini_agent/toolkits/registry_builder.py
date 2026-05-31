@@ -10,6 +10,7 @@ from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
 from mini_agent.logs import JsonlToolLogger
 from mini_agent.memory import LongTermMemory
+from mini_agent.memory_records import MemoryRecordStore
 from mini_agent.process_manager import ProcessManager
 from mini_agent.rag import ProjectRAG
 from mini_agent.registry import ToolPermission, ToolRegistry
@@ -23,6 +24,7 @@ from mini_agent.toolkits.register_core import register_core_tools
 from mini_agent.toolkits.register_developer import register_developer_tools
 from mini_agent.toolkits.register_external import register_external_tools
 from mini_agent.toolkits.register_git import register_git_tools
+from mini_agent.toolkits.register_memory_records import register_memory_record_tools
 from mini_agent.toolkits.register_state import register_state_tools
 from mini_agent.toolkits.register_supermemory import register_supermemory_tools
 from mini_agent.toolkits.supermemory import SupermemoryClient
@@ -88,6 +90,7 @@ def build_default_registry(
         project_rag=project_rag,
     )
     long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
+    memory_record_store = MemoryRecordStore(db=db)
     durable_task_store = DurableTaskStore(db=db)
     durable_event_store = DurableEventStore(db=db)
     durable_worker_store = DurableWorkerStore(db=db)
@@ -135,8 +138,10 @@ def build_default_registry(
     )
     supermemory_client = SupermemoryClient.from_env()
     register_supermemory_tools(registry, supermemory_client)
+    register_memory_record_tools(registry, memory_record_store)
     registry.task_manager = task_manager
     registry.long_term_memory = long_term_memory
+    registry.memory_record_store = memory_record_store
     registry.trace_store = trace_store
     registry.durable_task_store = durable_task_store
     registry.durable_event_store = durable_event_store
