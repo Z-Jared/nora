@@ -1,49 +1,51 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-032: durable worker heartbeat and offline lifecycle v1.
+TASK-034: durable worker task claim v1.
 
-Nora now has a durable worker registry, but worker liveness is only implicit. Add a small heartbeat/offline lifecycle so the runtime can record that a worker is still alive and mark stale workers as offline without mutating durable task ownership.
+Nora now tracks durable workers and their liveness, but there is still no minimal scheduler primitive for a worker to claim available work. Add a narrow claim tool that lets a registered online worker claim the oldest pending, unassigned durable task and updates both task ownership and worker runtime state.
 
 ## Scope
 
-Build narrowly on `mini_agent/durable_workers.py` and `mini_agent/toolkits/registry_builder.py`.
+Build narrowly in `mini_agent/toolkits/registry_builder.py`, using existing `DurableTaskStore` and `DurableWorkerStore` APIs. Add store helpers only if they keep the implementation simpler and well tested.
 
-1. Extend durable worker storage:
-   - Keep the existing `touch(worker_id)` behavior, but ensure it is covered by tests for SQLite and JSONL.
-   - Add a store method to mark stale workers offline, for example `mark_stale_workers_offline(max_age_seconds: int) -> list[DurableWorker]`.
-   - A worker is stale when `last_seen_at` is older than the threshold and status is not already `offline`.
-   - Mark stale workers with `status="offline"` and update `updated_at`.
-   - Do not change `last_seen_at` when marking offline; it should remain the last actual heartbeat timestamp.
-   - Do not mutate durable tasks or clear task ownership from durable tasks.
+1. Add a registry tool such as `claim_durable_task(worker_id)`:
+   - `worker_id` is required and stripped.
+   - Unknown worker returns a JSON error.
+   - Offline worker returns a JSON error.
+   - If the worker already has `current_task_id`, return that assignment instead of claiming a second task.
+   - Select the oldest pending durable task whose `worker_id` is empty.
+   - Assign the task to the worker without changing task status.
+   - Update the worker to `status="assigned"` and `current_task_id=<task_id>`.
+   - If no pending unassigned task exists, return a JSON object with `claimed: false` and no mutation.
 
-2. Add registry tools:
-   - `touch_worker(worker_id)` updates `last_seen_at` for an existing worker and returns JSON.
-   - `mark_stale_workers_offline(max_age_seconds=300)` returns a bounded JSON summary of workers that changed status.
-   - Empty/unknown worker IDs should return JSON errors, not raise.
-   - Invalid threshold values should return JSON errors, not raise.
+2. Durable event behavior:
+   - Record a safe task action event for successful claims, using the existing task action event style.
+   - Payload must include safe metadata only, such as `operation="claim"`, `task_id`, `worker_id_present`, and previous worker/task presence booleans.
+   - Event write failure must not prevent the claim.
 
 3. Safety and compatibility:
-   - Keep worker records as metadata only; do not expose env vars, prompts, secrets, shell output, or raw tool data.
-   - Do not implement scheduling, worktree creation, or task reassignment in this task.
-   - Existing durable task worker assignment semantics must stay unchanged.
+   - Do not run or execute the task.
+   - Do not create worktrees.
+   - Do not change durable task status transition rules.
+   - Do not expose raw task goal, steps, worker paths, prompts, env vars, or secrets in claim event payloads.
 
 ## Suggested Tests
 
-Add or extend focused tests in `tests/test_durable_workers.py`:
+Add focused tests, likely in `tests/test_durable_workers.py` or `tests/test_durable_events.py`:
 
-1. SQLite `touch` updates `last_seen_at` and `updated_at`.
-2. JSONL `touch` updates `last_seen_at` and `updated_at`.
-3. SQLite stale workers become `offline`; fresh workers do not.
-4. JSONL stale workers become `offline`; fresh workers do not.
-5. Already-offline workers are not returned as newly changed.
-6. Registry `touch_worker` and `mark_stale_workers_offline` return expected JSON.
-7. Registry invalid inputs return JSON errors.
-8. Marking a worker offline does not mutate the durable task that references that worker.
+1. Registered idle worker claims oldest pending unassigned task.
+2. Claim updates task `worker_id` and worker `status/current_task_id`.
+3. Claim does not change durable task status.
+4. Unknown worker and offline worker return JSON errors.
+5. Worker with existing `current_task_id` does not claim a second task.
+6. No available task returns `claimed: false` without mutation.
+7. Claim emits safe event and does not leak raw task goal/step/secret.
+8. Broken event store does not prevent claim.
 
 ## Verification
 
@@ -55,7 +57,7 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If you touch shared registry wiring broadly, also run:
+If you touch shared task/event logic broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests

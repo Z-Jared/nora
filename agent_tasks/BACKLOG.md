@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-034: Durable worker task claim v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-030、TASK-032 已完成
+- 目标: 增加最小 scheduler primitive，让在线 durable worker 可以 claim 最老的 pending/unassigned durable task，并同步 task ownership 与 worker runtime state。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 2 task state 与 Priority 4 worker runtime；`mini_agent/durable_tasks.py`；`mini_agent/durable_workers.py`；`mini_agent/toolkits/registry_builder.py`。
+
+### TASK-035: Eval coverage for durable worker heartbeat/offline lifecycle
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-032 已完成
+- 目标: 为 `touch_worker` 和 `mark_stale_workers_offline` 增加 deterministic offline eval，覆盖 heartbeat、stale→offline、task isolation、安全不泄漏和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_durable_tasks tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` durable worker eval 区域；TASK-032 新增的 heartbeat/offline behavior。
 
 ## 已完成
 
