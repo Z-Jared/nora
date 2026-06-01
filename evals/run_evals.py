@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
 from mini_agent.durable_workers import WorkerStatus
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
@@ -240,6 +240,11 @@ def main() -> int:
         EvalCase("lifecycle_invalid_transitions", eval_lifecycle_invalid_transitions),
         EvalCase("lifecycle_worker_consistency", eval_lifecycle_worker_consistency),
         EvalCase("lifecycle_safety_failure_isolation", eval_lifecycle_safety_failure_isolation),
+        EvalCase("workspace_lease_happy_path", eval_workspace_lease_happy_path),
+        EvalCase("workspace_lease_validation_errors", eval_workspace_lease_validation_errors),
+        EvalCase("workspace_lease_idempotency_uniqueness", eval_workspace_lease_idempotency_uniqueness),
+        EvalCase("workspace_lease_safety", eval_workspace_lease_safety),
+        EvalCase("workspace_lease_failure_isolation_compatibility", eval_workspace_lease_failure_isolation_compatibility),
         EvalCase("checkpoint_basics", eval_checkpoint_basics),
         EvalCase("checkpoint_step_consistency", eval_checkpoint_step_consistency),
         EvalCase("checkpoint_event_coverage", eval_checkpoint_event_coverage),
@@ -7050,6 +7055,311 @@ def eval_lifecycle_safety_failure_isolation():
             assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid2))
             assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
             assert isinstance(json.loads(registry.call("list_workers")), list)
+        finally:
+            db.close()
+
+
+# --- Workspace lease eval sentinels ---
+
+_WORKSPACE_SENTINEL_GOAL = "NORA_EVAL_WORKSPACE_GOAL_SENTINEL_w1x2y3z4"
+_WORKSPACE_SENTINEL_SECRET = "NORA_EVAL_WORKSPACE_SECRET_sk-lease-5a6b7c8d"
+
+
+def _setup_assigned_worker_task(registry, worker_id="w_ws"):
+    """Helper: register worker, create task, assign, set worker to assigned+current_task_id."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(goal=_WORKSPACE_SENTINEL_GOAL, steps=[{"text": "secret step"}])
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    return tid
+
+
+def eval_workspace_lease_happy_path():
+    """Assigned worker + matching task → prepare_worker_workspace succeeds.
+    Returns bounded JSON with lease_id/worker_id/task_id/workspace_path/created_at.
+    workspace_path directory exists on disk."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid = _setup_assigned_worker_task(registry)
+
+            result = registry.call("prepare_worker_workspace", worker_id="w_ws", task_id=tid)
+            parsed = json.loads(result)
+
+            # Required fields present
+            assert "lease_id" in parsed, f"missing lease_id: {parsed}"
+            assert parsed["lease_id"].startswith("wlease_"), f"bad lease_id format: {parsed['lease_id']}"
+            assert parsed["worker_id"] == "w_ws", f"worker_id: {parsed}"
+            assert parsed["task_id"] == tid, f"task_id: {parsed}"
+            assert "workspace_path" in parsed, f"missing workspace_path: {parsed}"
+            assert "created_at" in parsed, f"missing created_at: {parsed}"
+
+            # Directory actually exists
+            ws_path = Path(parsed["workspace_path"])
+            assert ws_path.exists(), f"workspace dir not created: {ws_path}"
+            assert ws_path.is_dir(), f"workspace path not a dir: {ws_path}"
+
+            # Bounded: no goal, steps, secrets in output
+            result_str = json.dumps(parsed)
+            assert _WORKSPACE_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:500]}"
+            assert _WORKSPACE_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:500]}"
+            for key in ("goal", "steps", "secret"):
+                assert key not in parsed, f"output has forbidden key {key}: {parsed}"
+
+            # Release works
+            release_r = registry.call("release_worker_workspace", worker_id="w_ws")
+            release_p = json.loads(release_r)
+            assert release_p["released"] is True, f"release failed: {release_p}"
+            assert release_p["lease_id"] == parsed["lease_id"], f"lease_id mismatch: {release_p}"
+            assert release_p["worker_id"] == "w_ws"
+        finally:
+            db.close()
+
+
+def eval_workspace_lease_validation_errors():
+    """Unknown worker/task, offline worker, idle worker, mismatch → JSON errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Unknown worker
+            r1 = registry.call("prepare_worker_workspace", worker_id="w_nonexistent", task_id="dtask_x")
+            assert "error" in json.loads(r1), f"unknown worker should error: {r1}"
+
+            # Unknown task
+            ws.register_worker("w_err", role="coder")
+            r2 = registry.call("prepare_worker_workspace", worker_id="w_err", task_id="dtask_nonexistent")
+            assert "error" in json.loads(r2), f"unknown task should error: {r2}"
+
+            # Offline worker
+            ws.register_worker("w_off", role="coder")
+            task_off = ts.create_task(goal="offline test", steps=[{"text": "s"}])
+            ts.assign_worker(task_off.task_id, "w_off")
+            ws.update_status("w_off", "offline", current_task_id=task_off.task_id)
+            r3 = registry.call("prepare_worker_workspace", worker_id="w_off", task_id=task_off.task_id)
+            p3 = json.loads(r3)
+            assert "error" in p3, f"offline worker should error: {p3}"
+            assert "离线" in p3["error"], f"error message should mention offline: {p3}"
+
+            # Idle worker with matching task.worker_id but no current_task_id
+            ws.register_worker("w_idle_match", role="coder")
+            task_idle = ts.create_task(goal="idle match test", steps=[{"text": "s"}])
+            ts.assign_worker(task_idle.task_id, "w_idle_match")
+            # Worker is idle (default), task.worker_id matches, but worker.current_task_id is None
+            r4 = registry.call("prepare_worker_workspace", worker_id="w_idle_match", task_id=task_idle.task_id)
+            p4 = json.loads(r4)
+            assert "error" in p4, f"idle worker should error: {p4}"
+            assert "空闲" in p4["error"], f"error should mention idle: {p4}"
+
+            # Worker current_task_id mismatch
+            ws.register_worker("w_mismatch", role="coder")
+            task_a = ts.create_task(goal="task A", steps=[{"text": "s"}])
+            task_b = ts.create_task(goal="task B", steps=[{"text": "s"}])
+            ts.assign_worker(task_a.task_id, "w_mismatch")
+            ws.update_status("w_mismatch", "assigned", current_task_id=task_b.task_id)
+            r5 = registry.call("prepare_worker_workspace", worker_id="w_mismatch", task_id=task_a.task_id)
+            p5 = json.loads(r5)
+            assert "error" in p5, f"current_task_id mismatch should error: {p5}"
+
+            # Task.worker_id mismatch
+            ws.register_worker("w_task_mismatch", role="coder")
+            task_tm = ts.create_task(goal="task mismatch", steps=[{"text": "s"}])
+            ts.assign_worker(task_tm.task_id, "w_task_mismatch")
+            ws.update_status("w_task_mismatch", "assigned", current_task_id=task_tm.task_id)
+            # Now reassign task to a different worker
+            ts.assign_worker(task_tm.task_id, "w_other")
+            r6 = registry.call("prepare_worker_workspace", worker_id="w_task_mismatch", task_id=task_tm.task_id)
+            p6 = json.loads(r6)
+            assert "error" in p6, f"task.worker_id mismatch should error: {p6}"
+        finally:
+            db.close()
+
+
+def eval_workspace_lease_idempotency_uniqueness():
+    """Same worker already has lease → error with existing_lease_id.
+    Same task already has lease → error with existing_lease_id.
+    Release removes lease. Release with no lease returns released=false."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Setup: worker1 prepares task1, generating lease_id_1
+            tid1 = _setup_assigned_worker_task(registry, worker_id="w_dup1")
+
+            # First prepare succeeds
+            r1 = registry.call("prepare_worker_workspace", worker_id="w_dup1", task_id=tid1)
+            p1 = json.loads(r1)
+            assert "lease_id" in p1, f"first prepare should succeed: {p1}"
+            lease_id_1 = p1["lease_id"]
+
+            # Same worker already has lease → error with existing_lease_id
+            r2 = registry.call("prepare_worker_workspace", worker_id="w_dup1", task_id=tid1)
+            p2 = json.loads(r2)
+            assert "error" in p2, f"duplicate worker lease should error: {p2}"
+            assert "existing_lease_id" in p2, f"should include existing_lease_id: {p2}"
+            assert p2["existing_lease_id"] == lease_id_1, f"wrong existing_lease_id: {p2}"
+
+            # Same task already has lease → error with existing_lease_id
+            # Reassign task1 to worker2, set worker2 status=assigned/current_task_id=task1
+            ws.register_worker("w_dup2", role="coder")
+            ts.assign_worker(tid1, "w_dup2")
+            ws.update_status("w_dup2", "assigned", current_task_id=tid1)
+
+            # Call prepare_worker_workspace with worker2 on the already-leased task1
+            r3 = registry.call("prepare_worker_workspace", worker_id="w_dup2", task_id=tid1)
+            p3 = json.loads(r3)
+            assert "error" in p3, f"task-level duplicate lease should error: {p3}"
+            assert "existing_lease_id" in p3, f"should include existing_lease_id: {p3}"
+            assert p3["existing_lease_id"] == lease_id_1, f"wrong existing_lease_id: {p3}"
+
+            # Release removes lease
+            release_r = registry.call("release_worker_workspace", worker_id="w_dup1")
+            release_p = json.loads(release_r)
+            assert release_p["released"] is True
+            assert release_p["lease_id"] == lease_id_1
+
+            # Lease actually gone
+            lease_store = registry.workspace_lease_store
+            assert lease_store.get_lease_by_worker("w_dup1") is None, "lease should be gone after release"
+
+            # Release with no lease returns released=false
+            release_r2 = registry.call("release_worker_workspace", worker_id="w_dup1")
+            release_p2 = json.loads(release_r2)
+            assert release_p2["released"] is False, f"second release should be false: {release_p2}"
+            assert release_p2["worker_id"] == "w_dup1"
+
+            # Reassign task1 back to w_dup1 for re-prepare test
+            ts.assign_worker(tid1, "w_dup1")
+            ws.update_status("w_dup1", "assigned", current_task_id=tid1)
+
+            # After release, can prepare again
+            r4 = registry.call("prepare_worker_workspace", worker_id="w_dup1", task_id=tid1)
+            p4 = json.loads(r4)
+            assert "lease_id" in p4, f"re-prepare after release should succeed: {p4}"
+            # Lease ID may reuse same number since old lease was deleted; just verify it's a valid format
+            assert p4["lease_id"].startswith("wlease_"), f"bad lease_id format: {p4['lease_id']}"
+        finally:
+            db.close()
+
+
+def eval_workspace_lease_safety():
+    """Output/events must not leak raw goal, steps, prompt-like strings, secret sentinel.
+    Event payload only safe metadata. mkdir failure returns error with no lease created."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid = _setup_assigned_worker_task(registry)
+
+            # Prepare
+            result = registry.call("prepare_worker_workspace", worker_id="w_ws", task_id=tid)
+            parsed = json.loads(result)
+            result_str = json.dumps(parsed)
+
+            # No raw goal/steps/secrets in output
+            assert _WORKSPACE_SENTINEL_GOAL not in result_str, f"goal leaked in prepare output"
+            assert _WORKSPACE_SENTINEL_SECRET not in result_str, f"secret leaked in prepare output"
+            assert "secret step" not in result_str, f"step text leaked in prepare output"
+
+            # Event payload safe
+            events = registry.durable_event_store.list_events(task_id=tid)
+            prepare_events = [e for e in events if e.event_type == "workspace_prepared"]
+            assert len(prepare_events) >= 1, f"no workspace_prepared event: {[e.event_type for e in events]}"
+            for evt in prepare_events:
+                serialized = json.dumps(evt.to_dict())
+                assert _WORKSPACE_SENTINEL_GOAL not in serialized, f"goal leaked in event"
+                assert _WORKSPACE_SENTINEL_SECRET not in serialized, f"secret leaked in event"
+                # Payload only safe keys
+                allowed_keys = {"operation", "lease_id", "worker_id", "task_id"}
+                for k in evt.payload:
+                    assert k in allowed_keys, f"unexpected event payload key: {k}"
+
+            # Release event also safe
+            registry.call("release_worker_workspace", worker_id="w_ws")
+            release_events = [e for e in registry.durable_event_store.list_events(worker_id="w_ws")
+                              if e.event_type == "workspace_released"]
+            assert len(release_events) >= 1, "no workspace_released event"
+            for evt in release_events:
+                serialized = json.dumps(evt.to_dict())
+                assert _WORKSPACE_SENTINEL_GOAL not in serialized, f"goal leaked in release event"
+                allowed_keys = {"operation", "lease_id", "worker_id"}
+                for k in evt.payload:
+                    assert k in allowed_keys, f"unexpected release event payload key: {k}"
+
+            # mkdir failure returns error and does not create lease
+            # Mock Path.mkdir to raise OSError
+            tid2 = _setup_assigned_worker_task(registry, worker_id="w_ws2")
+            with patch("pathlib.Path.mkdir", side_effect=OSError("disk full")):
+                r_err = registry.call("prepare_worker_workspace", worker_id="w_ws2", task_id=tid2)
+                p_err = json.loads(r_err)
+                assert "error" in p_err, f"mkdir failure should error: {p_err}"
+                # No lease created
+                assert registry.workspace_lease_store.get_lease_by_worker("w_ws2") is None, \
+                    "lease should not exist after mkdir failure"
+        finally:
+            db.close()
+
+
+def eval_workspace_lease_failure_isolation_compatibility():
+    """Broken event store doesn't prevent prepare/release.
+    After errors, get_worker/get_durable_task/list_workers/list_durable_tasks still work.
+    Existing dispatch/lifecycle evals still pass (compatibility)."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Prepare with broken event store
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+
+            tid = _setup_assigned_worker_task(registry)
+            result = registry.call("prepare_worker_workspace", worker_id="w_ws", task_id=tid)
+            parsed = json.loads(result)
+            assert "lease_id" in parsed, f"prepare should work with broken event store: {parsed}"
+
+            # Release with broken event store
+            release_r = registry.call("release_worker_workspace", worker_id="w_ws")
+            release_p = json.loads(release_r)
+            assert release_p["released"] is True, f"release should work with broken event store: {release_p}"
+
+            # After errors, existing tools still work
+            worker_detail = json.loads(registry.call("get_worker", worker_id="w_ws"))
+            assert "worker_id" in worker_detail or "error" not in worker_detail, f"get_worker broken: {worker_detail}"
+
+            task_detail = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert "task_id" in task_detail or "error" not in task_detail, f"get_durable_task broken: {task_detail}"
+
+            workers_list = json.loads(registry.call("list_workers"))
+            assert isinstance(workers_list, list), f"list_workers broken: {workers_list}"
+
+            tasks_list = json.loads(registry.call("list_durable_tasks"))
+            assert isinstance(tasks_list, list), f"list_durable_tasks broken: {tasks_list}"
+
+            # Validation errors don't break subsequent valid operations
+            r_bad = registry.call("prepare_worker_workspace", worker_id="w_nonexistent", task_id="dtask_x")
+            assert "error" in json.loads(r_bad), f"should error on bad input"
+
+            # Valid prepare still works after error
+            tid2 = _setup_assigned_worker_task(registry, worker_id="w_ws2")
+            r_ok = registry.call("prepare_worker_workspace", worker_id="w_ws2", task_id=tid2)
+            assert "lease_id" in json.loads(r_ok), f"valid prepare after error should work: {r_ok}"
         finally:
             db.close()
 

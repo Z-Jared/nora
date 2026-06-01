@@ -5,40 +5,44 @@ Status: completed
 
 ## Goal
 
-TASK-059: Deterministic eval coverage for durable task timeline.
+TASK-061: Deterministic eval coverage for worker workspace lease.
 
-Codex PM and CCB Reviewer approved this task. Integrated in main for terminal Codex handoff.
-
-TASK-058 runtime has been approved and integrated. Start implementation after confirming `get_durable_task_timeline` is visible in your CCB worktree.
+Codex PM approved this task after review. TASK-060 runtime is integrated locally.
 
 ## Scope
 
-When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-058 runtime bug.
+Edit `evals/run_evals.py` only unless a real TASK-060 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
 
-Do not call external APIs. Do not start real agents or terminals.
+Deterministic offline eval coverage:
 
-Planned deterministic eval coverage:
+1. Happy path:
+   - register worker
+   - create durable task
+   - assign task to worker
+   - set worker `assigned/current_task_id`
+   - call `prepare_worker_workspace`
+   - verify lease id format, worker/task ids, created_at, directory exists
+   - call `release_worker_workspace`
 
-1. Timeline basics:
-   - Create a durable task.
-   - Generate task/create/checkpoint/recovery events.
-   - Call `get_durable_task_timeline`.
-   - Verify chronological ordering, task summary counts, and bounded event summaries.
-
-2. Linkage and limit behavior:
-   - checkpoint_id linkage appears as safe id metadata.
-   - payload_keys lists safe key names only.
-   - limit bounds are deterministic.
-   - Unknown task and bad limit return JSON errors.
+2. Validation and uniqueness:
+   - unknown worker
+   - unknown task
+   - offline worker
+   - idle worker with matching `task.worker_id`
+   - worker `current_task_id` mismatch
+   - task worker mismatch
+   - duplicate lease for same worker
+   - duplicate lease for same task through real registry call with second active worker
 
 3. Safety:
-   - Timeline output does not leak raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot values, raw payload values, prompt text, diffs, shell output, env vars, request strings, or secret-like sentinels.
+   - bounded outputs
+   - no raw goal, steps, prompts, shell output, diffs, env vars, or secrets
+   - event payload contains only safe metadata
+   - mkdir failure returns error and creates no lease
 
 4. Compatibility:
-   - Timeline inspection does not mutate task or event state.
-   - Existing durable task/event registry tools still work after timeline errors/no-ops.
-
-Keep evals deterministic and offline.
+   - broken event store does not block prepare/release
+   - errors do not break existing worker/task list/get tools
 
 ## Verification
 
@@ -46,14 +50,12 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
 git diff --check
 ```
 
-If you touch anything outside `evals/run_evals.py`, also run focused tests for those files and explain why in `agent_tasks/B_DONE.md`.
-
 ## Completion Report
 
-Update `agent_tasks/B_DONE.md` with summary, diff stat, exact checks run, and known limitations.
+Written in `agent_tasks/B_DONE.md`.
 
 Do not commit or push.

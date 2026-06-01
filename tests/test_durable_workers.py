@@ -765,5 +765,223 @@ class DurableWorkerDispatchTests(unittest.TestCase):
         self.assertEqual(result["dispatched"], 1)
 
 
+class WorkspaceLeaseTests(unittest.TestCase):
+    """Tests for workspace lease / isolation tools (TASK-060)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_worker(self, worker_id, role="worker"):
+        return json.loads(self.registry.call("register_worker", worker_id=worker_id, role=role))
+
+    def _create_task(self, goal="test task", worker_id=None):
+        kwargs = {"goal": goal, "steps": "step one"}
+        if worker_id:
+            kwargs["worker_id"] = worker_id
+        return json.loads(self.registry.call("create_durable_task", **kwargs))
+
+    def _assign_and_activate(self, task_id, worker_id):
+        """Assign task to worker and update worker status to assigned with current_task_id."""
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task_id)
+
+    def test_prepare_basic(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task["task_id"])
+        self.assertIn("workspace_path", result)
+        self.assertIn("created_at", result)
+        # Directory should exist
+        self.assertTrue(Path(result["workspace_path"]).exists())
+
+    def test_prepare_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w999", task_id="dtask_1"))
+        self.assertIn("error", result)
+
+    def test_prepare_offline_worker_returns_error(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+        self.assertIn("error", result)
+
+    def test_prepare_idle_worker_returns_error(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        # assign_durable_task sets task.worker_id but worker stays idle
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id="w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+    def test_prepare_unknown_task_returns_error(self):
+        self._register_worker("w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id="dtask_999"))
+        self.assertIn("error", result)
+
+    def test_prepare_task_not_assigned_to_worker_returns_error(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w2", task_id=task["task_id"]))
+        self.assertIn("error", result)
+
+    def test_prepare_worker_current_task_mismatch_returns_error(self):
+        self._register_worker("w1")
+        t1 = self._create_task(goal="task one", worker_id="w1")
+        t2 = self._create_task(goal="task two", worker_id="w1")
+        self._assign_and_activate(t1["task_id"], "w1")
+        # w1's current_task_id is t1, try to prepare for t2
+        self.registry.call("assign_durable_task", task_id=t2["task_id"], worker_id="w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=t2["task_id"]))
+        self.assertIn("error", result)
+        self.assertIn("当前未执行", result["error"])
+
+    def test_prepare_worker_already_has_lease_returns_error(self):
+        self._register_worker("w1")
+        t1 = self._create_task(goal="task one", worker_id="w1")
+        t2 = self._create_task(goal="task two", worker_id="w1")
+        self._assign_and_activate(t1["task_id"], "w1")
+
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=t1["task_id"])
+
+        # Switch to t2
+        self._assign_and_activate(t2["task_id"], "w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=t2["task_id"]))
+        self.assertIn("error", result)
+        self.assertIn("existing_lease_id", result)
+
+    def test_prepare_task_already_leased_returns_error(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        task = self._create_task(goal="task one")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"])
+
+        # Reassign task to w2 — but w1's lease on this task still exists
+        self._assign_and_activate(task["task_id"], "w2")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w2", task_id=task["task_id"]))
+        self.assertIn("error", result)
+        self.assertIn("existing_lease_id", result)
+
+    def test_release_basic(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+        prepared = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        result = json.loads(self.registry.call("release_worker_workspace", worker_id="w1"))
+
+        self.assertTrue(result["released"])
+        self.assertEqual(result["lease_id"], prepared["lease_id"])
+        self.assertEqual(result["worker_id"], "w1")
+
+    def test_release_no_lease_returns_released_false(self):
+        self._register_worker("w1")
+
+        result = json.loads(self.registry.call("release_worker_workspace", worker_id="w1"))
+
+        self.assertFalse(result["released"])
+        self.assertEqual(result["worker_id"], "w1")
+
+    def test_release_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call("release_worker_workspace", worker_id="w999"))
+        self.assertIn("error", result)
+
+    def test_output_bounded_no_goal_leak(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="SECRET_GOAL_98765", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        result_str = json.dumps(result)
+        self.assertNotIn("SECRET_GOAL_98765", result_str)
+        self.assertNotIn("step one", result_str)
+
+    def test_event_failure_does_not_block_prepare(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        with patch.object(self.registry.durable_event_store, "record", side_effect=RuntimeError("boom")):
+            result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+
+    def test_event_failure_does_not_block_release(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"])
+
+        with patch.object(self.registry.durable_event_store, "record", side_effect=RuntimeError("boom")):
+            result = json.loads(self.registry.call("release_worker_workspace", worker_id="w1"))
+
+        self.assertTrue(result["released"])
+
+    def test_prepare_emits_safe_event(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="SECRET_GOAL_ABC", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"])
+
+        events = self.registry.durable_event_store.list_events(max_results=10)
+        ws_events = [e for e in events if e.event_type == "workspace_prepared"]
+        self.assertEqual(len(ws_events), 1)
+
+        payload = ws_events[0].payload
+        self.assertEqual(payload["operation"], "prepare")
+        self.assertIn("lease_id", payload)
+        self.assertEqual(payload["worker_id"], "w1")
+        self.assertEqual(payload["task_id"], task["task_id"])
+        # Must not leak raw content
+        self.assertNotIn("SECRET_GOAL_ABC", json.dumps(payload))
+        self.assertNotIn("step one", json.dumps(payload))
+        self.assertNotIn("goal", payload)
+        self.assertNotIn("steps", payload)
+
+    def test_mkdir_failure_returns_error_no_lease(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+        # Create a file where the .workspaces directory would be
+        (self.root / ".workspaces").touch()
+
+        result = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        self.assertIn("error", result)
+        # No lease should be created
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNone(lease)
+
+
 if __name__ == "__main__":
     unittest.main()

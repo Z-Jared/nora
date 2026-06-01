@@ -8,6 +8,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-061: Deterministic eval coverage for worker workspace lease ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 211 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 553 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 `prepare_worker_workspace` / `release_worker_workspace` happy path、validation errors、worker/task lease uniqueness、release/no-lease/re-prepare 行为、bounded output/event safety、mkdir failure no lease、broken event-store failure isolation，以及 worker/task registry compatibility。复审后补强了真实 task-level duplicate lease registry 分支：同一 task 已有 lease 后重新 assign 给第二个 active worker，调用 prepare 返回 `existing_lease_id`。
+
+### TASK-060: Worker workspace lease / isolation v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 211 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 553 tests OK；`git diff --check` OK。
+- 内容: 新增 durable worker workspace lease 基础能力：`WorkspaceLeaseStore`、`DurableWorkspaceLease`、`WORKSPACE_PREPARED` / `WORKSPACE_RELEASED` events，以及 registry tools `prepare_worker_workspace(worker_id, task_id)` / `release_worker_workspace(worker_id)`；prepare 要求 worker 非 idle/offline、`current_task_id` 匹配且 task owner 匹配，防止同 worker 或同 task 重复 lease；mkdir 失败返回 bounded error 且不落 lease；release 只删除 lease 不删除目录；event-store failure 不阻断 lease 操作。
+
 ### TASK-059: Deterministic eval coverage for durable task timeline ✅
 - 完成者: Claude B
 - Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED

@@ -52,6 +52,8 @@ REVIEW_GATE_ERROR = "review_gate_error"
 HANDOFF_CREATED = "handoff_created"
 HANDOFF_ACCEPTED = "handoff_accepted"
 RECOVERY_PLANNED = "recovery_planned"
+WORKSPACE_PREPARED = "workspace_prepared"
+WORKSPACE_RELEASED = "workspace_released"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -91,6 +93,8 @@ VALID_EVENT_TYPES = {
     HANDOFF_CREATED,
     HANDOFF_ACCEPTED,
     RECOVERY_PLANNED,
+    WORKSPACE_PREPARED,
+    WORKSPACE_RELEASED,
 }
 
 _DURABLE_EVENTS_TABLE = """

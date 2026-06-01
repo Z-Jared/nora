@@ -33,7 +33,7 @@ from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
 from mini_agent.durable_tasks import DurableTaskStore, StepStatus
-from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus
+from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus, WorkspaceLeaseStore
 from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
     DurableEventStore,
@@ -41,6 +41,8 @@ from mini_agent.durable_events import (
     TASK_CREATED,
     TASK_STATUS_CHANGED,
     TASK_RETRIED,
+    WORKSPACE_PREPARED,
+    WORKSPACE_RELEASED,
 )
 from mini_agent.web_tools import WebTools
 
@@ -98,6 +100,7 @@ def build_default_registry(
     durable_task_store = DurableTaskStore(db=db)
     durable_event_store = DurableEventStore(db=db)
     durable_worker_store = DurableWorkerStore(db=db)
+    workspace_lease_store = WorkspaceLeaseStore(db=db)
     task_manager = TaskManager(
         path=task_state_path or Path("data/current_task.json"),
         history_path=task_history_path or Path("data/task_history.jsonl"),
@@ -151,6 +154,7 @@ def build_default_registry(
     registry.durable_task_store = durable_task_store
     registry.durable_event_store = durable_event_store
     registry.durable_worker_store = durable_worker_store
+    registry.workspace_lease_store = workspace_lease_store
     workspace_files.event_store = durable_event_store
     shell_runner.event_store = durable_event_store
     git_tools.event_store = durable_event_store
@@ -900,6 +904,138 @@ def build_default_registry(
                     "description": "最多派发几个任务，默认 10，上限 50",
                 }
             },
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+
+    def _prepare_worker_workspace_json(worker_id: str, task_id: str) -> str:
+        worker_id = worker_id.strip()
+        task_id = task_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        if not task_id:
+            return _json.dumps({"error": "task_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        if worker.status == WorkerStatus.OFFLINE:
+            return _json.dumps({"error": f"worker {worker_id} 已离线，无法准备 workspace"}, ensure_ascii=False)
+        if worker.status == WorkerStatus.IDLE:
+            return _json.dumps({"error": f"worker {worker_id} 空闲中，需要先分配任务才能准备 workspace"}, ensure_ascii=False)
+        if worker.current_task_id != task_id:
+            return _json.dumps({"error": f"worker {worker_id} 当前未执行 task {task_id}"}, ensure_ascii=False)
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        if task.worker_id != worker_id:
+            return _json.dumps({"error": f"task {task_id} 未分配给 worker {worker_id}"}, ensure_ascii=False)
+        existing_worker_lease = workspace_lease_store.get_lease_by_worker(worker_id)
+        if existing_worker_lease:
+            return _json.dumps({
+                "error": f"worker {worker_id} 已有 workspace lease",
+                "existing_lease_id": existing_worker_lease.lease_id,
+            }, ensure_ascii=False)
+        existing_task_lease = workspace_lease_store.get_lease_by_task(task_id)
+        if existing_task_lease:
+            return _json.dumps({
+                "error": f"task {task_id} 已有 workspace lease",
+                "existing_lease_id": existing_task_lease.lease_id,
+            }, ensure_ascii=False)
+        ws_path = str(root / ".workspaces" / f"{worker_id}_{task_id}")
+        try:
+            Path(ws_path).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return _json.dumps({"error": f"workspace 目录创建失败: {ws_path}"}, ensure_ascii=False)
+        lease = workspace_lease_store.create_lease(
+            worker_id=worker_id,
+            task_id=task_id,
+            workspace_path=ws_path,
+        )
+        try:
+            registry.durable_event_store.record(
+                event_type=WORKSPACE_PREPARED,
+                task_id=task_id,
+                worker_id=worker_id,
+                summary="workspace prepared for worker",
+                payload={
+                    "operation": "prepare",
+                    "lease_id": lease.lease_id,
+                    "worker_id": worker_id,
+                    "task_id": task_id,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps(lease.to_dict(), ensure_ascii=False)
+
+    def _release_worker_workspace_json(worker_id: str) -> str:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        lease = workspace_lease_store.get_lease_by_worker(worker_id)
+        if lease is None:
+            return _json.dumps({"released": False, "worker_id": worker_id}, ensure_ascii=False)
+        lease_id = lease.lease_id
+        workspace_lease_store.release_lease(lease_id)
+        try:
+            registry.durable_event_store.record(
+                event_type=WORKSPACE_RELEASED,
+                worker_id=worker_id,
+                summary="workspace lease released",
+                payload={
+                    "operation": "release",
+                    "lease_id": lease_id,
+                    "worker_id": worker_id,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "released": True,
+            "lease_id": lease_id,
+            "worker_id": worker_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "prepare_worker_workspace",
+        "为已分配任务的 worker 准备隔离工作区目录并创建 lease。worker 必须在线且 task 已分配给该 worker。",
+        _prepare_worker_workspace_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id",
+                },
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "release_worker_workspace",
+        "释放 worker 的 workspace lease。不删除文件系统目录。",
+        _release_worker_workspace_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id",
+                }
+            },
+            "required": ["worker_id"],
         },
         permission=ToolPermission(category="task", risk="write"),
     )

@@ -272,3 +272,199 @@ class DurableWorkerStore:
                     except (json.JSONDecodeError, KeyError):
                         continue
         return workers
+
+
+def _next_lease_id(existing_ids: list[str]) -> str:
+    prefix = "wlease_"
+    max_num = 0
+    for lid in existing_ids:
+        if lid.startswith(prefix):
+            try:
+                num = int(lid[len(prefix):])
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                pass
+    return f"{prefix}{max_num + 1}"
+
+
+@dataclass
+class DurableWorkspaceLease:
+    lease_id: str
+    worker_id: str
+    task_id: str
+    workspace_path: str
+    created_at: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DurableWorkspaceLease":
+        return cls(
+            lease_id=data["lease_id"],
+            worker_id=data["worker_id"],
+            task_id=data["task_id"],
+            workspace_path=data.get("workspace_path", ""),
+            created_at=data.get("created_at", ""),
+        )
+
+
+_WORKSPACE_LEASES_TABLE = """
+CREATE TABLE IF NOT EXISTS workspace_leases (
+    lease_id TEXT PRIMARY KEY,
+    worker_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    workspace_path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+"""
+
+_WORKSPACE_LEASES_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_wl_worker ON workspace_leases(worker_id);
+CREATE INDEX IF NOT EXISTS idx_wl_task ON workspace_leases(task_id);
+"""
+
+
+class WorkspaceLeaseStore:
+    """Workspace lease storage with SQLite (via NoraDB) or JSONL fallback."""
+
+    def __init__(self, path: Path = None, db=None):
+        self.path = path or Path("data/workspace_leases.jsonl")
+        self.db = db
+        self._table_created = False
+
+    def _ensure_table(self) -> None:
+        if self.db and not self._table_created:
+            self.db.conn.executescript(_WORKSPACE_LEASES_TABLE)
+            self.db.conn.executescript(_WORKSPACE_LEASES_INDEX)
+            self._table_created = True
+
+    def create_lease(
+        self,
+        worker_id: str,
+        task_id: str,
+        workspace_path: str,
+    ) -> DurableWorkspaceLease:
+        now = _now_iso()
+        existing_ids = [l.lease_id for l in self._all_leases()]
+        lease_id = _next_lease_id(existing_ids)
+        lease = DurableWorkspaceLease(
+            lease_id=lease_id,
+            worker_id=worker_id,
+            task_id=task_id,
+            workspace_path=workspace_path,
+            created_at=now,
+        )
+        self._save(lease)
+        return lease
+
+    def get_lease_by_worker(self, worker_id: str) -> Optional[DurableWorkspaceLease]:
+        if self.db:
+            self._ensure_table()
+            row = self.db.conn.execute(
+                """SELECT lease_id, worker_id, task_id, workspace_path, created_at
+                   FROM workspace_leases WHERE worker_id = ? LIMIT 1""",
+                (worker_id,),
+            ).fetchone()
+            return self._row_to_lease(row) if row else None
+        for lease in self._read_all_jsonl():
+            if lease.worker_id == worker_id:
+                return lease
+        return None
+
+    def get_lease_by_task(self, task_id: str) -> Optional[DurableWorkspaceLease]:
+        if self.db:
+            self._ensure_table()
+            row = self.db.conn.execute(
+                """SELECT lease_id, worker_id, task_id, workspace_path, created_at
+                   FROM workspace_leases WHERE task_id = ? LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            return self._row_to_lease(row) if row else None
+        for lease in self._read_all_jsonl():
+            if lease.task_id == task_id:
+                return lease
+        return None
+
+    def release_lease(self, lease_id: str) -> bool:
+        if self.db:
+            self._ensure_table()
+            cursor = self.db.conn.execute(
+                "DELETE FROM workspace_leases WHERE lease_id = ?", (lease_id,)
+            )
+            self.db.conn.commit()
+            return cursor.rowcount > 0
+        leases = self._read_all_jsonl()
+        kept = [l for l in leases if l.lease_id != lease_id]
+        if len(kept) == len(leases):
+            return False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("w", encoding="utf-8") as f:
+            for l in kept:
+                f.write(json.dumps(l.to_dict(), ensure_ascii=False) + "\n")
+        return True
+
+    def _save(self, lease: DurableWorkspaceLease) -> None:
+        if self.db:
+            self._upsert_db(lease)
+        else:
+            self._upsert_jsonl(lease)
+
+    def _all_leases(self) -> list[DurableWorkspaceLease]:
+        if self.db:
+            self._ensure_table()
+            rows = self.db.conn.execute(
+                "SELECT lease_id, worker_id, task_id, workspace_path, created_at FROM workspace_leases"
+            ).fetchall()
+            return [self._row_to_lease(r) for r in rows]
+        return self._read_all_jsonl()
+
+    def _upsert_db(self, lease: DurableWorkspaceLease) -> None:
+        self._ensure_table()
+        self.db.conn.execute(
+            """INSERT OR REPLACE INTO workspace_leases
+               (lease_id, worker_id, task_id, workspace_path, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (lease.lease_id, lease.worker_id, lease.task_id,
+             lease.workspace_path, lease.created_at),
+        )
+        self.db.conn.commit()
+
+    def _row_to_lease(self, row) -> DurableWorkspaceLease:
+        return DurableWorkspaceLease(
+            lease_id=row[0],
+            worker_id=row[1],
+            task_id=row[2],
+            workspace_path=row[3] or "",
+            created_at=row[4] or "",
+        )
+
+    def _upsert_jsonl(self, lease: DurableWorkspaceLease) -> None:
+        leases = self._read_all_jsonl()
+        replaced = False
+        for i, l in enumerate(leases):
+            if l.lease_id == lease.lease_id:
+                leases[i] = lease
+                replaced = True
+                break
+        if not replaced:
+            leases.append(lease)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("w", encoding="utf-8") as f:
+            for l in leases:
+                f.write(json.dumps(l.to_dict(), ensure_ascii=False) + "\n")
+
+    def _read_all_jsonl(self) -> list[DurableWorkspaceLease]:
+        if not self.path.exists():
+            return []
+        leases = []
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        leases.append(DurableWorkspaceLease.from_dict(json.loads(line)))
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+        return leases
