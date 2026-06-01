@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-042: Review memory capture v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-038/039 structured memory records 已完成
+- 目标: 增加显式 review/task summary 到 structured memory records 的安全 capture 层，让 approved work 可以沉淀为 bounded project knowledge。
+- 验证: `python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `mini_agent/memory_records.py`、`mini_agent/toolkits/register_memory_records.py`、`docs/knowledge/MEMORY_KERNEL.md`。
+
+### TASK-043: Deterministic eval coverage for review memory capture
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-042 runtime 存在后执行
+- 目标: 为 review memory capture 增加 deterministic offline eval，覆盖 approved/non-approved、安全边界、dedupe、searchability 和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` memory_record/MCP eval pattern；TASK-042 新增 capture 工具。
 
 ## 已完成
 
