@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.durable_workers import WorkerStatus
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
@@ -248,6 +248,10 @@ def main() -> int:
         EvalCase("recovery_plan_selection_fallback", eval_recovery_plan_selection_fallback),
         EvalCase("recovery_plan_safety", eval_recovery_plan_safety),
         EvalCase("recovery_plan_compatibility", eval_recovery_plan_compatibility),
+        EvalCase("recovery_event_basics", eval_recovery_event_basics),
+        EvalCase("recovery_event_selection_fallback", eval_recovery_event_selection_fallback),
+        EvalCase("recovery_event_safety", eval_recovery_event_safety),
+        EvalCase("recovery_event_compatibility", eval_recovery_event_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -7421,6 +7425,204 @@ def eval_recovery_plan_compatibility():
             registry.call("plan_durable_recovery", task_id="dtask_nonexistent")  # error
             registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id="bad")  # error
             registry.call("plan_durable_recovery", task_id=task_id, step_id="bad")  # error
+
+            # Existing tools still work
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+            update_r = registry.call("update_durable_task", task_id=task_id, status="running")
+            assert "error" not in json.loads(update_r), f"update broken: {update_r}"
+        finally:
+            db.close()
+
+
+# --- Recovery event eval sentinels ---
+
+_RECOVERY_EVENT_SENTINEL_GOAL = "NORA_EVAL_RECOVERY_EVT_GOAL_a1b2c3d4"
+_RECOVERY_EVENT_SENTINEL_STEP = "NORA_EVAL_RECOVERY_EVT_STEP_e5f6a7b8"
+_RECOVERY_EVENT_SENTINEL_NOTE = "NORA_EVAL_RECOVERY_EVT_NOTE_c9d0e1f2"
+_RECOVERY_EVENT_SENTINEL_SECRET = "NORA_EVAL_RECOVERY_EVT_SECRET_sk-recv-3a4b5c6d"
+
+
+def eval_recovery_event_basics():
+    """RECOVERY_PLANNED event recorded with checkpoint_id linkage, source=registry, severity=info, and safe payload fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="event test", steps="alpha\nbeta")
+            task_id = json.loads(create_r)["task_id"]
+            cp_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+            cp_id = json.loads(cp_r)["checkpoint_id"]
+
+            registry.call("plan_durable_recovery", task_id=task_id)
+
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            rp_events = [e for e in events if e.event_type == RECOVERY_PLANNED]
+            assert len(rp_events) >= 1, f"no RECOVERY_PLANNED event: {[e.event_type for e in events]}"
+
+            ev = rp_events[0]
+            assert ev.severity == "info", f"severity: {ev.severity}"
+            assert ev.source == "registry", f"source: {ev.source}"
+            assert ev.checkpoint_id == cp_id, f"checkpoint_id linkage: {ev.checkpoint_id}"
+            assert ev.payload.get("operation") == "plan_recovery"
+            assert ev.payload.get("can_resume") is True
+            assert ev.payload.get("resume_policy") == "from_checkpoint"
+            assert ev.payload.get("reason") == "checkpoint_selected"
+            assert ev.payload.get("selected_checkpoint_present") is True
+            assert ev.payload.get("checkpoint_step_id") == 1
+            assert ev.payload.get("checkpoint_count") == 1
+            assert ev.payload.get("step_count") == 2
+            assert ev.payload.get("requested_checkpoint_id_present") is False
+            assert ev.payload.get("requested_step_id_present") is False
+
+            # Bounded payload: no raw fields
+            for key in ("goal", "steps", "description", "state_snapshot", "notes", "summary_text"):
+                assert key not in ev.payload, f"payload has {key}: {ev.payload}"
+        finally:
+            db.close()
+
+
+def eval_recovery_event_selection_fallback():
+    """Events for explicit checkpoint_id, step_id, no-checkpoint fallback, and terminal status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="fallback events", steps="a\nb\nc")
+            task_id = json.loads(create_r)["task_id"]
+            cp1_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+            cp1_id = json.loads(cp1_r)["checkpoint_id"]
+            cp2_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=2)
+            cp2_id = json.loads(cp2_r)["checkpoint_id"]
+
+            # Explicit checkpoint_id selection
+            registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=cp1_id)
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            rp = [e for e in events if e.event_type == RECOVERY_PLANNED]
+            assert rp[0].checkpoint_id == cp1_id, f"explicit cp linkage: {rp[0].checkpoint_id}"
+            assert rp[0].payload.get("requested_checkpoint_id_present") is True
+
+            # step_id selection
+            registry.call("plan_durable_recovery", task_id=task_id, step_id="2")
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            rp = [e for e in events if e.event_type == RECOVERY_PLANNED]
+            assert rp[0].payload.get("requested_step_id_present") is True
+            assert rp[0].checkpoint_id == cp2_id
+
+            # No-checkpoint fallback
+            create_r2 = registry.call("create_durable_task", goal="no cp", steps="x")
+            tid2 = json.loads(create_r2)["task_id"]
+            registry.call("plan_durable_recovery", task_id=tid2)
+            events2 = registry.durable_event_store.list_events(task_id=tid2)
+            rp2 = [e for e in events2 if e.event_type == RECOVERY_PLANNED]
+            assert len(rp2) >= 1
+            assert rp2[0].checkpoint_id == "", f"no-checkpoint: checkpoint_id should be empty, got: {rp2[0].checkpoint_id}"
+            assert rp2[0].payload.get("reason") == "no_checkpoint"
+            assert rp2[0].payload.get("selected_checkpoint_present") is False
+
+            # Terminal status event
+            registry.call("update_durable_task", task_id=task_id, status="running")
+            registry.call("update_durable_task", task_id=task_id, status="completed")
+            registry.call("plan_durable_recovery", task_id=task_id)
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            rp = [e for e in events if e.event_type == RECOVERY_PLANNED]
+            assert rp[0].payload.get("can_resume") is False, f"terminal can_resume: {rp[0].payload}"
+            assert rp[0].payload.get("reason") == "terminal_status"
+        finally:
+            db.close()
+
+
+def eval_recovery_event_safety():
+    """Event payload/serialized event does not leak goals, step text, notes, summaries, checkpoint descriptions, state_snapshot, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal=_RECOVERY_EVENT_SENTINEL_GOAL, steps=_RECOVERY_EVENT_SENTINEL_STEP)
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=0, description=_RECOVERY_EVENT_SENTINEL_SECRET, state_summary=_RECOVERY_EVENT_SENTINEL_GOAL)
+
+            # Inject sentinels into step note/summary and checkpoint state_snapshot
+            task = ts.get_task(task_id)
+            task.steps[0].note = _RECOVERY_EVENT_SENTINEL_NOTE
+            task.steps[0].summary = f"sum:{_RECOVERY_EVENT_SENTINEL_SECRET}"
+            task.checkpoints[0].description = _RECOVERY_EVENT_SENTINEL_SECRET
+            task.checkpoints[0].state_snapshot = {
+                "nested": {"secret_value": _RECOVERY_EVENT_SENTINEL_SECRET},
+                "api_token": "ghp_recv_abc123def456",
+                "progress": "ok",
+            }
+            ts.upsert_task(task)
+
+            registry.call("plan_durable_recovery", task_id=task_id)
+
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            rp = [e for e in events if e.event_type == RECOVERY_PLANNED]
+            assert len(rp) >= 1
+
+            for ev in rp:
+                serialized = json.dumps(ev.to_dict(), ensure_ascii=False)
+                assert _RECOVERY_EVENT_SENTINEL_GOAL not in serialized, "goal leaked in event"
+                assert _RECOVERY_EVENT_SENTINEL_STEP not in serialized, "step text leaked in event"
+                assert _RECOVERY_EVENT_SENTINEL_NOTE not in serialized, "note leaked in event"
+                assert _RECOVERY_EVENT_SENTINEL_SECRET not in serialized, "secret/desc/state_summary leaked in event"
+                assert "ghp_recv_abc123def456" not in serialized, "secret-like api_token leaked in event"
+
+            # Allowed-fields-only check on payload
+            ev = rp[0]
+            allowed_payload_keys = {
+                "operation", "can_resume", "resume_policy", "reason",
+                "selected_checkpoint_present", "checkpoint_step_id", "next_step_id",
+                "checkpoint_count", "step_count", "incomplete_step_count",
+                "trace_ref_count", "worker_id_present",
+                "requested_checkpoint_id_present", "requested_step_id_present",
+            }
+            unexpected = set(ev.payload.keys()) - allowed_payload_keys
+            assert not unexpected, f"unexpected payload keys: {unexpected}"
+        finally:
+            db.close()
+
+
+def eval_recovery_event_compatibility():
+    """Broken event store doesn't prevent planning. Existing tools still work. Task state not mutated."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal="compat events", steps="x\ny")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+
+            # Snapshot state before
+            before = ts.get_task(task_id)
+            before_status = before.status
+            before_steps = [(s.id, s.status) for s in before.steps]
+            before_cp_count = len(before.checkpoints)
+
+            # Broken event store: plan must still succeed
+            registry.durable_event_store = BrokenEventStore()
+            plan_r = registry.call("plan_durable_recovery", task_id=task_id)
+            plan = json.loads(plan_r)
+            assert "error" not in plan, f"plan failed with broken store: {plan}"
+            assert plan["can_resume"] is True
+
+            # Task state unchanged
+            after = ts.get_task(task_id)
+            assert after.status == before_status, f"status mutated: {after.status}"
+            assert [(s.id, s.status) for s in after.steps] == before_steps, "steps mutated"
+            assert len(after.checkpoints) == before_cp_count, "checkpoints mutated"
 
             # Existing tools still work
             assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))

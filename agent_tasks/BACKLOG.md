@@ -8,16 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-057: Deterministic eval coverage for recovery-plan events
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-056 runtime present
-- 分配: Claude B
-- 目标: 为 TASK-056 的 recovery-plan event logging 增加离线 deterministic eval，覆盖 event metadata、checkpoint_id linkage、bounded output、安全不泄漏、event-store failure isolation，以及 existing recovery plan compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
-- 参考: `evals/run_evals.py` durable event / recovery plan eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
+暂无。
 
 ## 已完成
+
+### TASK-057: Deterministic eval coverage for recovery-plan events ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 202 passed；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 458 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 `RECOVERY_PLANNED` event metadata、source/severity、top-level `checkpoint_id` linkage、explicit/step/no-checkpoint/terminal selection events、payload allowed-fields-only、直接注入 step note/summary 与 checkpoint description/state_snapshot sentinel 的 serialized event 泄漏检查、broken event-store failure isolation、planning no-mutation，以及 recovery planning 后 existing registry tool compatibility。
 
 ### TASK-056: Durable recovery plan event logging v1 ✅
 - 完成者: Claude A
