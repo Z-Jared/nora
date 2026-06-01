@@ -1321,6 +1321,76 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _get_durable_task_timeline_json(task_id: str, limit: int = 50) -> str:
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return _json.dumps({"error": f"limit 必须为整数: {limit!r}"}, ensure_ascii=False)
+        limit = max(1, min(limit, 200))
+
+        try:
+            events = durable_event_store.list_events(task_id=task_id, max_results=500)
+        except Exception:
+            return _json.dumps({"error": "事件查询失败"}, ensure_ascii=False)
+
+        # list_events returns newest first; reverse for chronological oldest-first
+        events = list(reversed(events))
+        total_count = len(events)
+        events = events[:limit]
+
+        event_summaries = []
+        for ev in events:
+            payload_keys = sorted(ev.payload.keys()) if ev.payload else []
+            event_summaries.append({
+                "event_id": ev.event_id,
+                "event_type": ev.event_type,
+                "created_at": ev.created_at,
+                "source": ev.source,
+                "severity": ev.severity,
+                "checkpoint_id": ev.checkpoint_id,
+                "checkpoint_id_present": bool(ev.checkpoint_id),
+                "trace_id_present": bool(ev.trace_id),
+                "worker_id_present": bool(ev.worker_id),
+                "summary_present": bool(ev.summary),
+                "payload_key_count": len(payload_keys),
+                "payload_keys": payload_keys,
+            })
+
+        return _json.dumps({
+            "task_id": task.task_id,
+            "status": task.status,
+            "event_count": total_count,
+            "returned_event_count": len(event_summaries),
+            "checkpoint_count": len(task.checkpoints),
+            "trace_ref_count": len(task.trace_refs),
+            "worker_id_present": bool(task.worker_id),
+            "events": event_summaries,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "get_durable_task_timeline",
+        "只读返回 durable task 的安全事件时间线（最旧在前），包含 bounded task 摘要和 event summaries。",
+        _get_durable_task_timeline_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返回事件数，默认 50，范围 1-200",
+                },
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

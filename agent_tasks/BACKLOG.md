@@ -4,26 +4,24 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+## 进行中
+
 ### TASK-059: Deterministic eval coverage for durable task timeline
 - 优先级: high
 - 预计: 1 小时
 - 依赖: TASK-058 runtime present
+- 分配: Claude B
 - 目标: 为 TASK-058 的 task timeline inspection tool 增加离线 deterministic eval，覆盖 chronological ordering、event/checkpoint/recovery linkage、bounded output、安全不泄漏、missing task error、limit bounds、以及 existing registry compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
 - 参考: `evals/run_evals.py` durable event / recovery plan eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
 
-## 进行中
-
-### TASK-058: Durable task timeline inspection tool v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-056/TASK-057
-- 分配: Claude A
-- 目标: 增加只读 `get_durable_task_timeline` registry tool，将一条 durable task 的事件按时间线输出为 bounded、safe、可审计的摘要，帮助 replay/recovery inspection。
-- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
-
 ## 已完成
+
+### TASK-058: Durable task timeline inspection tool v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 470 tests OK；`python3 evals/run_evals.py` 202 passed；`git diff --check` OK。
+- 内容: 新增只读 `get_durable_task_timeline(task_id, limit=50)` registry tool，按 chronological oldest-first 返回 durable task 的 bounded safe timeline；task summary 仅包含 status/count/presence metadata，event summaries 仅包含 safe metadata 和 sorted `payload_keys` key names；limit bounded 到 1..200，bad limit/unknown task/event-store failure 返回 JSON error；event-store failure 不回显原始异常文本；不泄漏 goal、step、notes、summary、checkpoint description、state_snapshot、payload values 或 secret-like 内容，且不 mutate task/event state。
 
 ### TASK-057: Deterministic eval coverage for recovery-plan events ✅
 - 完成者: Claude B

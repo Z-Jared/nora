@@ -1,163 +1,168 @@
 # CCB Code Review Report
 
-Reviewed: TASK-057 Deterministic eval coverage for recovery-plan events
-Worker: Claude B
+Reviewed: TASK-058 Durable task timeline inspection tool v1
+Worker: Claude A
 Status: **APPROVED**
 
 ---
 
 ## Review Scope
 
-### 1. Eval Coverage Completeness
+### 1. Chronological Timeline, Deterministic, Limit Bounds
 
-**Verdict: ✅ COMPLETE**
+**Verdict: ✅ CORRECT**
 
-4 eval cases added (eval count: 198 → 202):
+`mini_agent/toolkits/registry_builder.py` lines 1324-1371:
 
-1. **`eval_recovery_event_basics`** (line 7446-7483)
-   - Creates task with checkpoint, calls plan_durable_recovery
-   - Verifies RECOVERY_PLANNED event recorded with:
-     - ✅ `severity=info`, `source=registry` (lines 7465-7466)
-     - ✅ `checkpoint_id` top-level linkage matches selected checkpoint (line 7467)
-     - ✅ Payload fields: operation, can_resume, resume_policy, reason, selected_checkpoint_present, checkpoint_step_id, checkpoint_count, step_count, requested_checkpoint_id_present, requested_step_id_present (lines 7468-7477)
-     - ✅ Bounded payload: goal, steps, description, state_snapshot, notes, summary_text keys ABSENT (lines 7480-7481)
+- ✅ **Chronological oldest-first**: `events = list(reversed(events))` (line 1340)
+  - `list_events()` returns newest-first; reverse ensures chronological oldest-first ordering
+- ✅ **Deterministic**: Sorted by `created_at` timestamp (implicit from event store ordering)
+- ✅ **Limit bounded 1..200**: `limit = max(1, min(limit, 200))` (line 1332)
+- ✅ **Non-integer limit returns JSON error**: Lines 1328-1331
+  - `int(limit)` wrapped in try/except for TypeError/ValueError
+  - Returns `{"error": "limit 必须为整数: ..."}`
 
-2. **`eval_recovery_event_selection_fallback`** (line 7486-7534)
-   - ✅ Explicit checkpoint_id selection: checkpoint_id linkage matches, requested_checkpoint_id_present=True (lines 7504-7505)
-   - ✅ step_id selection: requested_step_id_present=True, checkpoint_id linkage (lines 7511-7512)
-   - ✅ No-checkpoint fallback: checkpoint_id="", reason=no_checkpoint, selected_checkpoint_present=False (lines 7521-7523)
-   - ✅ Terminal status: can_resume=False, reason=terminal_status (lines 7531-7532)
+### 2. Safe Output Structure
 
-3. **`eval_recovery_event_safety`** (line 7537-7587)
-   - Injects sentinels into task state via `get_task()` + `upsert_task()` (lines 7550-7559):
-     - ✅ `step.note` with sentinel (line 7551)
-     - ✅ `step.summary` with sentinel (line 7552)
-     - ✅ `checkpoint.description` with sentinel (line 7553)
-     - ✅ `checkpoint.state_snapshot` with nested sentinel + secret-like `api_token` key (lines 7554-7558)
-   - Verifies all sentinels ABSENT from serialized `event.to_dict()` (lines 7568-7573):
-     - ✅ `_RECOVERY_EVENT_SENTINEL_GOAL` (line 7569)
-     - ✅ `_RECOVERY_EVENT_SENTINEL_STEP` (line 7570)
-     - ✅ `_RECOVERY_EVENT_SENTINEL_NOTE` (line 7571)
-     - ✅ `_RECOVERY_EVENT_SENTINEL_SECRET` (line 7572)
-     - ✅ `"ghp_recv_abc123def456"` (line 7573)
-   - Allowed-fields-only check: verifies payload contains only expected keys (lines 7577-7585)
-     - ✅ 14 allowed keys verified (lines 7577-7583)
+**Verdict: ✅ SAFE**
 
-4. **`eval_recovery_event_compatibility`** (line 7590-7633)
-   - ✅ Snapshots task state before planning: status, steps, checkpoint_count (lines 7609-7612)
-   - ✅ Broken event store doesn't prevent planning (lines 7615-7619)
-   - ✅ Task state unchanged after planning: status, steps, checkpoints (lines 7622-7625)
-   - ✅ Existing tools still work after broken store: get_durable_task, list_durable_tasks, update_durable_task (lines 7628-7631)
-
-### 2. Deterministic and Offline
-
-**Verdict: ✅ DETERMINISTIC**
-
-All 4 eval cases are deterministic and offline:
-
-- ✅ Uses `tempfile.TemporaryDirectory()` for isolation
-- ✅ No live LLM calls — uses `build_default_registry` with `confirm_action=lambda _: True`
-- ✅ No interactive terminal prompts
-- ✅ No external state dependencies
-- ✅ No network calls
-- ✅ No timing dependencies
-- ✅ Reproducible — same results every run
-
-### 3. Regression Prevention Quality
-
-**Verdict: ✅ STRONG**
-
-Evals prevent key TASK-056 regressions:
-
-**RECOVERY_PLANNED event model:**
-- ✅ `eval_recovery_event_basics` lines 7461-7462: RECOVERY_PLANNED event recorded
-- ✅ `eval_recovery_event_basics` lines 7465-7466: source=registry, severity=info
-- ✅ Catches regression where event type or metadata would change
-
-**Top-level checkpoint_id linkage:**
-- ✅ `eval_recovery_event_basics` line 7467: checkpoint_id matches selected checkpoint
-- ✅ `eval_recovery_event_selection_fallback` lines 7504, 7512: checkpoint_id linkage for explicit/step selection
-- ✅ `eval_recovery_event_selection_fallback` line 7521: checkpoint_id="" for no-checkpoint fallback
-- ✅ Catches regression where checkpoint_id linkage would break
-
-**Payload fields:**
-- ✅ `eval_recovery_event_basics` lines 7468-7477: all 14 payload fields verified
-- ✅ `eval_recovery_event_selection_fallback` lines 7505, 7511, 7523: requested_checkpoint_id_present, requested_step_id_present, selected_checkpoint_present verified
-- ✅ Catches regression where payload fields would change
-
-**Event-store failure isolation:**
-- ✅ `eval_recovery_event_compatibility` lines 7615-7619: broken event store doesn't prevent planning
-- ✅ Catches regression where event logging failure would block plan generation
-
-**Read-only/no mutation:**
-- ✅ `eval_recovery_event_compatibility` lines 7622-7625: task state unchanged after planning
-- ✅ Catches regression where event logging would mutate task state
-
-**Safety (no raw text leakage):**
-- ✅ `eval_recovery_event_safety` lines 7569-7573: sentinels absent from serialized event
-- ✅ `eval_recovery_event_safety` lines 7577-7585: only allowed keys present
-- ✅ Catches regression where raw goal, step text, notes, summaries, checkpoint descriptions, state_snapshot, or secrets would leak
-
-### 4. Safety Eval Strength
-
-**Verdict: ✅ ROBUST**
-
-**Sentinel values (lines 7440-7443):**
+**Task summary contains only safe metadata (lines 1362-1370):**
 ```python
-_RECOVERY_EVENT_SENTINEL_GOAL = "NORA_EVAL_RECOVERY_EVT_GOAL_a1b2c3d4"
-_RECOVERY_EVENT_SENTINEL_STEP = "NORA_EVAL_RECOVERY_EVT_STEP_e5f6a7b8"
-_RECOVERY_EVENT_SENTINEL_NOTE = "NORA_EVAL_RECOVERY_EVT_NOTE_c9d0e1f2"
-_RECOVERY_EVENT_SENTINEL_SECRET = "NORA_EVAL_RECOVERY_EVT_SECRET_sk-recv-3a4b5c6d"
+{
+    "task_id": task.task_id,
+    "status": task.status,
+    "event_count": total_count,
+    "returned_event_count": len(event_summaries),
+    "checkpoint_count": len(task.checkpoints),
+    "trace_ref_count": len(task.trace_refs),
+    "worker_id_present": bool(task.worker_id),
+    "events": event_summaries,
+}
 ```
 
-**Direct state injection:**
-- ✅ Injects sentinels into step.note, step.summary, checkpoint.description, checkpoint.state_snapshot (lines 7550-7559)
-- ✅ State_snapshot contains nested sentinel + secret-like `api_token` key (lines 7554-7558)
+**Event summaries contain only safe metadata (lines 1347-1360):**
+```python
+{
+    "event_id": ev.event_id,
+    "event_type": ev.event_type,
+    "created_at": ev.created_at,
+    "source": ev.source,
+    "severity": ev.severity,
+    "checkpoint_id": ev.checkpoint_id,
+    "checkpoint_id_present": bool(ev.checkpoint_id),
+    "trace_id_present": bool(ev.trace_id),
+    "worker_id_present": bool(ev.worker_id),
+    "summary_present": bool(ev.summary),
+    "payload_key_count": len(payload_keys),
+    "payload_keys": payload_keys,  # sorted key names only, no values
+}
+```
 
-**Serialized event verification:**
-- ✅ Checks `event.to_dict()` serialized output (line 7568)
-- ✅ Verifies all 4 sentinels + api_token secret ABSENT (lines 7569-7573)
+**Payload keys are key names only, no values (line 1346):**
+```python
+payload_keys = sorted(ev.payload.keys()) if ev.payload else []
+```
 
-**Allowed-fields-only check:**
-- ✅ 14 allowed payload keys verified (lines 7577-7583)
-- ✅ Unexpected keys cause assertion failure (lines 7584-7585)
+### 3. No Raw Data Leakage
 
-**Note:** `checkpoint_id` linkage itself is allowed as a safe id (verified in eval_recovery_event_basics line 7467 and eval_recovery_event_selection_fallback lines 7504, 7512, 7521)
+**Verdict: ✅ SAFE**
 
-### 5. Assertion Quality
+**Explicitly excluded from output:**
+- ❌ Raw goal text
+- ❌ Raw step text
+- ❌ Notes
+- ❌ Summaries (only `summary_present: bool`)
+- ❌ Checkpoint descriptions (only `checkpoint_id` and `checkpoint_id_present`)
+- ❌ Raw state_snapshot
+- ❌ Payload values (only `payload_keys` key names, not values)
+- ❌ Prompts
+- ❌ Diffs
+- ❌ Shell output
+- ❌ Env vars
+- ❌ Request strings
+- ❌ Secrets
 
-**Verdict: ✅ SUBSTANTIVE**
+**Verified by tests:**
+- ✅ `test_no_raw_goal_step_leakage` (lines 2273-2281): goal, step text, checkpoint description ABSENT
+- ✅ `test_payload_keys_names_only` (lines 2229-2240): payload_keys are strings, no raw values
+- ✅ `test_checkpoint_id_only_as_safe_metadata` (lines 2294-2304): checkpoint_id is safe id string starting with "cp_"
 
-**Positive assertions verify specific values:**
-- ✅ severity=info, source=registry (lines 7465-7466)
-- ✅ checkpoint_id linkage matches selected checkpoint (line 7467)
-- ✅ operation=plan_recovery, can_resume=True, resume_policy="from_checkpoint", reason="checkpoint_selected" (lines 7468-7471)
-- ✅ selected_checkpoint_present=True, checkpoint_step_id=1, checkpoint_count=1, step_count=2 (lines 7472-7475)
-- ✅ requested_checkpoint_id_present=False, requested_step_id_present=False (lines 7476-7477)
+### 4. Error Handling
 
-**Negative assertions verify safety:**
-- ✅ 4 sentinels + api_token secret ABSENT from serialized event (lines 7569-7573)
-- ✅ goal, steps, description, state_snapshot, notes, summary_text keys ABSENT from payload (lines 7480-7481)
-- ✅ Only 14 allowed keys present in payload (lines 7577-7585)
+**Verdict: ✅ SAFE**
 
-**No empty or misleading assertions:**
-- ✅ All assertions check specific conditions
-- ✅ No assertions that always pass
-- ✅ No misleading comments
+**Unknown task (line 1327):**
+- ✅ Returns `{"error": "未找到 durable task: {task_id}"}`
 
-### 6. No Runtime Changes by Claude B
+**Non-integer limit (lines 1328-1331):**
+- ✅ Returns `{"error": "limit 必须为整数: {limit!r}"}`
 
-**Verdict: ✅ CLEAN**
+**Event store failure (lines 1334-1337):**
+- ✅ Returns fixed message `{"error": "事件查询失败"}` (no raw exception text)
+- ✅ PM-identified fix: Changed from `事件查询失败: {e}` to fixed message without exception content
+- ✅ Test `test_event_store_failure_returns_safe_error` (lines 2306-2318) verifies:
+  - Injects sentinel secret into exception message
+  - Asserts JSON error is returned
+  - Asserts sentinel does NOT appear in output
 
-From `B_DONE.md`:
-- ✅ "No runtime code changed (TASK-056 was already complete)"
-- ✅ "No commit or push performed"
-- ✅ "Known issues: none"
+### 5. Read-Only Verification
 
-**Diff verification:**
-- ✅ Only `evals/run_evals.py` modified (203 lines added, 1 removed)
-- ✅ No changes to runtime code (durable_events.py, registry_builder.py, test_durable_tasks.py)
-- ✅ No eval depends on incorrect TASK-056 behavior
+**Verdict: ✅ READ-ONLY**
+
+`_get_durable_task_timeline_json` implementation (lines 1324-1371):
+
+- ✅ No task state mutation (no `upsert_task()`, no `update_status()`)
+- ✅ No event state mutation (only reads events, does not modify)
+- ✅ No worker execution (no worker status changes)
+- ✅ No model calls (no LLMClient usage)
+- ✅ No file/git/shell operations
+- ✅ Registered with `risk="read"` permission (line 1391)
+- ✅ Test `test_no_mutation` verifies read-only (lines 2283-2292):
+  - Compares task state before and after timeline query
+  - Verifies status, checkpoints, steps all unchanged
+
+### 6. Test Coverage
+
+**Verdict: ✅ COMPREHENSIVE**
+
+`DurableTaskTimelineToolTests` class (12 test methods, lines 2158-2318):
+
+**Chronological ordering:**
+1. `test_chronological_timeline` (line 2182) — verifies oldest-first ordering via `created_at` timestamps
+
+**Task summary fields:**
+2. `test_task_summary_fields` (line 2196) — verifies checkpoint_count, trace_ref_count, worker_id_present present
+
+**Safe event fields:**
+3. `test_event_summaries_safe` (line 2206) — verifies all 12 safe fields present on each event
+
+**Payload keys safety:**
+4. `test_payload_keys_names_only` (line 2229) — verifies payload_keys are strings, no raw values
+
+**Limit bounds:**
+5. `test_limit_bounding` (line 2242) — verifies output limited to requested count
+6. `test_limit_clamped_to_range` (line 2250) — verifies 0→1, 999→200 clamping
+
+**Error handling:**
+7. `test_non_integer_limit_returns_error` (line 2262) — verifies JSON error for "bad" limit
+8. `test_unknown_task_returns_error` (line 2268) — verifies JSON error for nonexistent task
+
+**Safety (no leakage):**
+9. `test_no_raw_goal_step_leakage` (line 2273) — verifies goal, step text, checkpoint description ABSENT
+
+**Read-only verification:**
+10. `test_no_mutation` (line 2283) — verifies task state unchanged after timeline query
+
+**Checkpoint_id safe metadata:**
+11. `test_checkpoint_id_only_as_safe_metadata` (line 2294) — verifies checkpoint_id is safe id string starting with "cp_"
+
+**Event store failure safety:**
+12. `test_event_store_failure_returns_safe_error` (line 2306) — verifies safe error message without raw exception text
+
+**Assertion quality:**
+- ✅ No empty assertions (all verify specific payload fields, safety conditions, or error responses)
+- ✅ Strong negative assertions (goal, step text, checkpoint description, sentinel ABSENT)
+- ✅ Positive assertions verify exact values (chronological ordering, safe fields present, checkpoint_id format)
 
 ---
 
@@ -165,27 +170,31 @@ From `B_DONE.md`:
 
 **None identified.**
 
-All critical recovery-plan event behaviors are covered:
-- ✅ RECOVERY_PLANNED event recorded with correct metadata (source, severity, operation, can_resume, resume_policy, reason, counts, presence flags)
-- ✅ Top-level checkpoint_id linkage for all selection modes (explicit, step, no-checkpoint, terminal)
-- ✅ Payload safety with direct sentinel injection (step.note/summary, checkpoint.description/state_snapshot, nested + api_token)
-- ✅ Allowed-fields-only check on payload keys
-- ✅ Event-store failure isolation
-- ✅ Read-only verification (no task state mutation)
+All critical timeline behaviors are covered:
+- ✅ Chronological oldest-first ordering
+- ✅ Task summary safe metadata (7 fields)
+- ✅ Event summaries safe metadata (12 fields including payload_keys)
+- ✅ payload_keys are key names only, no values
+- ✅ Limit bounds (1..200, non-integer error)
+- ✅ Error handling (unknown task, non-integer limit, event store failure)
+- ✅ No raw data leakage (goal, step text, checkpoint description)
+- ✅ Read-only verification (no state mutation)
+- ✅ Checkpoint_id as safe id string
+- ✅ Event store failure returns safe error (no raw exception text)
 
 ---
 
 ## Checks Run
 
 ```text
+python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+Ran 470 tests — OK
+
 python3 evals/run_evals.py
 202 passed, 0 failed
 
-python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 458 tests — OK
-
-git diff --check evals/run_evals.py
-OK
+git diff --check
+clean
 ```
 
 ---
@@ -198,7 +207,7 @@ OK
 
 ### Suggestions
 
-**None** — eval coverage is comprehensive and well-structured.
+**None** — code quality is high, no technical debt introduced.
 
 ---
 
@@ -206,6 +215,6 @@ OK
 
 **APPROVE and merge.**
 
-TASK-057 provides strong deterministic eval coverage for TASK-056 recovery-plan event logging. All critical regression scenarios are covered: RECOVERY_PLANNED event model, checkpoint_id linkage, payload fields, event-store failure isolation, read-only verification, and safety. Safety eval uses direct state injection of sentinels into step.note/summary and checkpoint.description/state_snapshot (nested + api_token), and verifies allowed-fields-only on payload keys. No runtime changes by Claude B.
+TASK-058 provides a read-only chronological timeline inspection tool that returns safe task and event summaries without exposing raw goal, step text, notes, summaries, checkpoint descriptions, state_snapshot, payload values, or secrets. PM-identified fix ensures event store failure returns safe error message without raw exception text. Test coverage is comprehensive with 12 focused tests covering all specified scenarios. No blockers, no technical debt, no known risks.
 
 **Next Action**: PM can proceed with git commit and push.

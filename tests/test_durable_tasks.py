@@ -2155,5 +2155,168 @@ class DurableRecoveryPlanEventTests(unittest.TestCase):
         self.assertEqual(len(before["steps"]), len(after["steps"]))
 
 
+class DurableTaskTimelineToolTests(unittest.TestCase):
+    """Tests for get_durable_task_timeline registry tool (TASK-058)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_task_with_events(self):
+        result = self.registry.call("create_durable_task", goal="secret goal", steps="step one\nstep two")
+        task = json.loads(result)
+        task_id = task["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="cp desc")
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+        return task_id
+
+    def test_chronological_timeline(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["task_id"], task_id)
+        self.assertEqual(parsed["status"], "running")
+        self.assertGreater(parsed["event_count"], 0)
+        self.assertEqual(parsed["returned_event_count"], len(parsed["events"]))
+        # Verify chronological order (oldest first)
+        events = parsed["events"]
+        for i in range(1, len(events)):
+            self.assertGreaterEqual(events[i]["created_at"], events[i - 1]["created_at"])
+
+    def test_task_summary_fields(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIn("checkpoint_count", parsed)
+        self.assertIn("trace_ref_count", parsed)
+        self.assertIn("worker_id_present", parsed)
+        self.assertGreater(parsed["checkpoint_count"], 0)
+
+    def test_event_summaries_safe(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+        events = parsed["events"]
+
+        self.assertGreater(len(events), 0)
+        for ev in events:
+            self.assertIn("event_id", ev)
+            self.assertIn("event_type", ev)
+            self.assertIn("created_at", ev)
+            self.assertIn("source", ev)
+            self.assertIn("severity", ev)
+            self.assertIn("checkpoint_id", ev)
+            self.assertIn("checkpoint_id_present", ev)
+            self.assertIn("trace_id_present", ev)
+            self.assertIn("worker_id_present", ev)
+            self.assertIn("summary_present", ev)
+            self.assertIn("payload_key_count", ev)
+            self.assertIn("payload_keys", ev)
+            # payload_keys should be key names only, not values
+            self.assertIsInstance(ev["payload_keys"], list)
+
+    def test_payload_keys_names_only(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+
+        for ev in parsed["events"]:
+            for key in ev["payload_keys"]:
+                self.assertIsInstance(key, str)
+            # Verify no raw values leak through payload_keys
+            output_str = json.dumps(ev["payload_keys"])
+            self.assertNotIn("secret goal", output_str)
+            self.assertNotIn("step one", output_str)
+
+    def test_limit_bounding(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id, limit=2)
+        parsed = json.loads(result)
+
+        self.assertLessEqual(parsed["returned_event_count"], 2)
+        self.assertGreater(parsed["event_count"], 2)  # more events exist
+
+    def test_limit_clamped_to_range(self):
+        task_id = self._create_task_with_events()
+        # limit=0 should clamp to 1
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id, limit=0)
+        parsed = json.loads(result)
+        self.assertLessEqual(parsed["returned_event_count"], 1)
+
+        # limit=999 should clamp to 200
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id, limit=999)
+        parsed = json.loads(result)
+        self.assertLessEqual(parsed["returned_event_count"], 200)
+
+    def test_non_integer_limit_returns_error(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id, limit="bad")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_unknown_task_returns_error(self):
+        result = self.registry.call("get_durable_task_timeline", task_id="dtask_999")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_no_raw_goal_step_leakage(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        output = json.dumps(json.loads(result))
+
+        self.assertNotIn("secret goal", output)
+        self.assertNotIn("step one", output)
+        self.assertNotIn("step two", output)
+        self.assertNotIn("cp desc", output)
+
+    def test_no_mutation(self):
+        task_id = self._create_task_with_events()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+
+        self.registry.call("get_durable_task_timeline", task_id=task_id)
+
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(len(before["checkpoints"]), len(after["checkpoints"]))
+        self.assertEqual(len(before["steps"]), len(after["steps"]))
+
+    def test_checkpoint_id_only_as_safe_metadata(self):
+        task_id = self._create_task_with_events()
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+
+        for ev in parsed["events"]:
+            if ev["checkpoint_id_present"]:
+                self.assertIsNotNone(ev["checkpoint_id"])
+                # checkpoint_id is just an id string, not raw content
+                self.assertIsInstance(ev["checkpoint_id"], str)
+                self.assertTrue(ev["checkpoint_id"].startswith("cp_"))
+
+    def test_event_store_failure_returns_safe_error(self):
+        task_id = self._create_task_with_events()
+        original_list = self.registry.durable_event_store.list_events
+        self.registry.durable_event_store.list_events = lambda **kw: (_ for _ in ()).throw(
+            RuntimeError("SENTINEL_SECRET_777 leaked in exception")
+        )
+
+        result = self.registry.call("get_durable_task_timeline", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+        self.assertNotIn("SENTINEL_SECRET_777", json.dumps(parsed))
+
+        self.registry.durable_event_store.list_events = original_list
+
+
 if __name__ == "__main__":
     unittest.main()

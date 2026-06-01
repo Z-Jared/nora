@@ -1,11 +1,13 @@
 # Claude A Task
 
 Owner: Claude A
-Status: assigned
+Status: completed
 
 ## Goal
 
 TASK-058: Durable task timeline inspection tool v1.
+
+Codex PM and CCB Reviewer approved this task. Integrated in main before TASK-059 assignment.
 
 Nora now records durable events for task actions, checkpoints, lifecycle controls, recovery plans, and many tool/runtime operations. The next small replay/recovery step is a read-only registry tool that returns a safe chronological task timeline for inspection.
 

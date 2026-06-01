@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting
+Status: assigned
 
 ## Goal
 
 TASK-059: Deterministic eval coverage for durable task timeline.
 
-This task is waiting for TASK-058 runtime. Do not start implementation until Codex PM explicitly assigns it after TASK-058 is approved and its runtime is visible in your CCB worktree.
+TASK-058 runtime has been approved and integrated. Start implementation after confirming `get_durable_task_timeline` is visible in your CCB worktree.
 
 ## Scope
 
