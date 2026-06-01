@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-048: Durable worker auto-dispatch v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: durable worker registry、worker claim、task ownership metadata 已完成
+- 目标: 增加 `dispatch_durable_tasks` 之类的自动派发层，将 pending/unassigned durable tasks 分配给 idle/online workers；不启动进程、不创建 worktree。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `mini_agent/durable_workers.py`、`mini_agent/durable_tasks.py`、`mini_agent/toolkits/registry_builder.py`、worker claim 相关测试。
+
+### TASK-049: Deterministic eval coverage for durable worker auto-dispatch
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-048 runtime 存在后执行
+- 目标: 为 worker auto-dispatch 增加 deterministic offline eval，覆盖派发、限制/排除、状态一致性、安全输出和 failure isolation。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` worker_assignment / worker_registry / worker_heartbeat eval pattern；TASK-048 新增 dispatch 工具。
 
 ## 已完成
 

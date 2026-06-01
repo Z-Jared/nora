@@ -1,56 +1,53 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-046: Context compiler v2 — structured memory recall.
+TASK-048: Durable worker auto-dispatch v1.
 
-Nora's automatic context now recalls structured memory. Bring the same capability into the explicit `compile_context_pack` developer tool so workers can request a richer, bounded context pack that includes relevant structured project knowledge.
+Nora already has durable workers, worker heartbeat/offline lifecycle, task ownership metadata, and single-worker `claim_durable_task`. Add a narrow auto-dispatch layer that assigns pending durable tasks to available workers without launching processes or creating worktrees yet.
 
 ## Scope
 
-Keep this as a focused context-compiler slice. Do not add model routing, worker automation, sandboxing, UI changes, background memory writing, or durable-event summarization in this task.
+Build only assignment automation. Do not spawn terminals, start agents, create git worktrees, implement sandboxing, or change task execution semantics in this task.
 
-1. Extend `ContextCompiler`:
-   - Add an optional `MemoryRecordStore` dependency.
-   - Add compile options for structured memory recall, for example:
-     - `include_memory_records: bool = True`
-     - `memory_query: Optional[str] = None`
-     - `memory_max_results: int = 3`
-   - Search records using `memory_query` or `task_description`.
-   - Add a distinct `Structured Memory` / `结构化记忆` section to the compiled context pack.
+1. Add an auto-dispatch runtime path:
+   - Suggested registry tool: `dispatch_durable_tasks`.
+   - Finds available workers (`idle`/online and no current task).
+   - Finds pending durable tasks with no `worker_id`.
+   - Assigns oldest pending tasks to available workers, up to `max_assignments`.
+   - Does not overwrite `assigned`, `running`, `paused`, or `offline` workers.
+   - Does not change task status unless existing local semantics already require it; preserve current claim behavior if possible.
 
-2. Safety and bounding:
-   - Reuse or extract the same safety rules used by `ContextSystem` structured-memory recall.
-   - Do not include records with unsafe title/content/tags/source/related_task_id.
-   - Bound per-record content and total section output.
-   - Preserve existing `max_chars` pack budget behavior.
+2. State updates:
+   - Set task `worker_id`.
+   - Set worker status/current assignment consistently.
+   - Return bounded JSON with assignment summaries: worker_id, task_id, status, count.
+   - Avoid returning raw task goals, full steps, prompts, or secrets.
 
-3. Tool wiring:
-   - Wire `MemoryRecordStore` into the `ContextCompiler` instance built by `build_default_registry()`.
-   - Ensure the `compile_context_pack` tool exposes the new options through its schema.
-   - Existing calls without new args must remain compatible.
+3. Safety and failure isolation:
+   - Broken event logging must not break assignment.
+   - Invalid `max_assignments` should be bounded.
+   - No assignments when no idle workers or no pending tasks.
+   - Offline/stale workers must not receive tasks.
 
 4. Tests:
-   - Add focused tests in `tests/test_context_compiler.py`.
-   - Cover memory record recall by default query.
-   - Cover explicit `memory_query`.
-   - Cover disabling memory recall.
-   - Cover unsafe record omission, metadata safety, max result bounding, and compatibility with existing git/file/RAG sections.
+   - Add focused tests, likely in `tests/test_durable_workers.py` and/or `tests/test_durable_tasks.py`.
+   - Cover basic dispatch, multiple workers/tasks, max assignment cap, no available workers, no pending tasks, offline/running worker exclusion, existing assigned tasks untouched, bounded output, and event failure isolation.
 
 ## Verification
 
 Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-If you touch registry builder wiring broadly, also run:
+If you touch shared registry builder paths broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests
