@@ -227,6 +227,10 @@ def main() -> int:
         EvalCase("memory_recall_ranking_filtering", eval_memory_recall_ranking_filtering),
         EvalCase("memory_recall_safety", eval_memory_recall_safety),
         EvalCase("memory_recall_compatibility", eval_memory_recall_compatibility),
+        EvalCase("compiler_recall_basics", eval_compiler_recall_basics),
+        EvalCase("compiler_recall_query_controls", eval_compiler_recall_query_controls),
+        EvalCase("compiler_recall_safety", eval_compiler_recall_safety),
+        EvalCase("compiler_recall_compatibility", eval_compiler_recall_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -6275,6 +6279,241 @@ def eval_memory_recall_compatibility():
                 assert "结构化记忆" not in pack2, f"structured memory section should not appear: {pack2[:500]}"
             finally:
                 db2.close()
+        finally:
+            db.close()
+
+
+# --- Compiler recall eval helpers ---
+
+_COMPILER_RECALL_SENTINEL = "NORA_EVAL_COMPILER_RECALL_SENTINEL_a1b2c3d4"
+_COMPILER_UNSAFE_TITLE = "NORA_EVAL_COMPILER_UNSAFE_TITLE_e5f6a7b8"
+_COMPILER_UNSAFE_CONTENT = "NORA_EVAL_COMPILER_UNSAFE_CONTENT_c9d0e1f2"
+
+
+def _build_compiler_with_memory(tmpdir, db):
+    """Helper to build a ContextCompiler with memory record store."""
+    from mini_agent.context_compiler import ContextCompiler
+    from mini_agent.memory_records import MemoryRecordStore
+    from mini_agent.rag import ProjectRAG
+
+    store = MemoryRecordStore(db=db)
+    rag = ProjectRAG(Path(tmpdir))
+    compiler = ContextCompiler(Path(tmpdir), project_rag=rag, memory_record_store=store)
+    return compiler, store
+
+
+def eval_compiler_recall_basics():
+    """Matching records appear in structured memory section with kind/title/bounded content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            compiler, store = _build_compiler_with_memory(tmpdir, db)
+
+            # Save structured memory records
+            store.create(kind="decision", title=_COMPILER_RECALL_SENTINEL,
+                         content=f"Decision content: {_COMPILER_RECALL_SENTINEL}", scope="project",
+                         tags="arch", source="test")
+            store.create(kind="task_learning", title="SQLite performance",
+                         content="Use WAL mode for better concurrency", scope="project")
+
+            # Call compile_context_pack via registry tool
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = registry.call("compile_context_pack",
+                                   task_description=_COMPILER_RECALL_SENTINEL,
+                                   include_git_status=False,
+                                   include_changed_files=False)
+            assert _COMPILER_RECALL_SENTINEL in result, f"recall sentinel missing from pack: {result[:500]}"
+            assert "结构化记忆" in result, f"structured memory section missing: {result[:500]}"
+            assert "[decision]" in result, f"decision kind missing: {result[:500]}"
+        finally:
+            db.close()
+
+
+def eval_compiler_recall_query_controls():
+    """Default query uses task_description; explicit memory_query works; include_memory_records=false suppresses."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            compiler, store = _build_compiler_with_memory(tmpdir, db)
+
+            # Save record that matches task_description
+            store.create(kind="fact", title="Task related fact",
+                         content="Content about the task", scope="project")
+
+            # Save record that only matches explicit memory_query
+            _EXPLICIT_QUERY = "NORA_EVAL_EXPLICIT_QUERY_f3a4b5c6"
+            store.create(kind="decision", title=_EXPLICIT_QUERY,
+                         content=f"Explicit query content: {_EXPLICIT_QUERY}", scope="project")
+
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Default query uses task_description
+            r1 = registry.call("compile_context_pack",
+                               task_description="Task related fact",
+                               include_git_status=False,
+                               include_changed_files=False)
+            assert "Task related fact" in r1, f"task_description match missing: {r1[:500]}"
+
+            # Explicit memory_query recalls record not matched by task_description
+            r2 = registry.call("compile_context_pack",
+                               task_description="unrelated task description",
+                               memory_query=_EXPLICIT_QUERY,
+                               include_git_status=False,
+                               include_changed_files=False)
+            assert _EXPLICIT_QUERY in r2, f"explicit memory_query match missing: {r2[:500]}"
+
+            # include_memory_records=false suppresses memory section
+            r3 = registry.call("compile_context_pack",
+                               task_description="Task related fact",
+                               include_memory_records=False,
+                               include_git_status=False,
+                               include_changed_files=False)
+            assert "结构化记忆" not in r3, f"memory section should be suppressed: {r3[:500]}"
+        finally:
+            db.close()
+
+
+def eval_compiler_recall_safety():
+    """Unsafe content/metadata records omitted; oversized content bounded."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            compiler, store = _build_compiler_with_memory(tmpdir, db)
+
+            # Insert unsafe records directly (bypassing store.create safety checks)
+            # Record with unsafe title (diff markers)
+            db.conn.execute(
+                "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("mrec_unsafe1", "fact", "project", "diff --git a/file.py b/file.py",
+                 "Normal content", "test", "test", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+            db.conn.commit()
+
+            # Record with unsafe content (env var)
+            db.conn.execute(
+                "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("mrec_unsafe2", "fact", "project", _COMPILER_UNSAFE_TITLE,
+                 "MY_CUSTOM_TOKEN=NORA_EVAL_ENV_SENTINEL", "test", "test", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+            db.conn.commit()
+
+            # Record with unsafe tags (secret)
+            db.conn.execute(
+                "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("mrec_unsafe3", "fact", "project", "Unsafe tags record",
+                 "Normal content", "review,OPENAI_API_KEY=sk-abc123", "test", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+            db.conn.commit()
+
+            # Record with unsafe source (prompt transcript)
+            db.conn.execute(
+                "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("mrec_unsafe4", "fact", "project", "Unsafe source record",
+                 "Normal content", "test", "system: hidden instructions", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+            db.conn.commit()
+
+            # Record with unsafe related_task_id (env var)
+            db.conn.execute(
+                "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("mrec_unsafe5", "fact", "project", "Unsafe task_id record",
+                 "Normal content", "test", "test", 1.0, "NORA_DB_PATH=/tmp/db", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            )
+            db.conn.commit()
+
+            # Record with oversized content
+            large_content = "X" * 5000
+            store.create(kind="note", title="Large record", content=large_content, scope="project")
+
+            # Safe record
+            store.create(kind="fact", title="Safe compiler record",
+                         content="Normal safe content", scope="project")
+
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = registry.call("compile_context_pack",
+                                   task_description="compiler record",
+                                   include_git_status=False,
+                                   include_changed_files=False)
+
+            # Unsafe records must not appear
+            assert "diff --git" not in result, f"diff marker leaked: {result[:500]}"
+            assert "NORA_EVAL_ENV_SENTINEL" not in result, f"env var leaked: {result[:500]}"
+            assert "OPENAI_API_KEY" not in result, f"secret in tags leaked: {result[:500]}"
+            assert "system: hidden" not in result, f"unsafe source leaked: {result[:500]}"
+            assert "NORA_DB_PATH=/tmp/db" not in result, f"unsafe task_id leaked: {result[:500]}"
+
+            # Oversized content must be bounded (200 char limit per record)
+            assert large_content not in result, f"oversized content not bounded: {result[:500]}"
+
+            # Safe content should appear
+            assert "Safe compiler record" in result, f"safe record missing: {result[:500]}"
+            assert "Normal safe content" in result, f"safe content missing: {result[:500]}"
+        finally:
+            db.close()
+
+
+def eval_compiler_recall_compatibility():
+    """Existing git/file/RAG sections still work with strict sentinel assertions; budget behavior deterministic."""
+    _COMPILER_RAG_SENTINEL = "NORA_EVAL_COMPILER_RAG_SENTINEL_d7e8f9a0"
+    _COMPILER_MEMORY_SENTINEL = "NORA_EVAL_COMPILER_MEMORY_SENTINEL_b1c2d3e4"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            compiler, store = _build_compiler_with_memory(tmpdir, db)
+
+            # Set up git repo with a tracked file
+            _init_git_repo(Path(tmpdir))
+            (Path(tmpdir) / "test_file.py").write_text("def hello():\n    return 'hi'\n", encoding="utf-8")
+            subprocess.run(["git", "add", "test_file.py"], cwd=tmpdir, check=True)
+
+            # Save structured memory with sentinel
+            store.create(kind="decision", title=_COMPILER_MEMORY_SENTINEL,
+                         content=f"Memory content: {_COMPILER_MEMORY_SENTINEL}", scope="project")
+
+            # Add RAG content with sentinel
+            (Path(tmpdir) / "context.md").write_text(
+                f"RAG content: {_COMPILER_RAG_SENTINEL}\n", encoding="utf-8")
+
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # All sections should work together
+            result = registry.call("compile_context_pack",
+                                   task_description=_COMPILER_MEMORY_SENTINEL,
+                                   include_file_outlines=["test_file.py"],
+                                   rag_query=_COMPILER_RAG_SENTINEL,
+                                   include_git_status=True,
+                                   include_changed_files=True)
+
+            # 1. Git status — strict assertion
+            assert "Git Status" in result, f"Git Status section missing: {result[:500]}"
+
+            # 2. Changed files — strict assertion
+            assert "Changed Files" in result, f"Changed Files section missing: {result[:500]}"
+            assert "test_file.py" in result, f"test_file.py missing from changed files: {result[:500]}"
+
+            # 3. File outline — strict assertion
+            assert "Outline: test_file.py" in result, f"file outline missing: {result[:500]}"
+            assert "function hello" in result, f"function hello missing from outline: {result[:500]}"
+
+            # 4. RAG — strict assertion with sentinel
+            assert "RAG Snippets" in result, f"RAG section missing: {result[:500]}"
+            assert _COMPILER_RAG_SENTINEL in result, f"RAG sentinel missing: {result[:500]}"
+
+            # 5. Structured memory — strict assertion with sentinel
+            assert "结构化记忆" in result, f"structured memory section missing: {result[:500]}"
+            assert _COMPILER_MEMORY_SENTINEL in result, f"memory sentinel missing: {result[:500]}"
+
+            # Large memory records should not break budget
+            large_content = "Y" * 10000
+            store.create(kind="note", title="Budget test large", content=large_content, scope="project")
+            result2 = registry.call("compile_context_pack",
+                                    task_description="Budget test large",
+                                    include_git_status=False,
+                                    include_changed_files=False)
+            # Pack should still be produced (not crash)
+            assert "Context Pack" in result2, f"pack production failed with large memory: {result2[:500]}"
+            assert large_content not in result2, f"large content not bounded: {result2[:500]}"
         finally:
             db.close()
 

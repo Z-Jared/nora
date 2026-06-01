@@ -1,47 +1,45 @@
-# Claude B Completion Report - TASK-045
+# Claude B Completion Report - TASK-047
 
 Status: completed, ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for structured memory recall (TASK-044).
+Added deterministic offline eval coverage for Context compiler structured memory recall (TASK-046).
 
 Four new eval cases added to `evals/run_evals.py`:
 
-1. **memory_recall_basics** — Save structured memory records. Build ContextSystem with memory_record_store. `context_pack(query)` includes relevant title/content for matching queries. Kind is formatted (e.g., `[decision]`).
+1. **compiler_recall_basics** — Save structured memory records. Call real `compile_context_pack` registry tool. Matching records appear in `结构化记忆` section with kind/title/bounded content.
 
-2. **memory_recall_ranking_filtering** — Irrelevant records (e.g., "cooking") do not appear for unrelated queries. Multiple matching records bounded by `max_memory_record_results`. Oversized content (1000 chars) truncated in context output.
+2. **compiler_recall_query_controls** — Default query uses `task_description`. Explicit `memory_query` recalls records not matched by task description. `include_memory_records=false` suppresses memory section.
 
-3. **memory_recall_safety** — Secret-like record content omitted. Diff markers omitted. Env-var assignment content omitted. Prompt transcript content (system:/user:/assistant:) omitted. Shell output ($ commands) omitted. Unsafe metadata (secret in tags, prompt-like source, env var in related_task_id) omitted. Safe content appears normally.
+3. **compiler_recall_safety** — Unsafe title (diff markers), content (env var), tags (secret), source (prompt transcript), related_task_id (env var) records omitted. Oversized content bounded (200 char limit). Safe content appears normally.
 
-4. **memory_recall_compatibility** — Uses strict sentinel assertions: context summary sentinel, LTM sentinel, RAG/project file sentinel, structured memory sentinel all verified in `context_pack` output. Empty/no-match structured memory (separate db) does not suppress other context sections. RAG/project snippets covered via `context.md` file.
+4. **compiler_recall_compatibility** — Uses strict sentinel assertions for each section: Git Status (assert present), Changed Files (assert present + test_file.py), File Outline (assert Outline: test_file.py + function hello), RAG (unique sentinel NORA_EVAL_COMPILER_RAG_SENTINEL), Structured memory (unique sentinel NORA_EVAL_COMPILER_MEMORY_SENTINEL). Large memory records do not break pack budget behavior.
 
 ## Safety Assertions
 
-- Secret sentinel in record content → omitted from context
-- Diff markers in record content → omitted from context
-- Env-var assignment in record content → omitted from context
-- Prompt transcript (system:/user:/assistant:) → omitted from context
-- Shell output ($ commands) → omitted from context
-- Unsafe metadata (secret in tags, prompt-like source, env var in task_id) → omitted from context
-- Oversized content → truncated (200 char limit)
-- Max results → bounded by `max_memory_record_results`
+- Unsafe title (diff markers) → omitted
+- Unsafe content (env var) → omitted
+- Unsafe tags (secret) → omitted
+- Unsafe source (prompt transcript) → omitted
+- Unsafe related_task_id (env var) → omitted
+- Oversized content → bounded, not leaked raw
 
 ## Diff
 
 ```text
- evals/run_evals.py | 200 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 200 insertions(+)
+ evals/run_evals.py | 224 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 224 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-178 passed, 0 failed
+182 passed, 0 failed
 
-python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent
-Ran 240 tests in 6.319s
+python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent
+Ran 251 tests in 6.536s
 OK
 
 git diff --check
@@ -51,6 +49,6 @@ git diff --check
 ## Notes
 
 - No runtime code changed — eval only as instructed.
-- TASK-044 implementation was already complete.
+- TASK-046 implementation was already complete.
 - No commit or push performed.
 - Known limitations: none.

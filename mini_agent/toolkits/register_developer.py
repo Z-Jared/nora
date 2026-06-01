@@ -611,6 +611,18 @@ def register_developer_tools(
                         "type": "integer",
                         "description": "RAG 最多返回几条片段，默认 3",
                     },
+                    "include_memory_records": {
+                        "type": "boolean",
+                        "description": "是否包含结构化记忆记录，默认 true",
+                    },
+                    "memory_query": {
+                        "type": "string",
+                        "description": "结构化记忆检索关键词，默认使用 task_description",
+                    },
+                    "memory_max_results": {
+                        "type": "integer",
+                        "description": "结构化记忆最多返回几条，默认 3",
+                    },
                 },
                 "required": ["task_description"],
             },

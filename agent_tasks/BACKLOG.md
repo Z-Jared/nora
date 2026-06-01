@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-046: Context compiler v2 — structured memory recall
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-038/039 structured memory records、TASK-044/045 auto-context recall 已完成
-- 目标: 将 structured memory recall 接入 explicit `compile_context_pack` developer tool，让 worker 可生成包含 relevant project knowledge 的 bounded context pack。
-- 验证: `python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `mini_agent/context_compiler.py`、`mini_agent/context_system.py`、`mini_agent/toolkits/registry_builder.py`、`tests/test_context_compiler.py`。
-
-### TASK-047: Deterministic eval coverage for Context compiler structured memory recall
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-046 runtime 存在后执行
-- 目标: 为 `compile_context_pack` structured memory recall 增加 deterministic offline eval，覆盖 recall、query controls、安全边界、budget 和与现有 context compiler sections 的兼容性。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` context compiler / memory recall eval pattern；TASK-046 新增 compile_context_pack recall 参数。
+（空）
 
 ## 已完成
+
+### TASK-047: Deterministic eval coverage for Context compiler structured memory recall ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 182 passed；`python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent` 251 tests OK；`python3 -m unittest discover -s tests` 1509 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval，覆盖 `compile_context_pack` structured memory recall basics、默认/显式 memory query、关闭 memory recall、安全过滤 unsafe title/content/tags/source/task_id、oversized content bounding、budget stability，以及 Git Status、Changed Files、file outline、RAG snippets、structured memory 的 strict compatibility assertions。
+
+### TASK-046: Context compiler v2 — structured memory recall ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent` 251 tests OK；`python3 evals/run_evals.py` 182 passed；`python3 -m unittest discover -s tests` 1509 tests OK；`git diff --check` OK。
+- 内容: `ContextCompiler` 新增 structured `MemoryRecordStore` recall，`compile_context_pack` 支持 `include_memory_records`、`memory_query`、`memory_max_results`；registry builder 注入 DB-backed memory record store；输出新增 bounded `结构化记忆` section，并复用 auto-context structured memory safety/formatting。
 
 ### TASK-045: Deterministic eval coverage for structured memory recall ✅
 - 完成者: Claude B

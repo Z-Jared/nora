@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from mini_agent.memory_records import MemoryRecordStore
+from mini_agent.context_system import _safe_memory_record, _format_memory_record
 from mini_agent.rag import ProjectRAG
 from mini_agent.symbols import PythonSymbolIndex
 
@@ -55,12 +57,14 @@ class ContextCompiler:
         root: Path,
         symbol_index: Optional[PythonSymbolIndex] = None,
         project_rag: Optional[ProjectRAG] = None,
+        memory_record_store: Optional[MemoryRecordStore] = None,
         max_chars: int = MAX_CONTEXT_CHARS,
         git_timeout: int = 10,
     ):
         self.root = root.resolve()
         self.symbol_index = symbol_index or PythonSymbolIndex(root)
         self.project_rag = project_rag
+        self.memory_record_store = memory_record_store
         self.max_chars = max(200, min(max_chars, 50000))
         self.git_timeout = git_timeout
 
@@ -73,6 +77,9 @@ class ContextCompiler:
         include_knowledge_excerpts: Optional[list[str]] = None,
         rag_query: Optional[str] = None,
         rag_max_results: int = 3,
+        include_memory_records: bool = True,
+        memory_query: Optional[str] = None,
+        memory_max_results: int = 3,
     ) -> ContextPack:
         pack = ContextPack(task_description=task_description)
         budget = self.max_chars
@@ -99,6 +106,11 @@ class ContextCompiler:
 
         if rag_query and self.project_rag:
             section = self._rag_section(rag_query, rag_max_results)
+            if section:
+                budget = self._append_if_fits(pack, section, budget)
+
+        if include_memory_records and self.memory_record_store:
+            section = self._memory_record_section(memory_query or task_description, memory_max_results)
             if section:
                 budget = self._append_if_fits(pack, section, budget)
 
@@ -218,6 +230,18 @@ class ContextCompiler:
             title="RAG Snippets (auxiliary)",
             content="\n\n".join(parts),
             source=f"rag query: {query}",
+        )
+
+    def _memory_record_section(self, query: str, max_results: int) -> Optional[ContextSection]:
+        records = self.memory_record_store.search(query, max_results=max_results)
+        safe = [r for r in records if _safe_memory_record(r)]
+        if not safe:
+            return None
+        content = "\n".join(_format_memory_record(r) for r in safe)
+        return ContextSection(
+            title="结构化记忆",
+            content=content,
+            source="memory records",
         )
 
     def _run_git(self, command: list[str]) -> str:

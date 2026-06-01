@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from mini_agent.context_compiler import ContextCompiler, ContextPack
+from mini_agent.database import NoraDB
+from mini_agent.memory_records import MemoryRecordStore
 from mini_agent.rag import ProjectRAG
 from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.tools import build_default_registry
@@ -236,6 +238,145 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertIn("# Context Pack: test task", result)
         self.assertIn("## Knowledge: README.md", result)
+
+
+class ContextCompilerMemoryRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.store = MemoryRecordStore(db=self.db)
+        self.compiler = ContextCompiler(
+            self.root,
+            memory_record_store=self.store,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def test_compile_includes_memory_records_by_default_query(self):
+        self.store.create(kind="decision", title="Use SQLite", content="SQLite for local persistence")
+        pack = self.compiler.compile("SQLite persistence", include_git_status=False, include_changed_files=False)
+
+        titles = [s.title for s in pack.sections]
+        self.assertIn("结构化记忆", titles)
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        self.assertIn("Use SQLite", section.content)
+        self.assertIn("[decision]", section.content)
+
+    def test_compile_explicit_memory_query(self):
+        self.store.create(kind="fact", title="Redis", content="Redis for caching layer")
+        self.store.create(kind="decision", title="Postgres", content="Postgres for production DB")
+        pack = self.compiler.compile("database", memory_query="Redis", include_git_status=False, include_changed_files=False)
+
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        self.assertIn("Redis", section.content)
+        self.assertNotIn("Postgres", section.content)
+
+    def test_compile_disable_memory_records(self):
+        self.store.create(kind="decision", title="Use SQLite", content="SQLite for persistence")
+        pack = self.compiler.compile("SQLite", include_memory_records=False, include_git_status=False, include_changed_files=False)
+
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("结构化记忆", titles)
+
+    def test_compile_no_memory_when_no_store(self):
+        compiler = ContextCompiler(self.root)
+        pack = compiler.compile("SQLite", include_git_status=False, include_changed_files=False)
+
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("结构化记忆", titles)
+
+    def test_compile_no_memory_when_no_matches(self):
+        self.store.create(kind="decision", title="Use SQLite", content="SQLite for persistence")
+        pack = self.compiler.compile("xyznonexistent123", include_git_status=False, include_changed_files=False)
+
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("结构化记忆", titles)
+
+    def test_compile_filters_unsafe_memory_records(self):
+        self.db.conn.execute(
+            "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("mrec_bad", "note", "project", "OPENAI_API_KEY=sk-leaked", "Some content", "", "", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+        self.db.conn.commit()
+        self.store.create(kind="note", title="Normal note", content="Safe content here")
+        pack = self.compiler.compile("Safe content", include_git_status=False, include_changed_files=False)
+
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        self.assertNotIn("OPENAI_API_KEY", section.content)
+        self.assertIn("Normal note", section.content)
+
+    def test_compile_filters_unsafe_metadata(self):
+        self.db.conn.execute(
+            "INSERT INTO memory_records (record_id, kind, scope, title, content, tags, source, confidence, related_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("mrec_meta", "note", "project", "Config note", "Safe content", "OPENAI_API_KEY=secret", "", 1.0, "", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+        self.db.conn.commit()
+        self.store.create(kind="note", title="Clean note", content="Clean metadata content")
+        pack = self.compiler.compile("Clean metadata", include_git_status=False, include_changed_files=False)
+
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        self.assertNotIn("OPENAI_API_KEY", section.content)
+        self.assertIn("Clean note", section.content)
+
+    def test_compile_memory_max_results_bounded(self):
+        for i in range(5):
+            self.store.create(kind="fact", title=f"Fact {i}", content=f"Content about topic X number {i}")
+        pack = self.compiler.compile("topic X", memory_max_results=2, include_git_status=False, include_changed_files=False)
+
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        count = section.content.count("[fact]")
+        self.assertLessEqual(count, 2)
+
+    def test_compile_memory_coexists_with_other_sections(self):
+        self.store.create(kind="decision", title="Use SQLite", content="SQLite for local storage")
+        (self.root / "README.md").write_text("# Test Project\n", encoding="utf-8")
+        compiler = ContextCompiler(
+            self.root,
+            memory_record_store=self.store,
+        )
+        pack = compiler.compile(
+            "SQLite",
+            include_git_status=False,
+            include_changed_files=False,
+            include_knowledge_excerpts=["README.md"],
+        )
+
+        titles = [s.title for s in pack.sections]
+        self.assertIn("结构化记忆", titles)
+        self.assertIn("Knowledge: README.md", titles)
+
+    def test_compile_memory_safe_metadata_still_appears(self):
+        self.store.create(kind="decision", title="Use Postgres", content="Postgres for production", tags="review,approved", source="retro", related_task_id="dtask_42")
+        pack = self.compiler.compile("Postgres", include_git_status=False, include_changed_files=False)
+
+        section = next(s for s in pack.sections if s.title == "结构化记忆")
+        self.assertIn("review", section.content)
+        self.assertIn("approved", section.content)
+        self.assertIn("source: retro", section.content)
+        self.assertIn("task: dtask_42", section.content)
+
+    def test_compile_memory_record_tool_integration(self):
+        registry = build_default_registry(workspace_root=self.root, db=self.db)
+        registry.call(
+            "save_memory_record",
+            kind="decision",
+            title="Use Redis",
+            content="Redis for caching",
+        )
+
+        result = registry.call(
+            "compile_context_pack",
+            task_description="Redis cache",
+            include_git_status=False,
+            include_changed_files=False,
+        )
+
+        self.assertIn("结构化记忆", result)
+        self.assertIn("Use Redis", result)
+        self.assertIn("[decision]", result)
 
 
 class ContextCompilerNoGitTests(unittest.TestCase):

@@ -85,13 +85,14 @@ def build_default_registry(
     browser_tools = BrowserTools(root=root, backend=browser_backend)
     process_manager = ProcessManager(root, profiles=process_profiles)
     code_quality = CodeQualityTools(root)
+    long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
+    memory_record_store = MemoryRecordStore(db=db)
     context_compiler = ContextCompiler(
         root,
         symbol_index=symbol_index,
         project_rag=project_rag,
+        memory_record_store=memory_record_store,
     )
-    long_term_memory = LongTermMemory(path=long_term_memory_path or Path("data/long_term_memory.jsonl"), db=db)
-    memory_record_store = MemoryRecordStore(db=db)
     durable_task_store = DurableTaskStore(db=db)
     durable_event_store = DurableEventStore(db=db)
     durable_worker_store = DurableWorkerStore(db=db)

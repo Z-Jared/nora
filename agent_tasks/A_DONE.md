@@ -1,69 +1,58 @@
 # Claude A Completion Report
 
-Task: TASK-044 — Structured memory recall in auto-context v1
+Task: TASK-046 — Context compiler v2 runtime (structured memory recall)
 Status: completed
 
 ## Summary
 
-Extended `ContextSystem` to search structured `MemoryRecordStore` records
-by user query and include them as a distinct "结构化记忆" section in the
-automatic context pack. Added comprehensive safety filtering on all output
-fields to prevent raw artifacts and sensitive data from leaking into context.
+Extended `ContextCompiler` to search structured `MemoryRecordStore` records
+and include them as a distinct "结构化记忆" section in the compiled context
+pack. Supports default query from task description, explicit `memory_query`,
+disabling memory recall, safety filtering, bounding, and registry tool schema.
 
 ## Changes
 
-### `mini_agent/context_system.py`
+### `mini_agent/context_compiler.py`
 - Added `memory_record_store: Optional[MemoryRecordStore]` field.
-- Added `max_memory_record_results: int = 3` cap.
-- Added `_memory_record_section(query)` — searches store, filters sensitive
-  records, formats bounded output.
-- Section inserted between "长期记忆" and "项目片段" in `context_pack()`.
-- Added `_safe_memory_record()` — checks every field that appears in output
-  (title, content, source, related_task_id, each tag) for both
-  `is_sensitive_text()` and `_contains_raw_content()`. Any unsafe field
-  excludes the entire record.
-- Added `_format_memory_record()` — formats as `- [kind] title\n  content\n  metadata`,
-  truncates content at 200 chars.
+- Added compile parameters: `include_memory_records: bool = True`,
+  `memory_query: Optional[str] = None`, `memory_max_results: int = 3`.
+- Added `_memory_record_section(query, max_results)` — searches store,
+  filters unsafe records via `_safe_memory_record()`, formats via
+  `_format_memory_record()`, returns `ContextSection(title="结构化记忆")`.
+- Uses `memory_query` if provided, falls back to `task_description`.
+- Imports `_safe_memory_record` and `_format_memory_record` from
+  `context_system.py` — same safety rules as auto-context.
 
-### `mini_agent/app.py`
-- Added `MemoryRecordStore` import.
-- Wired `memory_record_store=MemoryRecordStore(db=db)` into `ContextSystem`.
+### `mini_agent/toolkits/registry_builder.py`
+- Moved `memory_record_store = MemoryRecordStore(db=db)` before
+  `ContextCompiler` instantiation (was defined after, causing UnboundLocalError).
+- Wired `memory_record_store=memory_record_store` into `ContextCompiler`.
 
-### `tests/test_context_memory.py`
-- Added 22 new tests covering:
-  - Relevant structured record recall by query
-  - No section when no records match
+### `mini_agent/toolkits/register_developer.py`
+- Added 3 new schema properties to `compile_context_pack` tool:
+  - `include_memory_records` (boolean) — default true
+  - `memory_query` (string) — default uses task_description
+  - `memory_max_results` (integer) — default 3
+
+### `tests/test_context_compiler.py`
+- Added `ContextCompilerMemoryRecordTests` class with 12 tests:
+  - Memory recall by default query (task_description)
+  - Explicit `memory_query` overrides default
+  - Disabling memory recall (`include_memory_records=False`)
   - No section when store is None
-  - Max results cap
-  - Long content truncation
-  - Sensitive title/content exclusion
-  - Raw artifact exclusion: prompt transcripts, diff markers, shell output, env vars
-  - Unsafe metadata exclusion: tags, source, related_task_id
+  - No section when no matches
+  - Unsafe records filtered (sensitive title)
+  - Unsafe metadata filtered (sensitive tags)
+  - Max results bounding
+  - Coexistence with other sections (knowledge excerpts)
   - Safe metadata still appears (tags, source, task_id)
-  - Normal records still appear after filtering
-  - Coexistence with long-term memory (both sections present, correct ordering)
-  - Metadata inclusion (tags, source, task_id)
-
-## Review fix rounds
-
-### Round 1: Raw-artifact filtering
-**Problem**: `_safe_memory_record()` only checked `is_sensitive_text()`.
-**Fix**: Imported `_contains_raw_content()` from `review_memory.py`; check
-title and content separately (concatenation breaks `^`-anchored patterns).
-
-### Round 2: Metadata field safety
-**Problem**: Only title/content checked, but tags/source/related_task_id
-also appear in formatted output — unsafe metadata could leak.
-**Fix**: `_safe_memory_record()` now iterates over all output fields
-(title, content, source, related_task_id, each tag individually) and
-rejects the record if any field fails `is_sensitive_text()` or
-`_contains_raw_content()`.
+  - Tool integration: `save_memory_record` + `compile_context_pack`
 
 ## Verification run
 
 ```
-python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent
-  → 240 tests OK
+python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent
+  → 251 tests OK
 
 python3 evals/run_evals.py
   → 178 passed, 0 failed
@@ -72,5 +61,5 @@ git diff --check
   → clean
 
 python3 -m unittest discover -s tests
-  → 1498 tests OK
+  → 1509 tests OK
 ```
