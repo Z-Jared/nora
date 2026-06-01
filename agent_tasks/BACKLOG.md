@@ -4,26 +4,26 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+暂无。
+
+## 进行中
+
 ### TASK-055: Deterministic eval coverage for durable recovery plans
 - 优先级: high
 - 预计: 1 小时
 - 依赖: TASK-054 runtime present
+- 分配: Claude B
 - 目标: 为 TASK-054 的 recovery plan registry tool 增加离线 deterministic eval，覆盖 checkpoint selection、next-step selection、bounded output、安全不泄漏、missing task/checkpoint error、以及 existing registry compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
 - 参考: `evals/run_evals.py` durable task/checkpoint eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 2 Durable task state / Replay and recovery engine。
 
-## 进行中
-
-### TASK-054: Durable recovery plan tool v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无
-- 分配: Claude A
-- 目标: 增加只读的 recovery plan registry tool，根据 durable task/checkpoints 生成可审计、bounded、可恢复的下一步计划，但不执行模型、工具、worker 或 Git 操作。
-- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Durable Task Lifecycle / Replay and recovery engine；`mini_agent/durable_tasks.py`；`mini_agent/toolkits/registry_builder.py`。
-
 ## 已完成
+
+### TASK-054: Durable recovery plan tool v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 452 tests OK；`python3 evals/run_evals.py` 194 passed；`git diff --check` OK。
+- 内容: 新增只读 `plan_durable_recovery(task_id, checkpoint_id="", step_id="")` registry tool；按 explicit checkpoint、step checkpoint、latest checkpoint、no-checkpoint fallback 生成恢复计划；输出 `can_resume`、`resume_policy`、`next_step_id`、safe reason labels 和 bounded counts；选中 checkpoint 时返回 `from_checkpoint`，terminal statuses 不可恢复；不 mutate task，不执行恢复，不启动 worker，不泄漏 goal、step、notes、summaries、checkpoint description 或 raw state_snapshot。
 
 ### TASK-053: Deterministic eval coverage for durable checkpoint controls ✅
 - 完成者: Claude B

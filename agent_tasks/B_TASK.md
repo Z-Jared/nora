@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting
+Status: assigned
 
 ## Goal
 
 TASK-055: Deterministic eval coverage for durable recovery plans.
 
-This task is waiting for TASK-054 runtime. Do not start implementation until Codex PM explicitly assigns it after TASK-054 is approved and its runtime is visible in your CCB worktree.
+TASK-054 runtime is approved and present for eval development.
 
 ## Scope
 

@@ -1,72 +1,80 @@
-# Claude A Completion Report — TASK-052: Durable Checkpoint Control Tools v1
+# Claude A Completion Report — TASK-054: Durable Recovery Plan Tool v1
 
 Status: ready for Codex review
 
 ## Review Fix
 
-**Problem**: `step_id="bad"` caused `int(step_id)` to raise `ValueError`, crashing the registry tool.
+**Problem 1**: `resume_policy` always returned `from_step` even when a checkpoint was selected. Per TASK-054 semantics, checkpoint-selected plans should use `from_checkpoint`.
 
-**Fix**: Wrapped `step_id` parsing in try/except — non-integer values now return JSON `{"error": "step_id 必须为整数: ..."}` and leave task checkpoints unchanged. Negative integers still clamp to 0.
+**Fix**: Changed `resume_policy` logic: returns `from_checkpoint` when a checkpoint is selected (latest, explicit, or step-based); returns `task.resume_policy` or `from_step` only for no-checkpoint fallback.
 
-**New test**: `test_non_integer_step_id_returns_error` — verifies JSON error response and that no checkpoint is created.
+**Problem 2**: No tests asserted `resume_policy`.
+
+**Fix**: Added 3 tests: `test_resume_policy_from_checkpoint_when_latest_selected`, `test_resume_policy_from_checkpoint_when_explicit_id`, `test_resume_policy_from_step_when_no_checkpoint`.
+
+**Problem 3**: No test verifying checkpoint description/state_snapshot sentinel not leaked.
+
+**Fix**: Added `test_checkpoint_description_and_snapshot_not_leaked` — injects sentinel text into checkpoint description and nested state_snapshot, verifies absent from `plan_durable_recovery` output.
 
 ## Summary
 
-Added `add_durable_checkpoint` registry tool that creates safe, inspectable checkpoints on demand. The tool creates bounded state snapshots with safe metadata only, updates step `checkpoint_ref` when applicable, logs `CHECKPOINT_ADDED` events, and returns bounded JSON without exposing raw goal, step text, prompts, or sensitive content.
+Added read-only `plan_durable_recovery` registry tool that inspects durable task state and checkpoints to compute a safe recovery plan. The tool does not mutate task state, execute recovery, start workers, or expose raw goal/step/note/summary/checkpoint text.
 
 ## Changes
 
 ### `mini_agent/toolkits/registry_builder.py`
-- Added `_add_durable_checkpoint_json(task_id, step_id=0, description="", state_summary="")`:
-  - Validates task_id exists, returns JSON error if not found
-  - Bounds `step_id` to integer >= 0
-  - Creates `state_snapshot` with safe metadata only: `task_status`, `current_step`, `step_id`, `description_present`, `state_summary_present`
-  - Does NOT store raw goal, step text, description text, state_summary text, prompts, diffs, or secrets
-  - Updates `step.checkpoint_ref` if `step_id` matches an existing step
-  - Records `CHECKPOINT_ADDED` event with safe metadata and `checkpoint_id`
-  - Returns bounded JSON: `task_id`, `checkpoint_id`, `step_id`, `checkpoint_count`, `description_present`, `state_summary_present`
-  - Event logging failure does not prevent checkpoint creation
+- Added `_plan_durable_recovery_json(task_id, checkpoint_id="", step_id="")`:
+  - **Checkpoint selection**: explicit `checkpoint_id` → step-based latest → overall latest → none
+  - **`next_step_id` computation**: prefers checkpoint step if not done/skipped, else first incomplete step, else `current_step`
+  - **`can_resume`**: false for `completed`/`cancelled`, true for `pending`/`running`/`paused`/`blocked`/`failed`
+  - **Reason labels**: `checkpoint_selected`, `step_checkpoint_missing`, `no_checkpoint`, `terminal_status`, `all_steps_done`
+  - Non-integer `step_id` returns JSON error
+  - Unknown `checkpoint_id` returns JSON error
+  - Read-only: no task/step state mutation
+  - Bounded output: only safe metadata fields, no raw goal/step/note/summary/checkpoint description/state_snapshot
+  - Registered with `risk="read"` permission
 
 ### `tests/test_durable_tasks.py`
-- Added `DurableCheckpointToolTests` class with 12 tests:
-  - `test_successful_checkpoint_creation` — full happy path
-  - `test_step_checkpoint_ref_updated` — step ref linking
-  - `test_step_checkpoint_ref_not_updated_for_nonexistent_step` — no ref for invalid step
+- Added `DurableRecoveryPlanToolTests` class with 19 tests:
+  - `test_latest_checkpoint_selected` — auto-selects most recent checkpoint
+  - `test_explicit_checkpoint_id_selection` — selects exact checkpoint by id
+  - `test_step_id_selection` — selects checkpoint for given step
+  - `test_step_id_missing_checkpoint` — returns `step_checkpoint_missing` reason
+  - `test_no_checkpoint_fallback` — returns `no_checkpoint` reason with null checkpoint_id
+  - `test_completed_task_can_resume_false` — terminal status
+  - `test_cancelled_task_can_resume_false` — terminal status
+  - `test_failed_task_can_resume_true` — failed is resumable
   - `test_unknown_task_returns_error`
-  - `test_step_id_bounded_to_non_negative` — negative step_id clamped to 0
-  - `test_multiple_checkpoints_increment` — checkpoint IDs and counts
+  - `test_unknown_checkpoint_returns_error`
+  - `test_non_integer_step_id_returns_error`
   - `test_no_goal_or_step_text_leakage` — output safety
-  - `test_checkpoint_emits_event` — event logging verified
-  - `test_event_failure_does_not_prevent_checkpoint` — failure isolation
-  - `test_checkpoint_preserves_task_status` — no side effects
-  - `test_state_snapshot_is_safe` — snapshot contains no raw text
+  - `test_no_mutation_of_task_state` — read-only verification
+  - `test_next_step_prefers_checkpoint_step_when_not_done`
+  - `test_next_step_skips_done_steps`
 
 ## Verification
 
 ```
 $ python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 433 tests — OK
+Ran 452 tests — OK
 
 $ python3 evals/run_evals.py
-190 passed, 0 failed
+194 passed, 0 failed
 
 $ git diff --check
 clean
-
-$ python3 -m unittest discover -s tests
-Ran 1554 tests — OK
 ```
 
 ## Diff
 
 ```
- mini_agent/toolkits/registry_builder.py |  84 +++++++++++++++++++++
- tests/test_durable_tasks.py             | 126 ++++++++++++++++++++++++++++++++
- 2 source files changed, +210 lines
+ mini_agent/toolkits/registry_builder.py | 114 +++++++++++++++++++-
+ tests/test_durable_tasks.py             | 185 ++++++++++++++++++++++++++++++++
+ 2 files changed, +298/-1 lines
 ```
 
 ## Notes
 
 - No push or commit performed.
 - BACKLOG.md untouched.
-- Uses existing `DurableTaskStore.add_checkpoint()` — no store-level changes needed.
+- Tool is strictly read-only — no task mutation, no worker execution, no model calls.

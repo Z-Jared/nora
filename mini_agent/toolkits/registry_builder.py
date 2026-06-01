@@ -32,7 +32,7 @@ from mini_agent.toolkits.supermemory import SupermemoryClient
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.toolkits.workspace import WorkspaceFiles
 from mini_agent.traces import TraceStore
-from mini_agent.durable_tasks import DurableTaskStore
+from mini_agent.durable_tasks import DurableTaskStore, StepStatus
 from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus
 from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
@@ -1173,6 +1173,123 @@ def build_default_registry(
             "required": ["task_id"],
         },
         permission=ToolPermission(category="task", risk="write"),
+    )
+
+    def _plan_durable_recovery_json(task_id: str, checkpoint_id: str = "", step_id: str = "") -> str:
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+
+        # Parse step_id if provided
+        parsed_step_id = None
+        if step_id:
+            try:
+                parsed_step_id = max(0, int(step_id))
+            except (TypeError, ValueError):
+                return _json.dumps({"error": f"step_id 必须为整数: {step_id!r}"}, ensure_ascii=False)
+
+        # Select checkpoint
+        selected_cp = None
+        reason = ""
+
+        if checkpoint_id:
+            for cp in task.checkpoints:
+                if cp.checkpoint_id == checkpoint_id:
+                    selected_cp = cp
+                    break
+            if selected_cp is None:
+                return _json.dumps({"error": f"未找到 checkpoint: {checkpoint_id}"}, ensure_ascii=False)
+            reason = "checkpoint_selected"
+        elif parsed_step_id is not None:
+            # Latest checkpoint for this step
+            for cp in reversed(task.checkpoints):
+                if cp.step_id == parsed_step_id:
+                    selected_cp = cp
+                    break
+            reason = "checkpoint_selected" if selected_cp else "step_checkpoint_missing"
+        else:
+            # Latest checkpoint overall
+            if task.checkpoints:
+                selected_cp = task.checkpoints[-1]
+                reason = "checkpoint_selected"
+            else:
+                reason = "no_checkpoint"
+
+        # Terminal status check
+        terminal_statuses = {"completed", "cancelled"}
+        if task.status in terminal_statuses:
+            can_resume = False
+            reason = "terminal_status"
+        else:
+            can_resume = True
+
+        # Compute next_step_id
+        done_skipped = {StepStatus.DONE, StepStatus.SKIPPED}
+        next_step_id = None
+
+        if selected_cp:
+            cp_step = next((s for s in task.steps if s.id == selected_cp.step_id), None)
+            if cp_step and cp_step.status not in done_skipped:
+                next_step_id = selected_cp.step_id
+
+        if next_step_id is None:
+            for step in task.steps:
+                if step.status not in done_skipped:
+                    next_step_id = step.id
+                    break
+
+        if next_step_id is None:
+            # All steps done/skipped
+            if can_resume:
+                reason = "all_steps_done"
+            next_step_id = task.current_step
+
+        incomplete_count = sum(1 for s in task.steps if s.status not in done_skipped)
+
+        if selected_cp:
+            resume_policy = "from_checkpoint"
+        else:
+            resume_policy = task.resume_policy or "from_step"
+
+        return _json.dumps({
+            "task_id": task.task_id,
+            "status": task.status,
+            "can_resume": can_resume,
+            "resume_policy": resume_policy,
+            "selected_checkpoint_id": selected_cp.checkpoint_id if selected_cp else None,
+            "checkpoint_step_id": selected_cp.step_id if selected_cp else None,
+            "next_step_id": next_step_id,
+            "checkpoint_count": len(task.checkpoints),
+            "step_count": len(task.steps),
+            "incomplete_step_count": incomplete_count,
+            "trace_ref_count": len(task.trace_refs),
+            "worker_id_present": bool(task.worker_id),
+            "reason": reason,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "plan_durable_recovery",
+        "只读检查 durable task 状态和 checkpoint，返回安全的恢复计划。不修改 task 状态，不执行恢复。",
+        _plan_durable_recovery_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "checkpoint_id": {
+                    "type": "string",
+                    "description": "可选，指定 checkpoint id；不指定则自动选择最新的",
+                },
+                "step_id": {
+                    "type": "string",
+                    "description": "可选，按步骤选择 checkpoint；不指定则选最新",
+                },
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
     )
 
     registry.register(

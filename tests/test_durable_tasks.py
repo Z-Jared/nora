@@ -1821,5 +1821,227 @@ class DurableCheckpointToolTests(unittest.TestCase):
         self.assertNotIn("step one", str(snapshot))
 
 
+class DurableRecoveryPlanToolTests(unittest.TestCase):
+    """Tests for plan_durable_recovery registry tool (TASK-054)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_running_task_with_checkpoints(self):
+        result = self.registry.call("create_durable_task", goal="secret goal", steps="step one\nstep two\nstep three")
+        task = json.loads(result)
+        task_id = task["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        # Add checkpoint for step 1
+        self.registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="cp1")
+        # Add checkpoint for step 2
+        self.registry.call("add_durable_checkpoint", task_id=task_id, step_id=2, description="cp2")
+        return task_id
+
+    def test_latest_checkpoint_selected(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["task_id"], task_id)
+        self.assertTrue(parsed["can_resume"])
+        self.assertEqual(parsed["checkpoint_count"], 2)
+        self.assertIsNotNone(parsed["selected_checkpoint_id"])
+        self.assertEqual(parsed["checkpoint_step_id"], 2)
+        self.assertEqual(parsed["reason"], "checkpoint_selected")
+
+    def test_explicit_checkpoint_id_selection(self):
+        task_id = self._create_running_task_with_checkpoints()
+        # Get the first checkpoint id
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        cp1_id = task["checkpoints"][0]["checkpoint_id"]
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=cp1_id)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["selected_checkpoint_id"], cp1_id)
+        self.assertEqual(parsed["checkpoint_step_id"], 1)
+
+    def test_step_id_selection(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, step_id="1")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["checkpoint_step_id"], 1)
+        self.assertEqual(parsed["reason"], "checkpoint_selected")
+
+    def test_step_id_missing_checkpoint(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, step_id="3")
+        parsed = json.loads(result)
+
+        self.assertIsNone(parsed["selected_checkpoint_id"])
+        self.assertEqual(parsed["reason"], "step_checkpoint_missing")
+
+    def test_no_checkpoint_fallback(self):
+        result = self.registry.call("create_durable_task", goal="g", steps="s1\ns2")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIsNone(parsed["selected_checkpoint_id"])
+        self.assertEqual(parsed["reason"], "no_checkpoint")
+        self.assertTrue(parsed["can_resume"])
+        self.assertEqual(parsed["checkpoint_count"], 0)
+
+    def test_completed_task_can_resume_false(self):
+        task_id = self._create_running_task_with_checkpoints()
+        self.registry.call("update_durable_task", task_id=task_id, status="completed")
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertFalse(parsed["can_resume"])
+        self.assertEqual(parsed["reason"], "terminal_status")
+        self.assertEqual(parsed["status"], "completed")
+
+    def test_cancelled_task_can_resume_false(self):
+        result = self.registry.call("create_durable_task", goal="g", steps="s1")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("cancel_durable_task", task_id=task_id)
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertFalse(parsed["can_resume"])
+        self.assertEqual(parsed["reason"], "terminal_status")
+
+    def test_failed_task_can_resume_true(self):
+        result = self.registry.call("create_durable_task", goal="g", steps="s1")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="err")
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertTrue(parsed["can_resume"])
+
+    def test_unknown_task_returns_error(self):
+        result = self.registry.call("plan_durable_recovery", task_id="dtask_999")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_unknown_checkpoint_returns_error(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id="cp_999")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_non_integer_step_id_returns_error(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, step_id="bad")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_no_goal_or_step_text_leakage(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertNotIn("secret goal", str(parsed))
+        self.assertNotIn("step one", str(parsed))
+        self.assertNotIn("step two", str(parsed))
+        # Verify safe fields present
+        self.assertIn("task_id", parsed)
+        self.assertIn("can_resume", parsed)
+        self.assertIn("resume_policy", parsed)
+        self.assertIn("incomplete_step_count", parsed)
+        self.assertIn("trace_ref_count", parsed)
+        self.assertIn("worker_id_present", parsed)
+
+    def test_no_mutation_of_task_state(self):
+        task_id = self._create_running_task_with_checkpoints()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+        self.registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=before["checkpoints"][0]["checkpoint_id"])
+        self.registry.call("plan_durable_recovery", task_id=task_id, step_id="1")
+
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(before["current_step"], after["current_step"])
+        self.assertEqual(len(before["checkpoints"]), len(after["checkpoints"]))
+        self.assertEqual(len(before["steps"]), len(after["steps"]))
+
+    def test_next_step_prefers_checkpoint_step_when_not_done(self):
+        task_id = self._create_running_task_with_checkpoints()
+        # All steps are pending, checkpoint at step 1 → next_step should be 1
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, step_id="1")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["next_step_id"], 1)
+
+    def test_next_step_skips_done_steps(self):
+        task_id = self._create_running_task_with_checkpoints()
+        # Mark step 1 as done
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        task["steps"][0]["status"] = "done"
+        self.registry.call("create_durable_task", goal="x", steps="x")  # dummy to ensure store works
+        # Use the task store directly to update step status
+        store_task = self.registry.durable_task_store.get_task(task_id)
+        store_task.steps[0].status = "done"
+        self.registry.durable_task_store.upsert_task(store_task)
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+        # next_step should be 2 (step 1 is done)
+        self.assertEqual(parsed["next_step_id"], 2)
+        self.assertEqual(parsed["incomplete_step_count"], 2)
+
+    def test_resume_policy_from_checkpoint_when_latest_selected(self):
+        task_id = self._create_running_task_with_checkpoints()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["resume_policy"], "from_checkpoint")
+
+    def test_resume_policy_from_checkpoint_when_explicit_id(self):
+        task_id = self._create_running_task_with_checkpoints()
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        cp_id = task["checkpoints"][0]["checkpoint_id"]
+        result = self.registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=cp_id)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["resume_policy"], "from_checkpoint")
+
+    def test_resume_policy_from_step_when_no_checkpoint(self):
+        result = self.registry.call("create_durable_task", goal="g", steps="s1")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertIn(parsed["resume_policy"], ("from_step", "from_beginning"))
+
+    def test_checkpoint_description_and_snapshot_not_leaked(self):
+        task_id = self._create_running_task_with_checkpoints()
+        # Add a checkpoint with sentinel text in description and state_snapshot via store directly
+        store_task = self.registry.durable_task_store.get_task(task_id)
+        store_task.checkpoints[0].description = "SENTINEL_DESCRIPTION_123"
+        store_task.checkpoints[0].state_snapshot = {"secret_key": "SENTINEL_SNAPSHOT_456", "nested": {"val": "SENTINEL_NESTED_789"}}
+        self.registry.durable_task_store.upsert_task(store_task)
+
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        output = json.dumps(json.loads(result))
+        self.assertNotIn("SENTINEL_DESCRIPTION_123", output)
+        self.assertNotIn("SENTINEL_SNAPSHOT_456", output)
+        self.assertNotIn("SENTINEL_NESTED_789", output)
+        self.assertNotIn("secret_key", output)
+
+
 if __name__ == "__main__":
     unittest.main()
