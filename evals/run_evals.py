@@ -252,6 +252,10 @@ def main() -> int:
         EvalCase("recovery_event_selection_fallback", eval_recovery_event_selection_fallback),
         EvalCase("recovery_event_safety", eval_recovery_event_safety),
         EvalCase("recovery_event_compatibility", eval_recovery_event_compatibility),
+        EvalCase("timeline_basics", eval_timeline_basics),
+        EvalCase("timeline_linkage_and_limits", eval_timeline_linkage_and_limits),
+        EvalCase("timeline_safety", eval_timeline_safety),
+        EvalCase("timeline_compatibility", eval_timeline_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -7629,6 +7633,211 @@ def eval_recovery_event_compatibility():
             assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
             update_r = registry.call("update_durable_task", task_id=task_id, status="running")
             assert "error" not in json.loads(update_r), f"update broken: {update_r}"
+        finally:
+            db.close()
+
+
+# --- Timeline eval sentinels ---
+
+_TIMELINE_SENTINEL_GOAL = "NORA_EVAL_TIMELINE_GOAL_SENTINEL_f1e2d3c4"
+_TIMELINE_SENTINEL_STEP = "NORA_EVAL_TIMELINE_STEP_SECRET_a5b6c7d8"
+_TIMELINE_SENTINEL_SECRET = "NORA_EVAL_TIMELINE_SECRET_sk-tl-9e0f1a2b"
+
+
+def eval_timeline_basics():
+    """Timeline returns chronological order, correct counts, and bounded event summaries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="timeline test", steps="alpha\nbeta")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="after alpha")
+            registry.call("plan_durable_recovery", task_id=task_id)
+
+            tl_r = registry.call("get_durable_task_timeline", task_id=task_id)
+            tl = json.loads(tl_r)
+            assert tl["task_id"] == task_id
+            assert tl["event_count"] >= 3, f"expected >=3 events (create+checkpoint+recovery), got {tl['event_count']}"
+            assert tl["returned_event_count"] == tl["event_count"], f"returned != total with default limit"
+            assert tl["checkpoint_count"] >= 1
+            assert tl["worker_id_present"] is False
+
+            events = tl["events"]
+            assert len(events) >= 3
+
+            # Chronological: created_at must be non-decreasing
+            for i in range(1, len(events)):
+                assert events[i]["created_at"] >= events[i-1]["created_at"], (
+                    f"not chronological: {events[i-1]['created_at']} > {events[i]['created_at']}"
+                )
+
+            # Event types present
+            types = {e["event_type"] for e in events}
+            assert "task_created" in types, f"missing task_created: {types}"
+            assert "checkpoint_added" in types, f"missing checkpoint_added: {types}"
+            assert "recovery_planned" in types, f"missing recovery_planned: {types}"
+
+            # Bounded event summaries: no raw fields
+            for ev in events:
+                for key in ("payload", "summary", "raw_summary", "goal", "steps"):
+                    assert key not in ev, f"event has {key}: {ev}"
+                assert "event_id" in ev
+                assert "event_type" in ev
+                assert "created_at" in ev
+                assert "payload_keys" in ev
+                assert "payload_key_count" in ev
+        finally:
+            db.close()
+
+
+def eval_timeline_linkage_and_limits():
+    """checkpoint_id linkage, limit bounds, unknown task, bad limit."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="linkage test", steps="a\nb\nc")
+            task_id = json.loads(create_r)["task_id"]
+            cp_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+            cp_id = json.loads(cp_r)["checkpoint_id"]
+            registry.call("plan_durable_recovery", task_id=task_id)
+
+            # Checkpoint event should have checkpoint_id linkage
+            tl = json.loads(registry.call("get_durable_task_timeline", task_id=task_id))
+            cp_events = [e for e in tl["events"] if e["event_type"] == "checkpoint_added"]
+            assert len(cp_events) >= 1, f"no checkpoint event in timeline"
+            assert cp_events[0]["checkpoint_id"] == cp_id, f"checkpoint_id mismatch: {cp_events[0]}"
+            assert cp_events[0]["checkpoint_id_present"] is True
+
+            # Recovery event should have checkpoint_id linkage
+            rp_events = [e for e in tl["events"] if e["event_type"] == "recovery_planned"]
+            assert len(rp_events) >= 1
+            assert rp_events[0]["checkpoint_id"] == cp_id, f"recovery checkpoint_id: {rp_events[0]}"
+            assert rp_events[0]["checkpoint_id_present"] is True
+
+            # payload_keys lists safe key names only
+            for ev in tl["events"]:
+                assert isinstance(ev["payload_keys"], list), f"payload_keys not list: {ev}"
+                assert ev["payload_key_count"] == len(ev["payload_keys"]), f"key count mismatch: {ev}"
+
+            # Limit bounds: limit=1 returns 1 event
+            tl1 = json.loads(registry.call("get_durable_task_timeline", task_id=task_id, limit=1))
+            assert tl1["returned_event_count"] == 1, f"limit=1: {tl1['returned_event_count']}"
+            assert tl1["event_count"] >= 3, f"total count wrong: {tl1['event_count']}"
+
+            # Limit clamped: limit=0 → at least 1, limit=999 → at most 200
+            tl0 = json.loads(registry.call("get_durable_task_timeline", task_id=task_id, limit=0))
+            assert tl0["returned_event_count"] >= 1, f"limit=0 clamped: {tl0['returned_event_count']}"
+            tl999 = json.loads(registry.call("get_durable_task_timeline", task_id=task_id, limit=999))
+            assert tl999["returned_event_count"] <= 200, f"limit=999 clamped: {tl999['returned_event_count']}"
+
+            # Unknown task
+            r_unknown = json.loads(registry.call("get_durable_task_timeline", task_id="dtask_nonexistent"))
+            assert "error" in r_unknown, f"unknown task: {r_unknown}"
+
+            # Bad limit
+            r_bad = json.loads(registry.call("get_durable_task_timeline", task_id=task_id, limit="not_a_number"))
+            assert "error" in r_bad, f"bad limit: {r_bad}"
+        finally:
+            db.close()
+
+
+def eval_timeline_safety():
+    """Timeline output does not leak goals, step text, notes, summaries, checkpoint descriptions, state_snapshot, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal=_TIMELINE_SENTINEL_GOAL, steps=_TIMELINE_SENTINEL_STEP)
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=0, description=_TIMELINE_SENTINEL_SECRET, state_summary=_TIMELINE_SENTINEL_GOAL)
+
+            # Inject sentinels into step and checkpoint state
+            task = ts.get_task(task_id)
+            task.steps[0].note = _TIMELINE_SENTINEL_SECRET
+            task.steps[0].summary = f"sum:{_TIMELINE_SENTINEL_GOAL}"
+            task.checkpoints[0].description = _TIMELINE_SENTINEL_SECRET
+            task.checkpoints[0].state_snapshot = {
+                "nested": {"secret_value": _TIMELINE_SENTINEL_SECRET},
+                "api_token": "ghp_tl_abc123def456",
+            }
+            ts.upsert_task(task)
+
+            tl_r = registry.call("get_durable_task_timeline", task_id=task_id)
+            assert _TIMELINE_SENTINEL_GOAL not in tl_r, "goal leaked in timeline output"
+            assert _TIMELINE_SENTINEL_STEP not in tl_r, "step text leaked in timeline output"
+            assert _TIMELINE_SENTINEL_SECRET not in tl_r, "secret/note/summary/desc/state_snapshot leaked"
+            assert "ghp_tl_abc123def456" not in tl_r, "secret-like api_token leaked"
+
+            # Allowed top-level keys only
+            tl = json.loads(tl_r)
+            allowed_keys = {
+                "task_id", "status", "event_count", "returned_event_count",
+                "checkpoint_count", "trace_ref_count", "worker_id_present", "events",
+            }
+            unexpected = set(tl.keys()) - allowed_keys
+            assert not unexpected, f"unexpected top-level keys: {unexpected}"
+
+            # Event summary keys are bounded
+            allowed_event_keys = {
+                "event_id", "event_type", "created_at", "source", "severity",
+                "checkpoint_id", "checkpoint_id_present", "trace_id_present",
+                "worker_id_present", "summary_present", "payload_key_count", "payload_keys",
+            }
+            for ev in tl["events"]:
+                unexpected_ev = set(ev.keys()) - allowed_event_keys
+                assert not unexpected_ev, f"unexpected event keys: {unexpected_ev}"
+        finally:
+            db.close()
+
+
+def eval_timeline_compatibility():
+    """Timeline doesn't mutate task/event state. Existing tools still work after timeline errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            create_r = registry.call("create_durable_task", goal="compat timeline", steps="x\ny")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+
+            # Snapshot state
+            before_task = ts.get_task(task_id)
+            before_events = es.list_events(task_id=task_id)
+            before_status = before_task.status
+            before_cp_count = len(before_task.checkpoints)
+            before_event_count = len(before_events)
+
+            # Call timeline
+            tl_r = registry.call("get_durable_task_timeline", task_id=task_id)
+            assert "error" not in json.loads(tl_r)
+
+            # Task state unchanged
+            after_task = ts.get_task(task_id)
+            assert after_task.status == before_status, f"status mutated"
+            assert len(after_task.checkpoints) == before_cp_count, f"checkpoints mutated"
+            assert [(s.id, s.status) for s in after_task.steps] == [(s.id, s.status) for s in before_task.steps], "steps mutated"
+
+            # Event state unchanged
+            after_events = es.list_events(task_id=task_id)
+            assert len(after_events) == before_event_count, f"event count mutated"
+
+            # Error calls don't break existing tools
+            registry.call("get_durable_task_timeline", task_id="dtask_nonexistent")
+            registry.call("get_durable_task_timeline", task_id=task_id, limit="bad")
+
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+            update_r = registry.call("update_durable_task", task_id=task_id, status="running")
+            assert "error" not in json.loads(update_r)
         finally:
             db.close()
 

@@ -1,11 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: assigned
+Status: completed
 
 ## Goal
 
 TASK-059: Deterministic eval coverage for durable task timeline.
+
+Codex PM and CCB Reviewer approved this task. Integrated in main for terminal Codex handoff.
 
 TASK-058 runtime has been approved and integrated. Start implementation after confirming `get_durable_task_timeline` is visible in your CCB worktree.
 

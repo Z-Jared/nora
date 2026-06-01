@@ -6,16 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-059: Deterministic eval coverage for durable task timeline
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-058 runtime present
-- 分配: Claude B
-- 目标: 为 TASK-058 的 task timeline inspection tool 增加离线 deterministic eval，覆盖 chronological ordering、event/checkpoint/recovery linkage、bounded output、安全不泄漏、missing task error、limit bounds、以及 existing registry compatibility。
-- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `evals/run_evals.py` durable event / recovery plan eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
-
 ## 已完成
+
+### TASK-059: Deterministic eval coverage for durable task timeline ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 206 passed；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 470 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 `get_durable_task_timeline` 的 chronological ordering、task/checkpoint/recovery event presence、bounded summaries、event/checkpoint/recovery linkage、`payload_keys` key names only、limit bounds、unknown task/bad limit errors、安全不泄漏 goal/step/note/summary/checkpoint description/state_snapshot/secret-like sentinels、allowed-fields-only 输出、timeline no-mutation，以及 error/no-op 后 existing registry tool compatibility。
 
 ### TASK-058: Durable task timeline inspection tool v1 ✅
 - 完成者: Claude A
