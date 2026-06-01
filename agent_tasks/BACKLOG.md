@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-048: Durable worker auto-dispatch v1
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: durable worker registry、worker claim、task ownership metadata 已完成
-- 目标: 增加 `dispatch_durable_tasks` 之类的自动派发层，将 pending/unassigned durable tasks 分配给 idle/online workers；不启动进程、不创建 worktree。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `mini_agent/durable_workers.py`、`mini_agent/durable_tasks.py`、`mini_agent/toolkits/registry_builder.py`、worker claim 相关测试。
-
-### TASK-049: Deterministic eval coverage for durable worker auto-dispatch
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-048 runtime 存在后执行
-- 目标: 为 worker auto-dispatch 增加 deterministic offline eval，覆盖派发、限制/排除、状态一致性、安全输出和 failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` worker_assignment / worker_registry / worker_heartbeat eval pattern；TASK-048 新增 dispatch 工具。
+（空）
 
 ## 已完成
+
+### TASK-049: Deterministic eval coverage for durable worker auto-dispatch ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 186 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 468 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval，覆盖 `dispatch_durable_tasks` oldest-task dispatch、`max_assignments` normal/0/oversized bounds、running/assigned/paused/offline worker exclusion、no-idle/no-pending no-op、task `worker_id` 与 worker `assigned/current_task_id` 一致性、task status 保持 pending、安全输出、event-store failure isolation，以及 dispatch 后 worker/task registry tool compatibility。
+
+### TASK-048: Durable worker auto-dispatch v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 468 tests OK；`python3 evals/run_evals.py` 186 passed；`git diff --check` OK。
+- 内容: 新增 `dispatch_durable_tasks` registry tool，将 pending/unassigned durable tasks 自动派发给 idle/online worker；派发前复用 stale worker lifecycle 将过期 worker 标记 offline；按 `created_at` 选择最早 pending tasks，按 worker id 稳定配对，`max_assignments` bounded 到 1..50；更新 task `worker_id` 和 worker `assigned/current_task_id`，保持 task status 不变；输出 bounded assignment summary，事件写入失败不阻断派发。
 
 ### TASK-047: Deterministic eval coverage for Context compiler structured memory recall ✅
 - 完成者: Claude B

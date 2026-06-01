@@ -783,6 +783,62 @@ def build_default_registry(
             "task": task.to_dict(),
         }, ensure_ascii=False)
 
+    def _dispatch_durable_tasks_json(max_assignments: int = 10) -> str:
+        max_assignments = max(1, min(max_assignments, 50))
+        durable_worker_store.mark_stale_workers_offline()
+        all_workers = durable_worker_store.list_workers(limit=200)
+        idle_workers = [
+            w for w in all_workers
+            if w.status == WorkerStatus.IDLE and not w.current_task_id
+        ]
+        if not idle_workers:
+            return _json.dumps({"dispatched": 0, "assignments": []}, ensure_ascii=False)
+        pending_tasks = [
+            t for t in durable_task_store.list_tasks(limit=500)
+            if t.status == "pending" and not t.worker_id
+        ]
+        if not pending_tasks:
+            return _json.dumps({"dispatched": 0, "assignments": []}, ensure_ascii=False)
+        pending_tasks.sort(key=lambda t: t.created_at)
+        idle_workers.sort(key=lambda w: w.worker_id)
+        assignments = []
+        for worker, task in zip(idle_workers, pending_tasks):
+            if len(assignments) >= max_assignments:
+                break
+            assigned_task = durable_task_store.assign_worker(task.task_id, worker.worker_id)
+            if assigned_task is None:
+                continue
+            durable_worker_store.update_status(
+                worker_id=worker.worker_id,
+                status=WorkerStatus.ASSIGNED,
+                current_task_id=task.task_id,
+            )
+            try:
+                registry.durable_event_store.record(
+                    event_type=TASK_STATUS_CHANGED,
+                    task_id=task.task_id,
+                    worker_id=worker.worker_id,
+                    summary="task auto-dispatched to worker",
+                    payload={
+                        "operation": "dispatch",
+                        "task_id": task.task_id,
+                        "worker_id_present": True,
+                    },
+                    source="registry",
+                    severity="info",
+                )
+            except Exception:
+                pass
+            assignments.append({
+                "worker_id": worker.worker_id,
+                "task_id": task.task_id,
+                "status": "assigned",
+            })
+        return _json.dumps(
+            {"dispatched": len(assignments), "assignments": assignments},
+            ensure_ascii=False,
+        )
+
     registry.register(
         "touch_worker",
         "更新 worker 的 last_seen_at 时间戳，表示 worker 仍然存活。",
@@ -827,6 +883,21 @@ def build_default_registry(
                 }
             },
             "required": ["worker_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "dispatch_durable_tasks",
+        "自动将待分配的持久任务派发给空闲 worker。找到最早的 pending 任务和空闲 worker，自动配对分配。返回派发结果摘要。",
+        _dispatch_durable_tasks_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_assignments": {
+                    "type": "integer",
+                    "description": "最多派发几个任务，默认 10，上限 50",
+                }
+            },
         },
         permission=ToolPermission(category="task", risk="write"),
     )

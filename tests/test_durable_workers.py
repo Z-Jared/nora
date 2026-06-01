@@ -565,5 +565,205 @@ class DurableWorkerClaimTests(unittest.TestCase):
         self.assertIn("error", parsed)
 
 
+class DurableWorkerDispatchTests(unittest.TestCase):
+    """Tests for dispatch_durable_tasks registry tool."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_task(self, goal="test task"):
+        return json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+
+    def _register_worker(self, worker_id, role="worker"):
+        return json.loads(self.registry.call("register_worker", worker_id=worker_id, role=role))
+
+    def test_basic_dispatch(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        self.assertEqual(result["assignments"][0]["worker_id"], "w1")
+        self.assertEqual(result["assignments"][0]["status"], "assigned")
+
+    def test_dispatch_multiple_workers_and_tasks(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        self._register_worker("w3")
+        self._create_task(goal="task A")
+        self._create_task(goal="task B")
+        self._create_task(goal="task C")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 3)
+        worker_ids = [a["worker_id"] for a in result["assignments"]]
+        self.assertEqual(len(set(worker_ids)), 3)
+
+    def test_dispatch_respects_max_assignments(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        self._register_worker("w3")
+        self._create_task(goal="task A")
+        self._create_task(goal="task B")
+        self._create_task(goal="task C")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks", max_assignments=2))
+
+        self.assertEqual(result["dispatched"], 2)
+
+    def test_dispatch_no_idle_workers(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+        self.registry.call("dispatch_durable_tasks")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 0)
+        self.assertEqual(result["assignments"], [])
+
+    def test_dispatch_no_pending_tasks(self):
+        self._register_worker("w1")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 0)
+        self.assertEqual(result["assignments"], [])
+
+    def test_dispatch_skips_offline_workers(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        self.registry.call("update_worker_status", worker_id="w2", status="offline")
+        self._create_task(goal="task one")
+        self._create_task(goal="task two")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        self.assertEqual(result["assignments"][0]["worker_id"], "w1")
+
+    def test_dispatch_skips_stale_idle_workers(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        # Make w1 stale by setting last_seen_at to old timestamp
+        store = self.registry.durable_worker_store
+        worker = store.get_worker("w1")
+        worker.last_seen_at = "2020-01-01T00:00:00+00:00"
+        store._save(worker)
+        self._create_task(goal="task one")
+        self._create_task(goal="task two")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        self.assertEqual(result["assignments"][0]["worker_id"], "w2")
+        # w1 should now be offline
+        w1 = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(w1["status"], "offline")
+
+    def test_dispatch_skips_running_workers(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+        self.registry.call("dispatch_durable_tasks")
+        self.registry.call("update_worker_status", worker_id="w1", status="running")
+        self._register_worker("w2")
+        self._create_task(goal="task two")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        self.assertEqual(result["assignments"][0]["worker_id"], "w2")
+
+    def test_dispatch_does_not_reassign_existing_tasks(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+        self.registry.call("dispatch_durable_tasks")
+
+        self._register_worker("w2")
+        self._create_task(goal="task two")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        task_ids = [a["task_id"] for a in result["assignments"]]
+        self.assertNotIn("dtask_1", task_ids)
+
+    def test_dispatch_assigns_worker_and_task_consistently(self):
+        self._register_worker("w1")
+        t1 = self._create_task(goal="task one")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+        assignment = result["assignments"][0]
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=assignment["task_id"]))
+        worker = json.loads(self.registry.call("get_worker", worker_id=assignment["worker_id"]))
+
+        self.assertEqual(task["worker_id"], "w1")
+        self.assertEqual(worker["status"], "assigned")
+        self.assertEqual(worker["current_task_id"], t1["task_id"])
+
+    def test_dispatch_output_bounded_no_goal_leak(self):
+        self._register_worker("w1")
+        self._create_task(goal="SECRET_GOAL_VALUE_12345")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        result_str = json.dumps(result)
+        self.assertNotIn("SECRET_GOAL_VALUE_12345", result_str)
+        self.assertNotIn("step one", result_str)
+
+    def test_dispatch_event_failure_does_not_block(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        class BrokenEventStore:
+            def record(self, **kwargs):
+                raise RuntimeError("event store broken")
+
+        self.registry.durable_event_store = BrokenEventStore()
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+
+    def test_dispatch_max_assignments_bounded(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks", max_assignments=200))
+
+        self.assertEqual(result["dispatched"], 1)
+
+    def test_dispatch_more_tasks_than_workers(self):
+        self._register_worker("w1")
+        self._create_task(goal="task A")
+        self._create_task(goal="task B")
+        self._create_task(goal="task C")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+
+    def test_dispatch_more_workers_than_tasks(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        self._register_worker("w3")
+        self._create_task(goal="task A")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

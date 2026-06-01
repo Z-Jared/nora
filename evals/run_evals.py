@@ -231,6 +231,10 @@ def main() -> int:
         EvalCase("compiler_recall_query_controls", eval_compiler_recall_query_controls),
         EvalCase("compiler_recall_safety", eval_compiler_recall_safety),
         EvalCase("compiler_recall_compatibility", eval_compiler_recall_compatibility),
+        EvalCase("dispatch_basics", eval_dispatch_basics),
+        EvalCase("dispatch_limits_exclusions", eval_dispatch_limits_exclusions),
+        EvalCase("dispatch_state_consistency", eval_dispatch_state_consistency),
+        EvalCase("dispatch_safety_failure_isolation", eval_dispatch_safety_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -6514,6 +6518,267 @@ def eval_compiler_recall_compatibility():
             # Pack should still be produced (not crash)
             assert "Context Pack" in result2, f"pack production failed with large memory: {result2[:500]}"
             assert large_content not in result2, f"large content not bounded: {result2[:500]}"
+        finally:
+            db.close()
+
+
+# --- Dispatch eval helpers ---
+
+_DISPATCH_SENTINEL_GOAL = "NORA_EVAL_DISPATCH_GOAL_SENTINEL_a1b2c3d4"
+_DISPATCH_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-dispatch-5e6f7a8b"
+
+
+def eval_dispatch_basics():
+    """Dispatch assigns oldest pending tasks to idle workers; returns bounded JSON.
+    Proves dispatch picks oldest tasks first via max_assignments=2 with 3 tasks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            worker_store = registry.durable_worker_store
+            task_store = registry.durable_task_store
+
+            # Register idle workers
+            worker_store.register_worker("w1", role="coder")
+            worker_store.register_worker("w2", role="coder")
+            worker_store.register_worker("w3", role="coder")
+
+            # Create 3 pending unassigned tasks (oldest first by created_at)
+            t1 = task_store.create_task(goal="oldest task", steps=[{"text": "s1"}])
+            t2 = task_store.create_task(goal="middle task", steps=[{"text": "s2"}])
+            t3 = task_store.create_task(goal="newest task", steps=[{"text": "s3"}])
+
+            # Dispatch with max_assignments=2
+            result = registry.call("dispatch_durable_tasks", max_assignments=2)
+            parsed = json.loads(result)
+            assert "dispatched" in parsed, f"missing dispatched: {parsed}"
+            assert "assignments" in parsed, f"missing assignments: {parsed}"
+            assert parsed["dispatched"] == 2, f"expected 2 dispatched, got {parsed['dispatched']}"
+            assert len(parsed["assignments"]) == 2, f"expected 2 assignments, got {len(parsed['assignments'])}"
+
+            # Assignments include worker_id and task_id
+            for a in parsed["assignments"]:
+                assert "worker_id" in a, f"missing worker_id: {a}"
+                assert "task_id" in a, f"missing task_id: {a}"
+                assert "status" in a, f"missing status: {a}"
+
+            # Proves oldest tasks dispatched first
+            dispatched_task_ids = {a["task_id"] for a in parsed["assignments"]}
+            assert t1.task_id in dispatched_task_ids, f"oldest task not dispatched: {dispatched_task_ids}"
+            assert t2.task_id in dispatched_task_ids, f"middle task not dispatched: {dispatched_task_ids}"
+            assert t3.task_id not in dispatched_task_ids, f"newest task should not be dispatched: {dispatched_task_ids}"
+
+            # Third task still pending and unassigned
+            remaining = task_store.get_task(t3.task_id)
+            assert remaining.worker_id is None or remaining.worker_id == "", \
+                f"third task should be unassigned: {remaining.worker_id}"
+        finally:
+            db.close()
+
+
+def eval_dispatch_limits_exclusions():
+    """max_assignments respected; running/assigned/paused/offline excluded; no-op cases; bounded semantics."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            worker_store = registry.durable_worker_store
+            task_store = registry.durable_task_store
+
+            # --- Part 1: max_assignments + worker exclusion ---
+            worker_store.register_worker("w_idle1", role="coder")
+            worker_store.register_worker("w_idle2", role="coder")
+            worker_store.register_worker("w_running", role="coder")
+            worker_store.update_status("w_running", status="running", current_task_id="dtask_x")
+            worker_store.register_worker("w_assigned", role="coder")
+            worker_store.update_status("w_assigned", status="assigned", current_task_id="dtask_y")
+            worker_store.register_worker("w_paused", role="coder")
+            worker_store.update_status("w_paused", status="paused")
+            worker_store.register_worker("w_offline", role="coder")
+            worker_store.update_status("w_offline", status="offline")
+
+            task_store.create_task(goal="task A", steps=[{"text": "s"}])
+            task_store.create_task(goal="task B", steps=[{"text": "s"}])
+            task_store.create_task(goal="task C", steps=[{"text": "s"}])
+
+            # max_assignments=1
+            result = registry.call("dispatch_durable_tasks", max_assignments=1)
+            parsed = json.loads(result)
+            assert parsed["dispatched"] == 1, f"expected 1 dispatched, got {parsed['dispatched']}"
+
+            # ALL non-idle workers excluded
+            excluded_workers = {"w_running", "w_assigned", "w_paused", "w_offline"}
+            for a in parsed["assignments"]:
+                assert a["worker_id"] not in excluded_workers, \
+                    f"excluded worker got assignment: {a}"
+
+            # --- Part 2: No idle workers ---
+            worker_store.update_status("w_idle1", status="running", current_task_id="dtask_z")
+            worker_store.update_status("w_idle2", status="running", current_task_id="dtask_w")
+            result2 = registry.call("dispatch_durable_tasks")
+            parsed2 = json.loads(result2)
+            assert parsed2["dispatched"] == 0, f"expected 0 dispatched with no idle workers, got {parsed2['dispatched']}"
+            assert parsed2["assignments"] == [], f"expected empty assignments, got {parsed2['assignments']}"
+
+            # --- Part 3: No pending unassigned tasks (clean scenario) ---
+            # Fresh registry with idle worker but no tasks at all
+            db3 = NoraDB(Path(tmpdir) / "test3.db")
+            try:
+                registry3 = build_default_registry(workspace_root=Path(tmpdir), db=db3, confirm_action=lambda _: True)
+                ws3 = registry3.durable_worker_store
+                ts3 = registry3.durable_task_store
+                ws3.register_worker("w_clean", role="coder")
+                # No tasks created
+                result3 = registry3.call("dispatch_durable_tasks")
+                parsed3 = json.loads(result3)
+                assert parsed3["dispatched"] == 0, f"expected 0 dispatched with no tasks, got {parsed3['dispatched']}"
+                assert parsed3["assignments"] == [], f"expected empty assignments, got {parsed3['assignments']}"
+            finally:
+                db3.close()
+
+            # --- Part 4: max_assignments=0 bounded to 1 ---
+            db4 = NoraDB(Path(tmpdir) / "test4.db")
+            try:
+                registry4 = build_default_registry(workspace_root=Path(tmpdir), db=db4, confirm_action=lambda _: True)
+                ws4 = registry4.durable_worker_store
+                ts4 = registry4.durable_task_store
+                ws4.register_worker("w4a", role="coder")
+                ws4.register_worker("w4b", role="coder")
+                ts4.create_task(goal="t4a", steps=[{"text": "s"}])
+                ts4.create_task(goal="t4b", steps=[{"text": "s"}])
+                # max_assignments=0 should be clamped to 1 by runtime
+                result4 = registry4.call("dispatch_durable_tasks", max_assignments=0)
+                parsed4 = json.loads(result4)
+                assert parsed4["dispatched"] == 1, f"max_assignments=0 should clamp to 1, got {parsed4['dispatched']}"
+            finally:
+                db4.close()
+
+            # --- Part 5: max_assignments super large bounded by available pairs ---
+            db5 = NoraDB(Path(tmpdir) / "test5.db")
+            try:
+                registry5 = build_default_registry(workspace_root=Path(tmpdir), db=db5, confirm_action=lambda _: True)
+                ws5 = registry5.durable_worker_store
+                ts5 = registry5.durable_task_store
+                # 2 workers, 3 tasks → max pairs = 2
+                ws5.register_worker("w5a", role="coder")
+                ws5.register_worker("w5b", role="coder")
+                ts5.create_task(goal="t5a", steps=[{"text": "s"}])
+                ts5.create_task(goal="t5b", steps=[{"text": "s"}])
+                ts5.create_task(goal="t5c", steps=[{"text": "s"}])
+                result5 = registry5.call("dispatch_durable_tasks", max_assignments=999)
+                parsed5 = json.loads(result5)
+                assert parsed5["dispatched"] == 2, f"expected 2 dispatched (bounded by workers), got {parsed5['dispatched']}"
+                assert len(parsed5["assignments"]) == 2, f"expected 2 assignments, got {len(parsed5['assignments'])}"
+            finally:
+                db5.close()
+        finally:
+            db.close()
+
+
+def eval_dispatch_state_consistency():
+    """Task worker_id updated; worker status/current_task updated; task status remains pending."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            worker_store = registry.durable_worker_store
+            task_store = registry.durable_task_store
+
+            # Register worker and create task
+            worker_store.register_worker("w_state", role="coder")
+            task = task_store.create_task(goal="state test", steps=[{"text": "s"}])
+            task_id = task.task_id
+
+            # Dispatch
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+            assert parsed["dispatched"] == 1
+
+            # Task worker_id should be updated
+            updated_task = task_store.get_task(task_id)
+            assert updated_task.worker_id == "w_state", f"task worker_id not updated: {updated_task.worker_id}"
+
+            # Task status remains pending (dispatch assigns, doesn't start)
+            assert updated_task.status == "pending", f"task status should be pending after dispatch: {updated_task.status}"
+
+            # Worker status should be ASSIGNED
+            updated_worker = worker_store.get_worker("w_state")
+            assert updated_worker.status == "assigned", f"worker status not updated: {updated_worker.status}"
+            assert updated_worker.current_task_id == task_id, f"worker current_task_id not updated: {updated_worker.current_task_id}"
+
+            # Already-assigned task should not be reassigned
+            worker_store.register_worker("w_idle2", role="coder")
+            task_store.create_task(goal="unassigned task", steps=[{"text": "s"}])
+            result2 = registry.call("dispatch_durable_tasks")
+            parsed2 = json.loads(result2)
+            for a in parsed2["assignments"]:
+                assert a["task_id"] != task_id, f"task reassigned: {a}"
+        finally:
+            db.close()
+
+
+def eval_dispatch_safety_failure_isolation():
+    """Output bounded, no raw goals/steps/secrets; broken event store doesn't prevent dispatch;
+    registry tools (get_worker, list_workers, get_durable_task, list_durable_tasks) still work."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+        def get_event(self, event_id):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            worker_store = registry.durable_worker_store
+            task_store = registry.durable_task_store
+
+            # Create task with sentinel in goal
+            worker_store.register_worker("w_safe", role="coder")
+            task_store.create_task(
+                goal=f"{_DISPATCH_SENTINEL_GOAL} {_DISPATCH_SENTINEL_SECRET}",
+                steps=[{"text": "secret step"}]
+            )
+
+            # Dispatch
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+
+            # Output should not leak raw goal or secret
+            assert _DISPATCH_SENTINEL_GOAL not in result, f"goal sentinel leaked: {result[:500]}"
+            assert _DISPATCH_SENTINEL_SECRET not in result, f"secret sentinel leaked: {result[:500]}"
+            assert "secret step" not in result, f"step content leaked: {result[:500]}"
+
+            # Output should be bounded (no full task dict)
+            for a in parsed.get("assignments", []):
+                assert "goal" not in a, f"goal leaked in assignment: {a}"
+                assert "steps" not in a, f"steps leaked in assignment: {a}"
+
+            # Broken event store should not prevent dispatch
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+
+            worker_store.register_worker("w_safe2", role="coder")
+            task_store.create_task(goal="safe task 2", steps=[{"text": "s"}])
+
+            result2 = registry.call("dispatch_durable_tasks")
+            parsed2 = json.loads(result2)
+            assert parsed2["dispatched"] >= 1, f"dispatch failed with broken event store: {parsed2}"
+
+            # Registry tools still work after broken event store
+            import json as _json
+            r1 = registry.call("get_worker", worker_id="w_safe")
+            assert "w_safe" in r1, f"get_worker broken: {r1}"
+
+            r2 = registry.call("list_workers")
+            parsed_workers = _json.loads(r2)
+            assert len(parsed_workers) >= 1, f"list_workers broken: {r2}"
+
+            r3 = registry.call("list_durable_tasks")
+            parsed_tasks = _json.loads(r3)
+            assert len(parsed_tasks) >= 1, f"list_durable_tasks broken: {r3}"
         finally:
             db.close()
 

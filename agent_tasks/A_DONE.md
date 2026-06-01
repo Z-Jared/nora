@@ -1,65 +1,70 @@
 # Claude A Completion Report
 
-Task: TASK-046 — Context compiler v2 runtime (structured memory recall)
+Task: TASK-048 — Durable worker auto-dispatch v1
 Status: completed
 
 ## Summary
 
-Extended `ContextCompiler` to search structured `MemoryRecordStore` records
-and include them as a distinct "结构化记忆" section in the compiled context
-pack. Supports default query from task description, explicit `memory_query`,
-disabling memory recall, safety filtering, bounding, and registry tool schema.
+Added `dispatch_durable_tasks` registry tool that automatically assigns
+pending/unassigned durable tasks to idle/online workers. Calls
+`mark_stale_workers_offline()` before dispatch to ensure stale workers
+(no recent heartbeat) are excluded from assignment.
 
 ## Changes
 
-### `mini_agent/context_compiler.py`
-- Added `memory_record_store: Optional[MemoryRecordStore]` field.
-- Added compile parameters: `include_memory_records: bool = True`,
-  `memory_query: Optional[str] = None`, `memory_max_results: int = 3`.
-- Added `_memory_record_section(query, max_results)` — searches store,
-  filters unsafe records via `_safe_memory_record()`, formats via
-  `_format_memory_record()`, returns `ContextSection(title="结构化记忆")`.
-- Uses `memory_query` if provided, falls back to `task_description`.
-- Imports `_safe_memory_record` and `_format_memory_record` from
-  `context_system.py` — same safety rules as auto-context.
-
 ### `mini_agent/toolkits/registry_builder.py`
-- Moved `memory_record_store = MemoryRecordStore(db=db)` before
-  `ContextCompiler` instantiation (was defined after, causing UnboundLocalError).
-- Wired `memory_record_store=memory_record_store` into `ContextCompiler`.
+- Added `_dispatch_durable_tasks_json(max_assignments=10)` function:
+  - Calls `durable_worker_store.mark_stale_workers_offline()` first
+    to exclude stale workers (default 300s heartbeat threshold).
+  - Bounds `max_assignments` to [1, 50].
+  - Filters workers: `status == IDLE and not current_task_id`.
+  - Filters tasks: `status == "pending" and not worker_id`.
+  - Sorts tasks by `created_at` ascending, workers by `worker_id`.
+  - Assigns via `durable_task_store.assign_worker()` (preserves task status).
+  - Updates worker status to `ASSIGNED` with `current_task_id`.
+  - Emits `TASK_STATUS_CHANGED` event per assignment (failure isolated).
+  - Returns `{"dispatched": N, "assignments": [...]}` — no goal/steps leaked.
+- Registered as `dispatch_durable_tasks` tool with `task` / `write` permission.
 
-### `mini_agent/toolkits/register_developer.py`
-- Added 3 new schema properties to `compile_context_pack` tool:
-  - `include_memory_records` (boolean) — default true
-  - `memory_query` (string) — default uses task_description
-  - `memory_max_results` (integer) — default 3
+### `tests/test_durable_workers.py`
+- Added `DurableWorkerDispatchTests` class with 14 tests:
+  - Basic dispatch (1 worker, 1 task)
+  - Multiple workers and tasks
+  - `max_assignments` cap
+  - No idle workers returns empty
+  - No pending tasks returns empty
+  - Offline workers excluded
+  - Stale idle workers excluded (last_seen_at set to 2020, auto-marked offline)
+  - Running workers excluded
+  - Existing assigned tasks not reassigned
+  - Worker/task state consistency after dispatch
+  - Output bounded, no goal/steps leakage
+  - Event store failure isolation
+  - `max_assignments` bounded to cap
+  - More tasks than workers / more workers than tasks
 
-### `tests/test_context_compiler.py`
-- Added `ContextCompilerMemoryRecordTests` class with 12 tests:
-  - Memory recall by default query (task_description)
-  - Explicit `memory_query` overrides default
-  - Disabling memory recall (`include_memory_records=False`)
-  - No section when store is None
-  - No section when no matches
-  - Unsafe records filtered (sensitive title)
-  - Unsafe metadata filtered (sensitive tags)
-  - Max results bounding
-  - Coexistence with other sections (knowledge excerpts)
-  - Safe metadata still appears (tags, source, task_id)
-  - Tool integration: `save_memory_record` + `compile_context_pack`
+## Review fix
+
+**Problem**: Dispatch only checked `status == IDLE` and `current_task_id`,
+but did not exclude stale workers (no recent heartbeat, status still IDLE).
+
+**Fix**: Added `durable_worker_store.mark_stale_workers_offline()` call at
+the top of `_dispatch_durable_tasks_json()`, reusing the existing heartbeat/
+offline lifecycle with the default 300s threshold. Stale workers are
+transitioned to OFFLINE before the idle-worker filter runs.
 
 ## Verification run
 
 ```
-python3 -m unittest tests.test_context_compiler tests.test_context_memory tests.test_memory_records tests.test_mini_agent
-  → 251 tests OK
+python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+  → 468 tests OK
 
 python3 evals/run_evals.py
-  → 178 passed, 0 failed
+  → 182 passed, 0 failed
 
 git diff --check
   → clean
 
 python3 -m unittest discover -s tests
-  → 1509 tests OK
+  → 1524 tests OK
 ```
