@@ -37,6 +37,7 @@ from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus
 from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
     DurableEventStore,
+    RECOVERY_PLANNED,
     TASK_CREATED,
     TASK_STATUS_CHANGED,
     TASK_RETRIED,
@@ -1250,6 +1251,34 @@ def build_default_registry(
             resume_policy = "from_checkpoint"
         else:
             resume_policy = task.resume_policy or "from_step"
+
+        try:
+            registry.durable_event_store.record(
+                event_type=RECOVERY_PLANNED,
+                task_id=task_id,
+                checkpoint_id=selected_cp.checkpoint_id if selected_cp else "",
+                summary="recovery planned",
+                payload={
+                    "operation": "plan_recovery",
+                    "can_resume": can_resume,
+                    "resume_policy": resume_policy,
+                    "reason": reason,
+                    "selected_checkpoint_present": selected_cp is not None,
+                    "checkpoint_step_id": selected_cp.step_id if selected_cp else None,
+                    "next_step_id": next_step_id,
+                    "checkpoint_count": len(task.checkpoints),
+                    "step_count": len(task.steps),
+                    "incomplete_step_count": incomplete_count,
+                    "trace_ref_count": len(task.trace_refs),
+                    "worker_id_present": bool(task.worker_id),
+                    "requested_checkpoint_id_present": bool(checkpoint_id),
+                    "requested_step_id_present": parsed_step_id is not None,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
 
         return _json.dumps({
             "task_id": task.task_id,

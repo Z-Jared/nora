@@ -51,6 +51,7 @@ REVIEW_GATE_BLOCKED = "review_gate_blocked"
 REVIEW_GATE_ERROR = "review_gate_error"
 HANDOFF_CREATED = "handoff_created"
 HANDOFF_ACCEPTED = "handoff_accepted"
+RECOVERY_PLANNED = "recovery_planned"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -89,6 +90,7 @@ VALID_EVENT_TYPES = {
     REVIEW_GATE_ERROR,
     HANDOFF_CREATED,
     HANDOFF_ACCEPTED,
+    RECOVERY_PLANNED,
 }
 
 _DURABLE_EVENTS_TABLE = """

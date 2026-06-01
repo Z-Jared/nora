@@ -1,13 +1,13 @@
 # Claude B Task
 
 Owner: Claude B
-Status: waiting
+Status: assigned
 
 ## Goal
 
 TASK-057: Deterministic eval coverage for recovery-plan events.
 
-This task is waiting for TASK-056 runtime. Do not start implementation until Codex PM explicitly assigns it after TASK-056 is approved and its runtime is visible in your CCB worktree.
+TASK-056 runtime is approved and present for eval development.
 
 ## Scope
 

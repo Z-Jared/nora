@@ -15,6 +15,7 @@ from mini_agent.durable_tasks import (
     TaskStatus,
 )
 from mini_agent.tools import build_default_registry
+from mini_agent.durable_events import RECOVERY_PLANNED
 
 
 class DataStructureTests(unittest.TestCase):
@@ -2041,6 +2042,117 @@ class DurableRecoveryPlanToolTests(unittest.TestCase):
         self.assertNotIn("SENTINEL_SNAPSHOT_456", output)
         self.assertNotIn("SENTINEL_NESTED_789", output)
         self.assertNotIn("secret_key", output)
+
+
+class DurableRecoveryPlanEventTests(unittest.TestCase):
+    """Tests for RECOVERY_PLANNED event logging (TASK-056)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_running_task_with_checkpoint(self):
+        result = self.registry.call("create_durable_task", goal="secret goal", steps="step one\nstep two")
+        task = json.loads(result)
+        task_id = task["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="cp1")
+        return task_id
+
+    def _recovery_events(self):
+        events = self.registry.durable_event_store.list_events()
+        return [e for e in events if e.event_type == RECOVERY_PLANNED]
+
+    def test_recovery_planned_event_with_checkpoint(self):
+        task_id = self._create_running_task_with_checkpoint()
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+
+        events = self._recovery_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event.task_id, task_id)
+        self.assertTrue(event.checkpoint_id)  # checkpoint linked
+        self.assertEqual(event.payload["operation"], "plan_recovery")
+        self.assertTrue(event.payload["can_resume"])
+        self.assertEqual(event.payload["resume_policy"], "from_checkpoint")
+        self.assertTrue(event.payload["selected_checkpoint_present"])
+        self.assertEqual(event.source, "registry")
+        self.assertEqual(event.severity, "info")
+
+    def test_recovery_planned_event_no_checkpoint(self):
+        result = self.registry.call("create_durable_task", goal="g", steps="s1")
+        task_id = json.loads(result)["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+
+        events = self._recovery_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertFalse(event.payload["selected_checkpoint_present"])
+        self.assertFalse(event.payload["requested_checkpoint_id_present"])
+        self.assertFalse(event.payload["requested_step_id_present"])
+
+    def test_checkpoint_id_linked_on_event(self):
+        task_id = self._create_running_task_with_checkpoint()
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        cp_id = task["checkpoints"][0]["checkpoint_id"]
+
+        self.registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=cp_id)
+
+        events = self._recovery_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].checkpoint_id, cp_id)
+        self.assertTrue(events[0].payload["requested_checkpoint_id_present"])
+
+    def test_event_payload_no_raw_leakage(self):
+        task_id = self._create_running_task_with_checkpoint()
+        # Inject sentinel text into checkpoint
+        store_task = self.registry.durable_task_store.get_task(task_id)
+        store_task.checkpoints[0].description = "SENTINEL_CP_DESC_999"
+        store_task.checkpoints[0].state_snapshot = {"secret": "SENTINEL_SNAPSHOT_999"}
+        self.registry.durable_task_store.upsert_task(store_task)
+
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+
+        events = self._recovery_events()
+        self.assertEqual(len(events), 1)
+        payload_str = json.dumps(events[0].payload)
+        self.assertNotIn("SENTINEL_CP_DESC_999", payload_str)
+        self.assertNotIn("SENTINEL_SNAPSHOT_999", payload_str)
+        self.assertNotIn("secret goal", payload_str)
+        self.assertNotIn("step one", payload_str)
+
+    def test_event_failure_does_not_prevent_plan(self):
+        original_record = self.registry.durable_event_store.record
+        self.registry.durable_event_store.record = lambda **kw: (_ for _ in ()).throw(RuntimeError("store broken"))
+
+        task_id = self._create_running_task_with_checkpoint()
+        result = self.registry.call("plan_durable_recovery", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertIn("task_id", parsed)
+        self.assertTrue(parsed["can_resume"])
+
+        self.registry.durable_event_store.record = original_record
+
+    def test_plan_does_not_mutate_task_state(self):
+        task_id = self._create_running_task_with_checkpoint()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+
+        self.registry.call("plan_durable_recovery", task_id=task_id)
+
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(before["current_step"], after["current_step"])
+        self.assertEqual(len(before["checkpoints"]), len(after["checkpoints"]))
+        self.assertEqual(len(before["steps"]), len(after["steps"]))
 
 
 if __name__ == "__main__":

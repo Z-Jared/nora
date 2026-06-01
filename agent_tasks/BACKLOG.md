@@ -4,26 +4,26 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+暂无。
+
+## 进行中
+
 ### TASK-057: Deterministic eval coverage for recovery-plan events
 - 优先级: high
 - 预计: 1 小时
 - 依赖: TASK-056 runtime present
+- 分配: Claude B
 - 目标: 为 TASK-056 的 recovery-plan event logging 增加离线 deterministic eval，覆盖 event metadata、checkpoint_id linkage、bounded output、安全不泄漏、event-store failure isolation，以及 existing recovery plan compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
 - 参考: `evals/run_evals.py` durable event / recovery plan eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
 
-## 进行中
-
-### TASK-056: Durable recovery plan event logging v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-054/TASK-055
-- 分配: Claude A
-- 目标: 让 `plan_durable_recovery` 在生成恢复计划时写入安全、可查询、bounded 的 durable event，使 recovery planning 可审计，但仍不修改 task state 或执行恢复。
-- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema。
-
 ## 已完成
+
+### TASK-056: Durable recovery plan event logging v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 458 tests OK；`python3 evals/run_evals.py` 198 passed；`git diff --check` OK。
+- 内容: 新增 `RECOVERY_PLANNED = "recovery_planned"` durable event type；`plan_durable_recovery` 成功生成计划后记录 safe bounded event，包含 `operation=plan_recovery`、`can_resume`、`resume_policy`、`reason`、checkpoint/step/count/worker presence metadata；选中 checkpoint 时写入 top-level `checkpoint_id` 便于查询；错误路径跳过 event logging；event-store failure 不阻断 plan 返回；保持 recovery planning 只读且不泄漏 raw goal、step、notes、summaries、checkpoint description 或 state_snapshot。
 
 ### TASK-055: Deterministic eval coverage for durable recovery plans ✅
 - 完成者: Claude B

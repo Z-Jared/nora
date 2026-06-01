@@ -1,65 +1,47 @@
-# Claude A Completion Report — TASK-054: Durable Recovery Plan Tool v1
+# Claude A Completion Report — TASK-056: Durable Recovery Plan Event Logging v1
 
 Status: ready for Codex review
 
-## Review Fix
-
-**Problem 1**: `resume_policy` always returned `from_step` even when a checkpoint was selected. Per TASK-054 semantics, checkpoint-selected plans should use `from_checkpoint`.
-
-**Fix**: Changed `resume_policy` logic: returns `from_checkpoint` when a checkpoint is selected (latest, explicit, or step-based); returns `task.resume_policy` or `from_step` only for no-checkpoint fallback.
-
-**Problem 2**: No tests asserted `resume_policy`.
-
-**Fix**: Added 3 tests: `test_resume_policy_from_checkpoint_when_latest_selected`, `test_resume_policy_from_checkpoint_when_explicit_id`, `test_resume_policy_from_step_when_no_checkpoint`.
-
-**Problem 3**: No test verifying checkpoint description/state_snapshot sentinel not leaked.
-
-**Fix**: Added `test_checkpoint_description_and_snapshot_not_leaked` — injects sentinel text into checkpoint description and nested state_snapshot, verifies absent from `plan_durable_recovery` output.
-
 ## Summary
 
-Added read-only `plan_durable_recovery` registry tool that inspects durable task state and checkpoints to compute a safe recovery plan. The tool does not mutate task state, execute recovery, start workers, or expose raw goal/step/note/summary/checkpoint text.
+Added `RECOVERY_PLANNED` durable event type and event logging to `plan_durable_recovery`. The tool now records a bounded safe event whenever a recovery plan is generated successfully. Event logging failures do not prevent plan generation.
 
 ## Changes
 
+### `mini_agent/durable_events.py`
+- Added `RECOVERY_PLANNED = "recovery_planned"` constant
+- Added to `VALID_EVENT_TYPES`
+
 ### `mini_agent/toolkits/registry_builder.py`
-- Added `_plan_durable_recovery_json(task_id, checkpoint_id="", step_id="")`:
-  - **Checkpoint selection**: explicit `checkpoint_id` → step-based latest → overall latest → none
-  - **`next_step_id` computation**: prefers checkpoint step if not done/skipped, else first incomplete step, else `current_step`
-  - **`can_resume`**: false for `completed`/`cancelled`, true for `pending`/`running`/`paused`/`blocked`/`failed`
-  - **Reason labels**: `checkpoint_selected`, `step_checkpoint_missing`, `no_checkpoint`, `terminal_status`, `all_steps_done`
-  - Non-integer `step_id` returns JSON error
-  - Unknown `checkpoint_id` returns JSON error
-  - Read-only: no task/step state mutation
-  - Bounded output: only safe metadata fields, no raw goal/step/note/summary/checkpoint description/state_snapshot
-  - Registered with `risk="read"` permission
+- Imported `RECOVERY_PLANNED`
+- Added event logging to `_plan_durable_recovery_json` after plan computation:
+  - `event_type`: `RECOVERY_PLANNED`
+  - `task_id`: task id
+  - `checkpoint_id`: selected checkpoint id when present, empty string otherwise
+  - `source`: `registry`
+  - `severity`: `info`
+  - `summary`: `"recovery planned"`
+  - Payload: `operation`, `can_resume`, `resume_policy`, `reason`, `selected_checkpoint_present`, `checkpoint_step_id`, `next_step_id`, `checkpoint_count`, `step_count`, `incomplete_step_count`, `trace_ref_count`, `worker_id_present`, `requested_checkpoint_id_present`, `requested_step_id_present`
+  - Wrapped in try/except — failure does not prevent plan return
+  - Error responses (unknown task/checkpoint/bad step_id) skip event logging
 
 ### `tests/test_durable_tasks.py`
-- Added `DurableRecoveryPlanToolTests` class with 19 tests:
-  - `test_latest_checkpoint_selected` — auto-selects most recent checkpoint
-  - `test_explicit_checkpoint_id_selection` — selects exact checkpoint by id
-  - `test_step_id_selection` — selects checkpoint for given step
-  - `test_step_id_missing_checkpoint` — returns `step_checkpoint_missing` reason
-  - `test_no_checkpoint_fallback` — returns `no_checkpoint` reason with null checkpoint_id
-  - `test_completed_task_can_resume_false` — terminal status
-  - `test_cancelled_task_can_resume_false` — terminal status
-  - `test_failed_task_can_resume_true` — failed is resumable
-  - `test_unknown_task_returns_error`
-  - `test_unknown_checkpoint_returns_error`
-  - `test_non_integer_step_id_returns_error`
-  - `test_no_goal_or_step_text_leakage` — output safety
-  - `test_no_mutation_of_task_state` — read-only verification
-  - `test_next_step_prefers_checkpoint_step_when_not_done`
-  - `test_next_step_skips_done_steps`
+- Added `DurableRecoveryPlanEventTests` class with 6 tests:
+  - `test_recovery_planned_event_with_checkpoint` — event with checkpoint linkage
+  - `test_recovery_planned_event_no_checkpoint` — event without checkpoint
+  - `test_checkpoint_id_linked_on_event` — top-level `checkpoint_id` matches selected
+  - `test_event_payload_no_raw_leakage` — no sentinel checkpoint description/state_snapshot/goal/step text
+  - `test_event_failure_does_not_prevent_plan` — broken event store still returns plan
+  - `test_plan_does_not_mutate_task_state` — read-only verified
 
 ## Verification
 
 ```
 $ python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 452 tests — OK
+Ran 458 tests — OK
 
 $ python3 evals/run_evals.py
-194 passed, 0 failed
+198 passed, 0 failed
 
 $ git diff --check
 clean
@@ -68,13 +50,15 @@ clean
 ## Diff
 
 ```
- mini_agent/toolkits/registry_builder.py | 114 +++++++++++++++++++-
- tests/test_durable_tasks.py             | 185 ++++++++++++++++++++++++++++++++
- 2 files changed, +298/-1 lines
+ mini_agent/durable_events.py            |   2 +
+ mini_agent/toolkits/registry_builder.py |  29 +++++++++
+ tests/test_durable_tasks.py             | 112 ++++++++++++++++++++++++++++++++
+ 3 files changed, +143 lines
 ```
 
 ## Notes
 
 - No push or commit performed.
 - BACKLOG.md untouched.
-- Tool is strictly read-only — no task mutation, no worker execution, no model calls.
+- Error responses skip event logging per task spec.
+- Tool remains `risk="read"`; event is audit metadata only.
