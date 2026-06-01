@@ -5,61 +5,62 @@ Status: completed
 
 ## Goal
 
-TASK-050: Durable task lifecycle control tools v1.
+TASK-052: Durable checkpoint control tools v1.
 
-Nora already has durable task status transitions and generic `update_durable_task`, but the runtime does not expose explicit, auditable lifecycle controls for pause/resume/cancel. Add narrow registry tools that make those lifecycle actions first-class while preserving the existing state machine and event safety.
+Nora already has durable checkpoints in `DurableTaskStore.add_checkpoint()` and TaskManager shadow sync, but there is no explicit registry tool for an agent or workflow to record a bounded checkpoint on demand. Add a narrow checkpoint control tool that creates safe, inspectable checkpoints without exposing raw prompts, diffs, shell output, or secrets.
 
 ## Scope
 
-Build only lifecycle control tools. Do not spawn terminals, start agents, create git worktrees, implement worker process execution, or redesign the durable task schema in this task.
+Build only explicit checkpoint creation. Do not implement replay/resume engine, worker process execution, worktree creation, or broad schema redesign in this task.
 
-1. Add explicit registry tools:
-   - `pause_durable_task(task_id, reason="")`
-   - `resume_durable_task(task_id)`
-   - `cancel_durable_task(task_id, reason="")`
-   - Register them near the existing durable task registry tools in `mini_agent/toolkits/registry_builder.py`.
-   - Use the existing `DurableTaskStore.update_status()` transition rules. Invalid transitions should return JSON `{"error": ...}` instead of raising through the registry.
+1. Add a registry tool:
+   - Suggested name: `add_durable_checkpoint(task_id, step_id=0, description="", state_summary="")`
+   - Register near existing durable task registry tools in `mini_agent/toolkits/registry_builder.py`.
+   - Use existing `DurableTaskStore.add_checkpoint()`.
+   - Unknown task ids should return JSON `{"error": ...}`.
 
-2. Lifecycle semantics:
-   - Pause: valid only where the existing store permits `running -> paused`.
-   - Resume: use existing valid transitions back to `running` from paused/blocked.
-   - Cancel: use existing valid transitions to `cancelled`.
-   - Do not bypass `_VALID_TRANSITIONS`.
-   - Do not persist raw pause/cancel `reason` text. Treat reason as presence metadata only.
-   - Return bounded JSON summaries, not full `task.to_dict()`: include `task_id`, `status`, `previous_status`, `worker_id_present`, and `reason_present` where relevant. Do not return goal, steps, prompt text, raw reason, or failure body.
+2. Checkpoint semantics:
+   - `step_id` should be parsed/bounded to an integer >= 0.
+   - Store a bounded `state_snapshot` with safe metadata only, for example:
+     - `task_status`
+     - `current_step`
+     - `step_id`
+     - `description_present`
+     - `state_summary_present`
+   - Do not store raw task goal, raw step text, prompts, diffs, shell output, env vars, full tool outputs, or secret-like values.
+   - Treat `description` and `state_summary` as presence metadata or bounded safe summaries only; if you include any text, bound it tightly and filter secret-like content.
+   - Return bounded JSON summary: `task_id`, `checkpoint_id`, `step_id`, `checkpoint_count`, `description_present`, `state_summary_present`.
 
-3. Worker consistency:
-   - If a paused task has an existing worker whose `current_task_id` is this task, set worker status to `paused`.
-   - If a resumed task has an existing non-offline worker whose `current_task_id` is this task, set worker status to `running`.
-   - If a cancelled task has an existing worker whose `current_task_id` is this task, release that worker to `idle` with no current task.
-   - Do not assign new workers, start workers, or create workspaces.
-   - Worker update failures should not corrupt the task state. If you need to choose between simplicity and atomicity, keep the behavior explicit in tests and DONE notes.
+3. Step checkpoint ref:
+   - If `step_id` matches an existing durable step, write the new checkpoint id into that step's `checkpoint_ref`.
+   - Preserve existing checkpoints, trace refs, worker id, retry metadata, and task status.
+   - Support both SQLite-backed store and JSONL-backed store.
 
 4. Event logging and safety:
-   - Record `TASK_STATUS_CHANGED` events with `operation` set to `pause`, `resume`, or `cancel`.
-   - Include only safe metadata: `task_id`, `status`, `previous_status`, `worker_id_present`, `reason_present`.
-   - Do not store raw goal, steps, prompts, raw reason text, shell output, diff, or secret-like values in event payload or summary.
-   - Broken event logging must not prevent lifecycle operations.
+   - Record `CHECKPOINT_ADDED` event with safe metadata only: `operation="checkpoint"`, `checkpoint_id`, `step_id`, `checkpoint_count`, `description_present`, `state_summary_present`.
+   - Include `checkpoint_id` top-level on the event where supported.
+   - Event logging failures must not prevent checkpoint creation.
 
 5. Tests:
    - Add focused tests in `tests/test_durable_tasks.py` and/or `tests/test_durable_events.py`.
-   - Cover successful pause/resume/cancel flows.
-   - Cover invalid transitions and unknown task ids.
-   - Cover worker status/current task consistency for pause/resume/cancel.
-   - Cover bounded output and no raw reason/goal/steps leakage.
-   - Cover event-store failure isolation.
+   - Cover successful checkpoint creation via registry.
+   - Cover step `checkpoint_ref` update when step exists.
+   - Cover unknown task id and invalid/bounded `step_id`.
+   - Cover safe output and no raw goal/step/summary/secret leakage.
+   - Cover `CHECKPOINT_ADDED` event safe metadata and failure isolation.
+   - Cover JSONL backend behavior if you add store-level helper behavior.
 
 ## Verification
 
 Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_durable_workers tests.test_mini_agent
+python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-If you touch shared registry builder paths broadly or worker-store semantics, also run:
+If you touch shared registry builder paths broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests

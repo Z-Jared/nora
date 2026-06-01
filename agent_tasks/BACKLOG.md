@@ -4,13 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（空）
+暂无。
 
 ## 进行中
 
-（空）
+暂无。
 
 ## 已完成
+
+### TASK-053: Deterministic eval coverage for durable checkpoint controls ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 194 passed；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 433 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 explicit checkpoint basics、checkpoint count increments、bounded JSON output、unknown task error、step `checkpoint_ref` linking、trace refs preservation、bad/large `step_id` handling、`CHECKPOINT_ADDED` safe event metadata、sentinel leakage safety、broken event-store failure isolation，以及 existing durable task registry compatibility。
+
+### TASK-052: Durable checkpoint control tools v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 433 tests OK；`python3 evals/run_evals.py` 190 passed；`python3 -m unittest discover -s tests` 1554 tests OK；`git diff --check` OK。
+- 内容: 新增 `add_durable_checkpoint(task_id, step_id=0, description="", state_summary="")` registry tool；复用 `DurableTaskStore.add_checkpoint()`；非整数 `step_id` 返回 JSON error，负数 clamp 到 0；checkpoint snapshot 只保存 safe metadata；匹配 step 时写入 `checkpoint_ref`；输出 bounded JSON；记录 `CHECKPOINT_ADDED` event 且仅包含安全元数据；event failure 不阻断 checkpoint 创建。
 
 ### TASK-051: Deterministic eval coverage for durable lifecycle controls ✅
 - 完成者: Claude B

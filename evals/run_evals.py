@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from mini_agent.durable_workers import WorkerStatus
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
@@ -240,6 +240,10 @@ def main() -> int:
         EvalCase("lifecycle_invalid_transitions", eval_lifecycle_invalid_transitions),
         EvalCase("lifecycle_worker_consistency", eval_lifecycle_worker_consistency),
         EvalCase("lifecycle_safety_failure_isolation", eval_lifecycle_safety_failure_isolation),
+        EvalCase("checkpoint_basics", eval_checkpoint_basics),
+        EvalCase("checkpoint_step_consistency", eval_checkpoint_step_consistency),
+        EvalCase("checkpoint_event_coverage", eval_checkpoint_event_coverage),
+        EvalCase("checkpoint_safety_failure_isolation", eval_checkpoint_safety_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -7034,6 +7038,177 @@ def eval_lifecycle_safety_failure_isolation():
             assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid2))
             assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
             assert isinstance(json.loads(registry.call("list_workers")), list)
+        finally:
+            db.close()
+
+
+# --- Checkpoint eval sentinels ---
+
+_CHECKPOINT_SENTINEL_GOAL = "NORA_EVAL_CHECKPOINT_GOAL_SENTINEL_e5f6a7b8"
+_CHECKPOINT_SENTINEL_SECRET = "NORA_EVAL_CHECKPOINT_SECRET_sk-ckpt-9a0b1c2d"
+_CHECKPOINT_SENTINEL_DESC = "NORA_EVAL_CHECKPOINT_DESC_SENTINEL_3e4f5a6b"
+_CHECKPOINT_SENTINEL_SUMMARY = "NORA_EVAL_CHECKPOINT_SUMMARY_SENTINEL_7c8d9e0f"
+
+
+def eval_checkpoint_basics():
+    """add_durable_checkpoint increments count, returns bounded JSON with task_id/checkpoint_id/step_id/count/presence flags."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="checkpoint test", steps="step one\nstep two")
+            task_id = json.loads(create_r)["task_id"]
+
+            # First checkpoint
+            r1 = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="mid-task snapshot", state_summary="progress 50%")
+            p1 = json.loads(r1)
+            assert p1["task_id"] == task_id, f"task_id: {p1}"
+            assert p1["checkpoint_id"], f"missing checkpoint_id: {p1}"
+            assert p1["step_id"] == 1, f"step_id: {p1}"
+            assert p1["checkpoint_count"] == 1, f"count: {p1}"
+            assert p1["description_present"] is True, f"description_present: {p1}"
+            assert p1["state_summary_present"] is True, f"state_summary_present: {p1}"
+            # Bounded: no raw text fields
+            for key in ("description", "state_summary", "goal", "steps", "raw_description"):
+                assert key not in p1, f"output has {key}: {p1}"
+
+            # Second checkpoint — count increments
+            r2 = registry.call("add_durable_checkpoint", task_id=task_id, step_id=2)
+            p2 = json.loads(r2)
+            assert p2["checkpoint_count"] == 2, f"count after 2nd: {p2}"
+            assert p2["description_present"] is False
+            assert p2["state_summary_present"] is False
+
+            # Unknown task returns error
+            r3 = registry.call("add_durable_checkpoint", task_id="dtask_nonexistent")
+            assert "error" in json.loads(r3), f"unknown task: {r3}"
+
+            # get_durable_task includes checkpoints
+            detail_r = registry.call("get_durable_task", task_id=task_id)
+            detail = json.loads(detail_r)
+            assert len(detail["checkpoints"]) == 2, f"checkpoint count in detail: {len(detail['checkpoints'])}"
+        finally:
+            db.close()
+
+
+def eval_checkpoint_step_consistency():
+    """Matching step gets checkpoint_ref; existing checkpoints/trace_refs preserved; bad step_id bounded."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal="step ref test", steps="alpha\nbeta\ngamma")
+            task_id = json.loads(create_r)["task_id"]
+
+            # Add checkpoint for step 1
+            r1 = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+            cp1_id = json.loads(r1)["checkpoint_id"]
+
+            # Step 1 should have checkpoint_ref
+            task = ts.get_task(task_id)
+            step1 = next(s for s in task.steps if s.id == 1)
+            assert step1.checkpoint_ref == cp1_id, f"step1 checkpoint_ref: {step1.checkpoint_ref}"
+
+            # Step 2 should not have checkpoint_ref
+            step2 = next(s for s in task.steps if s.id == 2)
+            assert step2.checkpoint_ref is None, f"step2 should not have ref: {step2.checkpoint_ref}"
+
+            # Add checkpoint for step 2 — step 1's ref preserved
+            r2 = registry.call("add_durable_checkpoint", task_id=task_id, step_id=2)
+            cp2_id = json.loads(r2)["checkpoint_id"]
+            task = ts.get_task(task_id)
+            step1 = next(s for s in task.steps if s.id == 1)
+            step2 = next(s for s in task.steps if s.id == 2)
+            assert step1.checkpoint_ref == cp1_id, f"step1 ref changed: {step1.checkpoint_ref}"
+            assert step2.checkpoint_ref == cp2_id, f"step2 ref: {step2.checkpoint_ref}"
+
+            # Existing trace_refs preserved
+            task.trace_refs.append("trace_existing")
+            ts.upsert_task(task)
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=3)
+            task = ts.get_task(task_id)
+            assert "trace_existing" in task.trace_refs, f"trace_refs lost: {task.trace_refs}"
+
+            # Bad step_id (non-integer) returns error
+            r_bad = registry.call("add_durable_checkpoint", task_id=task_id, step_id="not_a_number")
+            assert "error" in json.loads(r_bad), f"bad step_id: {r_bad}"
+
+            # Large step_id is clamped/bounded (no crash, checkpoint created with max(0, step_id))
+            r_large = registry.call("add_durable_checkpoint", task_id=task_id, step_id=999)
+            p_large = json.loads(r_large)
+            assert "checkpoint_id" in p_large, f"large step_id crashed: {p_large}"
+            assert p_large["step_id"] == 999, f"step_id clamped: {p_large}"
+        finally:
+            db.close()
+
+
+def eval_checkpoint_event_coverage():
+    """CHECKPOINT_ADDED event recorded with safe metadata. No raw goal/step text/description/summary/secrets in payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal=_CHECKPOINT_SENTINEL_GOAL, steps="secret step text")
+            task_id = json.loads(create_r)["task_id"]
+
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=0, description=_CHECKPOINT_SENTINEL_DESC, state_summary=_CHECKPOINT_SENTINEL_SUMMARY)
+
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            cp_events = [e for e in events if e.event_type == CHECKPOINT_ADDED]
+            assert len(cp_events) >= 1, f"no checkpoint event: {[e.event_type for e in events]}"
+
+            cp_event = cp_events[0]
+            assert cp_event.severity == "info", f"severity: {cp_event.severity}"
+            assert cp_event.payload.get("operation") == "checkpoint"
+            assert cp_event.payload.get("checkpoint_id"), f"missing checkpoint_id in payload"
+            assert cp_event.payload.get("step_id") == 0
+            assert cp_event.payload.get("checkpoint_count") >= 1
+
+            # Sentinel safety: no raw goal, description, summary, or secrets in serialized event
+            serialized = json.dumps(cp_event.to_dict(), ensure_ascii=False)
+            assert _CHECKPOINT_SENTINEL_GOAL not in serialized, "goal leaked in event"
+            assert _CHECKPOINT_SENTINEL_DESC not in serialized, "raw description leaked in event"
+            assert _CHECKPOINT_SENTINEL_SUMMARY not in serialized, "raw state_summary leaked in event"
+            assert "secret step text" not in serialized, "raw step text leaked in event"
+        finally:
+            db.close()
+
+
+def eval_checkpoint_safety_failure_isolation():
+    """Sentinel safety in output. Broken event store doesn't prevent checkpoint. Registry tools still work."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Sentinel safety in output
+            create_r = registry.call("create_durable_task", goal=_CHECKPOINT_SENTINEL_GOAL, steps="s")
+            task_id = json.loads(create_r)["task_id"]
+            r = registry.call("add_durable_checkpoint", task_id=task_id, description=_CHECKPOINT_SENTINEL_DESC, state_summary=_CHECKPOINT_SENTINEL_SECRET)
+            assert _CHECKPOINT_SENTINEL_GOAL not in r, "goal leaked in output"
+            assert _CHECKPOINT_SENTINEL_DESC not in r, "raw description leaked in output"
+            assert _CHECKPOINT_SENTINEL_SECRET not in r, "raw state_summary leaked in output"
+
+            # Broken event store: checkpoint must still work
+            registry.durable_event_store = BrokenEventStore()
+            r2 = registry.call("add_durable_checkpoint", task_id=task_id)
+            p2 = json.loads(r2)
+            assert "checkpoint_id" in p2, f"checkpoint failed with broken store: {p2}"
+            assert p2["checkpoint_count"] >= 1
+
+            # Existing registry tools still work
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
         finally:
             db.close()
 

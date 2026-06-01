@@ -35,6 +35,7 @@ from mini_agent.traces import TraceStore
 from mini_agent.durable_tasks import DurableTaskStore
 from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus
 from mini_agent.durable_events import (
+    CHECKPOINT_ADDED,
     DurableEventStore,
     TASK_CREATED,
     TASK_STATUS_CHANGED,
@@ -1086,6 +1087,92 @@ def build_default_registry(
             "required": ["task_id"],
         },
         permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
+    def _add_durable_checkpoint_json(task_id: str, step_id: int = 0, description: str = "", state_summary: str = "") -> str:
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        try:
+            step_id = max(0, int(step_id))
+        except (TypeError, ValueError):
+            return _json.dumps({"error": f"step_id 必须为整数: {step_id!r}"}, ensure_ascii=False)
+        cp = durable_task_store.add_checkpoint(task_id, {
+            "step_id": step_id,
+            "state_snapshot": {
+                "task_status": task.status,
+                "current_step": task.current_step,
+                "step_id": step_id,
+                "description_present": bool(description.strip()),
+                "state_summary_present": bool(state_summary.strip()),
+            },
+            "description": "",
+        })
+        if cp is None:
+            return _json.dumps({"error": f"创建 checkpoint 失败: {task_id}"}, ensure_ascii=False)
+        # Update step checkpoint_ref if step exists
+        task = durable_task_store.get_task(task_id)
+        if task:
+            for step in task.steps:
+                if step.id == step_id:
+                    step.checkpoint_ref = cp.checkpoint_id
+                    durable_task_store.upsert_task(task)
+                    break
+        try:
+            registry.durable_event_store.record(
+                event_type=CHECKPOINT_ADDED,
+                task_id=task_id,
+                checkpoint_id=cp.checkpoint_id,
+                summary="checkpoint added",
+                payload={
+                    "operation": "checkpoint",
+                    "checkpoint_id": cp.checkpoint_id,
+                    "step_id": step_id,
+                    "checkpoint_count": len(task.checkpoints) if task else 0,
+                    "description_present": bool(description.strip()),
+                    "state_summary_present": bool(state_summary.strip()),
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "task_id": task_id,
+            "checkpoint_id": cp.checkpoint_id,
+            "step_id": step_id,
+            "checkpoint_count": len(task.checkpoints) if task else 0,
+            "description_present": bool(description.strip()),
+            "state_summary_present": bool(state_summary.strip()),
+        }, ensure_ascii=False)
+
+    registry.register(
+        "add_durable_checkpoint",
+        "为 durable task 创建一个 checkpoint。记录安全元数据，不存储原始目标、步骤文本或敏感内容。",
+        _add_durable_checkpoint_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "step_id": {
+                    "type": "integer",
+                    "description": "关联的步骤 id，默认 0（不关联特定步骤）",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "checkpoint 描述（可选，仅记录是否提供，不存储原文）",
+                },
+                "state_summary": {
+                    "type": "string",
+                    "description": "状态摘要（可选，仅记录是否提供，不存储原文）",
+                },
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
     )
 
     registry.register(
