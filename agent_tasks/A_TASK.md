@@ -1,71 +1,54 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-042: Review memory capture v1.
+TASK-044: Structured memory recall in Nora auto-context v1.
 
-Nora now has structured local memory records. Add a narrow, explicit capture layer that turns bounded review/task summaries into structured memory records, so approved work can become durable project knowledge without saving raw diffs, prompts, shell output, or full DONE/REVIEW files.
+Nora now has structured local memory records and explicit review-memory capture. Add the first runtime recall slice so relevant structured records can appear in Nora's automatic context pack for future turns.
 
 ## Scope
 
-Build the smallest safe runtime slice. Do not add LLM summarization, automatic transcript ingestion, filesystem watchers, or background automation in this task.
+Build a narrow, safe recall path. Do not add LLM summarization, background workers, file watchers, model routing, or automatic memory writing in this task.
 
-1. Add a review-memory capture module:
-   - Suggested module: `mini_agent/review_memory.py`.
-   - Provide a function/class that can create one or more `MemoryRecordStore` records from explicit fields:
-     - `task_id`
-     - `status` (`approved`, `changes_requested`, `blocked`)
-     - `title`
-     - `summary`
-     - `learnings`
-     - `risks`
-     - `decisions`
-     - `source`
-   - For `approved`, allow writing bounded `task_learning`, `decision`, `risk`, and/or `fact` records.
-   - For `changes_requested` or `blocked`, do not write durable `decision`/`fact` records by default. At most write a bounded `risk` record if an explicit risk is provided.
+1. Extend `ContextSystem` to support structured memory records:
+   - Add an optional `MemoryRecordStore` dependency.
+   - Search structured records using the user query/task text.
+   - Add a distinct context section, e.g. `结构化记忆`, before or near existing long-term memory.
+   - Include bounded, useful fields only: kind, title, concise content, tags/source/task id if useful.
+   - Bound per-record and total structured-memory output.
 
-2. Safety and dedupe:
-   - Reject or skip secret-like content using existing sensitivity checks.
-   - Never save raw diff markers, shell command output, env vars, prompts, complete DONE/REVIEW bodies, or file contents.
-   - Bound title/content lengths.
-   - Add deterministic dedupe so repeated capture for the same `task_id/status/title/kind` does not create duplicate records.
-   - Use `related_task_id`, `source="review"` or equivalent, and useful tags such as `review`, `task`, `approved`.
+2. Safety:
+   - Never include records whose title/content/tags/source look sensitive via existing sensitivity checks.
+   - Treat recalled memory as untrusted reference material, consistent with the current context-pack warning.
+   - Do not include raw prompts, diffs, shell output, env vars, full DONE/REVIEW files, or huge content.
+   - Keep normal technical records useful, e.g. decisions and task learnings should remain readable.
 
-3. Registry tool:
-   - Add one explicit tool, e.g. `capture_review_memory`.
-   - The tool accepts structured summary fields, not raw files.
-   - It returns bounded JSON listing created/skipped records.
-   - It should use the existing `registry.memory_record_store` wiring.
+3. Wiring:
+   - Wire structured memory recall into the app path that builds `ContextSystem`.
+   - Avoid creating a second unrelated store when an existing DB-backed `MemoryRecordStore` can be used.
+   - Keep existing long-term memory, context summary, and project RAG behavior compatible.
 
-4. Documentation:
-   - Update `docs/knowledge/MEMORY_KERNEL.md` or add a short doc section explaining review-memory capture and safety boundaries.
-
-## Suggested Tests
-
-Add focused tests, likely `tests/test_review_memory.py`:
-
-1. Approved review creates expected `task_learning` / `decision` / `risk` records.
-2. Changes requested does not create `decision` or `fact` records.
-3. Explicit risk on changes requested can create a bounded `risk`.
-4. Dedupe prevents repeated capture duplicates.
-5. Secret-like content is rejected/skipped.
-6. Raw diff/shell/env/prompt-like content is rejected/skipped.
-7. Registry tool returns bounded JSON and does not expose full content except record IDs/titles/kinds.
+4. Tests:
+   - Add focused tests, likely in `tests/test_context_memory.py` or `tests/test_context_system.py`.
+   - Cover relevant structured record recall by query.
+   - Cover no section when no records match.
+   - Cover bounding and sensitive record filtering.
+   - Cover coexistence with existing long-term memory/context summaries.
 
 ## Verification
 
 Run at minimum:
 
 ```bash
-python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-If you touch registry builder broadly, also run:
+If you touch app wiring broadly, also run:
 
 ```bash
 python3 -m unittest discover -s tests

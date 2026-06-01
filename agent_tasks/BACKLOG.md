@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-（空）
+### TASK-044: Structured memory recall in Nora auto-context v1
+- 优先级: high
+- 预计: 1-2 小时
+- 负责人: Claude A
+- 依赖: TASK-038/039 structured memory records、TASK-042/043 review capture 已完成
+- 目标: 将 relevant structured memory records 安全召回到 Nora 自动上下文，让 review memory / decisions / risks / task learnings 能影响后续工作。
+- 验证: `python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
+- 参考: `mini_agent/context_system.py`、`mini_agent/memory_records.py`、`mini_agent/app.py`、`tests/test_context_memory.py`。
+
+### TASK-045: Deterministic eval coverage for structured memory recall
+- 优先级: high
+- 预计: 1 小时
+- 负责人: Claude B
+- 依赖: TASK-044 runtime 存在后执行
+- 目标: 为 structured memory auto-context recall 增加 deterministic offline eval，覆盖召回、过滤、安全边界、bounding 和与现有 context sources 的兼容性。
+- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent` 通过；`git diff --check` 通过。
+- 参考: `evals/run_evals.py` context compiler / memory_record eval pattern；TASK-044 新增召回路径。
 
 ## 已完成
 

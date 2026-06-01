@@ -1,41 +1,40 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-043: Deterministic eval coverage for review memory capture.
+TASK-045: Deterministic eval coverage for structured memory recall.
 
-Add offline eval coverage for TASK-042 so review/task summaries can safely become structured local memory records without leaking raw artifacts or creating duplicates.
+Add offline eval coverage for TASK-044 so Nora's automatic context pack can safely recall relevant structured memory records without leaking unsafe content or breaking existing context sources.
 
 ## Scope
 
-Edit `evals/run_evals.py` only unless you discover a real TASK-042 runtime bug. If TASK-042 runtime is not present yet, wait or write `agent_tasks/B_DONE.md` as blocked by missing runtime.
+Edit `evals/run_evals.py` only unless you discover a real TASK-044 runtime bug. If TASK-044 runtime is not present yet, wait or write `agent_tasks/B_DONE.md` as blocked by missing runtime.
 
 Do not call external APIs.
 
-Add eval cases covering:
+Add deterministic eval cases covering:
 
-1. Approved capture:
-   - `capture_review_memory` creates task learning and decision/risk records from explicit bounded fields.
-   - Created records are searchable via `search_memory_records`.
+1. Recall basics:
+   - Save structured memory records through the existing store/tool path.
+   - Build the app/context path or `ContextSystem` path used by runtime.
+   - `context_pack(query)` includes relevant structured memory title/content for matching queries.
 
-2. Non-approved statuses:
-   - `changes_requested` and `blocked` do not create durable decision/fact records.
-   - Explicit risk can create a risk record.
+2. Ranking/filtering behavior:
+   - Irrelevant records do not appear for unrelated queries.
+   - Multiple matching records are bounded by max results/char limits.
+   - Kinds such as `decision`, `task_learning`, and `risk` are formatted clearly enough to be useful.
 
 3. Safety:
-   - Secret-like content is rejected/skipped.
-   - Raw diff markers, shell output, env var names, prompts, and oversized content do not appear in memory search/list outputs.
-   - Tool output is bounded and does not include raw full content.
+   - Secret-like record title/content is omitted.
+   - Prompt/diff/shell/env-like content does not appear in context output if present in stored records.
+   - Context output does not expose oversized raw content.
 
-4. Dedupe:
-   - Repeating the same capture for `task_id/status/title/kind` does not create duplicate records.
-
-5. Failure isolation:
-   - Invalid status, empty title/summary, malformed inputs, or missing optional fields return JSON errors/skips, not crashes.
-   - Existing memory record tools still work after capture errors.
+4. Compatibility:
+   - Existing context summaries, long-term memory, and project snippets still work.
+   - Empty/no-match structured memory does not suppress other context sections.
 
 Keep evals deterministic and offline.
 
@@ -45,7 +44,7 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent
 git diff --check
 ```
 
