@@ -1,6 +1,6 @@
 # Nora Project Wakeup
 
-Last updated: 2026-05-29
+Last updated: 2026-06-01
 
 ## Mission
 
@@ -8,12 +8,21 @@ Nora is being built to catch and eventually surpass Claude Code and Codex by bec
 
 The project direction is not "chatbot plus tools" and not merely "coding agent plus UI." Nora should evolve into a local-first operating layer for durable agents: persistent task state, resumable execution, event-sourced traces, permissioned tools, worker scheduling, review gates, context compilation, and fast adaptation to current AI agent research.
 
+Nora should also become a professional agent platform that can serve personal and enterprise users across industries. The long-term architecture is:
+
+```text
+Nora = Agent OS Core + Skill Packs + Plugin Runtime + Capability Router
+```
+
+Industry ability should be embedded as a system mechanism, not as one giant prompt. Skill packs teach Nora how an industry works; plugins let Nora operate industry tools through permissioned, auditable connectors.
+
 ## Target Architecture North Star
 
 Use `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` as the architecture north star. Every major task should be judged by whether it advances Nora toward:
 
 - Durable tasks that can pause, resume, replay, inspect, and recover.
 - A runtime kernel with scheduler, event log, state store, permission manager, tool broker, context compiler, and model router.
+- A skill registry, plugin runtime, and capability router for professional and industry workflows.
 - Multi-agent execution with isolated workers, review gates, and deterministic handoff artifacts.
 - Auditable local-first operation where every model call, tool call, file edit, test, approval, and error is traceable.
 
@@ -37,10 +46,10 @@ git log --oneline --decorate -8
 
 Known state at this update:
 
-- `main` was ahead of `origin/main` by 2 local commits.
-- `/session/list` compatibility work was in progress.
-- `agent_tasks/A_TASK.md` and `agent_tasks/B_TASK.md` were assigned for the compatibility/documentation pass.
-- `AGENTS.md` existed but needed alignment with the Claude A/B worker model.
+- `main` was aligned with `origin/main`.
+- Recent completed work reached TASK-059: durable worker auto-dispatch, durable task lifecycle controls, checkpoints, recovery planning, recovery-plan events, and durable task timeline inspection all landed with deterministic eval coverage.
+- `agent_tasks/BACKLOG.md` had no pending or in-progress tasks at this update.
+- The working tree contained only knowledge-documentation updates about skill packs, plugin runtime, and capability routing.
 
 Do not assume this state is still current. Verify before editing.
 
@@ -49,6 +58,9 @@ Do not assume this state is still current. Verify before editing.
 - Nora's north star is Agent OS / Durable Runtime, above ordinary coding-agent or RAG-app positioning.
 - Nora should keep lightweight RAG as an auxiliary feature, not as the core coding-agent brain.
 - Code understanding should prioritize agentic search, AST/symbol search, import/call relationships, task-specific context compilation, trace memory, and review gates.
+- Nora should support industry and professional workflows through modular skill packs plus governed plugins/connectors. Skill packs provide terminology, workflows, templates, risk boundaries, and evals. Plugins provide external system access with auth, permissions, sensitivity labels, confirmation rules, and event logging.
+- Personal Nora should optimize for a local-first professional workbench with low friction, strong memory, private data, resumable tasks, and useful deliverables.
+- Enterprise Nora should optimize for governed agent runtime needs: RBAC, SSO, audit logs, policy controls, isolated worker pools, internal connectors, approvals, cost metrics, reliability, and compliance.
 - Every daily frontier scan should answer how Codex, Claude Code, MCP, OpenAI Agents SDK, and new research should change Nora's roadmap.
 - The project needs a persistent knowledge base because new Codex windows do not automatically inherit prior conversation context.
 
@@ -60,37 +72,34 @@ Nora is a usable local alpha approaching beta:
 - OpenAI-compatible, Anthropic, and Gemini providers.
 - Toolkits, permission categories, file/Git/shell/browser/web/RAG/log/process tools.
 - Short-term memory, long-term memory, task management, session save/load.
-- A large Python test suite; recent full run reported 878 tests passing.
+- Durable task/worker runtime primitives: worker registry/heartbeat/claim/auto-dispatch, lifecycle pause/resume/cancel, checkpoints, recovery planning, recovery events, and timeline inspection.
+- A large Python test suite; recent full run reported 1592 tests passing, and deterministic evals reported 206 passed.
 
 Main gap versus an Agent OS / Durable Runtime:
 
-- Durable execution semantics: pause/resume/replay/recover for long-running tasks.
-- Event-sourced trace store across model/tool/edit/test/review events.
-- Worker isolation, scheduling, and merge workflow.
-- Context compiler and project memory that are structured, scoped, and auditable.
+- Deeper runtime execution semantics beyond state tools: actual isolated worker execution, automatic scheduling, replay, and rollback.
+- Worker isolation, sandboxing, scheduling, and merge workflow.
 - Permission kernel, policy hooks, review gates, and rollback.
 - Evaluation harness for real coding and operating-system-like agent tasks.
-- Hook/plugin/MCP ecosystem.
+- Real model routing and cost/latency/reliability policy.
+- UI redesign for inspecting tasks, traces, workers, approvals, diffs, tests, recovery points, and timelines.
+- Skill pack runtime for industry-specific professional workflows.
+- Plugin runtime and capability routing for external industry tools.
 
 ## Near-Term Priority
 
-Finish the `/session/list` API compatibility fix:
+Shift from feature accumulation to deeper agent-runtime foundations:
 
-- Preserve legacy `sessions` string for old HTTP clients.
-- Keep structured data under `sessions_structured`.
-- Update Web UI to prefer structured data and fall back to legacy string.
-- Update README/OpenAPI docs.
-- Run focused tests, then full unittest suite.
+1. Worker isolation and automatic task dispatch into real worker processes or worktrees.
+2. Sandbox and permission policy kernel for filesystem, shell, browser, network, Git, plugin, and high-risk actions.
+3. Review gates, rollback hooks, and merge workflow around worker output.
+4. Real eval harness for end-to-end coding and durable-runtime tasks, not only unit-level registry behavior.
+5. Model routing by task type, tool-calling quality, cost, latency, context length, and reliability.
+6. UI redesign for task state, traces, approvals, workers, timelines, checkpoints, recovery plans, diffs, and tests.
+7. Skill pack runtime for industry workflows.
+8. Plugin manifests, permission mapping, and capability routing.
 
-After that, shift from feature accumulation to agent-runtime foundations:
-
-1. Define the durable task/event schema.
-2. Trace every model/tool/edit/test/review event into a replayable store.
-3. Build the context compiler.
-4. Isolate workers in separate worktrees or patch queues.
-5. Add lifecycle hooks, permission policies, and review gates.
-6. Add an eval harness for real coding and durable-runtime tasks.
-7. Add MCP/plugin support.
+Initial skill pack priority should stay close to Nora's strengths: software engineering, product/project management, research/consulting, spreadsheet/finance/operations analysis, and content creation. Higher-risk domains such as legal, healthcare, investment, tax, and regulated finance need stronger source tracking, disclaimers, human confirmation, and policy gates.
 
 ## Startup Protocol For A Fresh Window
 
