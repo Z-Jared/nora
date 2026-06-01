@@ -902,6 +902,192 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
+        existing = durable_task_store.get_task(task_id)
+        if existing is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        previous_status = existing.status
+        try:
+            task = durable_task_store.update_status(task_id, "paused")
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+        if task.worker_id:
+            worker = durable_worker_store.get_worker(task.worker_id)
+            if worker and worker.current_task_id == task_id and worker.status != WorkerStatus.OFFLINE:
+                try:
+                    durable_worker_store.update_status(task.worker_id, WorkerStatus.PAUSED, current_task_id=task_id)
+                except Exception:
+                    pass
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                worker_id=task.worker_id,
+                summary="task paused",
+                payload={
+                    "operation": "pause",
+                    "task_id": task_id,
+                    "status": task.status,
+                    "previous_status": previous_status,
+                    "worker_id_present": bool(task.worker_id),
+                    "reason_present": bool(reason.strip()),
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "task_id": task.task_id,
+            "status": task.status,
+            "previous_status": previous_status,
+            "worker_id_present": bool(task.worker_id),
+            "reason_present": bool(reason.strip()),
+        }, ensure_ascii=False)
+
+    def _resume_durable_task_json(task_id: str) -> str:
+        existing = durable_task_store.get_task(task_id)
+        if existing is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        if existing.status not in ("paused", "blocked"):
+            return _json.dumps({"error": f"无法恢复: 当前状态 {existing.status!r} 不允许 resume，仅支持 paused 或 blocked"}, ensure_ascii=False)
+        previous_status = existing.status
+        try:
+            task = durable_task_store.update_status(task_id, "running")
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+        if task.worker_id:
+            worker = durable_worker_store.get_worker(task.worker_id)
+            if worker and worker.current_task_id == task_id and worker.status != WorkerStatus.OFFLINE:
+                try:
+                    durable_worker_store.update_status(task.worker_id, WorkerStatus.RUNNING, current_task_id=task_id)
+                except Exception:
+                    pass
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                worker_id=task.worker_id,
+                summary="task resumed",
+                payload={
+                    "operation": "resume",
+                    "task_id": task_id,
+                    "status": task.status,
+                    "previous_status": previous_status,
+                    "worker_id_present": bool(task.worker_id),
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "task_id": task.task_id,
+            "status": task.status,
+            "previous_status": previous_status,
+            "worker_id_present": bool(task.worker_id),
+        }, ensure_ascii=False)
+
+    def _cancel_durable_task_json(task_id: str, reason: str = "") -> str:
+        existing = durable_task_store.get_task(task_id)
+        if existing is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        previous_status = existing.status
+        try:
+            task = durable_task_store.update_status(task_id, "cancelled")
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+        if task.worker_id:
+            worker = durable_worker_store.get_worker(task.worker_id)
+            if worker and worker.current_task_id == task_id and worker.status != WorkerStatus.OFFLINE:
+                try:
+                    durable_worker_store.update_status(task.worker_id, WorkerStatus.IDLE, current_task_id=None)
+                except Exception:
+                    pass
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                worker_id=task.worker_id,
+                summary="task cancelled",
+                payload={
+                    "operation": "cancel",
+                    "task_id": task_id,
+                    "status": task.status,
+                    "previous_status": previous_status,
+                    "worker_id_present": bool(task.worker_id),
+                    "reason_present": bool(reason.strip()),
+                },
+                source="registry",
+                severity="warning",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "task_id": task.task_id,
+            "status": task.status,
+            "previous_status": previous_status,
+            "worker_id_present": bool(task.worker_id),
+            "reason_present": bool(reason.strip()),
+        }, ensure_ascii=False)
+
+    registry.register(
+        "pause_durable_task",
+        "暂停一个正在运行的 durable task。仅允许 running -> paused 转换。",
+        _pause_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "暂停原因（可选，仅记录是否提供，不持久化原文）",
+                },
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+    registry.register(
+        "resume_durable_task",
+        "恢复一个暂停或阻塞的 durable task。允许 paused -> running 和 blocked -> running。",
+        _resume_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                }
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+    registry.register(
+        "cancel_durable_task",
+        "取消一个 durable task。允许从 pending、running、paused、blocked 状态取消。",
+        _cancel_durable_task_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id，例如 dtask_1",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "取消原因（可选，仅记录是否提供，不持久化原文）",
+                },
+            },
+            "required": ["task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
     registry.register(
         "list_tool_permissions",
         "查看所有工具的权限分类和哪些工具需要确认。",

@@ -37,7 +37,8 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from mini_agent.durable_workers import WorkerStatus
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
 
@@ -235,6 +236,10 @@ def main() -> int:
         EvalCase("dispatch_limits_exclusions", eval_dispatch_limits_exclusions),
         EvalCase("dispatch_state_consistency", eval_dispatch_state_consistency),
         EvalCase("dispatch_safety_failure_isolation", eval_dispatch_safety_failure_isolation),
+        EvalCase("lifecycle_basics", eval_lifecycle_basics),
+        EvalCase("lifecycle_invalid_transitions", eval_lifecycle_invalid_transitions),
+        EvalCase("lifecycle_worker_consistency", eval_lifecycle_worker_consistency),
+        EvalCase("lifecycle_safety_failure_isolation", eval_lifecycle_safety_failure_isolation),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -6779,6 +6784,256 @@ def eval_dispatch_safety_failure_isolation():
             r3 = registry.call("list_durable_tasks")
             parsed_tasks = _json.loads(r3)
             assert len(parsed_tasks) >= 1, f"list_durable_tasks broken: {r3}"
+        finally:
+            db.close()
+
+
+# --- Lifecycle control eval sentinels ---
+
+_LIFECYCLE_SENTINEL_GOAL = "NORA_EVAL_LIFECYCLE_GOAL_SENTINEL_a1b2c3d4"
+_LIFECYCLE_SENTINEL_SECRET = "NORA_EVAL_LIFECYCLE_SECRET_sk-lifecycle-5e6f7a8b"
+
+
+def eval_lifecycle_basics():
+    """Create → running → pause → resume → cancel. Returned JSON is bounded with task_id/status/previous_status only."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Create and advance to running
+            create_r = registry.call("create_durable_task", goal="lifecycle test", steps="step one")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("update_durable_task", task_id=task_id, status="running")
+
+            # pause_durable_task: running → paused
+            pause_r = registry.call("pause_durable_task", task_id=task_id, reason="maintenance window")
+            pause_parsed = json.loads(pause_r)
+            assert pause_parsed["task_id"] == task_id, f"pause task_id: {pause_parsed}"
+            assert pause_parsed["status"] == "paused", f"pause status: {pause_parsed}"
+            assert pause_parsed["previous_status"] == "running", f"pause prev: {pause_parsed}"
+            assert "reason_present" in pause_parsed, f"pause missing reason_present: {pause_parsed}"
+            assert pause_parsed["reason_present"] is True
+            # Bounded: no goal, steps, or raw reason text
+            for key in ("goal", "steps", "reason", "raw_reason"):
+                assert key not in pause_parsed, f"pause output has {key}: {pause_parsed}"
+
+            # resume_durable_task: paused → running
+            resume_r = registry.call("resume_durable_task", task_id=task_id)
+            resume_parsed = json.loads(resume_r)
+            assert resume_parsed["status"] == "running", f"resume status: {resume_parsed}"
+            assert resume_parsed["previous_status"] == "paused", f"resume prev: {resume_parsed}"
+            for key in ("goal", "steps", "reason"):
+                assert key not in resume_parsed, f"resume output has {key}: {resume_parsed}"
+
+            # cancel_durable_task: running → cancelled
+            cancel_r = registry.call("cancel_durable_task", task_id=task_id, reason="user abort")
+            cancel_parsed = json.loads(cancel_r)
+            assert cancel_parsed["status"] == "cancelled", f"cancel status: {cancel_parsed}"
+            assert cancel_parsed["previous_status"] == "running", f"cancel prev: {cancel_parsed}"
+            assert cancel_parsed["reason_present"] is True
+            for key in ("goal", "steps", "reason", "raw_reason"):
+                assert key not in cancel_parsed, f"cancel output has {key}: {cancel_parsed}"
+
+            # Durable events recorded
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            pause_events = [e for e in events if e.payload.get("operation") == "pause"]
+            resume_events = [e for e in events if e.payload.get("operation") == "resume"]
+            cancel_events = [e for e in events if e.payload.get("operation") == "cancel"]
+            assert len(pause_events) >= 1, f"no pause event: {[e.event_type for e in events]}"
+            assert len(resume_events) >= 1, f"no resume event"
+            assert len(cancel_events) >= 1, f"no cancel event"
+        finally:
+            db.close()
+
+
+def eval_lifecycle_invalid_transitions():
+    """Pause from pending, resume from pending, cancel from terminal, unknown task, retry semantics unchanged."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            task = registry.durable_task_store.create_task(goal="invalid transitions", steps=[{"text": "s"}])
+            tid = task.task_id
+
+            # Pause from pending should fail
+            r1 = registry.call("pause_durable_task", task_id=tid)
+            p1 = json.loads(r1)
+            assert "error" in p1, f"pause from pending should error: {p1}"
+
+            # Resume from pending should fail
+            r2 = registry.call("resume_durable_task", task_id=tid)
+            p2 = json.loads(r2)
+            assert "error" in p2, f"resume from pending should error: {p2}"
+
+            # Cancel from completed should fail (terminal state)
+            registry.call("update_durable_task", task_id=tid, status="running")
+            registry.call("update_durable_task", task_id=tid, status="completed")
+            r3 = registry.call("cancel_durable_task", task_id=tid)
+            p3 = json.loads(r3)
+            assert "error" in p3, f"cancel from completed should error: {p3}"
+
+            # Unknown task ids return error
+            r4 = registry.call("pause_durable_task", task_id="dtask_nonexistent")
+            assert "error" in json.loads(r4), f"pause unknown: {r4}"
+            r5 = registry.call("resume_durable_task", task_id="dtask_nonexistent")
+            assert "error" in json.loads(r5), f"resume unknown: {r5}"
+            r6 = registry.call("cancel_durable_task", task_id="dtask_nonexistent")
+            assert "error" in json.loads(r6), f"cancel unknown: {r6}"
+
+            # retry_durable_task still works (existing semantics not broken)
+            t2 = registry.durable_task_store.create_task(goal="retry test", steps=[{"text": "s"}], max_retries=1)
+            tid2 = t2.task_id
+            registry.call("update_durable_task", task_id=tid2, status="running")
+            registry.call("update_durable_task", task_id=tid2, status="failed", failure_reason="timeout")
+            retry_r = registry.call("retry_durable_task", task_id=tid2)
+            retry_p = json.loads(retry_r)
+            assert retry_p.get("status") == "pending" or "error" not in retry_p, f"retry broken: {retry_p}"
+        finally:
+            db.close()
+
+
+def eval_lifecycle_worker_consistency():
+    """Pause → worker paused. Resume → worker running. Cancel → worker idle. Offline/unrelated workers untouched."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Register worker and create+assign+run task
+            ws.register_worker("w_lc", role="coder")
+            task = ts.create_task(goal="worker lifecycle", steps=[{"text": "s"}])
+            tid = task.task_id
+            ts.update_status(tid, "running")
+            # Assign worker
+            registry.call("assign_durable_task", task_id=tid, worker_id="w_lc")
+            ws.update_status("w_lc", "running", current_task_id=tid)
+
+            # Pause: worker should become paused
+            registry.call("pause_durable_task", task_id=tid)
+            w = ws.get_worker("w_lc")
+            assert w.status == "paused", f"worker not paused: {w.status}"
+            assert w.current_task_id == tid, f"worker task cleared: {w.current_task_id}"
+
+            # Resume: worker should become running
+            registry.call("resume_durable_task", task_id=tid)
+            w = ws.get_worker("w_lc")
+            assert w.status == "running", f"worker not running after resume: {w.status}"
+            assert w.current_task_id == tid
+
+            # Cancel: worker should become idle with no current_task_id
+            registry.call("cancel_durable_task", task_id=tid)
+            w = ws.get_worker("w_lc")
+            assert w.status == "idle", f"worker not idle after cancel: {w.status}"
+            assert w.current_task_id is None, f"worker task not cleared: {w.current_task_id}"
+
+            # Offline worker preserved through valid lifecycle operation
+            ws.register_worker("w_offline", role="reviewer")
+            t_off = ts.create_task(goal="offline test", steps=[{"text": "s"}])
+            tid_off = t_off.task_id
+            ts.update_status(tid_off, "running")
+            registry.call("assign_durable_task", task_id=tid_off, worker_id="w_offline")
+            # Set worker to offline with current_task_id matching the running task
+            ws.update_status("w_offline", "offline", current_task_id=tid_off)
+            w_off_setup = ws.get_worker("w_offline")
+            assert w_off_setup.status == "offline", f"setup: worker not offline: {w_off_setup.status}"
+            assert w_off_setup.current_task_id == tid_off, f"setup: wrong task_id: {w_off_setup.current_task_id}"
+
+            # Pause the running task — valid transition, enters worker update branch
+            pause_off_r = registry.call("pause_durable_task", task_id=tid_off)
+            pause_off_p = json.loads(pause_off_r)
+            assert "error" not in pause_off_p, f"pause offline task errored: {pause_off_p}"
+            assert pause_off_p["status"] == "paused", f"task not paused: {pause_off_p}"
+            # Offline worker must NOT be overwritten
+            w_off = ws.get_worker("w_offline")
+            assert w_off.status == "offline", f"offline worker overwritten: {w_off.status}"
+            assert w_off.current_task_id == tid_off, f"offline worker current_task_id changed: {w_off.current_task_id}"
+
+            # Unrelated worker not affected by lifecycle on another task
+            ws.register_worker("w_unrelated", role="tester")
+            t_un = ts.create_task(goal="unrelated test", steps=[{"text": "s"}])
+            tid_un = t_un.task_id
+            ts.update_status(tid_un, "running")
+            registry.call("assign_durable_task", task_id=tid_un, worker_id="w_lc")
+            ws.update_status("w_lc", "running", current_task_id=tid_un)
+            # Set unrelated worker to a different task
+            ws.update_status("w_unrelated", "running", current_task_id="dtask_other_task")
+
+            # Cancel the task bound to w_lc — w_unrelated must be untouched
+            cancel_un_r = registry.call("cancel_durable_task", task_id=tid_un)
+            cancel_un_p = json.loads(cancel_un_r)
+            assert "error" not in cancel_un_p, f"cancel unrelated task errored: {cancel_un_p}"
+            assert cancel_un_p["status"] == "cancelled"
+            w_un = ws.get_worker("w_unrelated")
+            assert w_un.status == "running", f"unrelated worker changed: {w_un.status}"
+            assert w_un.current_task_id == "dtask_other_task", f"unrelated worker task changed: {w_un.current_task_id}"
+        finally:
+            db.close()
+
+
+def eval_lifecycle_safety_failure_isolation():
+    """No raw goals/secrets in output or events. Broken event store doesn't prevent lifecycle ops."""
+    class BrokenEventStore:
+        def record(self, **kwargs):
+            raise RuntimeError("event store offline")
+        def list_events(self, **kwargs):
+            return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Create task with sentinel goal
+            create_r = registry.call("create_durable_task", goal=_LIFECYCLE_SENTINEL_GOAL, steps="secret step")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("update_durable_task", task_id=task_id, status="running")
+
+            # Pause output must not leak goal
+            pause_r = registry.call("pause_durable_task", task_id=task_id, reason=_LIFECYCLE_SENTINEL_SECRET)
+            assert _LIFECYCLE_SENTINEL_GOAL not in pause_r, "goal leaked in pause output"
+            assert _LIFECYCLE_SENTINEL_SECRET not in pause_r, "raw reason leaked in pause output"
+
+            # Resume output must not leak goal
+            resume_r = registry.call("resume_durable_task", task_id=task_id)
+            assert _LIFECYCLE_SENTINEL_GOAL not in resume_r, "goal leaked in resume output"
+
+            # Cancel output must not leak goal
+            cancel_r = registry.call("cancel_durable_task", task_id=task_id, reason=_LIFECYCLE_SENTINEL_SECRET)
+            assert _LIFECYCLE_SENTINEL_GOAL not in cancel_r, "goal leaked in cancel output"
+            assert _LIFECYCLE_SENTINEL_SECRET not in cancel_r, "raw reason leaked in cancel output"
+
+            # Event payloads must not leak goal or reason text
+            events = registry.durable_event_store.list_events(task_id=task_id)
+            for event in events:
+                serialized = json.dumps(event.to_dict(), ensure_ascii=False)
+                assert _LIFECYCLE_SENTINEL_GOAL not in serialized, f"goal leaked in event {event.event_type}"
+                assert _LIFECYCLE_SENTINEL_SECRET not in serialized, f"reason leaked in event {event.event_type}"
+
+            # Broken event store: lifecycle ops must still work
+            registry.event_store = BrokenEventStore()
+            registry.durable_event_store = BrokenEventStore()
+
+            t2 = registry.durable_task_store.create_task(goal="isolation test", steps=[{"text": "s"}])
+            tid2 = t2.task_id
+            registry.call("update_durable_task", task_id=tid2, status="running")
+
+            p2 = json.loads(registry.call("pause_durable_task", task_id=tid2))
+            assert p2["status"] == "paused", f"pause failed with broken store: {p2}"
+
+            r2 = json.loads(registry.call("resume_durable_task", task_id=tid2))
+            assert r2["status"] == "running", f"resume failed with broken store: {r2}"
+
+            c2 = json.loads(registry.call("cancel_durable_task", task_id=tid2))
+            assert c2["status"] == "cancelled", f"cancel failed with broken store: {c2}"
+
+            # Existing registry tools still work
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid2))
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+            assert isinstance(json.loads(registry.call("list_workers")), list)
         finally:
             db.close()
 

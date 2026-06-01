@@ -14,6 +14,7 @@ from mini_agent.durable_tasks import (
     StepStatus,
     TaskStatus,
 )
+from mini_agent.tools import build_default_registry
 
 
 class DataStructureTests(unittest.TestCase):
@@ -1485,6 +1486,204 @@ class AddTraceRefTests(unittest.TestCase):
                 self.assertIn("trace_1", task2.trace_refs)
             finally:
                 db.close()
+
+
+class DurableTaskLifecycleToolTests(unittest.TestCase):
+    """Tests for pause/resume/cancel lifecycle control tools (TASK-050)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_running_task(self, worker_id=None):
+        result = self.registry.call("create_durable_task", goal="test goal", steps="step one\nstep two", worker_id=worker_id or "")
+        task = json.loads(result)
+        task_id = task["task_id"]
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        return task_id
+
+    def test_pause_running_task(self):
+        task_id = self._create_running_task()
+        result = self.registry.call("pause_durable_task", task_id=task_id, reason="user requested")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["task_id"], task_id)
+        self.assertEqual(parsed["status"], "paused")
+        self.assertEqual(parsed["previous_status"], "running")
+        self.assertTrue(parsed["reason_present"])
+
+    def test_resume_paused_task(self):
+        task_id = self._create_running_task()
+        self.registry.call("pause_durable_task", task_id=task_id)
+        result = self.registry.call("resume_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["status"], "running")
+        self.assertEqual(parsed["previous_status"], "paused")
+
+    def test_cancel_running_task(self):
+        task_id = self._create_running_task()
+        result = self.registry.call("cancel_durable_task", task_id=task_id, reason="no longer needed")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["status"], "cancelled")
+        self.assertEqual(parsed["previous_status"], "running")
+        self.assertTrue(parsed["reason_present"])
+
+    def test_cancel_pending_task(self):
+        result = self.registry.call("create_durable_task", goal="test", steps="step one")
+        task_id = json.loads(result)["task_id"]
+        result = self.registry.call("cancel_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["status"], "cancelled")
+        self.assertEqual(parsed["previous_status"], "pending")
+
+    def test_pause_non_running_returns_error(self):
+        result = self.registry.call("create_durable_task", goal="test", steps="step one")
+        task_id = json.loads(result)["task_id"]
+        result = self.registry.call("pause_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_resume_pending_task_returns_error(self):
+        """resume only valid from paused/blocked, not pending."""
+        result = self.registry.call("create_durable_task", goal="test", steps="step one")
+        task_id = json.loads(result)["task_id"]
+        result = self.registry.call("resume_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+
+    def test_resume_completed_task_returns_error(self):
+        task_id = self._create_running_task()
+        self.registry.call("update_durable_task", task_id=task_id, status="completed")
+        result = self.registry.call("resume_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_cancel_unknown_task_returns_error(self):
+        result = self.registry.call("cancel_durable_task", task_id="dtask_999")
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_pause_unknown_task_returns_error(self):
+        result = self.registry.call("pause_durable_task", task_id="dtask_999")
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_resume_unknown_task_returns_error(self):
+        result = self.registry.call("resume_durable_task", task_id="dtask_999")
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_cancel_completed_task_returns_error(self):
+        task_id = self._create_running_task()
+        self.registry.call("update_durable_task", task_id=task_id, status="completed")
+        result = self.registry.call("cancel_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+
+        self.assertIn("error", parsed)
+
+    def test_pause_sets_worker_to_paused(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task_id = self._create_running_task(worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task_id)
+
+        self.registry.call("pause_durable_task", task_id=task_id)
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "paused")
+        self.assertEqual(worker["current_task_id"], task_id)
+
+    def test_resume_sets_worker_to_running(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task_id = self._create_running_task(worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task_id)
+        self.registry.call("pause_durable_task", task_id=task_id)
+
+        self.registry.call("resume_durable_task", task_id=task_id)
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "running")
+
+    def test_cancel_releases_worker_to_idle(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task_id = self._create_running_task(worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task_id)
+
+        self.registry.call("cancel_durable_task", task_id=task_id)
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "idle")
+        self.assertIsNone(worker["current_task_id"])
+
+    def test_cancel_does_not_touch_offline_worker(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task_id = self._create_running_task(worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="offline", current_task_id=task_id)
+
+        self.registry.call("cancel_durable_task", task_id=task_id)
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "offline")
+
+    def test_output_bounded_no_goal_leak(self):
+        task_id = self._create_running_task()
+        result = self.registry.call("pause_durable_task", task_id=task_id, reason="secret reason")
+        parsed = json.loads(result)
+
+        self.assertNotIn("goal", parsed)
+        self.assertNotIn("steps", parsed)
+        self.assertNotIn("secret reason", str(parsed))
+        self.assertNotIn("test goal", str(parsed))
+
+    def test_cancel_output_bounded_no_reason_text(self):
+        task_id = self._create_running_task()
+        result = self.registry.call("cancel_durable_task", task_id=task_id, reason="secret cancellation reason")
+        parsed = json.loads(result)
+
+        self.assertNotIn("secret cancellation reason", str(parsed))
+        self.assertTrue(parsed["reason_present"])
+
+    def test_lifecycle_emits_status_changed_events(self):
+        task_id = self._create_running_task()
+        self.registry.call("pause_durable_task", task_id=task_id)
+        self.registry.call("resume_durable_task", task_id=task_id)
+        self.registry.call("cancel_durable_task", task_id=task_id)
+
+        events = self.registry.durable_event_store.list_events()
+        ops = [e.payload["operation"] for e in events if e.payload.get("operation") in ("pause", "resume", "cancel")]
+        self.assertIn("pause", ops)
+        self.assertIn("resume", ops)
+        self.assertIn("cancel", ops)
+
+    def test_worker_failure_does_not_prevent_task_transition(self):
+        """Worker update failure should not corrupt task state."""
+        self.registry.call("register_worker", worker_id="w1")
+        task_id = self._create_running_task(worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task_id)
+
+        # Mock worker store to fail on update
+        original_update = self.registry.durable_worker_store.update_status
+        self.registry.durable_worker_store.update_status = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("store broken"))
+
+        result = self.registry.call("pause_durable_task", task_id=task_id)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["status"], "paused")
+
+        self.registry.durable_worker_store.update_status = original_update
 
 
 if __name__ == "__main__":

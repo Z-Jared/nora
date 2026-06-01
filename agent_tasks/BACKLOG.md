@@ -12,6 +12,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-051: Deterministic eval coverage for durable lifecycle controls ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 190 passed；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_durable_workers tests.test_mini_agent` 487 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 `pause_durable_task` / `resume_durable_task` / `cancel_durable_task` lifecycle basics、invalid transitions、unknown task、retry compatibility、worker pause/resume/cancel consistency、offline/unrelated worker preservation、safe bounded outputs、event payload safety、broken event-store failure isolation，以及 existing registry tool compatibility。
+
+### TASK-050: Durable task lifecycle control tools v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_durable_workers tests.test_mini_agent` 487 tests OK；`python3 evals/run_evals.py` 190 passed；`git diff --check` OK。
+- 内容: 新增 `pause_durable_task`、`resume_durable_task`、`cancel_durable_task` registry tools；复用 `DurableTaskStore.update_status()` 状态机；`resume` 只允许 paused/blocked -> running；pause/cancel reason 只记录 presence metadata；输出 bounded JSON，不返回 goal/steps/raw reason；同步匹配 worker 的 paused/running/idle 状态并保留 offline/unrelated workers；`TASK_STATUS_CHANGED` events 仅写安全元数据，event/worker store failure 不阻断 task transition。
+
 ### TASK-049: Deterministic eval coverage for durable worker auto-dispatch ✅
 - 完成者: Claude B
 - Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED

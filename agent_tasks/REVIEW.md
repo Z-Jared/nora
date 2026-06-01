@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-048 Durable worker auto-dispatch v1; TASK-049 deterministic eval coverage
-Workers: Claude A (TASK-048), Claude B (TASK-049)
+Reviewed: TASK-050 durable lifecycle control tools; TASK-051 deterministic eval coverage
+Workers: Claude A (TASK-050), Claude B (TASK-051)
 Status: APPROVED
 
 ## Findings
@@ -12,29 +12,20 @@ Status: APPROVED
 
 ### Notes
 
-- `dispatch_durable_tasks` adds narrow assignment automation only: it does not spawn processes, create worktrees, or change task execution semantics.
-- Dispatch now marks stale workers offline before assignment, then assigns pending/unassigned tasks to idle workers up to bounded `max_assignments`.
-- Output is bounded to assignment summaries and does not include raw goals, steps, prompts, or secret-like task content.
-- TASK-049 evals now cover oldest-task dispatch, worker exclusion for running/assigned/paused/offline, no-idle and no-pending no-ops, bounded `max_assignments`, task/worker state consistency, task status compatibility, safe output, event-store failure isolation, and worker/task registry compatibility after dispatch.
+- TASK-050 adds `pause_durable_task`, `resume_durable_task`, and `cancel_durable_task` as explicit lifecycle tools.
+- The implementation reuses the existing durable task state machine; `resume_durable_task` explicitly limits resume to paused/blocked tasks.
+- Worker consistency is covered for pause, resume, cancel, offline worker preservation, and unrelated worker isolation.
+- Tool outputs and durable events are bounded to safe metadata and omit raw goals, steps, prompts, raw reasons, and failure bodies.
+- TASK-051 adds deterministic offline evals for lifecycle basics, invalid transitions, worker consistency, safety, and failure isolation.
 
 ## Checks Run
 
 ```text
-Reviewed:
-- git status --short --branch
-- agent_tasks/A_TASK.md
-- agent_tasks/B_TASK.md
-- agent_tasks/A_DONE.md
-- agent_tasks/B_DONE.md
-- mini_agent/toolkits/registry_builder.py
-- tests/test_durable_workers.py
-- evals/run_evals.py
-
 python3 evals/run_evals.py
-186 passed, 0 failed
+190 passed, 0 failed
 
-python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 468 tests in 11.221s
+python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_durable_workers tests.test_mini_agent
+Ran 487 tests
 OK
 
 git diff --check
