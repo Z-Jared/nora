@@ -1,54 +1,71 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-052: Durable checkpoint control tools v1.
+TASK-054: Durable recovery plan tool v1.
 
-Nora already has durable checkpoints in `DurableTaskStore.add_checkpoint()` and TaskManager shadow sync, but there is no explicit registry tool for an agent or workflow to record a bounded checkpoint on demand. Add a narrow checkpoint control tool that creates safe, inspectable checkpoints without exposing raw prompts, diffs, shell output, or secrets.
+Nora now has durable lifecycle controls and explicit checkpoint creation. The next narrow step toward replay/recovery is a read-only registry tool that can inspect durable task state and checkpoints and return a safe recovery plan for where a future agent should resume. This task must not execute recovery, start workers, run model calls, edit files, or mutate task state.
 
 ## Scope
 
-Build only explicit checkpoint creation. Do not implement replay/resume engine, worker process execution, worktree creation, or broad schema redesign in this task.
+Build only recovery plan inspection. Do not implement replay execution, worker process execution, worktree creation, patch queues, broad schema redesign, or automatic task mutation.
 
-1. Add a registry tool:
-   - Suggested name: `add_durable_checkpoint(task_id, step_id=0, description="", state_summary="")`
+1. Add a read-only registry tool:
+   - Suggested name: `plan_durable_recovery(task_id, checkpoint_id="", step_id="")`
    - Register near existing durable task registry tools in `mini_agent/toolkits/registry_builder.py`.
-   - Use existing `DurableTaskStore.add_checkpoint()`.
    - Unknown task ids should return JSON `{"error": ...}`.
+   - Unknown checkpoint ids should return JSON `{"error": ...}`.
+   - Non-integer `step_id` should return JSON `{"error": ...}` without crashing.
+   - This tool should have read-only task permission/risk.
 
-2. Checkpoint semantics:
-   - `step_id` should be parsed/bounded to an integer >= 0.
-   - Store a bounded `state_snapshot` with safe metadata only, for example:
-     - `task_status`
-     - `current_step`
-     - `step_id`
-     - `description_present`
-     - `state_summary_present`
-   - Do not store raw task goal, raw step text, prompts, diffs, shell output, env vars, full tool outputs, or secret-like values.
-   - Treat `description` and `state_summary` as presence metadata or bounded safe summaries only; if you include any text, bound it tightly and filter secret-like content.
-   - Return bounded JSON summary: `task_id`, `checkpoint_id`, `step_id`, `checkpoint_count`, `description_present`, `state_summary_present`.
+2. Recovery plan semantics:
+   - If `checkpoint_id` is provided, select exactly that checkpoint.
+   - Else if `step_id` is provided, select the latest checkpoint for that step when one exists.
+   - Else select the latest checkpoint when any checkpoint exists.
+   - If no checkpoint exists, still return a plan with `selected_checkpoint_id` empty/null and a `resume_policy` of `from_step` or `from_beginning`.
+   - Compute a bounded `next_step_id`:
+     - Prefer the selected checkpoint's step id when that step is not done/skipped.
+     - Otherwise choose the first step that is not done/skipped.
+     - If all steps are done/skipped, use `current_step` when present, otherwise empty/null.
+   - Set `can_resume` false for completed/cancelled tasks; true for pending/running/paused/blocked/failed tasks.
+   - Include safe reason labels such as `checkpoint_selected`, `step_checkpoint_missing`, `no_checkpoint`, `terminal_status`, or `all_steps_done`.
 
-3. Step checkpoint ref:
-   - If `step_id` matches an existing durable step, write the new checkpoint id into that step's `checkpoint_ref`.
-   - Preserve existing checkpoints, trace refs, worker id, retry metadata, and task status.
-   - Support both SQLite-backed store and JSONL-backed store.
+3. Bounded output:
+   - Return only safe metadata:
+     - `task_id`
+     - `status`
+     - `can_resume`
+     - `resume_policy`
+     - `selected_checkpoint_id`
+     - `checkpoint_step_id`
+     - `next_step_id`
+     - `checkpoint_count`
+     - `step_count`
+     - `incomplete_step_count`
+     - `trace_ref_count`
+     - `worker_id_present`
+     - `reason`
+   - Do not return raw task goal, raw step text, notes, summaries, checkpoint descriptions, raw `state_snapshot`, prompts, diffs, shell output, env vars, full tool outputs, or secret-like values.
 
-4. Event logging and safety:
-   - Record `CHECKPOINT_ADDED` event with safe metadata only: `operation="checkpoint"`, `checkpoint_id`, `step_id`, `checkpoint_count`, `description_present`, `state_summary_present`.
-   - Include `checkpoint_id` top-level on the event where supported.
-   - Event logging failures must not prevent checkpoint creation.
+4. Compatibility:
+   - Do not mutate durable task state.
+   - Preserve existing behavior of `get_durable_task`, `list_durable_tasks`, lifecycle controls, and checkpoint creation.
+   - Support both SQLite-backed store and JSONL-backed store if your implementation touches store-level helpers.
 
 5. Tests:
-   - Add focused tests in `tests/test_durable_tasks.py` and/or `tests/test_durable_events.py`.
-   - Cover successful checkpoint creation via registry.
-   - Cover step `checkpoint_ref` update when step exists.
-   - Cover unknown task id and invalid/bounded `step_id`.
-   - Cover safe output and no raw goal/step/summary/secret leakage.
-   - Cover `CHECKPOINT_ADDED` event safe metadata and failure isolation.
-   - Cover JSONL backend behavior if you add store-level helper behavior.
+   - Add focused tests in `tests/test_durable_tasks.py`.
+   - Cover latest checkpoint selection.
+   - Cover explicit `checkpoint_id` selection.
+   - Cover `step_id` selection and missing step checkpoint behavior.
+   - Cover no-checkpoint fallback.
+   - Cover completed/cancelled `can_resume=false`.
+   - Cover unknown task, unknown checkpoint, and non-integer `step_id`.
+   - Cover safe output and no raw goal/step/note/summary/checkpoint description/state snapshot/secret leakage.
+   - Cover no mutation of task state.
+   - Cover JSONL backend only if you add store-level helper behavior.
 
 ## Verification
 
