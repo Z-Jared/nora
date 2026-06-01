@@ -1,41 +1,40 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: waiting
 
 ## Goal
 
-TASK-057: Deterministic eval coverage for recovery-plan events.
+TASK-059: Deterministic eval coverage for durable task timeline.
 
-TASK-056 runtime is approved and present for eval development.
+This task is waiting for TASK-058 runtime. Do not start implementation until Codex PM explicitly assigns it after TASK-058 is approved and its runtime is visible in your CCB worktree.
 
 ## Scope
 
-When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-056 runtime bug.
+When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-058 runtime bug.
 
 Do not call external APIs. Do not start real agents or terminals.
 
 Planned deterministic eval coverage:
 
-1. Recovery-plan event basics:
+1. Timeline basics:
    - Create a durable task.
-   - Add checkpoints.
-   - Call `plan_durable_recovery`.
-   - Verify `RECOVERY_PLANNED` event is recorded with checkpoint_id linkage and safe metadata.
+   - Generate task/create/checkpoint/recovery events.
+   - Call `get_durable_task_timeline`.
+   - Verify chronological ordering, task summary counts, and bounded event summaries.
 
-2. Selection and fallback events:
-   - Explicit checkpoint_id selection event.
-   - step_id selection event.
-   - No-checkpoint fallback event.
-   - Terminal status event.
+2. Linkage and limit behavior:
+   - checkpoint_id linkage appears as safe id metadata.
+   - payload_keys lists safe key names only.
+   - limit bounds are deterministic.
+   - Unknown task and bad limit return JSON errors.
 
 3. Safety:
-   - Event payload/serialized event does not leak raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot values, prompt text, diffs, shell output, env vars, request strings, or secret-like sentinels.
+   - Timeline output does not leak raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot values, raw payload values, prompt text, diffs, shell output, env vars, request strings, or secret-like sentinels.
 
 4. Compatibility:
-   - Broken event store does not prevent recovery planning.
-   - Existing durable task registry tools still work after recovery planning.
-   - Recovery planning still does not mutate task state.
+   - Timeline inspection does not mutate task or event state.
+   - Existing durable task/event registry tools still work after timeline errors/no-ops.
 
 Keep evals deterministic and offline.
 

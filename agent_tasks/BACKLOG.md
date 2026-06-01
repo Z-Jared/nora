@@ -4,11 +4,24 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-暂无。
+### TASK-059: Deterministic eval coverage for durable task timeline
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-058 runtime present
+- 目标: 为 TASK-058 的 task timeline inspection tool 增加离线 deterministic eval，覆盖 chronological ordering、event/checkpoint/recovery linkage、bounded output、安全不泄漏、missing task error、limit bounds、以及 existing registry compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
+- 参考: `evals/run_evals.py` durable event / recovery plan eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
 
 ## 进行中
 
-暂无。
+### TASK-058: Durable task timeline inspection tool v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-056/TASK-057
+- 分配: Claude A
+- 目标: 增加只读 `get_durable_task_timeline` registry tool，将一条 durable task 的事件按时间线输出为 bounded、safe、可审计的摘要，帮助 replay/recovery inspection。
+- 验证: `python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/durable_events.py`；`mini_agent/toolkits/registry_builder.py`；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 Durable trace schema / Replay and recovery engine。
 
 ## 已完成
 
