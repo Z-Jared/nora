@@ -8,6 +8,7 @@ from mini_agent.context_window import ContextWindow
 from mini_agent.controller import MiniAgent
 from mini_agent.database import NoraDB
 from mini_agent.memory import LongTermMemory
+from mini_agent.memory_records import MemoryRecordStore
 from mini_agent.migration import migrate_jsonl_to_sqlite
 from mini_agent.providers.factory import build_llm_client
 from mini_agent.rag import ProjectRAG
@@ -71,6 +72,7 @@ def build_agent(root: Path = None):
         ),
         long_term_memory=LongTermMemory(db=db),
         context_summaries=ContextSummaryStore(db=db),
+        memory_record_store=MemoryRecordStore(db=db),
         context_window=context_window,
     )
     agent = MiniAgent(

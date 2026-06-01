@@ -1,50 +1,47 @@
-# Claude B Completion Report - TASK-043
+# Claude B Completion Report - TASK-045
 
 Status: completed, ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for review memory capture (TASK-042).
+Added deterministic offline eval coverage for structured memory recall (TASK-044).
 
-Six new eval cases added to `evals/run_evals.py`:
+Four new eval cases added to `evals/run_evals.py`:
 
-1. **review_capture_approved** — Approved capture creates task_learning/decision/risk records from bounded fields. Created records are searchable via `search_memory_records`.
+1. **memory_recall_basics** — Save structured memory records. Build ContextSystem with memory_record_store. `context_pack(query)` includes relevant title/content for matching queries. Kind is formatted (e.g., `[decision]`).
 
-2. **review_capture_non_approved** — `changes_requested` and `blocked` do not create decision/fact records. Explicit risk creates a risk record for non-approved statuses.
+2. **memory_recall_ranking_filtering** — Irrelevant records (e.g., "cooking") do not appear for unrelated queries. Multiple matching records bounded by `max_memory_record_results`. Oversized content (1000 chars) truncated in context output.
 
-3. **review_capture_safety** — Secret-like content rejected. Raw diff markers, shell output rejected. Transcript-style prompt content (system:/user:/assistant:) rejected with sentinel check. Generic env-var assignment content (MY_CUSTOM_TOKEN=, NORA_DB_PATH=) rejected via `[A-Z_][A-Z0-9_]*=` pattern, with sentinel check in capture, search, and list. Oversized content truncated. Tool output bounded (no full content field).
+3. **memory_recall_safety** — Secret-like record content omitted. Diff markers omitted. Env-var assignment content omitted. Prompt transcript content (system:/user:/assistant:) omitted. Shell output ($ commands) omitted. Unsafe metadata (secret in tags, prompt-like source, env var in related_task_id) omitted. Safe content appears normally.
 
-4. **review_capture_dedupe** — Repeating same task_id/status/title/kind does not create duplicates. Different task_id creates new record.
-
-5. **review_capture_failure_isolation** — Invalid status, empty title, empty summary return JSON errors/skips. Registry and memory record tools still work after capture errors.
-
-6. **review_capture_searchability** — Captured records searchable by query and kind. List by kind works. Search/list results bounded (no content field).
+4. **memory_recall_compatibility** — Uses strict sentinel assertions: context summary sentinel, LTM sentinel, RAG/project file sentinel, structured memory sentinel all verified in `context_pack` output. Empty/no-match structured memory (separate db) does not suppress other context sections. RAG/project snippets covered via `context.md` file.
 
 ## Safety Assertions
 
-- Secret sentinel in summary/title → rejected
-- Raw diff markers, shell prompts → rejected
-- Transcript-style prompt content (system:/user:/assistant:) → rejected, sentinel not in capture/search/list
-- Generic env-var assignment (MY_CUSTOM_TOKEN=, NORA_DB_PATH=) → rejected via `[A-Z_][A-Z0-9_]*=`, sentinel not in capture/search/list
-- Oversized content → truncated, not leaked raw
-- Tool output → bounded, no full content field
-- Search/list → bounded summaries, no content
+- Secret sentinel in record content → omitted from context
+- Diff markers in record content → omitted from context
+- Env-var assignment in record content → omitted from context
+- Prompt transcript (system:/user:/assistant:) → omitted from context
+- Shell output ($ commands) → omitted from context
+- Unsafe metadata (secret in tags, prompt-like source, env var in task_id) → omitted from context
+- Oversized content → truncated (200 char limit)
+- Max results → bounded by `max_memory_record_results`
 
 ## Diff
 
 ```text
- evals/run_evals.py | 300 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 300 insertions(+)
+ evals/run_evals.py | 200 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 200 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-174 passed, 0 failed
+178 passed, 0 failed
 
-python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
-Ran 226 tests in 4.003s
+python3 -m unittest tests.test_context_memory tests.test_context_compiler tests.test_memory_records tests.test_mini_agent
+Ran 240 tests in 6.319s
 OK
 
 git diff --check
@@ -54,6 +51,6 @@ git diff --check
 ## Notes
 
 - No runtime code changed — eval only as instructed.
-- TASK-042 implementation was already complete.
+- TASK-044 implementation was already complete.
 - No commit or push performed.
 - Known limitations: none.

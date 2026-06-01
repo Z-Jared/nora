@@ -5,7 +5,11 @@ from mini_agent.context_summary import ContextSummaryStore
 from mini_agent.context_window import ContextWindow
 from mini_agent.file_watcher import FileWatcher
 from mini_agent.memory import LongTermMemory, is_sensitive_text
+from mini_agent.memory_records import MemoryRecordStore
 from mini_agent.rag import ProjectRAG, SearchResult
+from mini_agent.review_memory import _contains_raw_content
+
+_MAX_RECORD_CONTENT = 200
 
 
 @dataclass
@@ -13,11 +17,13 @@ class ContextSystem:
     rag: Optional[ProjectRAG] = None
     long_term_memory: Optional[LongTermMemory] = None
     context_summaries: Optional[ContextSummaryStore] = None
+    memory_record_store: Optional[MemoryRecordStore] = None
     context_window: Optional[ContextWindow] = None
     file_watcher: Optional[FileWatcher] = None
     max_project_results: int = 3
     max_memory_results: int = 3
     max_summary_results: int = 3
+    max_memory_record_results: int = 3
 
     def start_watching(self) -> None:
         if self.file_watcher:
@@ -44,6 +50,10 @@ class ContextSystem:
         memory_context = self._memory_section(query)
         if memory_context:
             sections.append(("长期记忆", memory_context))
+
+        record_context = self._memory_record_section(query)
+        if record_context:
+            sections.append(("结构化记忆", record_context))
 
         project_context = self._project_section(query)
         if project_context:
@@ -74,6 +84,15 @@ class ContextSystem:
             return ""
         return _usable_text(self.long_term_memory.search(query, max_results=self.max_memory_results))
 
+    def _memory_record_section(self, query: str) -> str:
+        if not self.memory_record_store:
+            return ""
+        records = self.memory_record_store.search(query, max_results=self.max_memory_record_results)
+        safe = [r for r in records if _safe_memory_record(r)]
+        if not safe:
+            return ""
+        return "\n".join(_format_memory_record(r) for r in safe)
+
     def _project_section(self, query: str) -> str:
         if not self.rag:
             return ""
@@ -103,3 +122,43 @@ def _format_project_result(index: int, result: SearchResult) -> str:
         f"[{index}] path={result.path} lines={result.line_number}-{result.end_line_number} "
         f"score={result.score}\n{result.snippet}"
     )
+
+
+def _safe_memory_record(record: dict) -> bool:
+    fields = [
+        record.get("title", ""),
+        record.get("content", ""),
+        record.get("source", ""),
+        record.get("related_task_id", ""),
+    ]
+    tags = record.get("tags", [])
+    if isinstance(tags, list):
+        fields.extend(tags)
+    for field in fields:
+        if not field:
+            continue
+        if is_sensitive_text(field) or _contains_raw_content(field):
+            return False
+    return True
+
+
+def _format_memory_record(record: dict) -> str:
+    kind = record.get("kind", "?")
+    title = record.get("title", "")
+    content = record.get("content", "")
+    if len(content) > _MAX_RECORD_CONTENT:
+        content = content[:_MAX_RECORD_CONTENT].rstrip() + "…"
+    parts = [f"- [{kind}] {title}", f"  {content}"]
+    meta = []
+    tags = record.get("tags", [])
+    if tags:
+        meta.append(f"tags: {', '.join(tags)}")
+    source = record.get("source", "")
+    if source:
+        meta.append(f"source: {source}")
+    task_id = record.get("related_task_id", "")
+    if task_id:
+        meta.append(f"task: {task_id}")
+    if meta:
+        parts.append(f"  {' | '.join(meta)}")
+    return "\n".join(parts)
