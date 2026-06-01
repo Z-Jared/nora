@@ -1,47 +1,47 @@
-# Claude B Completion Report
+# Claude B Completion Report — TASK-065
 
-Task: TASK-063 — Deterministic eval coverage for worker workspace integration
 Status: ready for Codex review
 
 ## Summary
 
-Added 10 deterministic offline eval cases for worker workspace integration into claim/dispatch flows (TASK-062 runtime).
+Added 7 deterministic offline eval cases for worker workspace sandbox guard (TASK-064 runtime). Addressed REVIEW.md Must Fix #2.
 
-- **workspace_integration_claim_auto_prepares** — Claim auto-prepares workspace lease. Response includes workspace dict with lease_id/reused fields. Workspace directory exists on disk. Bounded output (no goal/steps/secrets in workspace sub-dict).
+### Eval Cases
 
-- **workspace_integration_dispatch_auto_prepares** — Dispatch auto-prepares workspace lease for each assignment. Each assignment entry includes workspace dict. Workspace directories exist. Bounded output.
+1. **sandbox_guard_valid_path_passes** — `get_worker_workspace` returns lease info (lease_id, worker_id, task_id, workspace_path). `validate_worker_workspace_path` accepts absolute paths within the workspace directory and the workspace root itself.
 
-- **workspace_integration_claim_reuses_existing_lease** — Second claim by same worker on same task returns `reused=True` with same lease_id. No duplicate lease created.
+2. **sandbox_guard_path_traversal_rejected** — Paths with `../` that escape the workspace are rejected with `"path 不在 workspace 内"` error. Deep traversal (`subdir/../../../etc/shadow`) is also rejected. Traversal that stays within workspace (`subdir/../other/file.txt`) passes.
 
-- **workspace_integration_dispatch_multiple_workers_unique_leases** — Dispatch assigns each worker a unique lease_id. No duplicate leases.
+3. **sandbox_guard_absolute_escape_rejected** — Absolute paths outside the workspace (`/etc/passwd`, tmpdir root) are rejected with `"path 不在 workspace 内"` error.
 
-- **workspace_integration_offline_idle_mismatch_no_workspace** — Offline worker cannot claim. Idle worker (no current_task_id) cannot prepare workspace. Worker current_task_id mismatch returns error. Dispatch skips offline workers.
+4. **sandbox_guard_no_lease_errors** — Unknown worker → error. Worker with no lease → `"无 workspace lease"` error. Task mismatch → error. Empty path → `"path 不能为空"` error.
 
-- **workspace_integration_safety_no_leak** — Workspace sub-dict in claim/dispatch responses doesn't leak goal/steps/secrets. WORKSPACE_PREPARED events contain only safe metadata (operation/lease_id/worker_id/task_id).
+5. **sandbox_guard_offline_idle_rejected** — Offline worker with stale `current_task_id` and lease → rejected by both `get_worker_workspace` and `validate_worker_workspace_path` with `"离线"` error. Idle worker with stale `current_task_id` and lease → rejected with `"空闲"` error.
 
-- **workspace_integration_claim_failure_does_not_block** — Workspace prepare failure (broken create_lease) doesn't block claim. Claim still succeeds with workspace error. list/get tools still work after failure.
+6. **sandbox_guard_safety_no_leak** — `get_worker_workspace` and `validate_worker_workspace_path` outputs (both valid and error paths) do not leak goal, steps, or secret sentinels. No forbidden keys in output.
 
-- **workspace_integration_dispatch_failure_does_not_block** — Workspace prepare failure doesn't block dispatch. Assignment still succeeds with workspace error. list/get tools still work.
+7. **sandbox_guard_error_does_not_break_other_tools** — After sandbox guard errors, `list_workers`, `get_worker`, `list_durable_tasks`, `get_durable_task`, and `claim_durable_task` all still work correctly. Post-claim validation uses absolute workspace path with strict `valid is True` assertion.
 
-- **workspace_integration_event_emitted** — Claim and dispatch emit WORKSPACE_PREPARED events with safe payload (operation/lease_id/worker_id/task_id only).
+### Review Fix (Must Fix #2)
 
-- **workspace_integration_dispatch_no_tasks_no_workspace** — Dispatch with no pending tasks returns empty assignments (no workspace errors).
+- Replaced loose `val_parsed.get("valid") is True or "error" in val_parsed` assertion with strict `val_parsed.get("valid") is True` using an absolute path inside the claimed workspace.
+- Added `sandbox_guard_offline_idle_rejected` eval covering offline and idle worker rejection paths.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 419 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 419 insertions(+), 5 deletions(-)
+ evals/run_evals.py | 377 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 371 insertions(+), 6 deletions(-)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-221 passed, 0 failed
+228 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 565 tests in 11.711s — OK
+Ran 585 tests in 13.330s — OK
 
 git diff --check
 OK
@@ -49,7 +49,7 @@ OK
 
 ## Notes
 
-- No runtime code changed (TASK-062 was already complete).
+- TASK-064 runtime fix (offline/idle rejection) was already in place.
+- Only `evals/run_evals.py` was edited.
+- No runtime bugs discovered.
 - No commit or push performed.
-- Safety eval checks workspace sub-dict and events only (claim/dispatch responses intentionally include task details for caller).
-- Known issues: none.

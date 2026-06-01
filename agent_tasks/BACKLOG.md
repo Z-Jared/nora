@@ -8,6 +8,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-065: Deterministic eval coverage for worker workspace sandbox guard ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 228 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 585 tests OK；`python3 -m unittest discover -s tests` 1641 tests OK；`git diff --check` OK。
+- 内容: 新增 7 个 deterministic offline eval，覆盖 sandbox guard valid workspace paths、path traversal rejection、absolute path escape rejection、unknown/no-lease/task-mismatch/empty-path errors、offline/idle worker with stale lease rejection、安全不泄漏 goal/steps/secrets、sandbox error 后 worker/task list/get 与 claim compatibility，以及 post-claim absolute workspace path strict `valid is True`。
+
+### TASK-064: Worker workspace sandbox guard v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 228 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 585 tests OK；`python3 -m unittest discover -s tests` 1641 tests OK；`git diff --check` OK。
+- 内容: 新增只读 sandbox guard tools：`get_worker_workspace(worker_id, task_id)` 和 `validate_worker_workspace_path(worker_id, task_id, path)`；共享 `_resolve_and_validate_lease()` 校验 worker 存在、非 offline/idle、current task 匹配、task owner 匹配、workspace lease 存在且 task 匹配；path validation 使用 `Path.resolve()` 与 resolved workspace root containment 拒绝 traversal/absolute escape；输出 bounded metadata，不创建文件，不执行命令。
+
 ### TASK-063: Deterministic eval coverage for worker workspace integration ✅
 - 完成者: Claude B
 - Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED

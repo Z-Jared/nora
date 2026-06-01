@@ -5,35 +5,36 @@ Status: completed
 
 ## Goal
 
-TASK-063: Deterministic eval coverage for worker workspace integration.
+TASK-065: Deterministic eval coverage for worker workspace sandbox guard.
 
-Codex PM approved this task after review. TASK-062 runtime is integrated locally.
+Codex PM approved this task after review. TASK-064 runtime is integrated locally.
 
 ## Scope
 
-Edit `evals/run_evals.py` only unless a real TASK-062 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
+Edit `evals/run_evals.py` only unless a real TASK-064 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
 
 Deterministic offline eval coverage:
 
-1. Claim/dispatch workspace integration:
-   - claim auto-prepares a workspace lease
-   - dispatch auto-prepares a workspace lease per assignment
-   - workspace directories exist when preparation succeeds
+1. Valid sandbox paths:
+   - `get_worker_workspace` returns bounded lease metadata
+   - `validate_worker_workspace_path` accepts absolute paths inside the workspace
+   - workspace root itself is valid
 
-2. Reuse and uniqueness:
-   - same worker claiming the same task reuses the same lease
-   - multiple dispatched workers receive unique leases
-   - offline/idle/mismatch cases do not create invalid workspace leases
+2. Rejection cases:
+   - path traversal that escapes workspace
+   - absolute path escape outside workspace
+   - unknown worker
+   - worker with no lease
+   - task mismatch
+   - empty path
+   - offline worker with stale current_task_id and lease
+   - idle worker with stale current_task_id and lease
 
-3. Failure isolation:
-   - workspace prepare failure does not block claim
-   - workspace prepare failure does not block dispatch
-   - existing list/get worker/task tools still work after workspace failures
-
-4. Safety and events:
-   - workspace sub-dict does not leak raw goal, steps, prompts, shell output, diffs, env vars, or secrets
-   - `WORKSPACE_PREPARED` events contain safe metadata only
-   - no pending tasks means dispatch returns no workspace activity
+3. Safety and compatibility:
+   - outputs do not leak raw task goal, steps, prompts, shell output, diffs, env vars, or secrets
+   - sandbox guard errors do not break worker/task list/get tools
+   - claim still works after sandbox guard errors
+   - post-claim validation uses an absolute path inside the claimed workspace and strictly asserts `valid is True`
 
 ## Verification
 

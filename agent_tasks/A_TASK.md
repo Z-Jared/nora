@@ -5,36 +5,34 @@ Status: completed
 
 ## Goal
 
-TASK-062: Worker workspace preparation integration.
+TASK-064: Worker workspace sandbox guard v1.
 
-Codex PM approved this task after review. TASK-060 workspace lease runtime and TASK-061 eval coverage are already integrated.
+Codex PM approved this task. TASK-060 workspace lease runtime, TASK-061 eval coverage, and TASK-062 workspace integration into claim/dispatch are already integrated.
 
-Nora can create durable worker workspace leases. The next runtime depth step is wiring workspace preparation into worker claim/dispatch flows so future worker execution has a workspace lease available before execution.
+Nora can create durable worker workspace leases and automatically prepare them during claim/dispatch. The next sandbox step is ensuring that worker file/command operations can only target paths within their active workspace lease directory.
 
 ## Scope
 
-Integrate workspace preparation into worker claim and dispatch. Do not implement sandbox policy, process isolation, git worktrees, patch queues, or real multi-process worker execution.
+Add minimal sandbox guard tools at the registry/toolkit layer. Do not implement real process isolation, Docker, git worktrees, patch queues, or UI changes.
 
-1. Claim integration:
-   - `claim_durable_task(worker_id)` should best-effort prepare workspace after a successful claim.
-   - Existing active assignment path should reuse existing workspace lease when possible.
-   - Response should include bounded `workspace` metadata or a bounded `workspace.error`.
-   - Workspace preparation failure must not block claim.
+1. Shared validation helper:
+   - `_resolve_and_validate_lease(worker_id, task_id)` returns `(lease, None)` or `(None, error_dict)`
+   - Validates: worker exists, worker is not offline or idle, `worker.current_task_id == task_id`, task exists, `task.worker_id == worker_id`, lease exists, `lease.task_id == task_id`
 
-2. Dispatch integration:
-   - `dispatch_durable_tasks(max_assignments=10)` should best-effort prepare workspace after each assignment.
-   - Each assignment response should include bounded `workspace` metadata or bounded `workspace.error`.
-   - Workspace preparation failure must not block dispatch.
+2. Read-only tools:
+   - `get_worker_workspace(worker_id, task_id)` — returns lease info or error
+   - `validate_worker_workspace_path(worker_id, task_id, path)` — validates path is within workspace
+   - Both registered with `risk="read"` permission
 
-3. Lease behavior:
-   - Same worker + same task with existing lease should be idempotent and return `reused: true`.
-   - Same task leased by a different worker must still return an error with `existing_lease_id`.
-   - Worker with a lease for a different task must still return an error with `existing_lease_id`.
+3. Path validation:
+   - Uses `Path.resolve()` to normalize `..`, symlinks, and relative paths
+   - Checks `resolved.relative_to(ws_root.resolve())` to ensure containment
+   - Path traversal, absolute path escape, no lease, worker/task mismatch all return bounded JSON error
 
-4. Safety and compatibility:
-   - New workspace output must not leak raw task goal, steps, prompts, shell output, diffs, env vars, or secrets.
-   - Preserve existing claim/dispatch task assignment behavior.
-   - Preserve existing durable worker/task/event registry tools.
+4. Safety:
+   - Output does not leak raw task goal, steps, prompts, shell output, diffs, env vars, or secrets
+   - Tools are read-only — validate paths but do not create files
+   - Preserve existing workspace lease, claim, dispatch, and all other registry tools
 
 ## Verification
 

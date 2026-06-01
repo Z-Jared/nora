@@ -1063,6 +1063,116 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _resolve_and_validate_lease(worker_id: str, task_id: str):
+        """Resolve and validate a workspace lease for worker+task.
+
+        Returns (lease, None) on success or (None, error_dict) on failure.
+        """
+        worker_id = worker_id.strip()
+        task_id = task_id.strip()
+        if not worker_id:
+            return None, {"error": "worker_id 不能为空"}
+        if not task_id:
+            return None, {"error": "task_id 不能为空"}
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return None, {"error": f"未找到 worker: {worker_id}"}
+        if worker.status == WorkerStatus.OFFLINE:
+            return None, {"error": f"worker {worker_id} 已离线，无法使用 workspace"}
+        if worker.status == WorkerStatus.IDLE:
+            return None, {"error": f"worker {worker_id} 空闲中，无法使用 workspace"}
+        if worker.current_task_id != task_id:
+            return None, {"error": f"worker {worker_id} 当前未执行 task {task_id}"}
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return None, {"error": f"未找到 durable task: {task_id}"}
+        if task.worker_id != worker_id:
+            return None, {"error": f"task {task_id} 未分配给 worker {worker_id}"}
+        lease = workspace_lease_store.get_lease_by_worker(worker_id)
+        if lease is None:
+            return None, {"error": f"worker {worker_id} 无 workspace lease"}
+        if lease.task_id != task_id:
+            return None, {"error": f"worker {worker_id} 的 lease 属于 task {lease.task_id}，非 {task_id}"}
+        return lease, None
+
+    def _get_worker_workspace_json(worker_id: str, task_id: str) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        return _json.dumps(lease.to_dict(), ensure_ascii=False)
+
+    def _validate_worker_workspace_path_json(worker_id: str, task_id: str, path: str) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        path = path.strip()
+        if not path:
+            return _json.dumps({"error": "path 不能为空"}, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path)
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            return _json.dumps({"error": f"path 解析失败: {path}"}, ensure_ascii=False)
+        try:
+            resolved.relative_to(ws_root.resolve())
+        except ValueError:
+            return _json.dumps({
+                "error": f"path 不在 workspace 内",
+                "path": path,
+                "workspace_path": lease.workspace_path,
+            }, ensure_ascii=False)
+        return _json.dumps({
+            "valid": True,
+            "path": str(resolved),
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "get_worker_workspace",
+        "获取 worker 的 workspace lease 信息。需要 worker 当前正在执行指定 task。",
+        _get_worker_workspace_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id",
+                },
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+    registry.register(
+        "validate_worker_workspace_path",
+        "校验目标 path 是否在 worker 的 workspace lease 目录内。防止 path traversal 和绝对路径逃逸。",
+        _validate_worker_workspace_path_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "worker id",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "durable task id",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "要校验的文件路径",
+                },
+            },
+            "required": ["worker_id", "task_id", "path"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

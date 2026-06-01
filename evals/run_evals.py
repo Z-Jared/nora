@@ -255,6 +255,13 @@ def main() -> int:
         EvalCase("workspace_integration_dispatch_failure_does_not_block", eval_workspace_integration_dispatch_failure_does_not_block),
         EvalCase("workspace_integration_event_emitted", eval_workspace_integration_event_emitted),
         EvalCase("workspace_integration_dispatch_no_tasks_no_workspace", eval_workspace_integration_dispatch_no_tasks_no_workspace),
+        EvalCase("sandbox_guard_valid_path_passes", eval_sandbox_guard_valid_path_passes),
+        EvalCase("sandbox_guard_path_traversal_rejected", eval_sandbox_guard_path_traversal_rejected),
+        EvalCase("sandbox_guard_absolute_escape_rejected", eval_sandbox_guard_absolute_escape_rejected),
+        EvalCase("sandbox_guard_no_lease_errors", eval_sandbox_guard_no_lease_errors),
+        EvalCase("sandbox_guard_offline_idle_rejected", eval_sandbox_guard_offline_idle_rejected),
+        EvalCase("sandbox_guard_safety_no_leak", eval_sandbox_guard_safety_no_leak),
+        EvalCase("sandbox_guard_error_does_not_break_other_tools", eval_sandbox_guard_error_does_not_break_other_tools),
         EvalCase("checkpoint_basics", eval_checkpoint_basics),
         EvalCase("checkpoint_step_consistency", eval_checkpoint_step_consistency),
         EvalCase("checkpoint_event_coverage", eval_checkpoint_event_coverage),
@@ -7774,6 +7781,376 @@ def eval_workspace_integration_dispatch_no_tasks_no_workspace():
             parsed = json.loads(result)
             assert parsed["dispatched"] == 0, f"expected 0 dispatched: {parsed}"
             assert parsed["assignments"] == [], f"expected empty assignments: {parsed}"
+        finally:
+            db.close()
+
+
+# --- Sandbox guard eval sentinels ---
+
+_SANDBOX_SENTINEL_GOAL = "NORA_EVAL_SANDBOX_GOAL_SENTINEL_a1b2c3d4"
+_SANDBOX_SENTINEL_SECRET = "NORA_EVAL_SANDBOX_SECRET_sk-sbox-5e6f7a8b"
+_SANDBOX_SENTINEL_STEP = "NORA_EVAL_SANDBOX_STEP_SENTINEL_c9d0e1f2"
+
+
+def _setup_sandbox_worker_with_lease(registry, worker_id="w_sbox"):
+    """Helper: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(goal=_SANDBOX_SENTINEL_GOAL, steps=[{"text": _SANDBOX_SENTINEL_STEP}])
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    # Transition task to running
+    ts.update_status(tid, "running")
+    # Prepare workspace lease
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"]
+
+
+def eval_sandbox_guard_valid_path_passes():
+    """Valid path inside workspace passes validate_worker_workspace_path.
+    get_worker_workspace returns lease info."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_sandbox_worker_with_lease(registry)
+
+            # get_worker_workspace returns lease info
+            gw_result = registry.call("get_worker_workspace", worker_id="w_sbox", task_id=tid)
+            gw_parsed = json.loads(gw_result)
+            assert "lease_id" in gw_parsed, f"get_worker_workspace missing lease_id: {gw_parsed}"
+            assert gw_parsed["worker_id"] == "w_sbox"
+            assert gw_parsed["task_id"] == tid
+            assert "workspace_path" in gw_parsed
+
+            # Valid absolute path inside workspace
+            ws_root = Path(ws_path)
+            valid_path = str(ws_root / "src" / "main.py")
+            valid_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=valid_path,
+            )
+            valid_parsed = json.loads(valid_result)
+            assert valid_parsed.get("valid") is True, f"valid path should pass: {valid_parsed}"
+            assert "path" in valid_parsed
+            assert "workspace_path" in valid_parsed
+            assert "lease_id" in valid_parsed
+
+            # Workspace root itself passes
+            root_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=ws_path,
+            )
+            root_parsed = json.loads(root_result)
+            assert root_parsed.get("valid") is True, f"workspace root should pass: {root_parsed}"
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_path_traversal_rejected():
+    """Path traversal with ../ that escapes workspace is rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_sandbox_worker_with_lease(registry)
+            ws_root = Path(ws_path)
+
+            # Traversal escape using absolute path with ..
+            escape_path = str(ws_root / ".." / ".." / "etc" / "passwd")
+            escape_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=escape_path,
+            )
+            escape_parsed = json.loads(escape_result)
+            assert "error" in escape_parsed, f"traversal should be rejected: {escape_parsed}"
+            assert "不在 workspace" in escape_parsed["error"], f"error should mention workspace: {escape_parsed}"
+
+            # Deep traversal
+            deep_path = str(ws_root / "subdir" / ".." / ".." / ".." / "etc" / "shadow")
+            deep_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=deep_path,
+            )
+            deep_parsed = json.loads(deep_result)
+            assert "error" in deep_parsed, f"deep traversal should be rejected: {deep_parsed}"
+
+            # Traversal that stays within workspace should pass
+            stay_path = str(ws_root / "subdir" / ".." / "other" / "file.txt")
+            stay_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=stay_path,
+            )
+            stay_parsed = json.loads(stay_result)
+            assert stay_parsed.get("valid") is True, f"traversal staying inside should pass: {stay_parsed}"
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_absolute_escape_rejected():
+    """Absolute path that escapes workspace is rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_sandbox_worker_with_lease(registry)
+
+            # Absolute path escape
+            abs_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path="/etc/passwd",
+            )
+            abs_parsed = json.loads(abs_result)
+            assert "error" in abs_parsed, f"absolute escape should be rejected: {abs_parsed}"
+            assert "不在 workspace" in abs_parsed["error"]
+
+            # Absolute path to tmpdir root (outside workspace)
+            outside_path = str(Path(tmpdir) / "outside.txt")
+            outside_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path=outside_path,
+            )
+            outside_parsed = json.loads(outside_result)
+            assert "error" in outside_parsed, f"outside absolute path should be rejected: {outside_parsed}"
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_no_lease_errors():
+    """No lease, unknown worker, task mismatch → JSON errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Unknown worker
+            r1 = registry.call("get_worker_workspace", worker_id="w_nonexistent", task_id="dtask_x")
+            p1 = json.loads(r1)
+            assert "error" in p1, f"unknown worker should error: {p1}"
+
+            r1v = registry.call("validate_worker_workspace_path", worker_id="w_nonexistent", task_id="dtask_x", path="f.txt")
+            p1v = json.loads(r1v)
+            assert "error" in p1v, f"unknown worker validate should error: {p1v}"
+
+            # Worker with no lease (assigned but no workspace prepared)
+            ws.register_worker("w_nolease", role="coder")
+            task_nl = ts.create_task(goal="no lease test", steps=[{"text": "s"}])
+            ts.assign_worker(task_nl.task_id, "w_nolease")
+            ws.update_status("w_nolease", "assigned", current_task_id=task_nl.task_id)
+            ts.update_status(task_nl.task_id, "running")
+
+            r2 = registry.call("get_worker_workspace", worker_id="w_nolease", task_id=task_nl.task_id)
+            p2 = json.loads(r2)
+            assert "error" in p2, f"no lease should error: {p2}"
+            assert "无 workspace lease" in p2["error"], f"error should mention no lease: {p2}"
+
+            r2v = registry.call("validate_worker_workspace_path", worker_id="w_nolease", task_id=task_nl.task_id, path="f.txt")
+            p2v = json.loads(r2v)
+            assert "error" in p2v, f"no lease validate should error: {p2v}"
+
+            # Task mismatch (worker executing different task)
+            ws.register_worker("w_mismatch", role="coder")
+            task_a = ts.create_task(goal="task A", steps=[{"text": "s"}])
+            task_b = ts.create_task(goal="task B", steps=[{"text": "s"}])
+            ts.assign_worker(task_a.task_id, "w_mismatch")
+            ws.update_status("w_mismatch", "assigned", current_task_id=task_a.task_id)
+            ts.update_status(task_a.task_id, "running")
+            # Prepare lease for task_a
+            registry.call("prepare_worker_workspace", worker_id="w_mismatch", task_id=task_a.task_id)
+            # Now ask about task_b (mismatch)
+            r3 = registry.call("get_worker_workspace", worker_id="w_mismatch", task_id=task_b.task_id)
+            p3 = json.loads(r3)
+            assert "error" in p3, f"task mismatch should error: {p3}"
+
+            r3v = registry.call("validate_worker_workspace_path", worker_id="w_mismatch", task_id=task_b.task_id, path="f.txt")
+            p3v = json.loads(r3v)
+            assert "error" in p3v, f"task mismatch validate should error: {p3v}"
+
+            # Empty path
+            tid, _ = _setup_sandbox_worker_with_lease(registry, worker_id="w_empty")
+            r4 = registry.call("validate_worker_workspace_path", worker_id="w_empty", task_id=tid, path="")
+            p4 = json.loads(r4)
+            assert "error" in p4, f"empty path should error: {p4}"
+            assert "不能为空" in p4["error"]
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_offline_idle_rejected():
+    """Offline and idle workers with stale current_task_id and lease are rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Setup: worker has lease and current_task_id, then goes offline
+            tid_off, ws_path_off = _setup_sandbox_worker_with_lease(registry, worker_id="w_go_offline")
+            ws_root_off = Path(ws_path_off)
+            abs_path_off = str(ws_root_off / "file.txt")
+
+            # Mark offline while current_task_id and lease remain
+            ws.update_status("w_go_offline", "offline", current_task_id=tid_off)
+
+            # get_worker_workspace should reject offline worker
+            r1 = registry.call("get_worker_workspace", worker_id="w_go_offline", task_id=tid_off)
+            p1 = json.loads(r1)
+            assert "error" in p1, f"offline worker should be rejected by get_worker_workspace: {p1}"
+            assert "离线" in p1["error"], f"error should mention offline: {p1}"
+
+            # validate_worker_workspace_path should reject offline worker
+            r1v = registry.call("validate_worker_workspace_path", worker_id="w_go_offline", task_id=tid_off, path=abs_path_off)
+            p1v = json.loads(r1v)
+            assert "error" in p1v, f"offline worker should be rejected by validate: {p1v}"
+            assert "离线" in p1v["error"], f"error should mention offline: {p1v}"
+
+            # Setup: worker has lease and current_task_id, then goes idle
+            tid_idle, ws_path_idle = _setup_sandbox_worker_with_lease(registry, worker_id="w_go_idle")
+            ws_root_idle = Path(ws_path_idle)
+            abs_path_idle = str(ws_root_idle / "file.txt")
+
+            # Mark idle while current_task_id and lease remain
+            ws.update_status("w_go_idle", "idle", current_task_id=tid_idle)
+
+            # get_worker_workspace should reject idle worker
+            r2 = registry.call("get_worker_workspace", worker_id="w_go_idle", task_id=tid_idle)
+            p2 = json.loads(r2)
+            assert "error" in p2, f"idle worker should be rejected by get_worker_workspace: {p2}"
+            assert "空闲" in p2["error"], f"error should mention idle: {p2}"
+
+            # validate_worker_workspace_path should reject idle worker
+            r2v = registry.call("validate_worker_workspace_path", worker_id="w_go_idle", task_id=tid_idle, path=abs_path_idle)
+            p2v = json.loads(r2v)
+            assert "error" in p2v, f"idle worker should be rejected by validate: {p2v}"
+            assert "空闲" in p2v["error"], f"error should mention idle: {p2v}"
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_safety_no_leak():
+    """Sandbox guard output does not leak goal, steps, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_sandbox_worker_with_lease(registry)
+
+            # get_worker_workspace output
+            gw_result = registry.call("get_worker_workspace", worker_id="w_sbox", task_id=tid)
+            gw_str = gw_result
+            assert _SANDBOX_SENTINEL_GOAL not in gw_str, f"goal leaked in get_worker_workspace: {gw_str}"
+            assert _SANDBOX_SENTINEL_SECRET not in gw_str, f"secret leaked in get_worker_workspace: {gw_str}"
+            assert _SANDBOX_SENTINEL_STEP not in gw_str, f"step leaked in get_worker_workspace: {gw_str}"
+            gw_parsed = json.loads(gw_result)
+            for key in ("goal", "steps", "secret"):
+                assert key not in gw_parsed, f"get_worker_workspace has forbidden key {key}: {gw_parsed}"
+
+            # validate_worker_workspace_path output (valid path)
+            val_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path="src/main.py",
+            )
+            val_str = val_result
+            assert _SANDBOX_SENTINEL_GOAL not in val_str, f"goal leaked in validate: {val_str}"
+            assert _SANDBOX_SENTINEL_SECRET not in val_str, f"secret leaked in validate: {val_str}"
+            assert _SANDBOX_SENTINEL_STEP not in val_str, f"step leaked in validate: {val_str}"
+            val_parsed = json.loads(val_result)
+            for key in ("goal", "steps", "secret"):
+                assert key not in val_parsed, f"validate has forbidden key {key}: {val_parsed}"
+
+            # validate_worker_workspace_path output (error path - traversal)
+            err_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_sbox", task_id=tid, path="../../etc/passwd",
+            )
+            err_str = err_result
+            assert _SANDBOX_SENTINEL_GOAL not in err_str, f"goal leaked in validate error: {err_str}"
+            assert _SANDBOX_SENTINEL_SECRET not in err_str, f"secret leaked in validate error: {err_str}"
+            assert _SANDBOX_SENTINEL_STEP not in err_str, f"step leaked in validate error: {err_str}"
+
+            # validate_worker_workspace_path output (error path - no lease)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_noleak", role="coder")
+            task_nl = ts.create_task(goal=_SANDBOX_SENTINEL_GOAL, steps=[{"text": _SANDBOX_SENTINEL_STEP}])
+            ts.assign_worker(task_nl.task_id, "w_noleak")
+            ws.update_status("w_noleak", "assigned", current_task_id=task_nl.task_id)
+            ts.update_status(task_nl.task_id, "running")
+
+            nol_result = registry.call(
+                "validate_worker_workspace_path",
+                worker_id="w_noleak", task_id=task_nl.task_id, path="f.txt",
+            )
+            nol_str = nol_result
+            assert _SANDBOX_SENTINEL_GOAL not in nol_str, f"goal leaked in no-lease error: {nol_str}"
+            assert _SANDBOX_SENTINEL_SECRET not in nol_str, f"secret leaked in no-lease error: {nol_str}"
+        finally:
+            db.close()
+
+
+def eval_sandbox_guard_error_does_not_break_other_tools():
+    """Sandbox guard errors do not break claim/dispatch/list/get worker/task tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Trigger sandbox guard errors
+            r1 = registry.call("get_worker_workspace", worker_id="w_nonexistent", task_id="dtask_x")
+            assert "error" in json.loads(r1)
+
+            r2 = registry.call("validate_worker_workspace_path", worker_id="w_nonexistent", task_id="dtask_x", path="../../etc/passwd")
+            assert "error" in json.loads(r2)
+
+            # Existing tools still work after sandbox errors
+            # Register worker and create task
+            ws.register_worker("w_after_err", role="coder")
+            task = ts.create_task(goal="post-error test", steps=[{"text": "s"}])
+
+            # list_workers works
+            lw = registry.call("list_workers")
+            lw_parsed = json.loads(lw)
+            assert isinstance(lw_parsed, list), f"list_workers broken: {lw}"
+
+            # get_worker works
+            gw = registry.call("get_worker", worker_id="w_after_err")
+            gw_parsed = json.loads(gw)
+            assert gw_parsed.get("worker_id") == "w_after_err", f"get_worker broken: {gw}"
+
+            # list_durable_tasks works
+            lt = registry.call("list_durable_tasks")
+            lt_parsed = json.loads(lt)
+            assert isinstance(lt_parsed, list), f"list_durable_tasks broken: {lt}"
+
+            # get_durable_task works
+            gt = registry.call("get_durable_task", task_id=task.task_id)
+            gt_parsed = json.loads(gt)
+            assert gt_parsed.get("task_id") == task.task_id, f"get_durable_task broken: {gt}"
+
+            # claim still works
+            claim_r = registry.call("claim_durable_task", worker_id="w_after_err")
+            claim_parsed = json.loads(claim_r)
+            assert claim_parsed.get("claimed") is True, f"claim broken after sandbox errors: {claim_r}"
+
+            # Validate still works after successful claim — use absolute path inside workspace
+            tid = claim_parsed.get("task_id")
+            ws_info = claim_parsed.get("workspace", {})
+            ws_path = ws_info.get("workspace_path", "")
+            assert ws_path, f"claim should produce workspace_path: {claim_r}"
+            abs_test_path = str(Path(ws_path) / "test.txt")
+            val_r = registry.call("validate_worker_workspace_path", worker_id="w_after_err", task_id=tid, path=abs_test_path)
+            val_parsed = json.loads(val_r)
+            assert val_parsed.get("valid") is True, f"validate should succeed with absolute path inside workspace: {val_r}"
         finally:
             db.close()
 

@@ -1151,5 +1151,265 @@ class WorkspaceIntegrationTests(unittest.TestCase):
         self.assertEqual(len(ws_events), 0)
 
 
+class WorkspaceSandboxGuardTests(unittest.TestCase):
+    """Tests for workspace sandbox guard tools (TASK-064)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    # --- get_worker_workspace ---
+
+    def test_get_workspace_returns_lease(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+        self.assertIn("lease_id", result)
+        self.assertIn("workspace_path", result)
+
+    def test_get_workspace_no_lease_returns_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+
+        self.assertIn("error", result)
+        self.assertIn("无 workspace lease", result["error"])
+
+    def test_get_workspace_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w999", task_id="dtask_1"))
+        self.assertIn("error", result)
+
+    def test_get_workspace_task_mismatch_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id="dtask_999"))
+        self.assertIn("error", result)
+
+    def test_get_workspace_worker_not_executing_task_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        # Change worker's current_task_id
+        self.registry.call("update_worker_status", worker_id="w1", status="assigned", current_task_id="dtask_999")
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertIn("error", result)
+        self.assertIn("当前未执行", result["error"])
+
+    # --- validate_worker_workspace_path ---
+
+    def test_validate_path_inside_workspace(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/src/main.py",
+        ))
+
+        self.assertTrue(result["valid"])
+        self.assertIn("path", result)
+        self.assertIn("workspace_path", result)
+
+    def test_validate_path_workspace_root_itself(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path,
+        ))
+
+        self.assertTrue(result["valid"])
+
+    def test_validate_path_traversal_escape_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/../../etc/passwd",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("不在 workspace 内", result["error"])
+
+    def test_validate_path_absolute_escape_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path="/etc/passwd",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("不在 workspace 内", result["error"])
+
+    def test_validate_path_no_lease_returns_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path="/tmp/some/file",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("无 workspace lease", result["error"])
+
+    def test_validate_path_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w999", task_id="dtask_1", path="/tmp/x",
+        ))
+        self.assertIn("error", result)
+
+    def test_validate_path_empty_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id, path="",
+        ))
+        self.assertIn("error", result)
+
+    def test_validate_path_worker_task_mismatch_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+        self.registry.call("update_worker_status", worker_id="w1", status="assigned", current_task_id="dtask_999")
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/file.txt",
+        ))
+        self.assertIn("error", result)
+
+    def test_validate_path_lease_for_different_task_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        # Create a second task and try to validate against it
+        task2 = json.loads(self.registry.call("create_durable_task", goal="task two", steps="step two"))
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task2["task_id"],
+            path="/tmp/x",
+        ))
+        self.assertIn("error", result)
+
+    def test_validate_path_no_goal_leak(self):
+        task_id = self._register_and_assign(goal="SECRET_SANDBOX_GOAL_777")
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/file.txt",
+        ))
+
+        result_str = json.dumps(result)
+        self.assertNotIn("SECRET_SANDBOX_GOAL_777", result_str)
+        self.assertNotIn("step one", result_str)
+
+    def test_validate_path_with_dot_dot_normalized(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+        # Path with .. that still stays within workspace after resolution
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/subdir/../file.txt",
+        ))
+        self.assertTrue(result["valid"])
+
+    def test_get_workspace_offline_worker_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertIn("error", result)
+        self.assertIn("已离线", result["error"])
+
+    def test_validate_path_offline_worker_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/file.txt",
+        ))
+        self.assertIn("error", result)
+        self.assertIn("已离线", result["error"])
+
+    def test_get_workspace_idle_worker_with_task_id_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        # Set idle but keep current_task_id (edge case: lease still exists)
+        store = self.registry.durable_worker_store
+        worker = store.get_worker("w1")
+        worker.status = "idle"
+        store._save(worker)
+
+        result = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+    def test_validate_path_idle_worker_with_task_id_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws_path = lease["workspace_path"]
+        store = self.registry.durable_worker_store
+        worker = store.get_worker("w1")
+        worker.status = "idle"
+        store._save(worker)
+
+        result = json.loads(self.registry.call(
+            "validate_worker_workspace_path",
+            worker_id="w1", task_id=task_id,
+            path=ws_path + "/file.txt",
+        ))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
