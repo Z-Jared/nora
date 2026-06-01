@@ -1,41 +1,41 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: waiting
 
 ## Goal
 
-TASK-055: Deterministic eval coverage for durable recovery plans.
+TASK-057: Deterministic eval coverage for recovery-plan events.
 
-TASK-054 runtime is approved and present for eval development.
+This task is waiting for TASK-056 runtime. Do not start implementation until Codex PM explicitly assigns it after TASK-056 is approved and its runtime is visible in your CCB worktree.
 
 ## Scope
 
-When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-054 runtime bug.
+When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-056 runtime bug.
 
 Do not call external APIs. Do not start real agents or terminals.
 
 Planned deterministic eval coverage:
 
-1. Recovery plan basics:
+1. Recovery-plan event basics:
    - Create a durable task.
    - Add checkpoints.
    - Call `plan_durable_recovery`.
-   - Verify selected checkpoint, resume_policy, next_step_id, counts, and can_resume.
+   - Verify `RECOVERY_PLANNED` event is recorded with checkpoint_id linkage and safe metadata.
 
-2. Selection and fallback:
-   - Explicit checkpoint_id selection.
-   - step_id selection.
-   - Missing step checkpoint fallback.
-   - No-checkpoint fallback.
-   - Unknown task/checkpoint and bad step_id errors.
+2. Selection and fallback events:
+   - Explicit checkpoint_id selection event.
+   - step_id selection event.
+   - No-checkpoint fallback event.
+   - Terminal status event.
 
 3. Safety:
-   - Output does not leak raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot values, prompts, diffs, shell output, or secret-like sentinels.
+   - Event payload/serialized event does not leak raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot values, prompt text, diffs, shell output, env vars, request strings, or secret-like sentinels.
 
 4. Compatibility:
-   - Existing durable task registry tools still work after recovery-plan errors/no-ops.
-   - Recovery planning does not mutate task state.
+   - Broken event store does not prevent recovery planning.
+   - Existing durable task registry tools still work after recovery planning.
+   - Recovery planning still does not mutate task state.
 
 Keep evals deterministic and offline.
 

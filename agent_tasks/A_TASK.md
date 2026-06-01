@@ -1,45 +1,35 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-054: Durable recovery plan tool v1.
+TASK-056: Durable recovery plan event logging v1.
 
-Nora now has durable lifecycle controls and explicit checkpoint creation. The next narrow step toward replay/recovery is a read-only registry tool that can inspect durable task state and checkpoints and return a safe recovery plan for where a future agent should resume. This task must not execute recovery, start workers, run model calls, edit files, or mutate task state.
+Nora now has a read-only `plan_durable_recovery` tool and deterministic eval coverage. The next small step toward replayable recovery is to make recovery planning itself auditable by recording a bounded durable event whenever a recovery plan is generated.
 
 ## Scope
 
-Build only recovery plan inspection. Do not implement replay execution, worker process execution, worktree creation, patch queues, broad schema redesign, or automatic task mutation.
+Build only event logging for recovery planning. Do not implement replay execution, worker process execution, worktree creation, patch queues, broad schema redesign, or automatic task mutation.
 
-1. Add a read-only registry tool:
-   - Suggested name: `plan_durable_recovery(task_id, checkpoint_id="", step_id="")`
-   - Register near existing durable task registry tools in `mini_agent/toolkits/registry_builder.py`.
-   - Unknown task ids should return JSON `{"error": ...}`.
-   - Unknown checkpoint ids should return JSON `{"error": ...}`.
-   - Non-integer `step_id` should return JSON `{"error": ...}` without crashing.
-   - This tool should have read-only task permission/risk.
+1. Add a durable event type:
+   - Suggested constant: `RECOVERY_PLANNED = "recovery_planned"` in `mini_agent/durable_events.py`.
+   - Ensure it can be stored and queried like other durable events without schema migration beyond existing event fields.
 
-2. Recovery plan semantics:
-   - If `checkpoint_id` is provided, select exactly that checkpoint.
-   - Else if `step_id` is provided, select the latest checkpoint for that step when one exists.
-   - Else select the latest checkpoint when any checkpoint exists.
-   - If no checkpoint exists, still return a plan with `selected_checkpoint_id` empty/null and a `resume_policy` of `from_step` or `from_beginning`.
-   - Compute a bounded `next_step_id`:
-     - Prefer the selected checkpoint's step id when that step is not done/skipped.
-     - Otherwise choose the first step that is not done/skipped.
-     - If all steps are done/skipped, use `current_step` when present, otherwise empty/null.
-   - Set `can_resume` false for completed/cancelled tasks; true for pending/running/paused/blocked/failed tasks.
-   - Include safe reason labels such as `checkpoint_selected`, `step_checkpoint_missing`, `no_checkpoint`, `terminal_status`, or `all_steps_done`.
-
-3. Bounded output:
-   - Return only safe metadata:
-     - `task_id`
-     - `status`
+2. Record a safe event from `plan_durable_recovery`:
+   - Event type: `RECOVERY_PLANNED`.
+   - `task_id`: task id.
+   - `checkpoint_id`: selected checkpoint id when present, otherwise empty/null.
+   - `source`: `registry`.
+   - `severity`: `info`.
+   - `summary`: short generic string such as `recovery planned`.
+   - Payload should include only safe metadata:
+     - `operation="plan_recovery"`
      - `can_resume`
      - `resume_policy`
-     - `selected_checkpoint_id`
+     - `reason`
+     - `selected_checkpoint_present`
      - `checkpoint_step_id`
      - `next_step_id`
      - `checkpoint_count`
@@ -47,25 +37,28 @@ Build only recovery plan inspection. Do not implement replay execution, worker p
      - `incomplete_step_count`
      - `trace_ref_count`
      - `worker_id_present`
-     - `reason`
-   - Do not return raw task goal, raw step text, notes, summaries, checkpoint descriptions, raw `state_snapshot`, prompts, diffs, shell output, env vars, full tool outputs, or secret-like values.
+     - `requested_checkpoint_id_present`
+     - `requested_step_id_present`
+
+3. Safety and behavior:
+   - Do not record raw task goal, raw step text, notes, summaries, checkpoint descriptions, raw `state_snapshot`, prompts, diffs, shell output, env vars, full tool outputs, checkpoint request strings, or secret-like values.
+   - Event logging failure must not prevent `plan_durable_recovery` from returning its plan.
+   - Error responses for unknown task/checkpoint/bad step_id may skip event logging unless there is already a safe local pattern for error events; do not add risky logging for invalid raw input.
+   - The tool may remain `risk="read"`; the event log side-effect is audit metadata only.
 
 4. Compatibility:
    - Do not mutate durable task state.
    - Preserve existing behavior of `get_durable_task`, `list_durable_tasks`, lifecycle controls, and checkpoint creation.
-   - Support both SQLite-backed store and JSONL-backed store if your implementation touches store-level helpers.
+   - Preserve all TASK-054/TASK-055 tests.
 
 5. Tests:
-   - Add focused tests in `tests/test_durable_tasks.py`.
-   - Cover latest checkpoint selection.
-   - Cover explicit `checkpoint_id` selection.
-   - Cover `step_id` selection and missing step checkpoint behavior.
-   - Cover no-checkpoint fallback.
-   - Cover completed/cancelled `can_resume=false`.
-   - Cover unknown task, unknown checkpoint, and non-integer `step_id`.
-   - Cover safe output and no raw goal/step/note/summary/checkpoint description/state snapshot/secret leakage.
-   - Cover no mutation of task state.
-   - Cover JSONL backend only if you add store-level helper behavior.
+   - Add focused tests in `tests/test_durable_tasks.py` and/or `tests/test_durable_events.py`.
+   - Cover successful `RECOVERY_PLANNED` event for selected checkpoint.
+   - Cover no-checkpoint fallback event.
+   - Cover top-level `checkpoint_id` linkage when a checkpoint is selected.
+   - Cover payload contains only safe metadata and no raw goal/step/note/summary/checkpoint description/state_snapshot/secret sentinel.
+   - Cover event-store failure isolation.
+   - Cover `plan_durable_recovery` still does not mutate task state.
 
 ## Verification
 
