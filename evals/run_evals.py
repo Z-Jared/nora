@@ -244,6 +244,10 @@ def main() -> int:
         EvalCase("checkpoint_step_consistency", eval_checkpoint_step_consistency),
         EvalCase("checkpoint_event_coverage", eval_checkpoint_event_coverage),
         EvalCase("checkpoint_safety_failure_isolation", eval_checkpoint_safety_failure_isolation),
+        EvalCase("recovery_plan_basics", eval_recovery_plan_basics),
+        EvalCase("recovery_plan_selection_fallback", eval_recovery_plan_selection_fallback),
+        EvalCase("recovery_plan_safety", eval_recovery_plan_safety),
+        EvalCase("recovery_plan_compatibility", eval_recovery_plan_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -7209,6 +7213,220 @@ def eval_checkpoint_safety_failure_isolation():
             # Existing registry tools still work
             assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))
             assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+        finally:
+            db.close()
+
+
+# --- Recovery plan eval sentinels ---
+
+_RECOVERY_SENTINEL_GOAL = "NORA_EVAL_RECOVERY_GOAL_SENTINEL_a9b8c7d6"
+_RECOVERY_SENTINEL_STEP = "NORA_EVAL_RECOVERY_STEP_SECRET_e5f4a3b2"
+_RECOVERY_SENTINEL_SECRET = "NORA_EVAL_RECOVERY_SECRET_sk-recovery-c1d2e3f4"
+
+
+def eval_recovery_plan_basics():
+    """plan_durable_recovery returns correct selected checkpoint, resume_policy, next_step_id, counts, can_resume."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Create task with 3 steps
+            create_r = registry.call("create_durable_task", goal="recovery test", steps="alpha\nbeta\ngamma")
+            task_id = json.loads(create_r)["task_id"]
+
+            # Add checkpoint for step 1
+            cp1_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1, description="after alpha")
+            cp1_id = json.loads(cp1_r)["checkpoint_id"]
+
+            # Add checkpoint for step 2
+            cp2_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=2, description="after beta")
+            cp2_id = json.loads(cp2_r)["checkpoint_id"]
+
+            # Plan with latest checkpoint (default)
+            plan_r = registry.call("plan_durable_recovery", task_id=task_id)
+            plan = json.loads(plan_r)
+            assert plan["task_id"] == task_id
+            assert plan["can_resume"] is True, f"can_resume: {plan}"
+            assert plan["selected_checkpoint_id"] == cp2_id, f"selected: {plan}"
+            assert plan["checkpoint_step_id"] == 2, f"cp step: {plan}"
+            assert plan["resume_policy"] == "from_checkpoint", f"policy: {plan}"
+            assert plan["checkpoint_count"] == 2, f"cp count: {plan}"
+            assert plan["step_count"] == 3, f"step count: {plan}"
+            assert plan["incomplete_step_count"] == 3, f"incomplete: {plan}"
+            assert plan["reason"] == "checkpoint_selected", f"reason: {plan}"
+
+            # Bounded output: no raw fields
+            for key in ("goal", "steps", "description", "state_snapshot", "notes"):
+                assert key not in plan, f"output has {key}: {plan}"
+
+            # Mark step 1 done, re-plan: latest checkpoint is step 2 (not done),
+            # so next_step_id must be 2 (the checkpoint step is incomplete).
+            ts = registry.durable_task_store
+            task = ts.get_task(task_id)
+            task.steps[0].status = "done"
+            ts.upsert_task(task)
+            plan_r2 = registry.call("plan_durable_recovery", task_id=task_id)
+            plan2 = json.loads(plan_r2)
+            assert plan2["incomplete_step_count"] == 2
+            assert plan2["next_step_id"] == 2, f"next_step must be 2 (checkpoint step not done): {plan2}"
+        finally:
+            db.close()
+
+
+def eval_recovery_plan_selection_fallback():
+    """Explicit checkpoint_id, step_id, missing step checkpoint, no-checkpoint, unknown task/checkpoint, bad step_id."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            create_r = registry.call("create_durable_task", goal="fallback test", steps="s1\ns2")
+            task_id = json.loads(create_r)["task_id"]
+            cp1_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+            cp1_id = json.loads(cp1_r)["checkpoint_id"]
+            cp2_r = registry.call("add_durable_checkpoint", task_id=task_id, step_id=2)
+            cp2_id = json.loads(cp2_r)["checkpoint_id"]
+
+            # Explicit checkpoint_id selection
+            plan_explicit = json.loads(registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id=cp1_id))
+            assert plan_explicit["selected_checkpoint_id"] == cp1_id, f"explicit: {plan_explicit}"
+            assert plan_explicit["checkpoint_step_id"] == 1
+            assert plan_explicit["reason"] == "checkpoint_selected"
+
+            # step_id selection (latest checkpoint for that step)
+            plan_step = json.loads(registry.call("plan_durable_recovery", task_id=task_id, step_id="2"))
+            assert plan_step["selected_checkpoint_id"] == cp2_id, f"step selection: {plan_step}"
+            assert plan_step["reason"] == "checkpoint_selected"
+
+            # Missing step checkpoint fallback (step with no checkpoint)
+            create_r2 = registry.call("create_durable_task", goal="no cp step", steps="a\nb")
+            tid2 = json.loads(create_r2)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=tid2, step_id=1)
+            plan_missing = json.loads(registry.call("plan_durable_recovery", task_id=tid2, step_id="999"))
+            assert plan_missing["selected_checkpoint_id"] is None, f"missing step: {plan_missing}"
+            assert plan_missing["reason"] == "step_checkpoint_missing", f"reason: {plan_missing}"
+
+            # No-checkpoint fallback
+            create_r3 = registry.call("create_durable_task", goal="no checkpoint", steps="x")
+            tid3 = json.loads(create_r3)["task_id"]
+            plan_none = json.loads(registry.call("plan_durable_recovery", task_id=tid3))
+            assert plan_none["selected_checkpoint_id"] is None, f"no cp: {plan_none}"
+            assert plan_none["reason"] == "no_checkpoint", f"reason: {plan_none}"
+            assert plan_none["can_resume"] is True
+
+            # Unknown task
+            r_unknown = json.loads(registry.call("plan_durable_recovery", task_id="dtask_nonexistent"))
+            assert "error" in r_unknown, f"unknown task: {r_unknown}"
+
+            # Unknown checkpoint
+            r_bad_cp = json.loads(registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id="cp_nonexistent"))
+            assert "error" in r_bad_cp, f"unknown checkpoint: {r_bad_cp}"
+
+            # Bad step_id
+            r_bad_step = json.loads(registry.call("plan_durable_recovery", task_id=task_id, step_id="not_a_number"))
+            assert "error" in r_bad_step, f"bad step_id: {r_bad_step}"
+
+            # Terminal status: can_resume = False
+            registry.call("update_durable_task", task_id=task_id, status="running")
+            registry.call("update_durable_task", task_id=task_id, status="completed")
+            plan_terminal = json.loads(registry.call("plan_durable_recovery", task_id=task_id))
+            assert plan_terminal["can_resume"] is False, f"terminal can_resume: {plan_terminal}"
+            assert plan_terminal["reason"] == "terminal_status", f"terminal reason: {plan_terminal}"
+        finally:
+            db.close()
+
+
+def eval_recovery_plan_safety():
+    """No raw goals, step text, notes, summaries, checkpoint descriptions, state_snapshot, or secrets in output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal=_RECOVERY_SENTINEL_GOAL, steps=_RECOVERY_SENTINEL_STEP)
+            task_id = json.loads(create_r)["task_id"]
+
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=0, description=_RECOVERY_SENTINEL_SECRET, state_summary=_RECOVERY_SENTINEL_GOAL)
+
+            # Inject sentinels directly into task state via upsert
+            task = ts.get_task(task_id)
+            # step.note and step.summary
+            task.steps[0].note = f"note:{_RECOVERY_SENTINEL_SECRET}"
+            task.steps[0].summary = f"summary:{_RECOVERY_SENTINEL_GOAL}"
+            # checkpoint.description and state_snapshot with nested + secret-like key
+            task.checkpoints[0].description = _RECOVERY_SENTINEL_SECRET
+            task.checkpoints[0].state_snapshot = {
+                "nested": {"secret_value": _RECOVERY_SENTINEL_SECRET},
+                "api_token": "ghp_abc123def456",
+                "progress": "ok",
+            }
+            ts.upsert_task(task)
+
+            plan_r = registry.call("plan_durable_recovery", task_id=task_id)
+            assert _RECOVERY_SENTINEL_GOAL not in plan_r, "goal leaked in plan output"
+            assert _RECOVERY_SENTINEL_STEP not in plan_r, "step text leaked in plan output"
+            assert _RECOVERY_SENTINEL_SECRET not in plan_r, "checkpoint description/state_snapshot/note/summary leaked in plan output"
+            assert "ghp_abc123def456" not in plan_r, "secret-like api_token leaked in plan output"
+
+            # Verify output is bounded JSON (only known fields)
+            plan = json.loads(plan_r)
+            allowed_keys = {
+                "task_id", "status", "can_resume", "resume_policy",
+                "selected_checkpoint_id", "checkpoint_step_id", "next_step_id",
+                "checkpoint_count", "step_count", "incomplete_step_count",
+                "trace_ref_count", "worker_id_present", "reason",
+            }
+            unexpected = set(plan.keys()) - allowed_keys
+            assert not unexpected, f"unexpected fields: {unexpected}"
+        finally:
+            db.close()
+
+
+def eval_recovery_plan_compatibility():
+    """Existing tools still work after plan errors. Planning does not mutate task state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            create_r = registry.call("create_durable_task", goal="compat test", steps="a\nb")
+            task_id = json.loads(create_r)["task_id"]
+            registry.call("add_durable_checkpoint", task_id=task_id, step_id=1)
+
+            # Snapshot task state before planning
+            before = ts.get_task(task_id)
+            before_status = before.status
+            before_step_count = len(before.steps)
+            before_cp_count = len(before.checkpoints)
+            before_current_step = before.current_step
+
+            # Plan
+            plan_r = registry.call("plan_durable_recovery", task_id=task_id)
+            assert "error" not in json.loads(plan_r), f"plan failed: {plan_r}"
+
+            # Verify task state unchanged
+            after = ts.get_task(task_id)
+            assert after.status == before_status, f"status changed: {after.status}"
+            assert len(after.steps) == before_step_count, f"step count changed"
+            assert len(after.checkpoints) == before_cp_count, f"checkpoint count changed"
+            assert after.current_step == before_current_step, f"current_step changed"
+            for i, (b, a) in enumerate(zip(before.steps, after.steps)):
+                assert b.status == a.status, f"step {i} status changed: {b.status} -> {a.status}"
+                assert b.checkpoint_ref == a.checkpoint_ref, f"step {i} checkpoint_ref changed"
+
+            # Error plans don't break existing tools
+            registry.call("plan_durable_recovery", task_id="dtask_nonexistent")  # error
+            registry.call("plan_durable_recovery", task_id=task_id, checkpoint_id="bad")  # error
+            registry.call("plan_durable_recovery", task_id=task_id, step_id="bad")  # error
+
+            # Existing tools still work
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=task_id))
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+            update_r = registry.call("update_durable_task", task_id=task_id, status="running")
+            assert "error" not in json.loads(update_r), f"update broken: {update_r}"
         finally:
             db.close()
 

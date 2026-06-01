@@ -8,16 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-055: Deterministic eval coverage for durable recovery plans
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-054 runtime present
-- 分配: Claude B
-- 目标: 为 TASK-054 的 recovery plan registry tool 增加离线 deterministic eval，覆盖 checkpoint selection、next-step selection、bounded output、安全不泄漏、missing task/checkpoint error、以及 existing registry compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent`；`git diff --check`。
-- 参考: `evals/run_evals.py` durable task/checkpoint eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 2 Durable task state / Replay and recovery engine。
+暂无。
 
 ## 已完成
+
+### TASK-055: Deterministic eval coverage for durable recovery plans ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 198 passed；`python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 452 tests OK；`git diff --check` OK。
+- 内容: 新增 4 个 deterministic offline eval，覆盖 recovery plan basics、explicit/step/latest/no-checkpoint selection、missing checkpoint fallback、unknown task/checkpoint/bad step errors、terminal status、`resume_policy=from_checkpoint`、严格 `next_step_id==2` 回归断言、allowed-fields-only bounded output、直接注入 step note/summary 与 checkpoint description/state_snapshot sentinel 的泄漏检查、planning no-mutation，以及 error/no-op 后 existing registry tool compatibility。
 
 ### TASK-054: Durable recovery plan tool v1 ✅
 - 完成者: Claude A

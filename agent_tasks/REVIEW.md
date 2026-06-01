@@ -1,166 +1,163 @@
 # CCB Code Review Report
 
-Reviewed: TASK-054 Durable recovery plan tool v1
-Worker: Claude A
+Reviewed: TASK-055 Deterministic eval coverage for durable recovery plans
+Worker: Claude B
 Status: **APPROVED**
 
 ---
 
 ## Review Scope
 
-### 1. Read-Only Verification
+### 1. Eval Coverage Completeness
 
-**Verdict: ✅ STRICTLY READ-ONLY**
+**Verdict: ✅ COMPLETE**
 
-`_plan_durable_recovery_json()` implementation (lines 1178-1268):
+4 eval cases added (eval count: 194 → 198):
 
-- ✅ No task state mutation (no `upsert_task()`, no `update_status()`)
-- ✅ No worker execution (no worker status changes)
-- ✅ No model calls (no LLMClient usage)
-- ✅ No git/file recovery (no file system operations)
-- ✅ Registered with `risk="read"` permission (line 1292)
-- ✅ Test `test_no_mutation_of_task_state` verifies read-only (lines 1969-1981):
-  - Compares task state before and after multiple plan calls
-  - Verifies status, current_step, checkpoints, steps all unchanged
+1. **`eval_recovery_plan_basics`** (line 7227)
+   - Creates task with 3 steps, adds checkpoint for step 1 and step 2
+   - Plans with latest checkpoint (default): verifies task_id, can_resume=True, selected_checkpoint_id=cp2, checkpoint_step_id=2, resume_policy="from_checkpoint", checkpoint_count=2, step_count=3, incomplete_step_count=3, reason="checkpoint_selected"
+   - Bounded output: checks goal, steps, description, state_snapshot, notes keys ABSENT
+   - Marks step 1 done, re-plans: verifies incomplete_step_count=2
+   - PM fix applied: strict `next_step_id == 2` assertion (line 7272) with explanatory comment
 
-### 2. Checkpoint Selection Logic
+2. **`eval_recovery_plan_selection_fallback`** (line 7277)
+   - ✅ Explicit checkpoint_id selection (lines 7291-7295)
+   - ✅ step_id selection: latest checkpoint for that step (lines 7297-7300)
+   - ✅ Missing step checkpoint fallback: selected_checkpoint_id=None, reason="step_checkpoint_missing" (lines 7302-7308)
+   - ✅ No-checkpoint fallback: selected_checkpoint_id=None, reason="no_checkpoint", can_resume=True (lines 7310-7316)
+   - ✅ Unknown task returns error (lines 7318-7320)
+   - ✅ Unknown checkpoint returns error (lines 7322-7324)
+   - ✅ Bad step_id returns error (lines 7326-7328)
+   - ✅ Terminal status: can_resume=False, reason="terminal_status" (lines 7330-7335)
 
-**Verdict: ✅ CORRECT**
+3. **`eval_recovery_plan_safety`** (line 7340)
+   - PM fix applied: direct state injection of sentinels via `get_task()` + `upsert_task()`
+   - Injects sentinels into (lines 7356-7364):
+     - `step.note` with sentinel (line 7356)
+     - `step.summary` with sentinel (line 7357)
+     - `checkpoint.description` with sentinel (line 7359)
+     - `checkpoint.state_snapshot` with nested sentinel + secret-like `api_token` key (lines 7360-7364)
+   - Verifies all sentinels ABSENT from plan output (lines 7368-7371):
+     - `_RECOVERY_SENTINEL_GOAL` (line 7368)
+     - `_RECOVERY_SENTINEL_STEP` (line 7369)
+     - `_RECOVERY_SENTINEL_SECRET` (line 7370)
+     - `"ghp_abc123def456"` (line 7371)
+   - Allowed-fields-only check: verifies output contains only expected keys (lines 7374-7382)
 
-Checkpoint selection priority (lines 1192-1216):
+4. **`eval_recovery_plan_compatibility`** (line 7387)
+   - Snapshots task state before planning: status, step_count, checkpoint_count, current_step (lines 7400-7404)
+   - Plans and verifies no error (line 7408)
+   - Verifies task state unchanged after planning (lines 7411-7418):
+     - status unchanged
+     - step count unchanged
+     - checkpoint count unchanged
+     - current_step unchanged
+     - step statuses unchanged
+     - step checkpoint_refs unchanged
+   - Error plans don't break existing tools (lines 7420-7423):
+     - Unknown task error
+     - Unknown checkpoint error
+     - Bad step_id error
+   - Existing tools still work after error plans (lines 7426-7429):
+     - `get_durable_task` returns no error
+     - `list_durable_tasks` returns list
+     - `update_durable_task` returns no error
 
-1. **Explicit checkpoint_id** (lines 1195-1202):
-   - ✅ Iterates through task.checkpoints to find matching checkpoint_id
-   - ✅ Returns JSON error if not found (line 1201)
-   - ✅ Sets reason="checkpoint_selected"
+### 2. Deterministic and Offline
 
-2. **Step_id latest checkpoint** (lines 1203-1209):
-   - ✅ Iterates checkpoints in reverse (latest first) to find step_id match
-   - ✅ Sets reason="checkpoint_selected" if found, "step_checkpoint_missing" if not
+**Verdict: ✅ DETERMINISTIC**
 
-3. **Latest overall checkpoint** (lines 1211-1214):
-   - ✅ Selects `task.checkpoints[-1]` (most recent)
-   - ✅ Sets reason="checkpoint_selected"
+All 4 eval cases are deterministic and offline:
 
-4. **No checkpoint fallback** (lines 1215-1216):
-   - ✅ Sets reason="no_checkpoint"
-   - ✅ selected_cp remains None
+- ✅ Uses `tempfile.TemporaryDirectory()` for isolation
+- ✅ No live LLM calls — uses `build_default_registry` with `confirm_action=lambda _: True`
+- ✅ No interactive terminal prompts
+- ✅ No external state dependencies
+- ✅ No network calls
+- ✅ No timing dependencies
+- ✅ Reproducible — same results every run
 
-**PM-identified fix (noted in A_DONE.md lines 6-9):**
-- ✅ Problem: resume_policy always returned "from_step" even when checkpoint selected
-- ✅ Fix: resume_policy returns "from_checkpoint" when checkpoint selected (lines 1249-1250)
-- ✅ Fix: resume_policy returns task.resume_policy or "from_step" for no-checkpoint fallback (line 1252)
+### 3. Regression Prevention Quality
 
-### 3. next_step_id, can_resume, resume_policy, Reason Labels
+**Verdict: ✅ STRONG**
 
-**Verdict: ✅ CORRECT AND DETERMINISTIC**
+Evals prevent key TASK-054 regressions:
 
-**next_step_id computation (lines 1226-1245):**
-- ✅ Prefers checkpoint step if not done/skipped (lines 1230-1233)
-- ✅ Falls back to first incomplete step (lines 1235-1239)
-- ✅ Falls back to task.current_step if all steps done (lines 1241-1245)
-- ✅ Uses StepStatus.DONE and StepStatus.SKIPPED for done_skipped set (line 1227)
+**resume_policy logic (PM fix in TASK-054):**
+- ✅ `eval_recovery_plan_basics` line 7253: `resume_policy == "from_checkpoint"` when checkpoint selected
+- ✅ Catches regression where resume_policy would always return "from_step"
 
-**can_resume logic (lines 1218-1224):**
-- ✅ False for terminal statuses: completed, cancelled (lines 1219-1222)
-- ✅ True for all other statuses: pending, running, paused, blocked, failed (line 1224)
-- ✅ Terminal status overrides checkpoint selection (checked after checkpoint selection)
+**Checkpoint selection priority:**
+- ✅ `eval_recovery_plan_selection_fallback` lines 7291-7308: explicit checkpoint_id, step_id, missing step fallback
+- ✅ `eval_recovery_plan_basics` lines 7251-7252: latest checkpoint selected
+- ✅ Catches regression where checkpoint selection logic would break
 
-**resume_policy logic (lines 1249-1252):**
-- ✅ Returns "from_checkpoint" when checkpoint selected (line 1250)
-- ✅ Returns task.resume_policy or "from_step" for no-checkpoint fallback (line 1252)
+**next_step_id computation (PM fix in TASK-055):**
+- ✅ `eval_recovery_plan_basics` line 7272: strict `next_step_id == 2` after step 1 done
+- ✅ Catches regression where next_step_id would incorrectly return 1
 
-**Reason labels (deterministic):**
-- ✅ "checkpoint_selected" — checkpoint found and selected
-- ✅ "step_checkpoint_missing" — step_id provided but no checkpoint for that step
-- ✅ "no_checkpoint" — no checkpoints exist
-- ✅ "terminal_status" — task completed or cancelled (overrides other reasons)
-- ✅ "all_steps_done" — all steps done/skipped, can_resume=True
+**can_resume logic:**
+- ✅ `eval_recovery_plan_selection_fallback` lines 7333-7335: terminal status → can_resume=False
+- ✅ `eval_recovery_plan_basics` line 7250: can_resume=True for non-terminal
+- ✅ Catches regression where can_resume logic would break
 
-### 4. Bounded Output Safety
+**Reason labels:**
+- ✅ `eval_recovery_plan_basics` line 7257: reason="checkpoint_selected"
+- ✅ `eval_recovery_plan_selection_fallback` lines 7308, 7315, 7335: step_checkpoint_missing, no_checkpoint, terminal_status
+- ✅ Catches regression where reason labels would change
 
-**Verdict: ✅ SAFE**
+**Bounded output/no mutation (PM fix in TASK-055):**
+- ✅ `eval_recovery_plan_safety` lines 7368-7371: sentinels absent from output
+- ✅ `eval_recovery_plan_safety` lines 7374-7382: only allowed keys present
+- ✅ `eval_recovery_plan_compatibility` lines 7411-7418: task state unchanged after planning
+- ✅ Catches regression where raw text would leak or planning would mutate state
 
-Output contains only bounded safe metadata (lines 1254-1268):
+### 4. Assertion Quality
 
+**Verdict: ✅ SUBSTANTIVE**
+
+**Sentinel values (lines 7222-7224):**
 ```python
-{
-    "task_id": task.task_id,
-    "status": task.status,
-    "can_resume": can_resume,
-    "resume_policy": resume_policy,
-    "selected_checkpoint_id": selected_cp.checkpoint_id if selected_cp else None,
-    "checkpoint_step_id": selected_cp.step_id if selected_cp else None,
-    "next_step_id": next_step_id,
-    "checkpoint_count": len(task.checkpoints),
-    "step_count": len(task.steps),
-    "incomplete_step_count": incomplete_count,
-    "trace_ref_count": len(task.trace_refs),
-    "worker_id_present": bool(task.worker_id),
-    "reason": reason,
-}
+_RECOVERY_SENTINEL_GOAL = "NORA_EVAL_RECOVERY_GOAL_SENTINEL_a9b8c7d6"
+_RECOVERY_SENTINEL_STEP = "NORA_EVAL_RECOVERY_STEP_SECRET_e5f4a3b2"
+_RECOVERY_SENTINEL_SECRET = "NORA_EVAL_RECOVERY_SECRET_sk-recovery-c1d2e3f4"
 ```
 
-**Explicitly excluded from output:**
-- ❌ Raw goal text
-- ❌ Raw step text
-- ❌ Notes
-- ❌ Summaries
-- ❌ Checkpoint description
-- ❌ Raw state_snapshot
-- ❌ Prompts
-- ❌ Diffs
-- ❌ Shell output
-- ❌ Env vars
-- ❌ Secret-like values
+**PM-identified fixes (from B_DONE.md lines 12-19):**
+1. ✅ **next_step_id assertion tightened**: Changed from `in (1, 2)` to strict `== 2` (line 7272)
+2. ✅ **safety eval strengthened**: Direct state injection of sentinels into step.note, step.summary, checkpoint.description, checkpoint.state_snapshot (lines 7356-7364)
 
-**Verified by tests:**
-- ✅ `test_no_goal_or_step_text_leakage` (lines 1953-1967): goal, step text ABSENT
-- ✅ `test_checkpoint_description_and_snapshot_not_leaked` (lines 2030-2043): sentinel description, snapshot, nested values ABSENT
+**Positive assertions verify specific values:**
+- ✅ task_id, can_resume, selected_checkpoint_id, checkpoint_step_id, resume_policy
+- ✅ checkpoint_count, step_count, incomplete_step_count, next_step_id
+- ✅ reason labels, status
 
-### 5. Test Coverage
+**Negative assertions verify safety:**
+- ✅ 3 sentinels + api_token secret ABSENT from plan output
+- ✅ goal, steps, description, state_snapshot, notes keys ABSENT from output
+- ✅ Only allowed keys present in output (13 allowed keys)
+- ✅ Task state unchanged after planning (6 assertions)
 
-**Verdict: ✅ COMPREHENSIVE**
+**No empty or misleading assertions:**
+- ✅ All assertions check specific conditions
+- ✅ No assertions that always pass
+- ✅ No misleading comments
+- ✅ PM fix explanations present in comments (lines 7264, 7272)
 
-`DurableRecoveryPlanToolTests` class (19 test methods, lines 1824-2044):
+### 5. No Runtime Changes by Claude B
 
-**Checkpoint selection:**
-1. `test_latest_checkpoint_selected` (line 1850) — auto-selects most recent checkpoint
-2. `test_explicit_checkpoint_id_selection` (line 1862) — selects exact checkpoint by id
-3. `test_step_id_selection` (line 1874) — selects checkpoint for given step
-4. `test_step_id_missing_checkpoint` (line 1882) — returns step_checkpoint_missing reason
-5. `test_no_checkpoint_fallback` (line 1890) — returns no_checkpoint reason with null checkpoint_id
+**Verdict: ✅ CLEAN**
 
-**Terminal status:**
-6. `test_completed_task_can_resume_false` (line 1903) — terminal status, can_resume=False
-7. `test_cancelled_task_can_resume_false` (line 1914) — terminal status, can_resume=False
-8. `test_failed_task_can_resume_true` (line 1925) — failed is resumable, can_resume=True
+From `B_DONE.md`:
+- ✅ "No runtime code changed"
+- ✅ "No commit or push performed"
+- ✅ "Known issues: none"
 
-**Error handling:**
-9. `test_unknown_task_returns_error` (line 1936)
-10. `test_unknown_checkpoint_returns_error` (line 1941)
-11. `test_non_integer_step_id_returns_error` (line 1947)
-
-**Output safety:**
-12. `test_no_goal_or_step_text_leakage` (line 1953) — goal, step text ABSENT
-13. `test_checkpoint_description_and_snapshot_not_leaked` (line 2030) — sentinels ABSENT
-
-**Read-only verification:**
-14. `test_no_mutation_of_task_state` (line 1969) — verifies no state changes
-
-**next_step_id logic:**
-15. `test_next_step_prefers_checkpoint_step_when_not_done` (line 1983)
-16. `test_next_step_skips_done_steps` (line 1990) — step 1 done, next_step=2
-
-**PM fix verification:**
-17. `test_resume_policy_from_checkpoint_when_latest_selected` (line 2008)
-18. `test_resume_policy_from_checkpoint_when_explicit_id` (line 2014)
-19. `test_resume_policy_from_step_when_no_checkpoint` (line 2022)
-
-**Assertion quality:**
-- ✅ No empty assertions (all verify specific payload fields, safety conditions, or error responses)
-- ✅ Strong negative assertions (goal, step text, checkpoint description, state_snapshot ABSENT)
-- ✅ Positive assertions verify exact values (resume_policy, next_step_id, reason, can_resume)
+**Diff verification:**
+- ✅ Only `evals/run_evals.py` modified (218 lines added)
+- ✅ No changes to runtime code (registry_builder.py, durable_tasks.py)
+- ✅ No eval depends on incorrect TASK-054 behavior
 
 ---
 
@@ -170,26 +167,28 @@ Output contains only bounded safe metadata (lines 1254-1268):
 
 All critical recovery plan behaviors are covered:
 - ✅ Checkpoint selection priority (explicit > step-based > latest > none)
-- ✅ next_step_id computation logic
-- ✅ can_resume logic for all status types
-- ✅ resume_policy logic (PM fix verified)
+- ✅ resume_policy logic (from_checkpoint when checkpoint selected)
+- ✅ next_step_id computation (strict == 2 after step 1 done)
+- ✅ can_resume logic for terminal and non-terminal statuses
+- ✅ Reason labels for all scenarios
+- ✅ Bounded output with no raw text leakage (injected sentinels + allowed-fields check)
+- ✅ No mutation verification
 - ✅ Error handling (unknown task, checkpoint, step_id)
-- ✅ Output safety (no raw text leakage)
-- ✅ Read-only verification
+- ✅ Compatibility (existing tools still work after error plans)
 
 ---
 
 ## Checks Run
 
 ```text
+python3 evals/run_evals.py
+198 passed, 0 failed
+
 python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
 Ran 452 tests — OK
 
-python3 evals/run_evals.py
-194 passed, 0 failed
-
-git diff --check
-clean
+git diff --check evals/run_evals.py
+OK
 ```
 
 ---
@@ -202,7 +201,7 @@ clean
 
 ### Suggestions
 
-**None** — code quality is high, no technical debt introduced.
+**None** — eval coverage is comprehensive and well-structured.
 
 ---
 
@@ -210,6 +209,6 @@ clean
 
 **APPROVE and merge.**
 
-TASK-054 provides a strictly read-only recovery plan tool that correctly implements checkpoint selection priority, next_step_id computation, can_resume logic, and resume_policy semantics. All PM-identified fixes (resume_policy logic, checkpoint description/snapshot leakage tests) are correctly implemented and tested. Output is bounded to safe metadata with no raw text leakage. No blockers, no technical debt, no known risks.
+TASK-055 provides strong deterministic eval coverage for TASK-054 recovery plan controls. All critical regression scenarios are covered: resume_policy, checkpoint selection, next_step_id, can_resume, reason labels, bounded output, and no mutation. PM-identified fixes (strict next_step_id assertion, strengthened safety eval with direct state injection) are correctly implemented. Evals are deterministic, offline, and use substantive sentinel-based assertions. No runtime changes by Claude B.
 
 **Next Action**: PM can proceed with git commit and push.

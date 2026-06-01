@@ -1,35 +1,45 @@
 # Claude B Completion Report
 
-Task: TASK-053 — Deterministic eval coverage for durable checkpoint controls
+Task: TASK-055 — Deterministic eval coverage for durable recovery plans
 Status: ready for Codex review
 
 ## Summary
 
-Added 4 deterministic offline eval cases for durable checkpoint controls (TASK-052 runtime).
+Added 4 deterministic offline eval cases for durable recovery plans (TASK-054 runtime). Applied PM review fixes.
 
-- **checkpoint_basics** — Create task, add checkpoints with/without description/state_summary. Verifies checkpoint count increments, bounded JSON output (task_id/checkpoint_id/step_id/count/presence flags only), unknown task returns error.
+## Review Fixes
 
-- **checkpoint_step_consistency** — Matching step gets `checkpoint_ref`. Existing checkpoints and trace_refs preserved across additions. Bad step_id (non-integer) returns error. Large step_id accepted without crash.
+1. **next_step_id assertion tightened** — After marking step 1 done, the latest checkpoint targets step 2 (still pending). Changed from `next_step_id in (1, 2)` to strict `next_step_id == 2` with explanatory comment.
 
-- **checkpoint_event_coverage** — `CHECKPOINT_ADDED` event recorded with safe metadata. Sentinel goal/description/summary/step text all absent from serialized event payload.
+2. **safety eval strengthened with direct state injection** — Now injects sentinels into task state via `get_task()` + `upsert_task()`:
+   - `step.note` with sentinel
+   - `step.summary` with sentinel
+   - `checkpoint.description` with sentinel
+   - `checkpoint.state_snapshot` with nested sentinel + secret-like `api_token` key
+   - Asserts all sentinels and secret-like values absent from plan output
 
-- **checkpoint_safety_failure_isolation** — Sentinel values absent from tool output. Broken event store doesn't prevent checkpoint creation. Existing registry tools (get_durable_task, list_durable_tasks) still work.
+## Eval Cases
+
+- **recovery_plan_basics** — Checkpoint selection, resume_policy, next_step_id (strict == 2), counts, can_resume, bounded JSON.
+- **recovery_plan_selection_fallback** — Explicit checkpoint_id, step_id, missing step fallback, no-checkpoint, unknown task/checkpoint, bad step_id, terminal status.
+- **recovery_plan_safety** — Injected sentinel goal/step/note/summary/desc/state_snapshot/api_token all absent from output. Allowed-fields-only check.
+- **recovery_plan_compatibility** — Task state unchanged after planning. Error plans don't break existing tools.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 177 +++++++++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 176 insertions(+), 1 deletion(-)
+ evals/run_evals.py | 218 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 218 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-194 passed, 0 failed
+198 passed, 0 failed
 
 python3 -m unittest tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 433 tests in 7.418s — OK
+Ran 452 tests in 6.947s — OK
 
 git diff --check evals/run_evals.py
 OK
@@ -37,7 +47,6 @@ OK
 
 ## Notes
 
-- No runtime code changed (TASK-052 was already complete).
+- No runtime code changed.
 - No commit or push performed.
-- Eval count increased from 190 to 194.
 - Known issues: none.
