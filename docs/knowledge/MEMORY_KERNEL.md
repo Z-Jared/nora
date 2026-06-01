@@ -51,6 +51,26 @@ Structured records are **local-first typed memory entries** stored in Nora's own
 - Search and list return **summaries** (no `content` field); only `get` returns full content.
 - No automatic ingestion of prompts, diffs, shell output, traces, or env vars.
 
+### Review-Memory Capture (`review_memory`)
+
+An explicit capture layer that turns bounded review/task summaries into structured records.
+
+| Tool | Returns | Description |
+|---|---|---|
+| `capture_review_memory` | Created/skipped IDs | Create records from a review summary |
+
+**What it captures by status:**
+- `approved` → `task_learning`, `decision`, `risk`, `fact` records
+- `changes_requested` → `risk` only (if explicit risk provided)
+- `blocked` → `risk` only (if explicit risk provided)
+
+**Safety boundaries:**
+- Rejects content containing diff markers, shell output, env vars, or prompt bodies.
+- Rejects sensitive content (API keys, tokens) via `is_sensitive_text()`.
+- Title/content lengths are bounded (200/2000 chars).
+- Deterministic dedupe prevents repeated capture for the same task_id/status/title/kind.
+- Accepts explicit summary fields only — never raw diffs, prompts, shell output, or full DONE/REVIEW files.
+
 ### When to Use Which Layer
 
 - Use **structured records** when you need typed, filterable, project-scoped knowledge.

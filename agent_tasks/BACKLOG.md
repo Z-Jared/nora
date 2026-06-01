@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-042: Review memory capture v1
-- 优先级: high
-- 预计: 1-2 小时
-- 负责人: Claude A
-- 依赖: TASK-038/039 structured memory records 已完成
-- 目标: 增加显式 review/task summary 到 structured memory records 的安全 capture 层，让 approved work 可以沉淀为 bounded project knowledge。
-- 验证: `python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`python3 evals/run_evals.py` 通过；`git diff --check` 通过。
-- 参考: `mini_agent/memory_records.py`、`mini_agent/toolkits/register_memory_records.py`、`docs/knowledge/MEMORY_KERNEL.md`。
-
-### TASK-043: Deterministic eval coverage for review memory capture
-- 优先级: high
-- 预计: 1 小时
-- 负责人: Claude B
-- 依赖: TASK-042 runtime 存在后执行
-- 目标: 为 review memory capture 增加 deterministic offline eval，覆盖 approved/non-approved、安全边界、dedupe、searchability 和 failure isolation。
-- 验证: `python3 evals/run_evals.py` 通过且新增 eval case；`python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 通过；`git diff --check` 通过。
-- 参考: `evals/run_evals.py` memory_record/MCP eval pattern；TASK-042 新增 capture 工具。
+（空）
 
 ## 已完成
+
+### TASK-043: Deterministic eval coverage for review memory capture ✅
+- 完成者: Claude B
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 174 passed；`python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 226 tests OK；`python3 -m unittest discover -s tests` 1475 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval，覆盖 review memory capture approved/non-approved、secret/diff/shell/prompt/env-var safety、oversized content bounding、dedupe、failure isolation、searchability，以及 search/list/tool output 不泄漏 full content 或 safety sentinel。
+
+### TASK-042: Review memory capture v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex review (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache` 226 tests OK；`python3 evals/run_evals.py` 174 passed；`python3 -m unittest discover -s tests` 1475 tests OK；`git diff --check` OK。
+- 内容: 新增 `mini_agent.review_memory` 显式 capture 层和 `capture_review_memory` registry tool，将 bounded review/task summary 写入 structured `MemoryRecordStore`；approved 可写 task_learning/decision/risk，changes_requested/blocked 仅允许显式 risk；拒绝 secrets、diff、shell output、prompt transcript/chat template、env-var assignment、raw artifacts；返回 bounded JSON 并支持 deterministic dedupe、`related_task_id`、`source` 和 review/task/status tags。
 
 ### TASK-041: Deterministic eval coverage for Nora MCP server adapter ✅
 - 完成者: Claude B

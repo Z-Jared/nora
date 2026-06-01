@@ -25,6 +25,7 @@ from mini_agent.toolkits.register_developer import register_developer_tools
 from mini_agent.toolkits.register_external import register_external_tools
 from mini_agent.toolkits.register_git import register_git_tools
 from mini_agent.toolkits.register_memory_records import register_memory_record_tools
+from mini_agent.toolkits.register_review_memory import register_review_memory_tool
 from mini_agent.toolkits.register_state import register_state_tools
 from mini_agent.toolkits.register_supermemory import register_supermemory_tools
 from mini_agent.toolkits.supermemory import SupermemoryClient
@@ -139,6 +140,7 @@ def build_default_registry(
     supermemory_client = SupermemoryClient.from_env()
     register_supermemory_tools(registry, supermemory_client)
     register_memory_record_tools(registry, memory_record_store)
+    register_review_memory_tool(registry, memory_record_store)
     registry.task_manager = task_manager
     registry.long_term_memory = long_term_memory
     registry.memory_record_store = memory_record_store
@@ -835,4 +837,5 @@ def build_default_registry(
         parameters={"type": "object", "properties": {}},
         permission=ToolPermission(category="local", risk="read"),
     )
+
     return registry

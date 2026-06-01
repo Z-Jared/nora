@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-040 Optional MCP server adapter for Nora ToolRegistry; TASK-041 deterministic eval coverage
-Workers: Claude A (TASK-040), Claude B (TASK-041)
+Reviewed: TASK-042 Review memory capture v1; TASK-043 deterministic eval coverage
+Workers: Claude A (TASK-042), Claude B (TASK-043)
 Status: APPROVED
 
 ## Findings
@@ -12,35 +12,43 @@ Status: APPROVED
 
 ### Notes
 
-- Previous blockers are fixed: `call_mcp_tool()` is a pure-Python adapter call helper, `create_server()` delegates to it, and handler exceptions no longer leak raw exception text.
-- TASK-041 evals cover optional dependency behavior, metadata export, safe allowlist, memory compatibility, failure isolation, output bounding, and secret-sentinel non-leakage.
-- The MCP SDK live stdio path remains untested because `mcp` is not installed in this environment; the integration is intentionally optional.
-- Full test suite passed.
+- Previous blockers are fixed: prompt transcript markers are rejected, env-var names embedded in summary prose are rejected, and both safety boundaries now have deterministic eval coverage.
+- `capture_review_memory` is wired through `register_review_memory_tool(...)` and returns bounded JSON without full memory content.
+- Approved captures create bounded `task_learning` / `decision` / `risk` records; non-approved statuses only allow explicit risks.
+- Full test suite passed. The `broken.py` plugin load warning is existing test fixture behavior.
 
 ## Checks Run
 
 ```text
 Reviewed:
 - git status --short --branch
+- agent_tasks/A_TASK.md
+- agent_tasks/B_TASK.md
 - agent_tasks/A_DONE.md
 - agent_tasks/B_DONE.md
-- mini_agent/mcp_server.py
-- tests/test_mcp_server.py
+- mini_agent/review_memory.py
+- mini_agent/toolkits/register_review_memory.py
+- mini_agent/toolkits/registry_builder.py
+- tests/test_review_memory.py
 - evals/run_evals.py
-- docs/knowledge/MCP_INTEGRATION.md
-- pyproject.toml
-- setup.py
-- agent_tasks/notify_codex.sh
+- docs/knowledge/MEMORY_KERNEL.md
 
-python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
-Ran 159 tests in 3.865s
+Manual safety check:
+_is_safe("Set NORA_DB_PATH=/tmp/db") -> False
+_is_safe("Config used: MY_CUSTOM_TOKEN=value") -> False
+_is_safe("Config used: AWS_SECRET_ACCESS_KEY=abc") -> False
+_is_safe("Used SQLite for local storage") -> True
+_is_safe("Changed port from 8080 to 3000") -> True
+
+python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+Ran 226 tests in 4.083s
 OK
 
 python3 evals/run_evals.py
-168 passed, 0 failed
+174 passed, 0 failed
 
 python3 -m unittest discover -s tests
-Ran 1433 tests in 108.735s
+Ran 1475 tests in 108.008s
 OK
 Warning: failed to load plugin broken.py: bad
 

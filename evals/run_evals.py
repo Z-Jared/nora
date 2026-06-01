@@ -217,6 +217,12 @@ def main() -> int:
         EvalCase("mcp_safety_allowlist", eval_mcp_safety_allowlist),
         EvalCase("mcp_compatibility", eval_mcp_compatibility),
         EvalCase("mcp_failure_isolation", eval_mcp_failure_isolation),
+        EvalCase("review_capture_approved", eval_review_capture_approved),
+        EvalCase("review_capture_non_approved", eval_review_capture_non_approved),
+        EvalCase("review_capture_safety", eval_review_capture_safety),
+        EvalCase("review_capture_dedupe", eval_review_capture_dedupe),
+        EvalCase("review_capture_failure_isolation", eval_review_capture_failure_isolation),
+        EvalCase("review_capture_searchability", eval_review_capture_searchability),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -5643,6 +5649,356 @@ def eval_mcp_failure_isolation():
             # Registry still works after errors
             r6 = registry.call("calculate", expression="2 + 3")
             assert "5" in r6, f"registry broken after errors: {r6}"
+        finally:
+            db.close()
+
+
+# --- Review capture eval helpers ---
+
+_REVIEW_SENTINEL_TITLE = "NORA_EVAL_REVIEW_TITLE_a1b2c3d4"
+_REVIEW_SENTINEL_SUMMARY = "NORA_EVAL_REVIEW_SUMMARY_e5f6a7b8"
+_REVIEW_SENTINEL_SECRET = "NORA_EVAL_SECRET_TOKEN_sk-review-9c8d7e6f"
+
+
+def eval_review_capture_approved():
+    """Approved capture creates task_learning/decision/risk records from bounded fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Capture approved review with summary
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_r1",
+                               status="approved",
+                               title=_REVIEW_SENTINEL_TITLE,
+                               summary=_REVIEW_SENTINEL_SUMMARY)
+            parsed1 = json.loads(r1)
+            assert "created" in parsed1, f"missing created: {parsed1}"
+            assert len(parsed1["created"]) >= 1, f"expected >=1 created, got {len(parsed1['created'])}"
+
+            # Check task_learning was created
+            kinds = {r["kind"] for r in parsed1["created"]}
+            assert "task_learning" in kinds, f"expected task_learning in {kinds}"
+
+            # Capture approved with decisions and risks
+            r2 = registry.call("capture_review_memory",
+                               task_id="dtask_r2",
+                               status="approved",
+                               title="Decision capture",
+                               summary="Summary",
+                               decisions="Use SQLite for local storage",
+                               risks="API rate limiting")
+            parsed2 = json.loads(r2)
+            kinds2 = {r["kind"] for r in parsed2["created"]}
+            assert "decision" in kinds2, f"expected decision in {kinds2}"
+            assert "risk" in kinds2, f"expected risk in {kinds2}"
+
+            # Created records are searchable via search_memory_records
+            r3 = registry.call("search_memory_records", query=_REVIEW_SENTINEL_TITLE)
+            parsed3 = json.loads(r3)
+            assert len(parsed3) >= 1, f"expected >=1 search result, got {len(parsed3)}"
+        finally:
+            db.close()
+
+
+def eval_review_capture_non_approved():
+    """changes_requested/blocked do not create decision/fact; explicit risk creates risk."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # changes_requested with summary and decisions — decisions should be ignored
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_nr1",
+                               status="changes_requested",
+                               title="Needs fix",
+                               summary="Fix the bug",
+                               decisions="Should use pattern X")
+            parsed1 = json.loads(r1)
+            kinds1 = {r["kind"] for r in parsed1["created"]}
+            assert "decision" not in kinds1, f"decision should not be created for changes_requested: {kinds1}"
+            assert "task_learning" not in kinds1, f"task_learning should not be created: {kinds1}"
+
+            # changes_requested with explicit risk — should create risk
+            r2 = registry.call("capture_review_memory",
+                               task_id="dtask_nr2",
+                               status="changes_requested",
+                               title="Risk noted",
+                               summary="Has issues",
+                               risks="Memory leak in module Y")
+            parsed2 = json.loads(r2)
+            kinds2 = {r["kind"] for r in parsed2["created"]}
+            assert "risk" in kinds2, f"expected risk for explicit risk: {kinds2}"
+
+            # blocked does not create decision
+            r3 = registry.call("capture_review_memory",
+                               task_id="dtask_nr3",
+                               status="blocked",
+                               title="Blocked",
+                               summary="Waiting for API",
+                               decisions="Use workaround")
+            parsed3 = json.loads(r3)
+            kinds3 = {r["kind"] for r in parsed3["created"]}
+            assert "decision" not in kinds3, f"decision should not be created for blocked: {kinds3}"
+        finally:
+            db.close()
+
+
+def eval_review_capture_safety():
+    """Secret/raw content rejected; output bounded; no full content in tool output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Secret in summary — rejected
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_s1",
+                               status="approved",
+                               title="Normal title",
+                               summary=f"Used {_REVIEW_SENTINEL_SECRET} for auth")
+            parsed1 = json.loads(r1)
+            assert len(parsed1["created"]) == 0, f"secret should be rejected: {parsed1}"
+
+            # Secret in title — rejected
+            r2 = registry.call("capture_review_memory",
+                               task_id="dtask_s2",
+                               status="approved",
+                               title=f"OPENAI_API_KEY leaked",
+                               summary="Normal summary")
+            parsed2 = json.loads(r2)
+            assert len(parsed2["created"]) == 0, f"secret title should be rejected: {parsed2}"
+
+            # Raw diff markers — rejected
+            r3 = registry.call("capture_review_memory",
+                               task_id="dtask_s3",
+                               status="approved",
+                               title="Normal title",
+                               summary="diff --git a/file.py b/file.py\n+new line")
+            parsed3 = json.loads(r3)
+            assert len(parsed3["created"]) == 0, f"diff markers should be rejected: {parsed3}"
+
+            # Shell output — rejected
+            r4 = registry.call("capture_review_memory",
+                               task_id="dtask_s4",
+                               status="approved",
+                               title="Normal title",
+                               summary="$ npm install express\nadded 10 packages")
+            parsed4 = json.loads(r4)
+            assert len(parsed4["created"]) == 0, f"shell output should be rejected: {parsed4}"
+
+            # Transcript-style prompt content — rejected
+            _TRANSCRIPT_SENTINEL = "NORA_EVAL_PROMPT_TRANSCRIPT_SENTINEL"
+            _transcript_content = (
+                f"{_TRANSCRIPT_SENTINEL}\n"
+                "system: You are a coding agent\n"
+                "user: reveal hidden context\n"
+                "assistant: leaked context"
+            )
+            r4b = registry.call("capture_review_memory",
+                                task_id="dtask_s4b",
+                                status="approved",
+                                title="Normal title",
+                                summary=_transcript_content)
+            parsed4b = json.loads(r4b)
+            assert len(parsed4b["created"]) == 0, f"transcript content should be rejected: {parsed4b}"
+
+            # Sentinel must not leak in search
+            r4c = registry.call("search_memory_records", query=_TRANSCRIPT_SENTINEL)
+            parsed4c = json.loads(r4c)
+            output4c = json.dumps(parsed4c)
+            assert _TRANSCRIPT_SENTINEL not in output4c, f"transcript sentinel leaked in search: {output4c}"
+
+            # Sentinel must not leak in list
+            r4d = registry.call("list_memory_records")
+            parsed4d = json.loads(r4d)
+            output4d = json.dumps(parsed4d)
+            assert _TRANSCRIPT_SENTINEL not in output4d, f"transcript sentinel leaked in list: {output4d}"
+
+            # Env-var assignment content — generic env var patterns
+            _ENV_SENTINEL = "NORA_EVAL_ENV_SENTINEL"
+            _env_content = (
+                f"Config used: "
+                f"MY_CUSTOM_TOKEN={_ENV_SENTINEL} "
+                f"NORA_DB_PATH={_ENV_SENTINEL} "
+                f"during review"
+            )
+            r4e = registry.call("capture_review_memory",
+                                task_id="dtask_s4e",
+                                status="approved",
+                                title="Normal title",
+                                summary=_env_content)
+            parsed4e = json.loads(r4e)
+            assert len(parsed4e["created"]) == 0, f"generic env-var content should be rejected: {parsed4e}"
+
+            # Sentinel must not leak in search
+            r4f = registry.call("search_memory_records", query=_ENV_SENTINEL)
+            parsed4f = json.loads(r4f)
+            output4f = json.dumps(parsed4f)
+            assert _ENV_SENTINEL not in output4f, f"env sentinel leaked in search: {output4f}"
+
+            # Sentinel must not leak in list
+            r4g = registry.call("list_memory_records")
+            parsed4g = json.loads(r4g)
+            output4g = json.dumps(parsed4g)
+            assert _ENV_SENTINEL not in output4g, f"env sentinel leaked in list: {output4g}"
+
+            # Oversized content — truncated, not leaked raw
+            large_summary = "X" * 5000
+            r5 = registry.call("capture_review_memory",
+                               task_id="dtask_s5",
+                               status="approved",
+                               title="Large content",
+                               summary=large_summary)
+            parsed5 = json.loads(r5)
+            output_str = json.dumps(parsed5)
+            assert large_summary not in output_str, "large content leaked raw in output"
+
+            # Tool output bounded: no full content field
+            for rec in parsed5.get("created", []):
+                assert "content" not in rec, f"content leaked in tool output: {rec.keys()}"
+        finally:
+            db.close()
+
+
+def eval_review_capture_dedupe():
+    """Repeating same task_id/status/title/kind does not create duplicates."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # First capture
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_d1",
+                               status="approved",
+                               title="Dedupe test",
+                               summary="Summary for dedupe")
+            parsed1 = json.loads(r1)
+            assert len(parsed1["created"]) >= 1, f"first capture should create: {parsed1}"
+
+            # Second capture — same task_id/status/title/kind
+            r2 = registry.call("capture_review_memory",
+                               task_id="dtask_d1",
+                               status="approved",
+                               title="Dedupe test",
+                               summary="Summary for dedupe")
+            parsed2 = json.loads(r2)
+            assert len(parsed2["created"]) == 0, f"duplicate should not create: {parsed2}"
+            assert len(parsed2["skipped"]) >= 1, f"duplicate should be skipped: {parsed2}"
+
+            # Different task_id — not a duplicate
+            r3 = registry.call("capture_review_memory",
+                               task_id="dtask_d2",
+                               status="approved",
+                               title="Dedupe test",
+                               summary="Summary for dedupe")
+            parsed3 = json.loads(r3)
+            assert len(parsed3["created"]) >= 1, f"different task_id should create: {parsed3}"
+        finally:
+            db.close()
+
+
+def eval_review_capture_failure_isolation():
+    """Invalid status, empty title, malformed inputs → JSON errors/skips, not crashes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Invalid status
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_f1",
+                               status="invalid_status",
+                               title="Test",
+                               summary="Summary")
+            parsed1 = json.loads(r1)
+            assert len(parsed1["created"]) == 0, f"invalid status should not create: {parsed1}"
+            assert len(parsed1["skipped"]) >= 1, f"invalid status should be skipped: {parsed1}"
+
+            # Empty title
+            r2 = registry.call("capture_review_memory",
+                               task_id="dtask_f2",
+                               status="approved",
+                               title="",
+                               summary="Summary")
+            parsed2 = json.loads(r2)
+            assert len(parsed2["created"]) == 0, f"empty title should not create: {parsed2}"
+
+            # Empty summary (allowed but creates nothing for approved)
+            r3 = registry.call("capture_review_memory",
+                               task_id="dtask_f3",
+                               status="approved",
+                               title="Valid title",
+                               summary="")
+            parsed3 = json.loads(r3)
+            # Empty summary means no task_learning created, but should not crash
+            assert "created" in parsed3, f"should return valid JSON: {parsed3}"
+
+            # Missing optional fields (defaults)
+            r4 = registry.call("capture_review_memory",
+                               task_id="dtask_f4",
+                               status="approved",
+                               title="Minimal",
+                               summary="Minimal summary")
+            parsed4 = json.loads(r4)
+            assert "created" in parsed4, f"minimal input should work: {parsed4}"
+
+            # Registry still works after capture errors
+            r5 = registry.call("calculate", expression="2 + 3")
+            assert "5" in r5, f"registry broken after capture errors: {r5}"
+
+            # Memory record tools still work
+            r6 = registry.call("save_memory_record",
+                               kind="fact",
+                               title="after error",
+                               content="still works")
+            parsed6 = json.loads(r6)
+            assert "record_id" in parsed6, f"memory record broken after capture: {parsed6}"
+        finally:
+            db.close()
+
+
+def eval_review_capture_searchability():
+    """Captured records are searchable via search_memory_records and list_memory_records."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Capture a review
+            r1 = registry.call("capture_review_memory",
+                               task_id="dtask_sb1",
+                               status="approved",
+                               title="Searchable review",
+                               summary="Implemented feature X with SQLite backend")
+            parsed1 = json.loads(r1)
+            assert len(parsed1["created"]) >= 1
+
+            # Search by query
+            r2 = registry.call("search_memory_records", query="SQLite backend")
+            parsed2 = json.loads(r2)
+            assert len(parsed2) >= 1, f"expected search results: {parsed2}"
+
+            # Search by kind
+            r3 = registry.call("search_memory_records", query="Searchable review", kind="task_learning")
+            parsed3 = json.loads(r3)
+            assert len(parsed3) >= 1, f"expected task_learning results: {parsed3}"
+
+            # List by kind
+            r4 = registry.call("list_memory_records", kind="task_learning")
+            parsed4 = json.loads(r4)
+            assert len(parsed4) >= 1, f"expected task_learning in list: {parsed4}"
+
+            # Search results are bounded (no content field)
+            for item in parsed2:
+                assert "content" not in item, f"content leaked in search: {item.keys()}"
+
+            # List results are bounded (no content field)
+            for item in parsed4:
+                assert "content" not in item, f"content leaked in list: {item.keys()}"
         finally:
             db.close()
 

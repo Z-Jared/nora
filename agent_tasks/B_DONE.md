@@ -1,45 +1,50 @@
-# Claude B Completion Report - TASK-041
+# Claude B Completion Report - TASK-043
 
 Status: completed, ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for Nora MCP server adapter (TASK-040).
+Added deterministic offline eval coverage for review memory capture (TASK-042).
 
-Five new eval cases added to `evals/run_evals.py`:
+Six new eval cases added to `evals/run_evals.py`:
 
-1. **mcp_optional_dependency** — MCP module is importable without `mcp` package. `create_server` raises `ImportError` with clear install guidance when `mcp` is missing.
+1. **review_capture_approved** — Approved capture creates task_learning/decision/risk records from bounded fields. Created records are searchable via `search_memory_records`.
 
-2. **mcp_tool_export_basics** — Allowed tools appear in MCP metadata with stable names, descriptions, and input schemas. Metadata is JSON-serializable. Specific tools (calculate) verified.
+2. **review_capture_non_approved** — `changes_requested` and `blocked` do not create decision/fact records. Explicit risk creates a risk record for non-approved statuses.
 
-3. **mcp_safety_allowlist** — High-risk tools (run_shell_command, write_file, git_commit, etc.) not in default allowlist and not in exported metadata. Disallowed tool calls return JSON error with "未在允许列表中". Output is bounded.
+3. **review_capture_safety** — Secret-like content rejected. Raw diff markers, shell output rejected. Transcript-style prompt content (system:/user:/assistant:) rejected with sentinel check. Generic env-var assignment content (MY_CUSTOM_TOKEN=, NORA_DB_PATH=) rejected via `[A-Z_][A-Z0-9_]*=` pattern, with sentinel check in capture, search, and list. Oversized content truncated. Tool output bounded (no full content field).
 
-4. **mcp_compatibility** — Existing OpenAI-style tool metadata still works. MCP metadata works alongside. Memory tools (save_memory, search_memory) work through adapter. Memory record tools work through adapter.
+4. **review_capture_dedupe** — Repeating same task_id/status/title/kind does not create duplicates. Different task_id creates new record.
 
-5. **mcp_failure_isolation** — Unknown tool returns "未知工具" error. Missing required args returns error. Handler errors return "工具调用失败" error. Handler exception with secret sentinel does not leak into MCP output. All errors are JSON-serializable. Registry still works after errors.
+5. **review_capture_failure_isolation** — Invalid status, empty title, empty summary return JSON errors/skips. Registry and memory record tools still work after capture errors.
+
+6. **review_capture_searchability** — Captured records searchable by query and kind. List by kind works. Search/list results bounded (no content field).
 
 ## Safety Assertions
 
-- High-risk tools excluded from default allowlist and MCP metadata
-- Disallowed calls return JSON errors, not exceptions
-- Output bounded via truncation
-- No external API calls or mcp package required
+- Secret sentinel in summary/title → rejected
+- Raw diff markers, shell prompts → rejected
+- Transcript-style prompt content (system:/user:/assistant:) → rejected, sentinel not in capture/search/list
+- Generic env-var assignment (MY_CUSTOM_TOKEN=, NORA_DB_PATH=) → rejected via `[A-Z_][A-Z0-9_]*=`, sentinel not in capture/search/list
+- Oversized content → truncated, not leaked raw
+- Tool output → bounded, no full content field
+- Search/list → bounded summaries, no content
 
 ## Diff
 
 ```text
- evals/run_evals.py | 209 ++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 209 insertions(+)
+ evals/run_evals.py | 300 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 300 insertions(+)
 ```
 
 ## Tests
 
 ```text
 python3 evals/run_evals.py
-168 passed, 0 failed
+174 passed, 0 failed
 
-python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
-Ran 159 tests in 3.405s
+python3 -m unittest tests.test_review_memory tests.test_memory_records tests.test_mini_agent tests.test_tool_cache
+Ran 226 tests in 4.003s
 OK
 
 git diff --check
@@ -49,6 +54,6 @@ git diff --check
 ## Notes
 
 - No runtime code changed — eval only as instructed.
-- TASK-040 implementation was already complete.
+- TASK-042 implementation was already complete.
 - No commit or push performed.
 - Known limitations: none.
