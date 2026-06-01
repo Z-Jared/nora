@@ -8,6 +8,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-063: Deterministic eval coverage for worker workspace integration ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 221 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 565 tests OK；`python3 -m unittest discover -s tests` 1621 tests OK；`git diff --check` OK。
+- 内容: 新增 10 个 deterministic offline eval，覆盖 claim/dispatch 自动准备 workspace、same-worker same-task lease reuse、多 worker dispatch unique leases、offline/idle/mismatch 不产生非法 workspace、workspace prepare failure 不阻断 claim/dispatch、错误后 list/get compatibility、workspace sub-dict 不泄漏 raw goal/steps/secrets、`WORKSPACE_PREPARED` event safe metadata，以及 no-task dispatch 无 workspace activity。
+
+### TASK-062: Worker workspace preparation integration ✅
+- 完成者: Claude A
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 221 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent` 565 tests OK；`python3 -m unittest discover -s tests` 1621 tests OK；`git diff --check` OK。
+- 内容: 将 workspace lease preparation 接入 `claim_durable_task` 和 `dispatch_durable_tasks`；成功 claim/dispatch 后 best-effort prepare workspace，并在返回值中附带 bounded `workspace` metadata 或 `workspace.error`；workspace failure 不阻断任务分配；same worker + same task prepare 变为 idempotent `reused: true`；different-worker same-task uniqueness 继续返回 `existing_lease_id` error。
+
 ### TASK-061: Deterministic eval coverage for worker workspace lease ✅
 - 完成者: Claude B
 - Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED

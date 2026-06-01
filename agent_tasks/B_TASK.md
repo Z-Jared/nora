@@ -5,44 +5,35 @@ Status: completed
 
 ## Goal
 
-TASK-061: Deterministic eval coverage for worker workspace lease.
+TASK-063: Deterministic eval coverage for worker workspace integration.
 
-Codex PM approved this task after review. TASK-060 runtime is integrated locally.
+Codex PM approved this task after review. TASK-062 runtime is integrated locally.
 
 ## Scope
 
-Edit `evals/run_evals.py` only unless a real TASK-060 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
+Edit `evals/run_evals.py` only unless a real TASK-062 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
 
 Deterministic offline eval coverage:
 
-1. Happy path:
-   - register worker
-   - create durable task
-   - assign task to worker
-   - set worker `assigned/current_task_id`
-   - call `prepare_worker_workspace`
-   - verify lease id format, worker/task ids, created_at, directory exists
-   - call `release_worker_workspace`
+1. Claim/dispatch workspace integration:
+   - claim auto-prepares a workspace lease
+   - dispatch auto-prepares a workspace lease per assignment
+   - workspace directories exist when preparation succeeds
 
-2. Validation and uniqueness:
-   - unknown worker
-   - unknown task
-   - offline worker
-   - idle worker with matching `task.worker_id`
-   - worker `current_task_id` mismatch
-   - task worker mismatch
-   - duplicate lease for same worker
-   - duplicate lease for same task through real registry call with second active worker
+2. Reuse and uniqueness:
+   - same worker claiming the same task reuses the same lease
+   - multiple dispatched workers receive unique leases
+   - offline/idle/mismatch cases do not create invalid workspace leases
 
-3. Safety:
-   - bounded outputs
-   - no raw goal, steps, prompts, shell output, diffs, env vars, or secrets
-   - event payload contains only safe metadata
-   - mkdir failure returns error and creates no lease
+3. Failure isolation:
+   - workspace prepare failure does not block claim
+   - workspace prepare failure does not block dispatch
+   - existing list/get worker/task tools still work after workspace failures
 
-4. Compatibility:
-   - broken event store does not block prepare/release
-   - errors do not break existing worker/task list/get tools
+4. Safety and events:
+   - workspace sub-dict does not leak raw goal, steps, prompts, shell output, diffs, env vars, or secrets
+   - `WORKSPACE_PREPARED` events contain safe metadata only
+   - no pending tasks means dispatch returns no workspace activity
 
 ## Verification
 

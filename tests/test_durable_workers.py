@@ -874,6 +874,19 @@ class WorkspaceLeaseTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("existing_lease_id", result)
 
+    def test_prepare_same_task_returns_reused(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one", worker_id="w1")
+        self._assign_and_activate(task["task_id"], "w1")
+
+        first = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+        second = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"]))
+
+        self.assertTrue(second["reused"])
+        self.assertEqual(second["lease_id"], first["lease_id"])
+        self.assertEqual(second["worker_id"], "w1")
+        self.assertEqual(second["task_id"], task["task_id"])
+
     def test_prepare_task_already_leased_returns_error(self):
         self._register_worker("w1")
         self._register_worker("w2")
@@ -981,6 +994,161 @@ class WorkspaceLeaseTests(unittest.TestCase):
         # No lease should be created
         lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
         self.assertIsNone(lease)
+
+
+class WorkspaceIntegrationTests(unittest.TestCase):
+    """Tests for workspace lease integration into claim/dispatch (TASK-062)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_worker(self, worker_id, role="worker"):
+        return json.loads(self.registry.call("register_worker", worker_id=worker_id, role=role))
+
+    def _create_task(self, goal="test task"):
+        return json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+
+    def test_claim_auto_prepares_workspace(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        result = json.loads(self.registry.call("claim_durable_task", worker_id="w1"))
+
+        self.assertTrue(result["claimed"])
+        ws = result["workspace"]
+        self.assertIn("lease_id", ws)
+        self.assertEqual(ws["worker_id"], "w1")
+        self.assertEqual(ws["task_id"], result["task_id"])
+        self.assertTrue(Path(ws["workspace_path"]).exists())
+
+    def test_dispatch_auto_prepares_workspace(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        ws = result["assignments"][0]["workspace"]
+        self.assertIn("lease_id", ws)
+        self.assertEqual(ws["worker_id"], "w1")
+        self.assertEqual(ws["task_id"], result["assignments"][0]["task_id"])
+        self.assertTrue(Path(ws["workspace_path"]).exists())
+
+    def test_claim_reuses_existing_workspace(self):
+        self._register_worker("w1")
+        task = self._create_task(goal="task one")
+
+        # Claim once — creates workspace
+        first = json.loads(self.registry.call("claim_durable_task", worker_id="w1"))
+        # Claim again — should reuse
+        second = json.loads(self.registry.call("claim_durable_task", worker_id="w1"))
+
+        self.assertTrue(second["already_assigned"])
+        ws = second["workspace"]
+        self.assertTrue(ws["reused"])
+        self.assertEqual(ws["lease_id"], first["workspace"]["lease_id"])
+
+    def test_dispatch_multiple_workers_each_get_workspace(self):
+        self._register_worker("w1")
+        self._register_worker("w2")
+        self._create_task(goal="task A")
+        self._create_task(goal="task B")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 2)
+        for assignment in result["assignments"]:
+            ws = assignment["workspace"]
+            self.assertIn("lease_id", ws)
+            self.assertEqual(ws["worker_id"], assignment["worker_id"])
+            self.assertTrue(Path(ws["workspace_path"]).exists())
+
+    def test_claim_workspace_failure_does_not_block(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        # Make workspace preparation fail by creating a file at .workspaces
+        (self.root / ".workspaces").touch()
+
+        result = json.loads(self.registry.call("claim_durable_task", worker_id="w1"))
+
+        self.assertTrue(result["claimed"])
+        self.assertIn("workspace", result)
+        self.assertIn("error", result["workspace"])
+
+    def test_dispatch_workspace_failure_does_not_block(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        (self.root / ".workspaces").touch()
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 1)
+        ws = result["assignments"][0]["workspace"]
+        self.assertIn("error", ws)
+
+    def test_claim_workspace_no_goal_leak(self):
+        self._register_worker("w1")
+        self._create_task(goal="SECRET_WS_GOAL_XYZ")
+
+        result = json.loads(self.registry.call("claim_durable_task", worker_id="w1"))
+
+        # Workspace output must not leak goal/steps
+        ws_str = json.dumps(result["workspace"])
+        self.assertNotIn("SECRET_WS_GOAL_XYZ", ws_str)
+        self.assertNotIn("step one", ws_str)
+
+    def test_dispatch_workspace_no_goal_leak(self):
+        self._register_worker("w1")
+        self._create_task(goal="SECRET_WS_GOAL_ABC")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        ws_str = json.dumps(result["assignments"][0]["workspace"])
+        self.assertNotIn("SECRET_WS_GOAL_ABC", ws_str)
+        self.assertNotIn("step one", ws_str)
+
+    def test_claim_workspace_event_emitted(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        self.registry.call("claim_durable_task", worker_id="w1")
+
+        events = self.registry.durable_event_store.list_events(max_results=20)
+        ws_events = [e for e in events if e.event_type == "workspace_prepared"]
+        self.assertEqual(len(ws_events), 1)
+        self.assertEqual(ws_events[0].payload["worker_id"], "w1")
+
+    def test_dispatch_workspace_event_emitted(self):
+        self._register_worker("w1")
+        self._create_task(goal="task one")
+
+        self.registry.call("dispatch_durable_tasks")
+
+        events = self.registry.durable_event_store.list_events(max_results=20)
+        ws_events = [e for e in events if e.event_type == "workspace_prepared"]
+        self.assertEqual(len(ws_events), 1)
+
+    def test_dispatch_no_tasks_no_workspace(self):
+        self._register_worker("w1")
+
+        result = json.loads(self.registry.call("dispatch_durable_tasks"))
+
+        self.assertEqual(result["dispatched"], 0)
+        # No workspace events
+        events = self.registry.durable_event_store.list_events(max_results=10)
+        ws_events = [e for e in events if e.event_type == "workspace_prepared"]
+        self.assertEqual(len(ws_events), 0)
 
 
 if __name__ == "__main__":

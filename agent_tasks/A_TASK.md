@@ -5,51 +5,36 @@ Status: completed
 
 ## Goal
 
-TASK-060: Worker workspace lease / isolation v1.
+TASK-062: Worker workspace preparation integration.
 
-Codex PM approved this task after review. Integrated locally after TASK-061 eval coverage.
+Codex PM approved this task after review. TASK-060 workspace lease runtime and TASK-061 eval coverage are already integrated.
 
-Nora has durable workers and auto-dispatch. The next runtime depth step was a minimal workspace lease layer so an actively assigned worker can receive an isolated workspace directory before future worker execution/sandbox work.
+Nora can create durable worker workspace leases. The next runtime depth step is wiring workspace preparation into worker claim/dispatch flows so future worker execution has a workspace lease available before execution.
 
 ## Scope
 
-Build only workspace lease / isolation v1. Do not implement worker process execution, git worktree creation, patch queues, sandbox policy, multi-agent orchestration, or broad schema redesign.
+Integrate workspace preparation into worker claim and dispatch. Do not implement sandbox policy, process isolation, git worktrees, patch queues, or real multi-process worker execution.
 
-1. Add durable workspace lease storage:
-   - `DurableWorkspaceLease`
-   - `WorkspaceLeaseStore`
-   - SQLite backend via `NoraDB`
-   - JSONL fallback
-   - fields: `lease_id`, `worker_id`, `task_id`, `workspace_path`, `created_at`
+1. Claim integration:
+   - `claim_durable_task(worker_id)` should best-effort prepare workspace after a successful claim.
+   - Existing active assignment path should reuse existing workspace lease when possible.
+   - Response should include bounded `workspace` metadata or a bounded `workspace.error`.
+   - Workspace preparation failure must not block claim.
 
-2. Add registry tools:
-   - `prepare_worker_workspace(worker_id, task_id)`
-   - `release_worker_workspace(worker_id)`
+2. Dispatch integration:
+   - `dispatch_durable_tasks(max_assignments=10)` should best-effort prepare workspace after each assignment.
+   - Each assignment response should include bounded `workspace` metadata or bounded `workspace.error`.
+   - Workspace preparation failure must not block dispatch.
 
-3. Prepare behavior:
-   - validate worker exists
-   - reject offline worker
-   - reject idle worker
-   - require `worker.current_task_id == task_id`
-   - validate durable task exists
-   - require `task.worker_id == worker_id`
-   - reject duplicate lease for worker
-   - reject duplicate lease for task
-   - create `.workspaces/{worker_id}_{task_id}`
-   - if mkdir fails, return bounded JSON error and do not persist a lease
-   - emit safe `WORKSPACE_PREPARED` event
+3. Lease behavior:
+   - Same worker + same task with existing lease should be idempotent and return `reused: true`.
+   - Same task leased by a different worker must still return an error with `existing_lease_id`.
+   - Worker with a lease for a different task must still return an error with `existing_lease_id`.
 
-4. Release behavior:
-   - validate worker exists
-   - return `released: false` when no lease exists
-   - delete only the lease record, not the filesystem directory
-   - emit safe `WORKSPACE_RELEASED` event
-
-5. Safety and compatibility:
-   - output only bounded metadata
-   - do not leak task goal, steps, notes, prompts, shell output, diffs, env vars, or secrets
-   - event-store failure must not block prepare/release
-   - existing worker/task/event tools must remain compatible
+4. Safety and compatibility:
+   - New workspace output must not leak raw task goal, steps, prompts, shell output, diffs, env vars, or secrets.
+   - Preserve existing claim/dispatch task assignment behavior.
+   - Preserve existing durable worker/task/event registry tools.
 
 ## Verification
 
@@ -57,6 +42,7 @@ Run at minimum:
 
 ```bash
 python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+python3 -m unittest discover -s tests
 python3 evals/run_evals.py
 git diff --check
 ```

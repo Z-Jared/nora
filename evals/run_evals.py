@@ -245,6 +245,16 @@ def main() -> int:
         EvalCase("workspace_lease_idempotency_uniqueness", eval_workspace_lease_idempotency_uniqueness),
         EvalCase("workspace_lease_safety", eval_workspace_lease_safety),
         EvalCase("workspace_lease_failure_isolation_compatibility", eval_workspace_lease_failure_isolation_compatibility),
+        EvalCase("workspace_integration_claim_auto_prepares", eval_workspace_integration_claim_auto_prepares),
+        EvalCase("workspace_integration_dispatch_auto_prepares", eval_workspace_integration_dispatch_auto_prepares),
+        EvalCase("workspace_integration_claim_reuses_existing_lease", eval_workspace_integration_claim_reuses_existing_lease),
+        EvalCase("workspace_integration_dispatch_multiple_workers_unique_leases", eval_workspace_integration_dispatch_multiple_workers_unique_leases),
+        EvalCase("workspace_integration_offline_idle_mismatch_no_workspace", eval_workspace_integration_offline_idle_mismatch_no_workspace),
+        EvalCase("workspace_integration_safety_no_leak", eval_workspace_integration_safety_no_leak),
+        EvalCase("workspace_integration_claim_failure_does_not_block", eval_workspace_integration_claim_failure_does_not_block),
+        EvalCase("workspace_integration_dispatch_failure_does_not_block", eval_workspace_integration_dispatch_failure_does_not_block),
+        EvalCase("workspace_integration_event_emitted", eval_workspace_integration_event_emitted),
+        EvalCase("workspace_integration_dispatch_no_tasks_no_workspace", eval_workspace_integration_dispatch_no_tasks_no_workspace),
         EvalCase("checkpoint_basics", eval_checkpoint_basics),
         EvalCase("checkpoint_step_consistency", eval_checkpoint_step_consistency),
         EvalCase("checkpoint_event_coverage", eval_checkpoint_event_coverage),
@@ -7183,7 +7193,7 @@ def eval_workspace_lease_validation_errors():
 
 
 def eval_workspace_lease_idempotency_uniqueness():
-    """Same worker already has lease → error with existing_lease_id.
+    """Same worker already has lease → reused with same lease_id.
     Same task already has lease → error with existing_lease_id.
     Release removes lease. Release with no lease returns released=false."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -7202,12 +7212,11 @@ def eval_workspace_lease_idempotency_uniqueness():
             assert "lease_id" in p1, f"first prepare should succeed: {p1}"
             lease_id_1 = p1["lease_id"]
 
-            # Same worker already has lease → error with existing_lease_id
+            # Same worker already has lease → reused with same lease_id
             r2 = registry.call("prepare_worker_workspace", worker_id="w_dup1", task_id=tid1)
             p2 = json.loads(r2)
-            assert "error" in p2, f"duplicate worker lease should error: {p2}"
-            assert "existing_lease_id" in p2, f"should include existing_lease_id: {p2}"
-            assert p2["existing_lease_id"] == lease_id_1, f"wrong existing_lease_id: {p2}"
+            assert p2.get("reused") is True, f"duplicate worker lease should be reused: {p2}"
+            assert p2["lease_id"] == lease_id_1, f"wrong lease_id on reuse: {p2}"
 
             # Same task already has lease → error with existing_lease_id
             # Reassign task1 to worker2, set worker2 status=assigned/current_task_id=task1
@@ -7360,6 +7369,411 @@ def eval_workspace_lease_failure_isolation_compatibility():
             tid2 = _setup_assigned_worker_task(registry, worker_id="w_ws2")
             r_ok = registry.call("prepare_worker_workspace", worker_id="w_ws2", task_id=tid2)
             assert "lease_id" in json.loads(r_ok), f"valid prepare after error should work: {r_ok}"
+        finally:
+            db.close()
+
+
+# --- Workspace integration eval sentinels (TASK-063) ---
+
+_WORKSPACE_INTEGRATION_SENTINEL_GOAL = "NORA_EVAL_WSINT_GOAL_SENTINEL_k9m0n1p2"
+_WORKSPACE_INTEGRATION_SENTINEL_SECRET = "NORA_EVAL_WSINT_SECRET_sk-wsint-3q4r5s6t"
+_WORKSPACE_INTEGRATION_SENTINEL_STEP = "NORA_EVAL_WSINT_STEP_SENTINEL_u7v8w9x0"
+
+
+def _create_idle_worker_and_pending_task(registry, worker_id="w_idle", task_id_prefix="wsint"):
+    """Helper: register idle worker + create pending unassigned task. Returns (worker_id, task_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+        steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+    )
+    return worker_id, task.task_id
+
+
+def eval_workspace_integration_claim_auto_prepares():
+    """Claim auto-prepares workspace lease for the claimed task.
+    Response includes workspace dict with lease_id/reused fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            ws.register_worker("w_claim", role="coder")
+            task = ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+            )
+
+            result = registry.call("claim_durable_task", worker_id="w_claim")
+            parsed = json.loads(result)
+
+            assert parsed.get("claimed") is True, f"claim should succeed: {parsed}"
+            assert "workspace" in parsed, f"missing workspace in claim response: {parsed}"
+            ws_info = parsed["workspace"]
+            assert "lease_id" in ws_info, f"workspace missing lease_id: {ws_info}"
+            assert ws_info["lease_id"].startswith("wlease_"), f"bad lease_id format: {ws_info}"
+            assert ws_info.get("reused") is not True or "lease_id" in ws_info
+
+            # Workspace directory exists
+            ws_path = Path(ws_info["workspace_path"])
+            assert ws_path.exists(), f"workspace dir not created: {ws_path}"
+
+            # Bounded: no goal/steps/secrets in workspace output
+            ws_str = json.dumps(ws_info)
+            assert _WORKSPACE_INTEGRATION_SENTINEL_GOAL not in ws_str, f"goal leaked in workspace: {ws_str}"
+            assert _WORKSPACE_INTEGRATION_SENTINEL_SECRET not in ws_str, f"secret leaked in workspace: {ws_str}"
+            assert _WORKSPACE_INTEGRATION_SENTINEL_STEP not in ws_str, f"step leaked in workspace: {ws_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_dispatch_auto_prepares():
+    """Dispatch auto-prepares workspace lease for each assignment.
+    Each assignment entry includes workspace dict."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Register 2 workers and create 2 tasks
+            ws.register_worker("w_disp1", role="coder")
+            ws.register_worker("w_disp2", role="coder")
+            t1 = ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+            )
+            t2 = ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+            )
+
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+
+            assert parsed["dispatched"] == 2, f"expected 2 dispatched: {parsed}"
+            for assignment in parsed["assignments"]:
+                assert "workspace" in assignment, f"assignment missing workspace: {assignment}"
+                ws_info = assignment["workspace"]
+                assert "lease_id" in ws_info, f"workspace missing lease_id: {ws_info}"
+                ws_path = Path(ws_info["workspace_path"])
+                assert ws_path.exists(), f"workspace dir not created: {ws_path}"
+
+                # Bounded: no goal/steps/secrets
+                ws_str = json.dumps(ws_info)
+                assert _WORKSPACE_INTEGRATION_SENTINEL_GOAL not in ws_str, f"goal leaked: {ws_str}"
+                assert _WORKSPACE_INTEGRATION_SENTINEL_SECRET not in ws_str, f"secret leaked: {ws_str}"
+                assert _WORKSPACE_INTEGRATION_SENTINEL_STEP not in ws_str, f"step leaked: {ws_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_claim_reuses_existing_lease():
+    """Claim by same worker on same task reuses existing lease (reused=True, same lease_id)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            ws.register_worker("w_reuse", role="coder")
+            task = ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": "step"}],
+            )
+
+            # First claim creates lease
+            r1 = registry.call("claim_durable_task", worker_id="w_reuse")
+            p1 = json.loads(r1)
+            assert p1.get("claimed") is True
+            lease_id_1 = p1["workspace"]["lease_id"]
+
+            # Second claim by same worker reuses lease
+            r2 = registry.call("claim_durable_task", worker_id="w_reuse")
+            p2 = json.loads(r2)
+            assert p2.get("claimed") is True
+            assert p2.get("already_assigned") is True, f"should be already_assigned: {p2}"
+            ws_info = p2["workspace"]
+            assert ws_info.get("reused") is True, f"should be reused: {ws_info}"
+            assert ws_info["lease_id"] == lease_id_1, f"lease_id should match on reuse: {ws_info}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_dispatch_multiple_workers_unique_leases():
+    """Dispatch assigns each worker a unique lease (no duplicate leases)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            ws.register_worker("w_uniq1", role="coder")
+            ws.register_worker("w_uniq2", role="coder")
+            ts.create_task(goal="task1", steps=[{"text": "s1"}])
+            ts.create_task(goal="task2", steps=[{"text": "s2"}])
+
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+            assert parsed["dispatched"] == 2
+
+            lease_ids = set()
+            for assignment in parsed["assignments"]:
+                lid = assignment["workspace"]["lease_id"]
+                assert lid not in lease_ids, f"duplicate lease_id: {lid}"
+                lease_ids.add(lid)
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_offline_idle_mismatch_no_workspace():
+    """Offline/idle/mismatch workers don't get workspace leases via claim or dispatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Offline worker cannot claim
+            ws.register_worker("w_off", role="coder")
+            ws.update_status("w_off", "offline")
+            ts.create_task(goal="task off", steps=[{"text": "s"}])
+            r1 = registry.call("claim_durable_task", worker_id="w_off")
+            p1 = json.loads(r1)
+            assert "error" in p1, f"offline worker should not claim: {p1}"
+
+            # Idle worker with no current_task_id cannot prepare workspace directly
+            ws.register_worker("w_idle_only", role="coder")
+            task_idle = ts.create_task(goal="idle task", steps=[{"text": "s"}])
+            ts.assign_worker(task_idle.task_id, "w_idle_only")
+            # Worker is still idle (no update_status call)
+            r2 = registry.call("prepare_worker_workspace", worker_id="w_idle_only", task_id=task_idle.task_id)
+            p2 = json.loads(r2)
+            assert "error" in p2, f"idle worker should not get workspace: {p2}"
+
+            # Worker current_task_id mismatch
+            ws.register_worker("w_mismatch", role="coder")
+            task_a = ts.create_task(goal="task A", steps=[{"text": "s"}])
+            task_b = ts.create_task(goal="task B", steps=[{"text": "s"}])
+            ts.assign_worker(task_a.task_id, "w_mismatch")
+            ws.update_status("w_mismatch", "assigned", current_task_id=task_b.task_id)
+            r3 = registry.call("prepare_worker_workspace", worker_id="w_mismatch", task_id=task_a.task_id)
+            p3 = json.loads(r3)
+            assert "error" in p3, f"mismatch should error: {p3}"
+
+            # Dispatch skips offline workers
+            ws.register_worker("w_off2", role="coder")
+            ws.update_status("w_off2", "offline")
+            ws.register_worker("w_good", role="coder")
+            ts.create_task(goal="task dispatch", steps=[{"text": "s"}])
+            r4 = registry.call("dispatch_durable_tasks")
+            p4 = json.loads(r4)
+            for assignment in p4.get("assignments", []):
+                assert assignment["worker_id"] != "w_off2", f"offline worker got assignment: {assignment}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_safety_no_leak():
+    """Workspace lease output and events don't leak task goal, steps, prompts, or secrets.
+    Note: claim/dispatch responses intentionally include task details for the caller;
+    we verify the workspace sub-dict and events are safe."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Claim path - check workspace sub-dict is safe
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_safe_claim", role="coder")
+            ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+            )
+            claim_r = registry.call("claim_durable_task", worker_id="w_safe_claim")
+            claim_parsed = json.loads(claim_r)
+            ws_info = claim_parsed.get("workspace", {})
+            ws_str = json.dumps(ws_info)
+            assert _WORKSPACE_INTEGRATION_SENTINEL_GOAL not in ws_str, f"goal leaked in workspace: {ws_str[:500]}"
+            assert _WORKSPACE_INTEGRATION_SENTINEL_SECRET not in ws_str, f"secret leaked in workspace: {ws_str[:500]}"
+            assert _WORKSPACE_INTEGRATION_SENTINEL_STEP not in ws_str, f"step leaked in workspace: {ws_str[:500]}"
+
+            # Dispatch path - check workspace sub-dict is safe
+            ws.register_worker("w_safe_dispatch", role="coder")
+            ts.create_task(
+                goal=_WORKSPACE_INTEGRATION_SENTINEL_GOAL,
+                steps=[{"text": _WORKSPACE_INTEGRATION_SENTINEL_STEP}],
+            )
+            dispatch_r = registry.call("dispatch_durable_tasks")
+            dispatch_parsed = json.loads(dispatch_r)
+            for assignment in dispatch_parsed.get("assignments", []):
+                ws_info = assignment.get("workspace", {})
+                ws_str = json.dumps(ws_info)
+                assert _WORKSPACE_INTEGRATION_SENTINEL_GOAL not in ws_str, f"goal leaked in workspace: {ws_str[:500]}"
+                assert _WORKSPACE_INTEGRATION_SENTINEL_SECRET not in ws_str, f"secret leaked in workspace: {ws_str[:500]}"
+                assert _WORKSPACE_INTEGRATION_SENTINEL_STEP not in ws_str, f"step leaked in workspace: {ws_str[:500]}"
+
+            # Events contain only safe metadata
+            events = registry.durable_event_store.list_events()
+            ws_events = [e for e in events if e.event_type in (WORKSPACE_PREPARED, WORKSPACE_RELEASED)]
+            for event in ws_events:
+                payload = event.payload or {}
+                allowed_keys = {"operation", "lease_id", "worker_id", "task_id"}
+                for key in payload:
+                    assert key in allowed_keys, f"event payload has forbidden key {key}: {payload}"
+                payload_str = json.dumps(payload)
+                assert _WORKSPACE_INTEGRATION_SENTINEL_GOAL not in payload_str, f"goal in event: {payload_str}"
+                assert _WORKSPACE_INTEGRATION_SENTINEL_SECRET not in payload_str, f"secret in event: {payload_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_claim_failure_does_not_block():
+    """Workspace prepare failure during claim does not block the claim itself."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            ws.register_worker("w_claim_fail", role="coder")
+            task = ts.create_task(goal="fail test", steps=[{"text": "s"}])
+
+            # Monkeypatch _prepare_worker_workspace_json to always fail
+            original_prepare = None
+
+            def _always_fail(worker_id, task_id):
+                raise RuntimeError("simulated workspace failure")
+
+            # Patch via registry internals - replace the workspace lease store's create_lease
+            original_create = registry.workspace_lease_store.create_lease
+
+            def broken_create(*args, **kwargs):
+                raise OSError("disk full")
+
+            registry.workspace_lease_store.create_lease = broken_create
+
+            result = registry.call("claim_durable_task", worker_id="w_claim_fail")
+            parsed = json.loads(result)
+
+            # Claim should still succeed
+            assert parsed.get("claimed") is True, f"claim should succeed despite workspace failure: {parsed}"
+            assert "workspace" in parsed, f"should have workspace key: {parsed}"
+            assert "error" in parsed["workspace"], f"workspace should have error: {parsed['workspace']}"
+
+            # Restore
+            registry.workspace_lease_store.create_lease = original_create
+
+            # list/get tools still work
+            workers_list = json.loads(registry.call("list_workers"))
+            assert isinstance(workers_list, list)
+            tasks_list = json.loads(registry.call("list_durable_tasks"))
+            assert isinstance(tasks_list, list)
+            worker_detail = json.loads(registry.call("get_worker", worker_id="w_claim_fail"))
+            assert "worker_id" in worker_detail
+            task_detail = json.loads(registry.call("get_durable_task", task_id=task.task_id))
+            assert "task_id" in task_detail
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_dispatch_failure_does_not_block():
+    """Workspace prepare failure during dispatch does not block assignment."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            ws.register_worker("w_disp_fail", role="coder")
+            ts.create_task(goal="dispatch fail test", steps=[{"text": "s"}])
+
+            # Break workspace lease creation
+            original_create = registry.workspace_lease_store.create_lease
+            registry.workspace_lease_store.create_lease = lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full"))
+
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+
+            # Dispatch should still succeed
+            assert parsed["dispatched"] == 1, f"dispatch should succeed despite workspace failure: {parsed}"
+            assignment = parsed["assignments"][0]
+            assert "workspace" in assignment, f"should have workspace key: {assignment}"
+            assert "error" in assignment["workspace"], f"workspace should have error: {assignment['workspace']}"
+
+            # Restore
+            registry.workspace_lease_store.create_lease = original_create
+
+            # list/get tools still work
+            workers_list = json.loads(registry.call("list_workers"))
+            assert isinstance(workers_list, list)
+            tasks_list = json.loads(registry.call("list_durable_tasks"))
+            assert isinstance(tasks_list, list)
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_event_emitted():
+    """Claim and dispatch emit WORKSPACE_PREPARED events with safe payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Claim path
+            ws.register_worker("w_evt_claim", role="coder")
+            ts.create_task(goal="event claim test", steps=[{"text": "s"}])
+            registry.call("claim_durable_task", worker_id="w_evt_claim")
+
+            # Dispatch path
+            ws.register_worker("w_evt_dispatch", role="coder")
+            ts.create_task(goal="event dispatch test", steps=[{"text": "s"}])
+            registry.call("dispatch_durable_tasks")
+
+            events = registry.durable_event_store.list_events()
+            ws_events = [e for e in events if e.event_type == WORKSPACE_PREPARED]
+            assert len(ws_events) >= 2, f"expected >=2 WORKSPACE_PREPARED events, got {len(ws_events)}"
+
+            for event in ws_events:
+                payload = event.payload or {}
+                assert payload.get("operation") == "prepare", f"bad operation: {payload}"
+                assert "lease_id" in payload, f"missing lease_id: {payload}"
+                assert "worker_id" in payload, f"missing worker_id: {payload}"
+                assert "task_id" in payload, f"missing task_id: {payload}"
+                # No forbidden keys
+                allowed_keys = {"operation", "lease_id", "worker_id", "task_id"}
+                for key in payload:
+                    assert key in allowed_keys, f"forbidden key in event: {key}"
+        finally:
+            db.close()
+
+
+def eval_workspace_integration_dispatch_no_tasks_no_workspace():
+    """Dispatch with no pending tasks returns empty assignments (no workspace errors)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ws.register_worker("w_empty", role="coder")
+
+            result = registry.call("dispatch_durable_tasks")
+            parsed = json.loads(result)
+            assert parsed["dispatched"] == 0, f"expected 0 dispatched: {parsed}"
+            assert parsed["assignments"] == [], f"expected empty assignments: {parsed}"
         finally:
             db.close()
 

@@ -733,6 +733,14 @@ def build_default_registry(
             ensure_ascii=False,
         )
 
+    def _try_prepare_workspace(worker_id: str, task_id: str) -> dict:
+        """Best-effort workspace lease preparation. Never raises."""
+        try:
+            result = _prepare_worker_workspace_json(worker_id, task_id)
+            return _json.loads(result)
+        except Exception:
+            return {"error": "workspace preparation failed"}
+
     def _claim_durable_task_json(worker_id: str) -> str:
         worker_id = worker_id.strip()
         if not worker_id:
@@ -745,11 +753,13 @@ def build_default_registry(
         if worker.current_task_id:
             existing_task = durable_task_store.get_task(worker.current_task_id)
             if existing_task:
+                ws = _try_prepare_workspace(worker_id, existing_task.task_id)
                 return _json.dumps({
                     "claimed": True,
                     "already_assigned": True,
                     "task_id": existing_task.task_id,
                     "task": existing_task.to_dict(),
+                    "workspace": ws,
                 }, ensure_ascii=False)
         pending_tasks = [
             t for t in durable_task_store.list_tasks(limit=500)
@@ -783,10 +793,12 @@ def build_default_registry(
             )
         except Exception:
             pass
+        ws = _try_prepare_workspace(worker_id, task.task_id)
         return _json.dumps({
             "claimed": True,
             "task_id": task.task_id,
             "task": task.to_dict(),
+            "workspace": ws,
         }, ensure_ascii=False)
 
     def _dispatch_durable_tasks_json(max_assignments: int = 10) -> str:
@@ -835,10 +847,12 @@ def build_default_registry(
                 )
             except Exception:
                 pass
+            ws = _try_prepare_workspace(worker.worker_id, task.task_id)
             assignments.append({
                 "worker_id": worker.worker_id,
                 "task_id": task.task_id,
                 "status": "assigned",
+                "workspace": ws,
             })
         return _json.dumps(
             {"dispatched": len(assignments), "assignments": assignments},
@@ -931,6 +945,15 @@ def build_default_registry(
             return _json.dumps({"error": f"task {task_id} 未分配给 worker {worker_id}"}, ensure_ascii=False)
         existing_worker_lease = workspace_lease_store.get_lease_by_worker(worker_id)
         if existing_worker_lease:
+            if existing_worker_lease.task_id == task_id:
+                return _json.dumps({
+                    "reused": True,
+                    "lease_id": existing_worker_lease.lease_id,
+                    "worker_id": worker_id,
+                    "task_id": task_id,
+                    "workspace_path": existing_worker_lease.workspace_path,
+                    "created_at": existing_worker_lease.created_at,
+                }, ensure_ascii=False)
             return _json.dumps({
                 "error": f"worker {worker_id} 已有 workspace lease",
                 "existing_lease_id": existing_worker_lease.lease_id,

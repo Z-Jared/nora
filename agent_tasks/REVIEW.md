@@ -1,42 +1,47 @@
 # Code Review Report
 
-Reviewed: TASK-060 Worker workspace lease / isolation v1; TASK-061 deterministic eval coverage
-Workers: Claude A (TASK-060), Claude B (TASK-061)
+Reviewed: TASK-062 Worker workspace preparation integration; TASK-063 deterministic eval coverage
+Workers: Claude A (TASK-062), Claude B (TASK-063)
 Status: APPROVED
 
 ## Findings
 
 ### Must Fix
 
-- None remaining.
+- None.
 
 ### Review Notes
 
-- TASK-060 runtime now creates a bounded workspace lease only after worker/task assignment validation passes.
-- The prior mkdir failure issue is fixed: `prepare_worker_workspace` returns an error and does not persist a lease when workspace directory creation fails.
-- The prior idle-worker issue is fixed: workers must be non-idle/non-offline and `current_task_id` must match the requested task.
-- TASK-061 now exercises the real task-level duplicate lease registry branch by reassigning an already-leased task to a second active worker and asserting `existing_lease_id` matches the first lease.
+- `claim_durable_task` now best-effort prepares a workspace after a successful claim and includes a `workspace` result.
+- `dispatch_durable_tasks` now best-effort prepares a workspace for each assignment and includes per-assignment `workspace` metadata.
+- Same-worker same-task prepare is now idempotent: existing lease returns `reused: true` with the same `lease_id`.
+- Different-worker same-task lease uniqueness is still enforced with an `existing_lease_id` error.
+- Workspace preparation failure does not block claim/dispatch and is surfaced as a bounded `workspace.error`.
+- Workspace sub-dict and `WORKSPACE_PREPARED` events remain bounded and do not expose raw goal/step data. Existing claim response task details are unchanged from prior behavior.
 
 ## Checks Run
 
 ```text
 Reviewed:
-- git status --short
+- git status --short --branch
 - agent_tasks/A_DONE.md
 - agent_tasks/B_DONE.md
 - agent_tasks/PM_INBOX.md
-- mini_agent/durable_events.py
-- mini_agent/durable_workers.py
 - mini_agent/toolkits/registry_builder.py
 - tests/test_durable_workers.py
 - evals/run_evals.py
 
 python3 evals/run_evals.py
-211 passed, 0 failed
+221 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 553 tests in 12.648s
+Ran 565 tests in 14.584s
 OK
+
+python3 -m unittest discover -s tests
+Ran 1621 tests in 116.782s
+OK
+Warning: failed to load plugin broken.py: bad
 
 git diff --check
 OK
@@ -44,7 +49,7 @@ OK
 
 ## Verdict
 
-TASK-060 APPROVED.
-TASK-061 APPROVED.
+TASK-062 APPROVED.
+TASK-063 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.
