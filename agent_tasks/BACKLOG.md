@@ -6,6 +6,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-078: Worker workspace merge apply audit/history v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-076
+- 分配: Claude A
+- 目标: 新增只读 audit/history 工具，查询 `apply_reviewed_worker_workspace_merge` 成功 apply 产生的 workspace merge events，支持 worker/task/limit 过滤，输出 bounded safe metadata；本任务不改 apply 行为、不改 evals、不执行 shell/git/UI。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 `apply_reviewed_worker_workspace_merge` 和 `workspace_merge` event payload；TASK-076/TASK-077。
+
 ### TASK-077: Deterministic eval coverage for worker workspace reviewed merge apply
 - 优先级: high
 - 预计: 1-2 小时

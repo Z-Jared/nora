@@ -1,73 +1,59 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-076: Worker workspace reviewed merge apply v1.
+TASK-078: Worker workspace merge apply audit/history v1.
 
-TASK-074 dry-run runtime and TASK-075 deterministic eval coverage are approved. Start implementation now.
+TASK-076 runtime is approved and TASK-077 eval coverage is running in parallel with Claude B. Start implementation now.
 
-Nora can now safely determine whether a worker workspace is ready for a reviewed merge. The next step is a guarded apply tool that copies approved worker workspace changes into the project root. This task writes project files, so it must be conservative and rollback-capable.
+Nora can now apply reviewed worker workspace changes to the project root. The next step is a read-only audit/history surface so Codex PM can inspect prior workspace merge apply events without reading raw file content or patch text.
 
-Do not implement git commits, git pushes, shell execution, process isolation, Docker, UI changes, model routing, worker auto-start, or deletion semantics in this task.
+Do not implement new apply behavior, git commits, git pushes, shell execution, process isolation, Docker, UI changes, model routing, worker auto-start, or deletion semantics in this task.
 
 ## Scope
 
-1. Add a registry-level reviewed merge apply tool near the existing worker workspace change export / review gate / dry-run section in `mini_agent/toolkits/registry_builder.py`.
+1. Add a read-only registry-level audit tool near the worker workspace merge apply section in `mini_agent/toolkits/registry_builder.py`.
 
    Suggested tool name:
-   - `apply_reviewed_worker_workspace_merge(worker_id, task_id, max_files=50)`
+   - `list_worker_workspace_merge_applies(worker_id="", task_id="", limit=20)`
 
-2. Gate apply strictly:
-   - Reuse existing worker/task/workspace lease validation.
-   - Re-run `dry_run_worker_workspace_merge` at apply time.
-   - If dry-run is not `ready: true`, return bounded JSON with `applied: false` and safe reason labels.
-   - Do not trust stale caller-supplied preflight output.
+2. Query behavior:
+   - Read durable events for successful `apply_reviewed_worker_workspace_merge` operations.
+   - Filter by optional `worker_id` and/or `task_id`.
+   - Bound `limit` to 1..100 and reject non-integer input with bounded JSON error.
+   - Return newest-first results consistent with existing durable event query behavior.
+   - Return only events whose source/operation identify workspace merge apply.
 
-3. Apply behavior:
-   - Write only created/modified safe text files identified by current summary/patch export safety rules.
-   - Re-check every project-root target path immediately before write.
-   - Reject/skips must block the whole apply.
-   - Do not apply raw patches.
-   - Do not delete files.
-   - Do not write symlink targets, binary files, oversized files, denied paths, path escapes, or project symlink-to-sensitive/escape paths.
-   - If any file write fails after earlier writes, rollback:
-     - restore modified files from pre-apply content
-     - remove files created by this apply
-   - On rollback failure, return bounded JSON with rollback failure metadata only; never leak file contents.
-
-4. Output:
+3. Output:
    - Return JSON only.
    - Return bounded safe metadata:
-     - `applied` boolean
-     - worker_id, task_id, lease_id
-     - created/modified/applied counts
-     - bounded list of safe file paths and statuses
-     - safe reason labels / error labels
-   - Avoid raw file content, raw patch text, summary body, task goal, steps, prompts, env vars, shell output, request strings, reviewer notes, or secrets.
+     - count
+     - event_id, created_at, worker_id, task_id, lease_id
+     - applied_count, created_count, modified_count
+     - bounded safe paths/status metadata if present
+   - Avoid raw file content, raw patch text, summary body, task goal, steps, prompts, env vars, shell output, request strings, reviewer notes, raw exception strings, or secrets.
+   - If event payloads are malformed or missing fields, return safe defaults rather than raw payload values.
 
-5. Event/audit:
-   - Record a safe durable event for successful apply if there is an established event pattern available.
-   - Event payload must contain only safe metadata: worker/task/lease ids, counts, path/status metadata, and no content.
-   - Event-store failure must not corrupt already-applied files; return bounded behavior consistent with existing registry patterns.
-
-6. Compatibility:
-   - Preserve existing behavior of dry-run, workspace lease tools, file inspection tools, write tools, change summary/patch export tools, review gate tools, sandbox guard tools, claim/dispatch, durable task/worker/event tools, and project-level workspace tools.
+4. Compatibility:
+   - Preserve existing behavior of apply, dry-run, summary, patch export, review gate, workspace lease, sandbox guard, read/list/preview/write, claim/dispatch, durable task/worker/event tools, and project-level workspace tools.
+   - Since B is running TASK-077 in parallel, do not edit `evals/run_evals.py` in this task.
+   - If you discover a TASK-076 runtime bug that blocks this audit tool, stop and write it in `agent_tasks/A_DONE.md`; do not broad-refactor.
 
 ## Tests
 
 Add focused unit tests in `tests/test_durable_workers.py` covering:
 
-- Applies created and modified safe text files after approved ready dry-run.
-- Rejects no gate, changes_requested, blocked, no changes, skipped summary/patch entries, and patch budget overflow.
-- Rejects unknown worker, no lease, task mismatch, offline/idle worker, and bad `max_files`.
-- Blocks sensitive path, binary, oversized, symlink escape, and project symlink-to-sensitive-file cases.
-- Does not leak raw patch, raw file content, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
-- Rollback restores modified files and removes newly created files if a later write fails.
-- Successful apply mutates only intended project files; worker workspace, worker/task state, lease ownership, and review gate remain unchanged.
-- Existing dry-run/summary/patch/review gate/read/list/write/preview/claim/dispatch tools still work after apply.
+- No merge apply events returns empty list.
+- Successful apply creates an audit entry with safe counts and ids.
+- Filtering by worker_id and task_id works.
+- Limit bounds and bad limit handling.
+- Malformed/unrelated file edit events are ignored or safely bounded.
+- Output does not leak raw file content, patch text, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
+- Audit tool is read-only and does not mutate project root, worker workspace, worker/task state, lease ownership, or review gate.
+- Existing apply/dry-run/summary/patch/review gate/read/list/write/preview/claim/dispatch tools still work after audit query.
 
 ## Verification
 
