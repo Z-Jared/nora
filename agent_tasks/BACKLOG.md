@@ -4,15 +4,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+## 进行中
+
 ### TASK-072: Worker workspace review gate artifact v1
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-070/TASK-071
+- 分配: Claude A
 - 目标: 在 worker workspace change summary / patch export 之后，新增一个只读/记录型 review gate artifact 能力，用安全元数据记录某个 worker workspace 输出是否已通过 PM/reviewer 审查，为后续 merge workflow 做前置门禁；本任务不执行 project-root merge、不应用 patch、不 commit、不 push。
 - 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
 - 参考: `mini_agent/toolkits/registry_builder.py` worker workspace change export tools；`mini_agent/durable_events.py` review gate / task action event patterns；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / Priority 4 Worker isolation。
-
-## 进行中
 
 ## 已完成
 
