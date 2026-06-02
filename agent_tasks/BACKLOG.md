@@ -6,16 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-067: Deterministic eval coverage for worker workspace file inspection
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-066 runtime present
-- 分配: Claude B
-- 目标: 为 TASK-066 的 worker workspace file inspection/preview 工具增加离线 deterministic eval，覆盖 valid scoped read/list/preview、path escape rejection、missing lease/worker/task mismatch errors、安全不泄漏、以及 existing worker/task registry compatibility。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `evals/run_evals.py` sandbox guard / workspace lease eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation / Priority 5 Eval harness。
-
 ## 已完成
+
+### TASK-067: Deterministic eval coverage for worker workspace file inspection ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 236 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 314 tests OK；`git diff --check` OK。
+- 内容: 新增 8 个 deterministic offline eval，覆盖 worker workspace file inspection valid list/read/preview、relative/absolute/deep path escape、empty path、unknown/no-lease/task mismatch、offline/idle stale lease rejection、goal/step/secret sentinel 不泄漏、oversized/binary read bounded error、direct `.env`/`.git` rejection、symlink escape、symlink to denied dirs (`gitlink -> .git/config`, `loglink -> logs/app.log`)、no-mutation，以及 file inspection 后 worker/task/lease/sandbox guard/claim/dispatch compatibility。
 
 ### TASK-066: Worker workspace file inspection tools v1 ✅
 - 完成者: Claude A

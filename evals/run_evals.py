@@ -278,6 +278,14 @@ def main() -> int:
         EvalCase("timeline_linkage_and_limits", eval_timeline_linkage_and_limits),
         EvalCase("timeline_safety", eval_timeline_safety),
         EvalCase("timeline_compatibility", eval_timeline_compatibility),
+        EvalCase("workspace_file_inspection_valid_list_read_preview", eval_workspace_file_inspection_valid_list_read_preview),
+        EvalCase("workspace_file_inspection_path_escape_rejected", eval_workspace_file_inspection_path_escape_rejected),
+        EvalCase("workspace_file_inspection_missing_lease_worker_mismatch", eval_workspace_file_inspection_missing_lease_worker_mismatch),
+        EvalCase("workspace_file_inspection_offline_idle_rejected", eval_workspace_file_inspection_offline_idle_rejected),
+        EvalCase("workspace_file_inspection_safety_no_leak", eval_workspace_file_inspection_safety_no_leak),
+        EvalCase("workspace_file_inspection_oversized_binary", eval_workspace_file_inspection_oversized_binary),
+        EvalCase("workspace_file_inspection_symlink_sensitive_paths", eval_workspace_file_inspection_symlink_sensitive_paths),
+        EvalCase("workspace_file_inspection_compatibility", eval_workspace_file_inspection_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -8939,6 +8947,517 @@ def eval_timeline_compatibility():
             assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
             update_r = registry.call("update_durable_task", task_id=task_id, status="running")
             assert "error" not in json.loads(update_r)
+        finally:
+            db.close()
+
+
+# --- Workspace file inspection eval sentinels ---
+
+_FILE_INSPECT_SENTINEL_GOAL = "NORA_EVAL_FILEINSPECT_GOAL_SENTINEL_x7y8z9"
+_FILE_INSPECT_SENTINEL_SECRET = "NORA_EVAL_FILEINSPECT_SECRET_sk-fileinspect-a1b2c3d4"
+_FILE_INSPECT_SENTINEL_STEP = "NORA_EVAL_FILEINSPECT_STEP_SENTINEL_e5f6g7h8"
+_FILE_INSPECT_SENTINEL_FILE_CONTENT = "NORA_EVAL_FILEINSPECT_CONTENT_SECRET_i9j0k1l2"
+
+
+def _setup_file_inspect_worker_with_files(registry, worker_id="w_fi"):
+    """Helper: register worker, create task with sentinels, assign, set running, prepare workspace lease, create test files.
+    Returns (task_id, workspace_path)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(goal=_FILE_INSPECT_SENTINEL_GOAL + " " + _FILE_INSPECT_SENTINEL_SECRET, steps=[{"text": _FILE_INSPECT_SENTINEL_STEP}])
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    ws_path = Path(parsed["workspace_path"])
+    # Create test files
+    (ws_path / "src").mkdir(parents=True, exist_ok=True)
+    (ws_path / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    (ws_path / "README.md").write_text("# Test Project\n", encoding="utf-8")
+    (ws_path / "data.txt").write_text(_FILE_INSPECT_SENTINEL_FILE_CONTENT, encoding="utf-8")
+    return tid, str(ws_path)
+
+
+def eval_workspace_file_inspection_valid_list_read_preview():
+    """Valid scoped file inspection: list returns bounded relative paths, read reads inside lease, preview does not mutate."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # --- list_worker_workspace_files ---
+            list_result = json.loads(registry.call(
+                "list_worker_workspace_files", worker_id="w_fi", task_id=tid,
+            ))
+            assert "files" in list_result, f"list missing files key: {list_result}"
+            assert "count" in list_result, f"list missing count key: {list_result}"
+            assert list_result["count"] >= 2, f"expected >=2 files, got {list_result['count']}"
+            # All paths are relative (no leading /)
+            for f in list_result["files"]:
+                assert not f.startswith("/"), f"list returned absolute path: {f}"
+            assert "src/main.py" in list_result["files"], f"src/main.py not found: {list_result['files']}"
+            assert "README.md" in list_result["files"], f"README.md not found: {list_result['files']}"
+            # Bounded: lease info present
+            assert "workspace_path" in list_result
+            assert "lease_id" in list_result
+
+            # --- read_worker_workspace_file ---
+            read_result = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="src/main.py",
+            ))
+            assert "content" in read_result, f"read missing content: {read_result}"
+            assert "print('hello')" in read_result["content"]
+            assert read_result["path"] == "src/main.py"
+            assert "size" in read_result
+            assert "workspace_path" in read_result
+            assert "lease_id" in read_result
+
+            # Read with absolute path inside workspace
+            abs_read = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid,
+                path=str(ws_root / "README.md"),
+            ))
+            assert "content" in abs_read, f"absolute read failed: {abs_read}"
+            assert "# Test Project" in abs_read["content"]
+
+            # --- preview_worker_workspace_write ---
+            # New file preview
+            preview_new = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path="new_file.py", content="print('new')\n",
+            ))
+            assert "preview" in preview_new, f"preview missing preview: {preview_new}"
+            assert preview_new["will_create"] is True, f"new file should will_create=True"
+            assert "print('new')" in preview_new["preview"]
+            assert "workspace_path" in preview_new
+            assert "lease_id" in preview_new
+
+            # Existing file preview (diff)
+            preview_exist = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path="README.md", content="# Modified Project\n",
+            ))
+            assert "preview" in preview_exist
+            assert preview_exist["will_create"] is False
+            assert "-# Test Project" in preview_exist["preview"]
+            assert "+# Modified Project" in preview_exist["preview"]
+
+            # Preview does NOT mutate the file on disk
+            assert (ws_root / "README.md").read_text(encoding="utf-8") == "# Test Project\n"
+            assert not (ws_root / "new_file.py").exists(), "preview should not create new_file.py"
+
+            # Preview does NOT mutate task/worker state
+            task_after = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert task_after["status"] == "running", f"task status mutated: {task_after['status']}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_path_escape_rejected():
+    """Relative traversal and absolute path escape are rejected by all three tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # --- Relative traversal ---
+            # list has no path arg, skip it for traversal tests
+            r_trav_read = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="../../etc/passwd",
+            ))
+            assert "error" in r_trav_read, f"read traversal should be rejected: {r_trav_read}"
+
+            r_trav_prev = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path="../../etc/evil", content="bad",
+            ))
+            assert "error" in r_trav_prev, f"preview traversal should be rejected: {r_trav_prev}"
+
+            # --- Absolute path escape ---
+            r_abs_read = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="/etc/passwd",
+            ))
+            assert "error" in r_abs_read, f"read absolute escape should be rejected: {r_abs_read}"
+
+            r_abs_prev = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path="/etc/evil", content="bad",
+            ))
+            assert "error" in r_abs_prev, f"preview absolute escape should be rejected: {r_abs_prev}"
+
+            # --- Deep traversal ---
+            deep_path = str(ws_root / "subdir" / ".." / ".." / ".." / "etc" / "shadow")
+            r_deep = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path=deep_path,
+            ))
+            assert "error" in r_deep, f"deep traversal should be rejected: {r_deep}"
+
+            # --- Empty path ---
+            r_empty = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="",
+            ))
+            assert "error" in r_empty, f"empty path should error: {r_empty}"
+
+            r_empty_prev = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid, path="", content="x",
+            ))
+            assert "error" in r_empty_prev, f"empty path preview should error: {r_empty_prev}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_missing_lease_worker_mismatch():
+    """No lease, unknown worker, task mismatch → JSON errors for all three tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Unknown worker
+            for tool, extra_kw in [
+                ("list_worker_workspace_files", {}),
+                ("read_worker_workspace_file", {"path": "f.txt"}),
+                ("preview_worker_workspace_write", {"path": "f.txt", "content": "x"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_ghost", task_id="dtask_x", **extra_kw))
+                assert "error" in r, f"unknown worker {tool} should error: {r}"
+
+            # Worker with no lease (assigned but no workspace prepared)
+            ws.register_worker("w_nolease", role="coder")
+            task_nl = ts.create_task(goal="no lease task", steps=[{"text": "s"}])
+            ts.assign_worker(task_nl.task_id, "w_nolease")
+            ws.update_status("w_nolease", "assigned", current_task_id=task_nl.task_id)
+            ts.update_status(task_nl.task_id, "running")
+
+            for tool, extra_kw in [
+                ("list_worker_workspace_files", {}),
+                ("read_worker_workspace_file", {"path": "f.txt"}),
+                ("preview_worker_workspace_write", {"path": "f.txt", "content": "x"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_nolease", task_id=task_nl.task_id, **extra_kw))
+                assert "error" in r, f"no lease {tool} should error: {r}"
+
+            # Task mismatch (worker executing different task)
+            ws.register_worker("w_mismatch", role="coder")
+            task_a = ts.create_task(goal="task A", steps=[{"text": "s"}])
+            task_b = ts.create_task(goal="task B", steps=[{"text": "s"}])
+            ts.assign_worker(task_a.task_id, "w_mismatch")
+            ws.update_status("w_mismatch", "assigned", current_task_id=task_a.task_id)
+            ts.update_status(task_a.task_id, "running")
+            registry.call("prepare_worker_workspace", worker_id="w_mismatch", task_id=task_a.task_id)
+
+            for tool, extra_kw in [
+                ("list_worker_workspace_files", {}),
+                ("read_worker_workspace_file", {"path": "f.txt"}),
+                ("preview_worker_workspace_write", {"path": "f.txt", "content": "x"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_mismatch", task_id=task_b.task_id, **extra_kw))
+                assert "error" in r, f"task mismatch {tool} should error: {r}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_offline_idle_rejected():
+    """Offline and idle workers with stale current_task_id and lease are rejected by all three tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+
+            # Offline worker
+            tid_off, ws_path_off = _setup_file_inspect_worker_with_files(registry, worker_id="w_offline")
+            ws.update_status("w_offline", "offline", current_task_id=tid_off)
+
+            for tool, extra_kw in [
+                ("list_worker_workspace_files", {}),
+                ("read_worker_workspace_file", {"path": "README.md"}),
+                ("preview_worker_workspace_write", {"path": "f.txt", "content": "x"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_offline", task_id=tid_off, **extra_kw))
+                assert "error" in r, f"offline {tool} should error: {r}"
+
+            # Idle worker
+            tid_idle, ws_path_idle = _setup_file_inspect_worker_with_files(registry, worker_id="w_idle")
+            ws.update_status("w_idle", "idle", current_task_id=tid_idle)
+
+            for tool, extra_kw in [
+                ("list_worker_workspace_files", {}),
+                ("read_worker_workspace_file", {"path": "README.md"}),
+                ("preview_worker_workspace_write", {"path": "f.txt", "content": "x"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_idle", task_id=tid_idle, **extra_kw))
+                assert "error" in r, f"idle {tool} should error: {r}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_safety_no_leak():
+    """Outputs do not leak raw task goals, steps, secrets, or file content sentinels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+
+            # list output should not leak goal/step
+            list_r = registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid)
+            assert _FILE_INSPECT_SENTINEL_GOAL not in list_r, f"goal leaked in list: {list_r}"
+            assert _FILE_INSPECT_SENTINEL_STEP not in list_r, f"step leaked in list: {list_r}"
+            assert _FILE_INSPECT_SENTINEL_SECRET not in list_r, f"secret leaked in list: {list_r}"
+
+            # read output: the file data.txt contains the sentinel content, that's expected in "content" field
+            # but goal/step/secret should NOT leak
+            read_r = registry.call("read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="data.txt")
+            assert _FILE_INSPECT_SENTINEL_GOAL not in read_r, f"goal leaked in read: {read_r}"
+            assert _FILE_INSPECT_SENTINEL_STEP not in read_r, f"step leaked in read: {read_r}"
+            assert _FILE_INSPECT_SENTINEL_SECRET not in read_r, f"secret leaked in read: {read_r}"
+
+            # preview output should not leak goal/step
+            preview_r = registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path="out.txt", content="safe content",
+            )
+            assert _FILE_INSPECT_SENTINEL_GOAL not in preview_r, f"goal leaked in preview: {preview_r}"
+            assert _FILE_INSPECT_SENTINEL_STEP not in preview_r, f"step leaked in preview: {preview_r}"
+            assert _FILE_INSPECT_SENTINEL_SECRET not in preview_r, f"secret leaked in preview: {preview_r}"
+
+            # Listing output is bounded and relative
+            list_parsed = json.loads(list_r)
+            for f in list_parsed["files"]:
+                assert not f.startswith("/"), f"absolute path in listing: {f}"
+                assert ".." not in f, f"traversal in listing: {f}"
+
+            # Read output is bounded (content size check)
+            read_parsed = json.loads(read_r)
+            assert read_parsed["size"] <= 64 * 1024, f"size exceeds MAX_FILE_BYTES: {read_parsed['size']}"
+
+            # Error outputs also should not leak sentinels
+            err_r = registry.call("read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="nonexistent.txt")
+            assert _FILE_INSPECT_SENTINEL_GOAL not in err_r, f"goal leaked in error: {err_r}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_oversized_binary():
+    """Oversized and binary/non-UTF8 files return bounded JSON errors without leaking task sentinels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # Oversized file (>64KB)
+            big_content = "x" * (64 * 1024 + 1)
+            (ws_root / "big.txt").write_text(big_content, encoding="utf-8")
+            r_big = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="big.txt",
+            ))
+            assert "error" in r_big, f"oversized file should error: {r_big}"
+            # Must not leak sentinels in error response
+            r_big_str = json.dumps(r_big)
+            assert _FILE_INSPECT_SENTINEL_GOAL not in r_big_str, f"goal leaked in oversized error: {r_big_str}"
+            assert _FILE_INSPECT_SENTINEL_SECRET not in r_big_str, f"secret leaked in oversized error: {r_big_str}"
+            assert _FILE_INSPECT_SENTINEL_STEP not in r_big_str, f"step leaked in oversized error: {r_big_str}"
+
+            # Binary/non-UTF8 file
+            (ws_root / "binary.bin").write_bytes(b"\x80\x81\x82\xff\xfe\x00\x01\x02")
+            r_bin = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="binary.bin",
+            ))
+            assert "error" in r_bin, f"binary file should error: {r_bin}"
+            # Must not leak sentinels in error response
+            r_bin_str = json.dumps(r_bin)
+            assert _FILE_INSPECT_SENTINEL_GOAL not in r_bin_str, f"goal leaked in binary error: {r_bin_str}"
+            assert _FILE_INSPECT_SENTINEL_SECRET not in r_bin_str, f"secret leaked in binary error: {r_bin_str}"
+            assert _FILE_INSPECT_SENTINEL_STEP not in r_bin_str, f"step leaked in binary error: {r_bin_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_symlink_sensitive_paths():
+    """Symlinks escaping workspace are skipped. Sensitive files (.env, .git) are rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # Create a symlink that points outside workspace
+            outside_file = Path(tmpdir) / "outside_secret.txt"
+            outside_file.write_text("SECRET_OUTSIDE", encoding="utf-8")
+            symlink_path = ws_root / "link_to_outside"
+            try:
+                symlink_path.symlink_to(outside_file)
+            except OSError:
+                # Symlink creation may fail in some environments; skip gracefully
+                pass
+            else:
+                # Symlink should NOT appear in listing (target escapes workspace)
+                list_r = json.loads(registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid))
+                assert "link_to_outside" not in list_r["files"], f"symlink escape listed: {list_r['files']}"
+
+                # Reading symlink should be rejected
+                read_r = json.loads(registry.call(
+                    "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="link_to_outside",
+                ))
+                assert "error" in read_r, f"symlink escape read should error: {read_r}"
+
+            # Sensitive files: .env
+            (ws_root / ".env").write_text("SECRET_KEY=abc123", encoding="utf-8")
+            list_r2 = json.loads(registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid))
+            assert ".env" not in list_r2["files"], f".env listed: {list_r2['files']}"
+
+            read_env = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path=".env",
+            ))
+            assert "error" in read_env, f".env read should error: {read_env}"
+
+            preview_env = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                path=".env", content="NEW_SECRET=xyz",
+            ))
+            assert "error" in preview_env, f".env preview should error: {preview_env}"
+
+            # Sensitive dirs: .git
+            (ws_root / ".git" / "config").parent.mkdir(parents=True, exist_ok=True)
+            (ws_root / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+            list_r3 = json.loads(registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid))
+            for f in list_r3["files"]:
+                assert not f.startswith(".git/"), f".git file listed: {f}"
+
+            read_git = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path=".git/config",
+            ))
+            assert "error" in read_git, f".git read should error: {read_git}"
+
+            # Symlinks pointing to denied directories inside workspace
+            # gitlink -> .git/config
+            (ws_root / "logs").mkdir(parents=True, exist_ok=True)
+            (ws_root / "logs" / "app.log").write_text("log entry\n", encoding="utf-8")
+            gitlink_path = ws_root / "gitlink"
+            loglink_path = ws_root / "loglink"
+            try:
+                gitlink_path.symlink_to(ws_root / ".git" / "config")
+                loglink_path.symlink_to(ws_root / "logs" / "app.log")
+            except OSError:
+                pass  # skip if symlinks not supported
+            else:
+                # list should skip symlinks whose resolved target is under denied dirs
+                list_r4 = json.loads(registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid))
+                assert "gitlink" not in list_r4["files"], f"gitlink (-> .git/config) listed: {list_r4['files']}"
+                assert "loglink" not in list_r4["files"], f"loglink (-> logs/app.log) listed: {list_r4['files']}"
+
+                # read should reject symlinks to denied dirs
+                read_gitlink = json.loads(registry.call(
+                    "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="gitlink",
+                ))
+                assert "error" in read_gitlink, f"gitlink read should error: {read_gitlink}"
+
+                read_loglink = json.loads(registry.call(
+                    "read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="loglink",
+                ))
+                assert "error" in read_loglink, f"loglink read should error: {read_loglink}"
+
+                # preview should reject symlinks to denied dirs
+                prev_gitlink = json.loads(registry.call(
+                    "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                    path="gitlink", content="x",
+                ))
+                assert "error" in prev_gitlink, f"gitlink preview should error: {prev_gitlink}"
+
+                prev_loglink = json.loads(registry.call(
+                    "preview_worker_workspace_write", worker_id="w_fi", task_id=tid,
+                    path="loglink", content="x",
+                ))
+                assert "error" in prev_loglink, f"loglink preview should error: {prev_loglink}"
+        finally:
+            db.close()
+
+
+def eval_workspace_file_inspection_compatibility():
+    """File inspection and preview do not mutate task/worker/lease/event state. Error calls don't break other tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+            tid, ws_path = _setup_file_inspect_worker_with_files(registry)
+
+            # Snapshot state
+            before_task = ts.get_task(tid)
+            before_status = before_task.status
+            before_worker = ws.get_worker("w_fi")
+            before_worker_status = before_worker.status
+            before_events = es.list_events(task_id=tid)
+            before_event_count = len(before_events)
+
+            # Call all three tools
+            registry.call("list_worker_workspace_files", worker_id="w_fi", task_id=tid)
+            registry.call("read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="README.md")
+            registry.call("preview_worker_workspace_write", worker_id="w_fi", task_id=tid, path="new.py", content="x")
+
+            # Task state unchanged
+            after_task = ts.get_task(tid)
+            assert after_task.status == before_status, f"task status mutated: {before_status} -> {after_task.status}"
+            assert len(after_task.steps) == len(before_task.steps), "steps mutated"
+
+            # Worker state unchanged
+            after_worker = ws.get_worker("w_fi")
+            assert after_worker.status == before_worker_status, f"worker status mutated"
+
+            # Event state unchanged
+            after_events = es.list_events(task_id=tid)
+            assert len(after_events) == before_event_count, f"event count mutated: {before_event_count} -> {len(after_events)}"
+
+            # Error calls don't break existing tools
+            registry.call("read_worker_workspace_file", worker_id="w_fi", task_id=tid, path="nonexistent.txt")
+            registry.call("read_worker_workspace_file", worker_id="w_ghost", task_id="dtask_x", path="f.txt")
+
+            # Worker/task registry tools still work
+            assert "error" not in json.loads(registry.call("get_worker", worker_id="w_fi"))
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid))
+            assert isinstance(json.loads(registry.call("list_workers")), list)
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+
+            # Workspace lease tools still work
+            gw = json.loads(registry.call("get_worker_workspace", worker_id="w_fi", task_id=tid))
+            assert "lease_id" in gw, f"get_worker_workspace broken after file inspection: {gw}"
+
+            # Sandbox guard tools still work
+            ws_root = Path(ws_path)
+            valid_path = str(ws_root / "src" / "main.py")
+            vp = json.loads(registry.call("validate_worker_workspace_path", worker_id="w_fi", task_id=tid, path=valid_path))
+            assert vp.get("valid") is True, f"validate broken after file inspection: {vp}"
+
+            # Claim/dispatch still work after file inspection
+            # Create a pending task and idle worker, then claim
+            ws.register_worker("w_claimer", role="coder")
+            claim_task = ts.create_task(goal="claim test", steps=[{"text": "s"}])
+            claim_r = json.loads(registry.call("claim_durable_task", worker_id="w_claimer"))
+            assert "task_id" in claim_r, f"claim broken after file inspection: {claim_r}"
+            assert "workspace" in claim_r, f"claim missing workspace after file inspection: {claim_r}"
+
+            # Create another idle worker + pending task, then dispatch
+            ws.register_worker("w_dispatch", role="coder")
+            ts.create_task(goal="dispatch test", steps=[{"text": "s"}])
+            dispatch_r = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch_r, f"dispatch broken after file inspection: {dispatch_r}"
+            assert dispatch_r["dispatched"] >= 1, f"dispatch should assign at least 1: {dispatch_r}"
         finally:
             db.close()
 
