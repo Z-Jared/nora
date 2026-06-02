@@ -4,9 +4,26 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+（暂无）
+
 ## 进行中
 
+### TASK-069: Deterministic eval coverage for worker workspace write tools
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-068 approved runtime present
+- 分配: Claude B
+- 目标: 为 worker workspace write/replace/patch tools 增加离线 deterministic eval，覆盖 valid scoped writes、path escape rejection、missing lease/worker/task mismatch、offline/idle rejection、sensitive/symlink paths、安全不泄漏、oversized/binary bounded errors、no mutation on errors，以及 compatibility。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `evals/run_evals.py` workspace file inspection eval 区域；`mini_agent/toolkits/registry_builder.py` worker workspace file inspection/write 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation / Priority 5 Eval harness。
+
 ## 已完成
+
+### TASK-068: Worker workspace write tools v1 ✅
+- 完成者: Claude A；Codex PM 补强 sensitive path / event / rollback review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 186 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 353 tests OK；`python3 evals/run_evals.py` 236 passed；`python3 -m unittest discover -s tests` 1712 tests OK；`git diff --check` OK。
+- 内容: 新增 worker-scoped write tools：`write_worker_workspace_file(worker_id, task_id, path, content, reason="")`、`replace_worker_workspace_file(worker_id, task_id, path, old_text, new_text, reason="")`、`apply_worker_workspace_patch(worker_id, task_id, patch, reason="")`；全部复用 active worker/task/workspace lease 校验；路径限定在 worker 当前 lease workspace 内；拒绝 traversal、absolute escape、offline/idle worker、missing/no lease、task mismatch、`.env`/`.env.local`/`.env.production` 任意路径层级、`.git`/`logs`/`data`/cache dirs、symlink escape 与 symlink-to-denied-dir；输出 bounded JSON metadata；记录 safe file-edit events；patch 使用 workspace unified diff helpers 并在 partial write failure 时回滚。
 
 ### TASK-067: Deterministic eval coverage for worker workspace file inspection ✅
 - 完成者: Claude B

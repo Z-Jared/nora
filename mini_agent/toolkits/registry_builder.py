@@ -38,6 +38,10 @@ from mini_agent.durable_workers import DurableWorkerStore, WorkerStatus, Workspa
 from mini_agent.durable_events import (
     CHECKPOINT_ADDED,
     DurableEventStore,
+    FILE_EDIT_BLOCKED,
+    FILE_EDIT_ERROR,
+    FILE_EDIT_FINISHED,
+    FILE_EDIT_STARTED,
     RECOVERY_PLANNED,
     TASK_CREATED,
     TASK_STATUS_CHANGED,
@@ -1204,9 +1208,9 @@ def build_default_registry(
                 "path": path,
                 "workspace_path": lease.workspace_path,
             }
-        if resolved.name in DENIED_FILE_NAMES:
-            return None, {"error": f"拒绝访问敏感文件: {resolved.name}"}
         rel_parts = resolved.relative_to(ws_root).parts
+        if any(part in DENIED_FILE_NAMES for part in rel_parts):
+            return None, {"error": "path 包含禁止访问的敏感文件名"}
         if any(part in DENIED_DIR_NAMES for part in rel_parts):
             return None, {"error": f"path 包含禁止访问的目录"}
         return resolved, None
@@ -1239,12 +1243,12 @@ def build_default_registry(
                 rel = target.relative_to(ws_root)
                 if resolved.name in DENIED_FILE_NAMES or target.name in DENIED_FILE_NAMES:
                     continue
-                if any(part in DENIED_DIR_NAMES for part in rel.parts):
+                if any(part in DENIED_FILE_NAMES or part in DENIED_DIR_NAMES for part in rel.parts):
                     continue
                 # Also check resolved target path for denied directories
                 try:
                     resolved_rel = resolved.relative_to(ws_root)
-                    if any(part in DENIED_DIR_NAMES for part in resolved_rel.parts):
+                    if any(part in DENIED_FILE_NAMES or part in DENIED_DIR_NAMES for part in resolved_rel.parts):
                         continue
                 except ValueError:
                     continue
@@ -1376,6 +1380,417 @@ def build_default_registry(
             "required": ["worker_id", "task_id", "path", "content"],
         },
         permission=ToolPermission(category="task", risk="read"),
+    )
+
+    def _record_worker_file_edit_event(
+        event_type: str,
+        path: str,
+        operation: str,
+        worker_id: str = "",
+        task_id: str = "",
+        lease_id: str = "",
+        status: str = "",
+        error: str = "",
+        bytes_before: int = None,
+        bytes_after: int = None,
+    ) -> None:
+        payload = {
+            "path": path,
+            "operation": operation,
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "lease_id": lease_id,
+            "status": status,
+        }
+        if error:
+            payload["error"] = error
+        if bytes_before is not None:
+            payload["bytes_before"] = bytes_before
+        if bytes_after is not None:
+            payload["bytes_after"] = bytes_after
+        severity = "warning" if event_type in (FILE_EDIT_BLOCKED, FILE_EDIT_ERROR) else "info"
+        try:
+            registry.durable_event_store.record(
+                event_type=event_type,
+                task_id=task_id,
+                worker_id=worker_id,
+                source="worker_workspace",
+                summary=f"{event_type}: {path} ({operation})",
+                severity=severity,
+                payload=payload,
+            )
+        except Exception:
+            pass
+
+    def _write_worker_workspace_file_json(worker_id: str, task_id: str, path: str, content: str, reason: str = "") -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        resolved, err = _resolve_workspace_path(lease, path)
+        if err:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "write",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="denied_path",
+            )
+            return _json.dumps(err, ensure_ascii=False)
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > MAX_FILE_BYTES:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "write",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="file_too_large",
+            )
+            return _json.dumps({"error": f"内容过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        if resolved.is_symlink():
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "write",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="symlink",
+            )
+            return _json.dumps({"error": "不能写入符号链接"}, ensure_ascii=False)
+        bytes_before = 0
+        will_create = not resolved.exists()
+        if resolved.exists():
+            if not resolved.is_file():
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, path, "write",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="not_file",
+                )
+                return _json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+            bytes_before = resolved.stat().st_size
+        _record_worker_file_edit_event(
+            FILE_EDIT_STARTED, path, "write",
+            worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+            status="started", bytes_before=bytes_before, bytes_after=content_bytes,
+        )
+        try:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content, encoding="utf-8")
+        except OSError:
+            _record_worker_file_edit_event(
+                FILE_EDIT_ERROR, path, "write",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="error", error="write_failed",
+            )
+            return _json.dumps({"error": "写入失败"}, ensure_ascii=False)
+        _record_worker_file_edit_event(
+            FILE_EDIT_FINISHED, path, "write",
+            worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+            status="finished", bytes_before=bytes_before, bytes_after=content_bytes,
+        )
+        rel = resolved.relative_to(Path(lease.workspace_path).resolve()).as_posix()
+        return _json.dumps({
+            "operation": "write",
+            "path": rel,
+            "bytes_before": bytes_before,
+            "bytes_after": content_bytes,
+            "created": will_create,
+            "changed": True,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    def _replace_worker_workspace_file_json(worker_id: str, task_id: str, path: str, old_text: str, new_text: str, reason: str = "") -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        resolved, err = _resolve_workspace_path(lease, path)
+        if err:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="denied_path",
+            )
+            return _json.dumps(err, ensure_ascii=False)
+        if not old_text:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="empty_old_text",
+            )
+            return _json.dumps({"error": "old_text 不能为空"}, ensure_ascii=False)
+        if not resolved.exists():
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="file_not_found",
+            )
+            return _json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
+        if not resolved.is_file():
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="not_file",
+            )
+            return _json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+        if resolved.stat().st_size > MAX_FILE_BYTES:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="file_too_large",
+            )
+            return _json.dumps({"error": f"文件过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        try:
+            current = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="not_utf8",
+            )
+            return _json.dumps({"error": "只支持 UTF-8 文本文件"}, ensure_ascii=False)
+        except OSError:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="read_failed",
+            )
+            return _json.dumps({"error": "读取失败"}, ensure_ascii=False)
+        if old_text not in current:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="text_not_found",
+            )
+            return _json.dumps({"error": "没有找到要替换的文本"}, ensure_ascii=False)
+        updated = current.replace(old_text, new_text, 1)
+        bytes_before = len(current.encode("utf-8"))
+        bytes_after = len(updated.encode("utf-8"))
+        if bytes_after > MAX_FILE_BYTES:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="file_too_large",
+            )
+            return _json.dumps({"error": f"替换后内容过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        _record_worker_file_edit_event(
+            FILE_EDIT_STARTED, path, "replace",
+            worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+            status="started", bytes_before=bytes_before, bytes_after=bytes_after,
+        )
+        try:
+            resolved.write_text(updated, encoding="utf-8")
+        except OSError:
+            _record_worker_file_edit_event(
+                FILE_EDIT_ERROR, path, "replace",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="error", error="write_failed",
+            )
+            return _json.dumps({"error": "写入失败"}, ensure_ascii=False)
+        _record_worker_file_edit_event(
+            FILE_EDIT_FINISHED, path, "replace",
+            worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+            status="finished", bytes_before=bytes_before, bytes_after=bytes_after,
+        )
+        rel = resolved.relative_to(Path(lease.workspace_path).resolve()).as_posix()
+        return _json.dumps({
+            "operation": "replace",
+            "path": rel,
+            "bytes_before": bytes_before,
+            "bytes_after": bytes_after,
+            "created": False,
+            "changed": True,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    def _apply_worker_workspace_patch_json(worker_id: str, task_id: str, patch: str, reason: str = "") -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        if not patch.strip():
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, "", "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="empty_patch",
+            )
+            return _json.dumps({"error": "patch 不能为空"}, ensure_ascii=False)
+        if len(patch.encode("utf-8")) > MAX_FILE_BYTES:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, "", "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="patch_too_large",
+            )
+            return _json.dumps({"error": f"patch 过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path).resolve()
+        ws = WorkspaceFiles(
+            root=ws_root,
+            max_file_bytes=MAX_FILE_BYTES,
+            require_confirmation=False,
+            event_store=None,
+        )
+        parsed = ws._parse_multi_file_patch(patch)
+        if isinstance(parsed, str):
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, "", "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="patch_parse_error",
+            )
+            return _json.dumps({"error": parsed}, ensure_ascii=False)
+        results = []
+        for rel_path, hunks in parsed:
+            resolved, err = _resolve_workspace_path(lease, rel_path)
+            if err:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="denied_path",
+                )
+                return _json.dumps(err, ensure_ascii=False)
+            if not resolved.exists():
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="file_not_found",
+                )
+                return _json.dumps({"error": f"文件不存在: {rel_path}"}, ensure_ascii=False)
+            if not resolved.is_file():
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="not_file",
+                )
+                return _json.dumps({"error": f"不是文件: {rel_path}"}, ensure_ascii=False)
+            if resolved.stat().st_size > MAX_FILE_BYTES:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="file_too_large",
+                )
+                return _json.dumps({"error": f"文件过大: {rel_path}"}, ensure_ascii=False)
+            try:
+                current = resolved.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="not_utf8",
+                )
+                return _json.dumps({"error": f"只支持 UTF-8 文本文件: {rel_path}"}, ensure_ascii=False)
+            except OSError:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="read_failed",
+                )
+                return _json.dumps({"error": f"读取失败: {rel_path}"}, ensure_ascii=False)
+            ok, applied = ws._apply_hunks(current, hunks)
+            if not ok:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="patch_context_mismatch",
+                )
+                return _json.dumps({"error": applied}, ensure_ascii=False)
+            if len(applied.encode("utf-8")) > MAX_FILE_BYTES:
+                _record_worker_file_edit_event(
+                    FILE_EDIT_BLOCKED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="blocked", error="file_too_large",
+                )
+                return _json.dumps({"error": f"patch 后文件过大: {rel_path}"}, ensure_ascii=False)
+            results.append((rel_path, resolved, current, applied))
+        if not results:
+            _record_worker_file_edit_event(
+                FILE_EDIT_BLOCKED, "", "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="blocked", error="empty_patch",
+            )
+            return _json.dumps({"error": "patch 没有变化"}, ensure_ascii=False)
+        written = []
+        try:
+            for rel_path, resolved, current, updated in results:
+                bytes_before = len(current.encode("utf-8"))
+                bytes_after = len(updated.encode("utf-8"))
+                _record_worker_file_edit_event(
+                    FILE_EDIT_STARTED, rel_path, "patch",
+                    worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                    status="started", bytes_before=bytes_before, bytes_after=bytes_after,
+                )
+                written.append((rel_path, resolved, current, bytes_before, bytes_after))
+                resolved.write_text(updated, encoding="utf-8")
+        except OSError:
+            for rel_path, resolved, original, _bb, _ba in written:
+                try:
+                    resolved.write_text(original, encoding="utf-8")
+                except OSError:
+                    pass
+            _record_worker_file_edit_event(
+                FILE_EDIT_ERROR, rel_path, "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="error", error="patch_write_failed_rolled_back",
+            )
+            return _json.dumps({"error": "patch 写入失败，已回滚"}, ensure_ascii=False)
+        for rel_path, _resolved, _current, bytes_before, bytes_after in written:
+            _record_worker_file_edit_event(
+                FILE_EDIT_FINISHED, rel_path, "patch",
+                worker_id=worker_id, task_id=task_id, lease_id=lease.lease_id,
+                status="finished", bytes_before=bytes_before, bytes_after=bytes_after,
+            )
+        return _json.dumps({
+            "operation": "patch",
+            "files": [rel for rel, *_ in written],
+            "file_count": len(written),
+            "changed": True,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "write_worker_workspace_file",
+        "写入文件到 worker workspace。只写入 lease 内的非敏感文件。",
+        _write_worker_workspace_file_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "path": {"type": "string", "description": "文件路径（相对于 workspace 或绝对路径）"},
+                "content": {"type": "string", "description": "要写入的内容"},
+                "reason": {"type": "string", "description": "写入原因"},
+            },
+            "required": ["worker_id", "task_id", "path", "content"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "replace_worker_workspace_file",
+        "替换 worker workspace 文件中的文本。只替换第一次出现。",
+        _replace_worker_workspace_file_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "path": {"type": "string", "description": "文件路径"},
+                "old_text": {"type": "string", "description": "要替换的文本"},
+                "new_text": {"type": "string", "description": "替换后的文本"},
+                "reason": {"type": "string", "description": "替换原因"},
+            },
+            "required": ["worker_id", "task_id", "path", "old_text", "new_text"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "apply_worker_workspace_patch",
+        "对 worker workspace 文件应用 unified diff patch。",
+        _apply_worker_workspace_patch_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "patch": {"type": "string", "description": "unified diff patch"},
+                "reason": {"type": "string", "description": "应用原因"},
+            },
+            "required": ["worker_id", "task_id", "patch"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
     )
 
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:

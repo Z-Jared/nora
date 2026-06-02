@@ -1,87 +1,70 @@
-# Claude A Completion Report — TASK-066: Worker Workspace File Inspection Tools v1
+# Claude A Completion Report — TASK-068: Worker Workspace Write Tools v1
 
-Status: ready for Codex review
-
-## Review Fix (Must Fix #1, #2, #3, #4)
-
-**#1 — `max_files` non-integer input:**
-- Wrapped `int(max_files or 50)` in `try/except (ValueError, TypeError)`, returns bounded JSON error `{"error": "max_files 必须是整数"}`.
-- Regression test: `test_list_files_bad_max_files_returns_error`
-
-**#2 — `context_lines` non-integer input:**
-- Wrapped `int(context_lines or 3)` in `try/except (ValueError, TypeError)`, returns bounded JSON error `{"error": "context_lines 必须是整数"}`.
-- Regression test: `test_preview_write_bad_context_lines_returns_error`
-
-**#3 — Symlink escape in `list_worker_workspace_files`:**
-- After `target.is_file()`, now calls `target.resolve()` and checks `resolved.relative_to(ws_root)` to ensure the real file target stays inside workspace. Symlinks pointing outside are skipped.
-- Also checks `resolved.name` against `DENIED_FILE_NAMES` (in case symlink target is a sensitive filename).
-- Regression test: `test_list_files_skips_symlink_escape` — creates a symlink inside workspace pointing outside, verifies it is excluded from listing.
-
-**#4 — Symlink to denied directory (e.g. `.git/config`):**
-- Added check on `resolved.relative_to(ws_root).parts` against `DENIED_DIR_NAMES`. Previously only the symlink's own path was checked, so `gitlink -> .git/config` was listed.
-- Regression tests: `test_list_files_skips_symlink_to_git_dir` (symlink to `.git/config`), `test_list_files_skips_symlink_to_logs_dir` (symlink to `logs/app.log`).
+Status: approved by Codex review
 
 ## Summary
 
-Added three worker-scoped file inspection tools that operate only inside the active workspace lease: `list_worker_workspace_files`, `read_worker_workspace_file`, and `preview_worker_workspace_write`. All tools reuse the existing lease validation and workspace file safety rules (`.env`, `.git`, etc.).
+Added three worker-scoped write tools that operate only inside the active workspace lease: `write_worker_workspace_file`, `replace_worker_workspace_file`, and `apply_worker_workspace_patch`. All tools reuse the existing lease validation, path safety rules, and file size limits.
 
 ## Changes
 
 ### `mini_agent/toolkits/registry_builder.py`
 
-Added `import difflib` at top.
+Added `FILE_EDIT_BLOCKED`, `FILE_EDIT_ERROR`, `FILE_EDIT_FINISHED`, `FILE_EDIT_STARTED` to imports from `durable_events`.
 
-**`_resolve_workspace_path(lease, path)` — shared path resolver:**
-- Handles both relative paths (resolved under workspace root) and absolute paths (only allowed if they resolve inside workspace)
-- Checks path traversal via `relative_to()`
-- Rejects sensitive file names (`DENIED_FILE_NAMES`: `.env`, `.env.local`, `.env.production`)
-- Rejects paths containing sensitive directory names (`DENIED_DIR_NAMES`: `.git`, `__pycache__`, `.pytest_cache`, `data`, `logs`)
-- Returns `(resolved_path, None)` or `(None, error_dict)`
+**`_record_worker_file_edit_event(...)` — shared event recorder:**
+- Records `FILE_EDIT_*` events with safe payload: path, operation, worker_id, task_id, lease_id, status, error, bytes_before/after
+- Event failure never blocks write operations (try/except)
 
-**`list_worker_workspace_files(worker_id, task_id, max_files=50)`:**
-- Lists files recursively under workspace, returning bounded relative paths
-- Skips sensitive files and directories
-- Skips symlinks whose resolved target escapes workspace
-- `max_files` bounded to 1..200; non-integer returns bounded JSON error
-- Returns `{"files": [...], "count": N, "workspace_path": ..., "lease_id": ...}`
+**`write_worker_workspace_file(worker_id, task_id, path, content, reason="")`:**
+- Validates lease via `_resolve_and_validate_lease`
+- Resolves path via `_resolve_workspace_path` (traversal, sensitive names/dirs)
+- Content size bounded by `MAX_FILE_BYTES` (64KB)
+- Rejects symlink escape and symlink-to-denied paths via resolved path validation
+- Creates parent directories
+- Writes UTF-8 text
+- Returns safe metadata: path, bytes_before/after, created, changed, lease_id, worker_id, task_id
 
-**`read_worker_workspace_file(worker_id, task_id, path)`:**
-- Reads UTF-8 text file content
-- Rejects missing files, non-files, oversized files, binary files, sensitive paths
-- Returns `{"content": ..., "path": ..., "size": ..., "workspace_path": ..., "lease_id": ...}`
+**`replace_worker_workspace_file(worker_id, task_id, path, old_text, new_text, reason="")`:**
+- Validates lease + path
+- `old_text` must be non-empty and present in file
+- Replaces only the first occurrence
+- Size check on result
+- Returns same safe metadata shape
 
-**`preview_worker_workspace_write(worker_id, task_id, path, content, context_lines=3)`:**
-- Generates unified diff preview without writing any files
-- `context_lines` bounded to 0..20; non-integer returns bounded JSON error
-- Returns `{"preview": ..., "path": ..., "current_size": ..., "new_size": ..., "will_create": bool, ...}`
+**`apply_worker_workspace_patch(worker_id, task_id, patch, reason="")`:**
+- Validates lease
+- Parses unified diff using `WorkspaceFiles._parse_multi_file_patch` (scoped to lease root)
+- All file paths resolved via `_resolve_workspace_path` (not project root)
+- Applies hunks via `WorkspaceFiles._apply_hunks`
+- Rollback on partial write failure
+- Returns: operation, files, file_count, changed, lease_id, worker_id, task_id
 
 All three tools:
-- Registered with `risk="read"` permission
-- Reuse `_resolve_and_validate_lease()` for worker/task/lease validation
+- Registered with `risk="write"` permission
 - Reject offline and idle workers
 - Output does not leak task goal, steps, or secrets
+- Record `FILE_EDIT_STARTED` / `FILE_EDIT_FINISHED` / `FILE_EDIT_BLOCKED` / `FILE_EDIT_ERROR` events
 
 ### `tests/test_durable_workers.py`
-- Added `WorkspaceFileInspectionTests` class with 32 tests:
-  - **list** (10): empty workspace, relative paths, skips .env, skips .git dir, max bounded, no lease error, unknown worker error, no goal leak, no mutation, bad max_files error
-  - **read** (10): returns content, absolute inside workspace, traversal rejected, absolute escape rejected, missing file error, .env rejected, empty path error, offline worker error, no goal leak, no mutation
-  - **preview** (9): new file, existing file (diff), no actual write, traversal rejected, .env rejected, no goal leak, no task mutation, context_lines, bad context_lines error
-  - **symlink** (3): symlink escape skipped, symlink to .git/config skipped, symlink to logs skipped
+
+Added `WorkspaceFileWriteTests` class with 39 tests:
+- **write**: new file, overwrite existing, creates parent dirs, safe metadata, traversal rejected, absolute escape rejected, .env rejected, .env directory rejected, .git rejected, logs rejected, data rejected, unknown worker, no lease, task mismatch, offline worker, idle worker, oversized content, denied-path blocked event safety, no goal leak, no task/worker/lease mutation
+- **replace** (8): basic replace, old_text not found, empty old_text, only first occurrence, file not found, oversized result, no goal leak
+- **patch**: basic patch, file not found, empty patch, context mismatch, no goal leak, traversal rejected, .env rejected, .env directory rejected, partial write failure rollback
+- **compatibility**: read/list/preview still work after writes, list skips .env directory files, write after failed write still works
 
 ## Verification
 
 ```
-$ python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 617 tests — OK
-
-$ python3 -m unittest tests.test_workspace tests.test_workspace_extra
-Ran 42 tests — OK
+$ python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+Ran 353 tests — OK
 
 $ python3 -m unittest discover -s tests
-Ran 1673 tests — OK
+Ran 1712 tests — OK
 
 $ python3 evals/run_evals.py
-228 passed, 0 failed
+236 passed, 0 failed
 
 $ git diff --check
 clean
@@ -90,15 +73,16 @@ clean
 ## Diff
 
 ```
- mini_agent/toolkits/registry_builder.py | 189 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
- tests/test_durable_workers.py           | 227 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
- 2 files changed
+ mini_agent/toolkits/registry_builder.py | 423 +++++++++++++++++++-
+ tests/test_durable_workers.py           | 668 +++++++++++++++++++++++++++++++-
+ 2 files changed, 1086 insertions(+), 5 deletions(-)
 ```
 
 ## Notes
 
 - No push or commit performed.
-- BACKLOG.md untouched.
-- All three tools are read-only (`risk="read"`) — preview never writes files.
-- Reuses `DENIED_FILE_NAMES` and `DENIED_DIR_NAMES` from `workspace.py` for consistent safety rules.
-- `_resolve_workspace_path` is reusable for future workspace-scoped tools.
+- Codex PM review fixes tightened sensitive path component rejection, added blocked event coverage for worker write tools, and made patch rollback include the currently failing file.
+- Reuses `WorkspaceFiles._parse_multi_file_patch` and `WorkspaceFiles._apply_hunks` from `workspace.py` for patch parsing/application, but all path resolution goes through `_resolve_workspace_path` scoped to lease root.
+- Patch tool creates a temporary `WorkspaceFiles(root=ws_root, require_confirmation=False, event_store=None)` instance for parsing only — no confirmation prompts, no project-root leakage.
+- Rollback on partial patch write failure restores original file content.
+- All file-edit events are recorded via `_record_worker_file_edit_event` which is best-effort (event failure never blocks writes).
