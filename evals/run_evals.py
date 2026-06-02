@@ -295,6 +295,21 @@ def main() -> int:
         EvalCase("workspace_write_oversized_binary_errors", eval_workspace_write_oversized_binary_errors),
         EvalCase("workspace_write_no_mutation_on_error", eval_workspace_write_no_mutation_on_error),
         EvalCase("workspace_write_compatibility", eval_workspace_write_compatibility),
+        EvalCase("workspace_change_summary_basics", eval_workspace_change_summary_basics),
+        EvalCase("workspace_change_summary_max_files_bounded", eval_workspace_change_summary_max_files_bounded),
+        EvalCase("workspace_change_summary_sandbox_sensitive", eval_workspace_change_summary_sandbox_sensitive),
+        EvalCase("workspace_change_summary_safety_no_leak", eval_workspace_change_summary_safety_no_leak),
+        EvalCase("workspace_change_summary_no_mutation", eval_workspace_change_summary_no_mutation),
+        EvalCase("workspace_patch_export_basics", eval_workspace_patch_export_basics),
+        EvalCase("workspace_patch_export_single_file", eval_workspace_patch_export_single_file),
+        EvalCase("workspace_patch_export_bounded", eval_workspace_patch_export_bounded),
+        EvalCase("workspace_patch_export_sandbox_sensitive", eval_workspace_patch_export_sandbox_sensitive),
+        EvalCase("workspace_patch_export_safety_no_leak", eval_workspace_patch_export_safety_no_leak),
+        EvalCase("workspace_patch_export_no_mutation", eval_workspace_patch_export_no_mutation),
+        EvalCase("workspace_change_export_validation_errors", eval_workspace_change_export_validation_errors),
+        EvalCase("workspace_change_export_project_symlink_sensitive", eval_workspace_change_export_project_symlink_sensitive),
+        EvalCase("workspace_patch_export_budget_limits", eval_workspace_patch_export_budget_limits),
+        EvalCase("workspace_change_export_compatibility", eval_workspace_change_export_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -10087,6 +10102,714 @@ def eval_workspace_write_compatibility():
             ts.create_task(goal="dispatch test write", steps=[{"text": "s"}])
             dispatch_r = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch_r, f"dispatch broken after write: {dispatch_r}"
+        finally:
+            db.close()
+
+
+# --- Workspace change export eval sentinels ---
+
+_CHANGE_EXPORT_SENTINEL_GOAL = "NORA_EVAL_CHANGEEXPORT_GOAL_SENTINEL_m3n4o5"
+_CHANGE_EXPORT_SENTINEL_SECRET = "NORA_EVAL_CHANGEEXPORT_SECRET_sk-changeexport-p6q7r8"
+_CHANGE_EXPORT_SENTINEL_STEP = "NORA_EVAL_CHANGEEXPORT_STEP_SENTINEL_s9t0u1"
+_CHANGE_EXPORT_SENTINEL_CONTENT = "NORA_EVAL_CHANGEEXPORT_CONTENT_SECRET_v2w3x4"
+
+
+def _setup_change_export_worker(registry, worker_id="w_ce"):
+    """Helper for change export evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Creates project root files and worker workspace files with known differences.
+    Returns (task_id, workspace_path, project_root)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(goal=_CHANGE_EXPORT_SENTINEL_GOAL + " " + _CHANGE_EXPORT_SENTINEL_SECRET, steps=[{"text": _CHANGE_EXPORT_SENTINEL_STEP}])
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    ws_path = Path(parsed["workspace_path"])
+    project_root = Path(registry.workspace_root) if hasattr(registry, 'workspace_root') else ws_path.parent.parent
+
+    # Create project root files (the "base" versions)
+    (project_root / "src").mkdir(parents=True, exist_ok=True)
+    (project_root / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    (project_root / "README.md").write_text("# Test Project\n", encoding="utf-8")
+    (project_root / "unchanged.txt").write_text("same content\n", encoding="utf-8")
+
+    # Create worker workspace files (the "modified" versions)
+    (ws_path / "src").mkdir(parents=True, exist_ok=True)
+    (ws_path / "src" / "main.py").write_text("print('hello world')\n", encoding="utf-8")  # modified
+    (ws_path / "README.md").write_text("# Test Project\n", encoding="utf-8")  # same
+    (ws_path / "unchanged.txt").write_text("same content\n", encoding="utf-8")  # same
+    (ws_path / "new_file.txt").write_text(_CHANGE_EXPORT_SENTINEL_CONTENT, encoding="utf-8")  # created
+    (ws_path / "data.txt").write_text("some data\n", encoding="utf-8")
+
+    return tid, str(ws_path), str(project_root)
+
+
+def eval_workspace_change_summary_basics():
+    """summarize_worker_workspace_changes classifies created, modified, same files. Returns metadata only."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            result = json.loads(registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+            ))
+
+            # Check structure
+            assert "files" in result, f"missing files: {result}"
+            assert "count" in result, f"missing count: {result}"
+            assert "created" in result, f"missing created count: {result}"
+            assert "modified" in result, f"missing modified count: {result}"
+            assert "same" in result, f"missing same count: {result}"
+            assert "workspace_path" in result, f"missing workspace_path: {result}"
+            assert "lease_id" in result, f"missing lease_id: {result}"
+            assert "worker_id" in result, f"missing worker_id: {result}"
+            assert "task_id" in result, f"missing task_id: {result}"
+
+            # Check file classifications
+            files_by_path = {f["path"]: f for f in result["files"]}
+            assert "new_file.txt" in files_by_path, f"new_file.txt not found in summary"
+            assert files_by_path["new_file.txt"]["status"] == "created", f"new_file.txt should be created"
+
+            assert "src/main.py" in files_by_path, f"src/main.py not found"
+            assert files_by_path["src/main.py"]["status"] == "modified", f"src/main.py should be modified"
+
+            assert "README.md" in files_by_path, f"README.md not found"
+            assert files_by_path["README.md"]["status"] == "same", f"README.md should be same"
+
+            assert "unchanged.txt" in files_by_path, f"unchanged.txt not found"
+            assert files_by_path["unchanged.txt"]["status"] == "same", f"unchanged.txt should be same"
+
+            # Verify counts
+            assert result["created"] >= 1, f"expected >=1 created, got {result['created']}"
+            assert result["modified"] >= 1, f"expected >=1 modified, got {result['modified']}"
+            assert result["same"] >= 2, f"expected >=2 same, got {result['same']}"
+
+            # Verify metadata only (no raw file content in summary)
+            for f in result["files"]:
+                assert "content" not in f, f"raw content leaked in summary: {f}"
+                assert "worker" in f or "project" in f, f"missing metadata in file entry: {f}"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_summary_max_files_bounded():
+    """Summary is bounded by max_files parameter."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Create many files
+            for i in range(20):
+                (Path(ws_path) / f"file_{i}.txt").write_text(f"content {i}\n", encoding="utf-8")
+
+            # Request with small max_files
+            result = json.loads(registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid, max_files=5,
+            ))
+            assert result["count"] <= 5, f"max_files not respected: {result['count']}"
+
+            # Request with default max_files
+            result2 = json.loads(registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+            ))
+            assert result2["count"] >= result["count"], "default should return more than limited"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_summary_sandbox_sensitive():
+    """Sensitive paths (.env, .git, logs, data, __pycache__, .pytest_cache) are skipped. Symlinks are rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+            ws_root = Path(ws_path)
+
+            # Create sensitive files in workspace
+            (ws_root / ".env").write_text("SECRET=abc\n", encoding="utf-8")
+            (ws_root / ".git").mkdir(parents=True, exist_ok=True)
+            (ws_root / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+            (ws_root / "logs").mkdir(parents=True, exist_ok=True)
+            (ws_root / "logs" / "app.log").write_text("log entry\n", encoding="utf-8")
+            (ws_root / "data").mkdir(parents=True, exist_ok=True)
+            (ws_root / "data" / "db.csv").write_text("a,b\n", encoding="utf-8")
+            (ws_root / "__pycache__").mkdir(parents=True, exist_ok=True)
+            (ws_root / "__pycache__" / "mod.cpython-311.pyc").write_bytes(b"\x00")
+            (ws_root / ".pytest_cache").mkdir(parents=True, exist_ok=True)
+
+            result = json.loads(registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+            ))
+
+            # Sensitive paths should not appear in results
+            paths = [f["path"] for f in result["files"]]
+            assert ".env" not in paths, ".env should be skipped"
+            assert ".git/config" not in paths, ".git/config should be skipped"
+            assert "logs/app.log" not in paths, "logs/app.log should be skipped"
+            assert "data/db.csv" not in paths, "data/db.csv should be skipped"
+            assert "__pycache__/mod.cpython-311.pyc" not in paths, "__pycache__ should be skipped"
+
+            # Check that sensitive files don't appear at all (filtered out by the runtime)
+            assert result.get("skipped", 0) >= 0, f"skipped count should be non-negative"
+
+            # Symlink escape should be skipped
+            outside = Path(tmpdir) / "outside.txt"
+            outside.write_text("outside content\n", encoding="utf-8")
+            symlink_path = ws_root / "escape_link.txt"
+            try:
+                symlink_path.symlink_to(outside)
+                result2 = json.loads(registry.call(
+                    "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+                ))
+                paths2 = [f["path"] for f in result2["files"]]
+                assert "escape_link.txt" not in paths2, "symlink escape should be skipped"
+            except OSError:
+                pass  # symlink creation may fail on some systems
+
+            # Symlink to sensitive file should be skipped
+            sensitive_link = ws_root / "link_to_env.txt"
+            try:
+                sensitive_link.symlink_to(ws_root / ".env")
+                result3 = json.loads(registry.call(
+                    "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+                ))
+                paths3 = [f["path"] for f in result3["files"]]
+                assert "link_to_env.txt" not in paths3, "symlink to .env should be skipped"
+            except OSError:
+                pass
+        finally:
+            db.close()
+
+
+def eval_workspace_change_summary_safety_no_leak():
+    """Outputs do not leak task goal, steps, secrets, or raw file content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            result_str = registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+            )
+
+            # No sentinel leaks
+            assert _CHANGE_EXPORT_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_CONTENT not in result_str, f"content leaked: {result_str[:200]}"
+
+            # Verify metadata keys are present (bounded output)
+            result = json.loads(result_str)
+            for f in result["files"]:
+                assert "path" in f, f"missing path: {f}"
+                assert "status" in f, f"missing status: {f}"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_summary_no_mutation():
+    """Error and success calls do not mutate project root, worker workspace, task/worker state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Snapshot state
+            task_before = ts.get_task(tid)
+            worker_before = ws.get_worker("w_ce")
+            ws_file_before = (Path(ws_path) / "src" / "main.py").read_text(encoding="utf-8")
+            proj_file_before = (Path(proj_root) / "src" / "main.py").read_text(encoding="utf-8")
+
+            # Call summarize
+            registry.call("summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid)
+
+            # Verify no mutation
+            task_after = ts.get_task(tid)
+            worker_after = ws.get_worker("w_ce")
+            ws_file_after = (Path(ws_path) / "src" / "main.py").read_text(encoding="utf-8")
+            proj_file_after = (Path(proj_root) / "src" / "main.py").read_text(encoding="utf-8")
+
+            assert task_after.status == task_before.status, f"task status mutated: {task_before.status} -> {task_after.status}"
+            assert task_after.goal == task_before.goal, "task goal mutated"
+            assert worker_after.status == worker_before.status, f"worker status mutated"
+            assert ws_file_after == ws_file_before, "workspace file mutated"
+            assert proj_file_after == proj_file_before, "project file mutated"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_basics():
+    """export_worker_workspace_patch exports created-file diff from /dev/null, modified diffs, same files omitted."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Multi-file export (path empty)
+            result = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+
+            assert "patches" in result, f"missing patches: {result}"
+            assert "count" in result, f"missing count: {result}"
+            assert "skipped" in result, f"missing skipped: {result}"
+            assert "patch_bytes" in result, f"missing patch_bytes: {result}"
+            assert "workspace_path" in result, f"missing workspace_path: {result}"
+            assert "lease_id" in result, f"missing lease_id: {result}"
+
+            patches_by_path = {p["path"]: p for p in result["patches"]}
+
+            # Created file should have /dev/null as from-file
+            assert "new_file.txt" in patches_by_path, f"new_file.txt not in patches"
+            new_patch = patches_by_path["new_file.txt"]
+            assert new_patch["status"] == "created", f"new_file.txt status: {new_patch['status']}"
+            assert new_patch["has_changes"] is True
+            assert "/dev/null" in new_patch["patch"], f"created file should diff from /dev/null: {new_patch['patch'][:100]}"
+
+            # Modified file should have +/- lines
+            assert "src/main.py" in patches_by_path, f"src/main.py not in patches"
+            mod_patch = patches_by_path["src/main.py"]
+            assert mod_patch["status"] == "modified", f"src/main.py status: {mod_patch['status']}"
+            assert mod_patch["has_changes"] is True
+            assert "-print('hello')" in mod_patch["patch"], f"missing removal: {mod_patch['patch'][:100]}"
+            assert "+print('hello world')" in mod_patch["patch"], f"missing addition: {mod_patch['patch'][:100]}"
+
+            # Same files should NOT appear in patches
+            assert "README.md" not in patches_by_path, "README.md (same) should be excluded"
+            assert "unchanged.txt" not in patches_by_path, "unchanged.txt (same) should be excluded"
+
+            # Verify metadata
+            assert result["count"] >= 2, f"expected >=2 patches, got {result['count']}"
+            assert result["patch_bytes"] > 0, "patch_bytes should be > 0"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_single_file():
+    """Single-file mode: same file returns no-change result, created file returns diff from /dev/null."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Single file - same content
+            result_same = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="README.md",
+            ))
+            assert result_same["status"] == "same", f"README.md status: {result_same['status']}"
+            assert result_same["has_changes"] is False, f"README.md should have no changes"
+            assert result_same["path"] == "README.md"
+
+            # Single file - created
+            result_created = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="new_file.txt",
+            ))
+            assert result_created["status"] == "created", f"new_file.txt status: {result_created['status']}"
+            assert result_created["has_changes"] is True
+            assert "/dev/null" in result_created["patch"]
+
+            # Single file - modified
+            result_mod = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="src/main.py",
+            ))
+            assert result_mod["status"] == "modified", f"src/main.py status: {result_mod['status']}"
+            assert result_mod["has_changes"] is True
+
+            # Single file - nonexistent in workspace returns error
+            result_missing = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="nonexistent.txt",
+            ))
+            assert "error" in result_missing, f"nonexistent should return error: {result_missing}"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_bounded():
+    """context_lines and max_files are bounded. Binary/oversized files skipped. Budget enforced."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+            ws_root = Path(ws_path)
+
+            # context_lines bounded (0-20)
+            result_ctx = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, context_lines=0,
+            ))
+            assert "patches" in result_ctx, f"missing patches: {result_ctx}"
+
+            # max_files bounded
+            for i in range(10):
+                (ws_root / f"extra_{i}.txt").write_text(f"new content {i}\n", encoding="utf-8")
+            result_max = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, max_files=3,
+            ))
+            assert result_max["count"] <= 3, f"max_files not respected: {result_max['count']}"
+
+            # Binary file skipped (must be invalid UTF-8 to trigger binary detection)
+            (ws_root / "binary.bin").write_bytes(bytes(range(256)))
+            result_bin = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+            bin_paths = [p["path"] for p in result_bin.get("patches", [])]
+            assert "binary.bin" not in bin_paths, "binary file should be skipped"
+
+            # Oversized worker file skipped
+            (ws_root / "huge.txt").write_text("x" * 70000, encoding="utf-8")
+            result_huge = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+            huge_paths = [p["path"] for p in result_huge.get("patches", [])]
+            assert "huge.txt" not in huge_paths, "oversized file should be skipped"
+
+            # Oversized project file skipped
+            (Path(proj_root) / "huge_proj.txt").write_text("y" * 70000, encoding="utf-8")
+            (ws_root / "huge_proj.txt").write_text("z\n", encoding="utf-8")
+            result_huge2 = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+            huge_paths2 = [p["path"] for p in result_huge2.get("patches", [])]
+            assert "huge_proj.txt" not in huge_paths2, "oversized project file should be skipped"
+
+            # Single-file patch size bounded: worker file is allowed, generated diff is too large.
+            (ws_root / "big_single.txt").write_text("a" * (64 * 1024), encoding="utf-8")
+            result_big = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="big_single.txt",
+            ))
+            assert "error" in result_big, f"oversized single-file should error: {result_big}"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_sandbox_sensitive():
+    """Path traversal, sensitive paths, symlinks rejected for patch export."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+            ws_root = Path(ws_path)
+
+            # Relative traversal
+            result_trav = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="../../etc/passwd",
+            ))
+            assert "error" in result_trav, f"traversal should be rejected: {result_trav}"
+
+            # Absolute path escape
+            result_abs = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="/etc/passwd",
+            ))
+            assert "error" in result_abs, f"absolute escape should be rejected: {result_abs}"
+
+            # Sensitive paths in multi-file mode should be skipped
+            (ws_root / ".env").write_text("SECRET=abc\n", encoding="utf-8")
+            (ws_root / ".git").mkdir(parents=True, exist_ok=True)
+            (ws_root / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+            (ws_root / "logs").mkdir(parents=True, exist_ok=True)
+            (ws_root / "logs" / "app.log").write_text("log\n", encoding="utf-8")
+
+            result_sensitive = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+            patch_paths = [p["path"] for p in result_sensitive.get("patches", [])]
+            skipped_paths = [s["path"] for s in result_sensitive.get("skipped", [])]
+            assert ".env" not in patch_paths, ".env should be skipped"
+            assert ".git/config" not in patch_paths, ".git/config should be skipped"
+            assert "logs/app.log" not in patch_paths, "logs/app.log should be skipped"
+
+            # Single-file sensitive path rejected
+            result_env = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path=".env",
+            ))
+            assert "error" in result_env, f".env single-file should be rejected: {result_env}"
+
+            # Symlink escape
+            outside = Path(tmpdir) / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            symlink_path = ws_root / "escape_link.txt"
+            try:
+                symlink_path.symlink_to(outside)
+                result_sym = json.loads(registry.call(
+                    "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="escape_link.txt",
+                ))
+                assert "error" in result_sym, f"symlink escape should be rejected: {result_sym}"
+            except OSError:
+                pass
+
+            # Symlink to sensitive file
+            sensitive_link = ws_root / "link_env.txt"
+            try:
+                sensitive_link.symlink_to(ws_root / ".env")
+                result_link = json.loads(registry.call(
+                    "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="link_env.txt",
+                ))
+                assert "error" in result_link, f"symlink to .env should be rejected: {result_link}"
+            except OSError:
+                pass
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_safety_no_leak():
+    """Outputs do not leak task goal, steps, secrets, or raw file content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Multi-file export
+            result_str = registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            )
+            assert _CHANGE_EXPORT_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+
+            # Single-file export with sentinel content
+            result_single_str = registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="new_file.txt",
+            )
+            # The patch contains the file diff, which includes the sentinel content - this is expected
+            # but the goal/secret/step sentinels should not leak
+            assert _CHANGE_EXPORT_SENTINEL_GOAL not in result_single_str, f"goal leaked in single: {result_single_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_SECRET not in result_single_str, f"secret leaked in single: {result_single_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_STEP not in result_single_str, f"step leaked in single: {result_single_str[:200]}"
+
+            # Error output
+            result_err_str = registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="../../etc/passwd",
+            )
+            assert _CHANGE_EXPORT_SENTINEL_GOAL not in result_err_str, f"goal leaked in error: {result_err_str[:200]}"
+            assert _CHANGE_EXPORT_SENTINEL_SECRET not in result_err_str, f"secret leaked in error: {result_err_str[:200]}"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_no_mutation():
+    """Error and success calls do not mutate project root, worker workspace, task/worker state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Snapshot state
+            task_before = ts.get_task(tid)
+            worker_before = ws.get_worker("w_ce")
+            ws_file_before = (Path(ws_path) / "src" / "main.py").read_text(encoding="utf-8")
+            proj_file_before = (Path(proj_root) / "src" / "main.py").read_text(encoding="utf-8")
+
+            # Call export (success)
+            registry.call("export_worker_workspace_patch", worker_id="w_ce", task_id=tid)
+
+            # Call export (error - traversal)
+            registry.call("export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="../../etc/passwd")
+
+            # Verify no mutation
+            task_after = ts.get_task(tid)
+            worker_after = ws.get_worker("w_ce")
+            ws_file_after = (Path(ws_path) / "src" / "main.py").read_text(encoding="utf-8")
+            proj_file_after = (Path(proj_root) / "src" / "main.py").read_text(encoding="utf-8")
+
+            assert task_after.status == task_before.status, f"task status mutated: {task_before.status} -> {task_after.status}"
+            assert task_after.goal == task_before.goal, "task goal mutated"
+            assert worker_after.status == worker_before.status, f"worker status mutated"
+            assert ws_file_after == ws_file_before, "workspace file mutated"
+            assert proj_file_after == proj_file_before, "project file mutated"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_export_validation_errors():
+    """Unknown worker, no lease, task mismatch, offline worker, and idle worker are rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            for tool_name in ("summarize_worker_workspace_changes", "export_worker_workspace_patch"):
+                unknown = json.loads(registry.call(tool_name, worker_id="missing_worker", task_id="dtask_missing"))
+                assert "error" in unknown, f"{tool_name} unknown worker should error: {unknown}"
+
+            ws.register_worker("w_no_lease", role="coder")
+            no_lease_task = ts.create_task(goal="no lease", steps=[{"text": "s"}])
+            ts.assign_worker(no_lease_task.task_id, "w_no_lease")
+            ws.update_status("w_no_lease", "assigned", current_task_id=no_lease_task.task_id)
+            for tool_name in ("summarize_worker_workspace_changes", "export_worker_workspace_patch"):
+                no_lease = json.loads(registry.call(tool_name, worker_id="w_no_lease", task_id=no_lease_task.task_id))
+                assert "error" in no_lease and "lease" in no_lease["error"], f"{tool_name} no lease should error: {no_lease}"
+
+            tid, ws_path, proj_root = _setup_change_export_worker(registry, worker_id="w_validate")
+            other_task = ts.create_task(goal="other", steps=[{"text": "s"}])
+            for tool_name in ("summarize_worker_workspace_changes", "export_worker_workspace_patch"):
+                mismatch = json.loads(registry.call(tool_name, worker_id="w_validate", task_id=other_task.task_id))
+                assert "error" in mismatch, f"{tool_name} task mismatch should error: {mismatch}"
+
+            ws.update_status("w_validate", "offline")
+            for tool_name in ("summarize_worker_workspace_changes", "export_worker_workspace_patch"):
+                offline = json.loads(registry.call(tool_name, worker_id="w_validate", task_id=tid))
+                assert "error" in offline, f"{tool_name} offline worker should error: {offline}"
+
+            ws.update_status("w_validate", "idle", current_task_id=None)
+            for tool_name in ("summarize_worker_workspace_changes", "export_worker_workspace_patch"):
+                idle = json.loads(registry.call(tool_name, worker_id="w_validate", task_id=tid))
+                assert "error" in idle, f"{tool_name} idle worker should error: {idle}"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_export_project_symlink_sensitive():
+    """Project-root symlink-to-sensitive-file is skipped/rejected without leaking target contents."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+            project_root = Path(proj_root)
+            ws_root = Path(ws_path)
+            sentinel = "NORA_EVAL_PROJECT_SYMLINK_ENV_SECRET_x1y2z3"
+
+            (project_root / ".env").write_text(sentinel, encoding="utf-8")
+            try:
+                (project_root / "safe_link").symlink_to(project_root / ".env")
+            except OSError:
+                return
+            (ws_root / "safe_link").write_text("worker replacement\n", encoding="utf-8")
+
+            summary_str = registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid,
+            )
+            summary = json.loads(summary_str)
+            summary_entry = next((f for f in summary["files"] if f["path"] == "safe_link"), None)
+            assert summary_entry is not None, f"safe_link summary entry missing: {summary}"
+            assert summary_entry["status"] == "skipped", f"safe_link should be skipped: {summary_entry}"
+            assert summary_entry["reason"] == "project_sensitive_path", f"wrong skip reason: {summary_entry}"
+            assert sentinel not in summary_str, f"project symlink target leaked in summary: {summary_str[:200]}"
+
+            single_str = registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="safe_link",
+            )
+            single = json.loads(single_str)
+            assert "error" in single, f"single project symlink to sensitive path should error: {single}"
+            assert "project_sensitive_path" in single["error"], f"wrong error: {single}"
+            assert sentinel not in single_str, f"project symlink target leaked in single patch: {single_str[:200]}"
+
+            multi_str = registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            )
+            multi = json.loads(multi_str)
+            patch_paths = [p["path"] for p in multi.get("patches", [])]
+            skipped = {s["path"]: s["reason"] for s in multi.get("skipped", [])}
+            assert "safe_link" not in patch_paths, f"safe_link should not be patched: {multi}"
+            assert skipped.get("safe_link") == "project_sensitive_path", f"safe_link skip missing: {multi}"
+            assert sentinel not in multi_str, f"project symlink target leaked in multi patch: {multi_str[:200]}"
+        finally:
+            db.close()
+
+
+def eval_workspace_patch_export_budget_limits():
+    """Single-file and multi-file patch output stay under the workspace byte budget."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+            ws_root = Path(ws_path)
+
+            (ws_root / "single_patch_too_large.txt").write_text("x" * (64 * 1024), encoding="utf-8")
+            single = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid, path="single_patch_too_large.txt",
+            ))
+            assert "error" in single and "patch" in single["error"], f"single patch budget should error: {single}"
+
+            (ws_root / "large_a.txt").write_text("a" * (40 * 1024), encoding="utf-8")
+            (ws_root / "large_b.txt").write_text("b" * (40 * 1024), encoding="utf-8")
+            multi = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_ce", task_id=tid,
+            ))
+            assert multi["patch_bytes"] <= 64 * 1024, f"multi patch budget exceeded: {multi['patch_bytes']}"
+            assert any(
+                item["path"] == "large_b.txt" and item["reason"] == "patch_budget_exceeded"
+                for item in multi.get("skipped", [])
+            ), f"large_b.txt should be skipped by total patch budget: {multi}"
+        finally:
+            db.close()
+
+
+def eval_workspace_change_export_compatibility():
+    """Change export tools do not break other tools. Compatibility with file inspection, write, claim, dispatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, ws_path, proj_root = _setup_change_export_worker(registry)
+
+            # Call change export tools
+            registry.call("summarize_worker_workspace_changes", worker_id="w_ce", task_id=tid)
+            registry.call("export_worker_workspace_patch", worker_id="w_ce", task_id=tid)
+
+            # Worker/task registry tools still work
+            assert "error" not in json.loads(registry.call("get_worker", worker_id="w_ce"))
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid))
+            assert isinstance(json.loads(registry.call("list_workers")), list)
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+
+            # Workspace lease tools still work
+            gw = json.loads(registry.call("get_worker_workspace", worker_id="w_ce", task_id=tid))
+            assert "lease_id" in gw, f"get_worker_workspace broken: {gw}"
+
+            # Sandbox guard tools still work
+            ws_root = Path(ws_path)
+            valid_path = str(ws_root / "src" / "main.py")
+            vp = json.loads(registry.call("validate_worker_workspace_path", worker_id="w_ce", task_id=tid, path=valid_path))
+            assert vp.get("valid") is True, f"validate broken: {vp}"
+
+            # File inspection tools still work
+            read_r = json.loads(registry.call("read_worker_workspace_file", worker_id="w_ce", task_id=tid, path="src/main.py"))
+            assert "content" in read_r, f"read broken: {read_r}"
+
+            list_r = json.loads(registry.call("list_worker_workspace_files", worker_id="w_ce", task_id=tid))
+            assert "files" in list_r, f"list broken: {list_r}"
+
+            # Write tools still work
+            write_r = json.loads(registry.call("write_worker_workspace_file", worker_id="w_ce", task_id=tid, path="compat_test.txt", content="ok"))
+            assert write_r.get("operation") == "write", f"write broken: {write_r}"
+
+            # Claim/dispatch still work
+            ws.register_worker("w_claimer_ce", role="coder")
+            claim_task = ts.create_task(goal="claim test ce", steps=[{"text": "s"}])
+            claim_r = json.loads(registry.call("claim_durable_task", worker_id="w_claimer_ce"))
+            assert "task_id" in claim_r, f"claim broken: {claim_r}"
+
+            ws.register_worker("w_dispatch_ce", role="coder")
+            ts.create_task(goal="dispatch test ce", steps=[{"text": "s"}])
+            dispatch_r = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch_r, f"dispatch broken: {dispatch_r}"
         finally:
             db.close()
 

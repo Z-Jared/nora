@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-070 Worker workspace change summary / patch export tools v1
-Workers: Claude A (TASK-070)
+Reviewed: TASK-071 Deterministic eval coverage for worker workspace change export tools
+Workers: Claude B (TASK-071)
 Status: APPROVED
 
 ## Findings
@@ -12,29 +12,20 @@ Status: APPROVED
 
 ### Review Notes
 
-- Added read-only registry tools `summarize_worker_workspace_changes` and `export_worker_workspace_patch`.
-- Codex PM review fixes tightened sensitive path handling for intermediate components like `.env/config`, blocked project-root symlinks that resolve into sensitive paths, skipped worker binary/oversized created files safely, and bounded both single-file and multi-file patch output by the existing 64KB workspace budget.
-- Added regression tests for nested sensitive components, project symlink-to-sensitive-file leak prevention, worker binary/oversized skips, and patch budget enforcement.
-- Scope stayed within TASK-070 runtime/test/report/task-management files. No project-root merge/apply behavior was added.
+- Added deterministic offline eval coverage for TASK-070 `summarize_worker_workspace_changes` and `export_worker_workspace_patch`.
+- Codex PM review fixes added missing coverage for unknown/no-lease/task-mismatch/offline/idle validation, project-root symlink-to-sensitive-file safety, and single/multi-file patch budget limits.
+- Scope stayed eval-only for runtime code: only `evals/run_evals.py` changed outside task report/inbox/task-management files.
+- No TASK-070 runtime bug was found.
 
 ## Checks Run
 
 ```text
-python3 -m unittest tests.test_durable_workers
-Ran 234 tests in 3.505s
-OK
+python3 evals/run_evals.py
+260 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 401 tests in 7.776s
+Ran 401 tests in 6.944s
 OK
-
-python3 evals/run_evals.py
-245 passed, 0 failed
-
-python3 -m unittest discover -s tests
-Ran 1760 tests in 117.491s
-OK
-Warning: failed to load plugin broken.py: bad
 
 git diff --check
 OK
@@ -42,6 +33,6 @@ OK
 
 ## Verdict
 
-TASK-070 APPROVED.
+TASK-071 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.
