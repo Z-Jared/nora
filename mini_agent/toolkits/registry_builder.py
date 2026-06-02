@@ -1793,6 +1793,416 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _safe_read_file_content(file_path: Path):
+        """Read a file with size/binary/encoding checks.
+
+        Returns (content, metadata_dict) on success or (None, metadata_dict) on skip/error.
+        """
+        if not file_path.exists():
+            return None, {"exists": False}
+        if not file_path.is_file():
+            return None, {"exists": True, "is_file": False}
+        size = file_path.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return None, {"exists": True, "is_file": True, "size": size, "oversized": True}
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            return content, {"exists": True, "is_file": True, "size": size, "text": True}
+        except UnicodeDecodeError:
+            return None, {"exists": True, "is_file": True, "size": size, "binary": True}
+        except OSError:
+            return None, {"exists": True, "is_file": True, "read_error": True}
+
+    def _has_denied_workspace_part(parts) -> bool:
+        return any(part in DENIED_FILE_NAMES or part in DENIED_DIR_NAMES for part in parts)
+
+    def _safe_project_path_for_worker_export(project_root: Path, project_path: Path):
+        try:
+            project_rel = project_path.relative_to(project_root)
+        except ValueError:
+            return False, "project_path_escape"
+        if _has_denied_workspace_part(project_rel.parts):
+            return False, "project_sensitive_path"
+        try:
+            resolved = project_path.resolve()
+            resolved_rel = resolved.relative_to(project_root)
+        except OSError:
+            return False, "project_path_resolve_error"
+        except ValueError:
+            return False, "project_symlink_escape"
+        if _has_denied_workspace_part(resolved_rel.parts):
+            return False, "project_sensitive_path"
+        return True, ""
+
+    def _append_worker_patch_if_bounded(patches, skipped, patch_entry, total_patch_bytes: int):
+        patch_text = patch_entry.get("patch", "")
+        patch_bytes = len(patch_text.encode("utf-8"))
+        rel_posix = patch_entry.get("path", "")
+        if patch_bytes > MAX_FILE_BYTES:
+            skipped.append({"path": rel_posix, "reason": "patch_too_large"})
+            return total_patch_bytes, False, False
+        if total_patch_bytes + patch_bytes > MAX_FILE_BYTES:
+            skipped.append({"path": rel_posix, "reason": "patch_budget_exceeded"})
+            return total_patch_bytes, False, True
+        patches.append(patch_entry)
+        return total_patch_bytes + patch_bytes, True, False
+
+    def _summarize_worker_workspace_changes_json(worker_id: str, task_id: str, max_files: int = 50) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        try:
+            max_files = max(1, min(int(max_files or 50), 200))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "max_files 必须是整数"}, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path).resolve()
+        project_root = root.resolve()
+        files = []
+        try:
+            for target in sorted(ws_root.rglob("*")):
+                if len(files) >= max_files:
+                    break
+                if not target.is_file():
+                    continue
+                try:
+                    resolved_target = target.resolve()
+                except OSError:
+                    continue
+                try:
+                    resolved_target.relative_to(ws_root)
+                except ValueError:
+                    continue
+                rel = target.relative_to(ws_root)
+                if _has_denied_workspace_part(rel.parts):
+                    continue
+                try:
+                    resolved_rel = resolved_target.relative_to(ws_root)
+                    if _has_denied_workspace_part(resolved_rel.parts):
+                        continue
+                except ValueError:
+                    continue
+                rel_posix = rel.as_posix()
+                worker_content, worker_meta = _safe_read_file_content(target)
+                if worker_meta.get("oversized") or worker_meta.get("binary") or worker_meta.get("read_error") or not worker_meta.get("text"):
+                    if worker_meta.get("oversized"):
+                        reason = "worker_oversized"
+                    elif worker_meta.get("binary"):
+                        reason = "worker_binary"
+                    else:
+                        reason = "worker_read_error"
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": reason,
+                        "worker": worker_meta,
+                    })
+                    continue
+                proj_path = project_root / rel
+                project_safe, project_reason = _safe_project_path_for_worker_export(project_root, proj_path)
+                if not project_safe:
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": project_reason,
+                        "worker": worker_meta,
+                    })
+                    continue
+                if not proj_path.exists():
+                    files.append({
+                        "path": rel_posix,
+                        "status": "created",
+                        "worker": worker_meta,
+                        "project": {"exists": False},
+                    })
+                    continue
+                if not proj_path.is_file():
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": "project_not_file",
+                        "worker": worker_meta,
+                    })
+                    continue
+                proj_size = proj_path.stat().st_size
+                if proj_size > MAX_FILE_BYTES:
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": "project_oversized",
+                        "worker": worker_meta,
+                        "project": {"exists": True, "size": proj_size, "oversized": True},
+                    })
+                    continue
+                try:
+                    proj_content = proj_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": "project_binary",
+                        "worker": worker_meta,
+                        "project": {"exists": True, "size": proj_size, "binary": True},
+                    })
+                    continue
+                except OSError:
+                    files.append({
+                        "path": rel_posix,
+                        "status": "skipped",
+                        "reason": "project_read_error",
+                        "worker": worker_meta,
+                    })
+                    continue
+                file_status = "same" if worker_content == proj_content else "modified"
+                files.append({
+                    "path": rel_posix,
+                    "status": file_status,
+                    "worker": {"exists": True, "size": len(worker_content.encode("utf-8")), "text": True},
+                    "project": {"exists": True, "size": len(proj_content.encode("utf-8")), "text": True},
+                })
+        except OSError:
+            return _json.dumps({"error": "workspace 目录读取失败"}, ensure_ascii=False)
+        created = sum(1 for f in files if f.get("status") == "created")
+        modified = sum(1 for f in files if f.get("status") == "modified")
+        same = sum(1 for f in files if f.get("status") == "same")
+        skipped = sum(1 for f in files if f.get("status") == "skipped")
+        return _json.dumps({
+            "files": files,
+            "count": len(files),
+            "created": created,
+            "modified": modified,
+            "same": same,
+            "skipped": skipped,
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    def _export_worker_workspace_patch_json(worker_id: str, task_id: str, path: str = "", max_files: int = 50, context_lines: int = 3) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path).resolve()
+        project_root = root.resolve()
+        try:
+            context_lines = max(0, min(int(context_lines or 3), 20))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "context_lines 必须是整数"}, ensure_ascii=False)
+        if path.strip():
+            resolved, err = _resolve_workspace_path(lease, path)
+            if err:
+                return _json.dumps(err, ensure_ascii=False)
+            rel = resolved.relative_to(ws_root)
+            rel_posix = rel.as_posix()
+            worker_content, worker_meta = _safe_read_file_content(resolved)
+            proj_path = project_root / rel
+            project_safe, project_reason = _safe_project_path_for_worker_export(project_root, proj_path)
+            if not project_safe:
+                return _json.dumps({"error": f"project path 不安全: {project_reason}"}, ensure_ascii=False)
+            proj_content, proj_meta = _safe_read_file_content(proj_path)
+            if worker_meta.get("oversized"):
+                return _json.dumps({"error": f"worker 文件过大: {rel_posix}"}, ensure_ascii=False)
+            if worker_meta.get("binary"):
+                return _json.dumps({"error": f"worker 文件是二进制: {rel_posix}"}, ensure_ascii=False)
+            if worker_meta.get("read_error"):
+                return _json.dumps({"error": f"worker 文件读取失败: {rel_posix}"}, ensure_ascii=False)
+            if not worker_meta.get("exists"):
+                return _json.dumps({"error": f"worker 文件不存在: {rel_posix}"}, ensure_ascii=False)
+            if not worker_meta.get("text"):
+                return _json.dumps({"error": f"worker 文件不可读: {rel_posix}"}, ensure_ascii=False)
+            if proj_meta.get("oversized"):
+                return _json.dumps({"error": f"project 文件过大: {rel_posix}"}, ensure_ascii=False)
+            if proj_meta.get("binary"):
+                return _json.dumps({"error": f"project 文件是二进制: {rel_posix}"}, ensure_ascii=False)
+            if proj_meta.get("read_error"):
+                return _json.dumps({"error": f"project 文件读取失败: {rel_posix}"}, ensure_ascii=False)
+            if not proj_meta.get("exists"):
+                old_lines = "".splitlines(keepends=True)
+                new_lines = worker_content.splitlines(keepends=True)
+                diff = list(difflib.unified_diff(
+                    old_lines, new_lines,
+                    fromfile=f"/dev/null", tofile=f"b/{rel_posix}",
+                    n=context_lines,
+                ))
+                diff_text = "".join(diff)
+                if len(diff_text.encode("utf-8")) > MAX_FILE_BYTES:
+                    return _json.dumps({"error": f"patch 过大: {rel_posix}"}, ensure_ascii=False)
+                return _json.dumps({
+                    "patch": diff_text,
+                    "path": rel_posix,
+                    "status": "created",
+                    "worker_bytes": len(worker_content.encode("utf-8")),
+                    "project_bytes": 0,
+                    "has_changes": True,
+                    "workspace_path": lease.workspace_path,
+                    "lease_id": lease.lease_id,
+                    "worker_id": worker_id,
+                    "task_id": task_id,
+                }, ensure_ascii=False)
+            if not proj_meta.get("text"):
+                return _json.dumps({"error": f"project 文件不可读: {rel_posix}"}, ensure_ascii=False)
+            old_lines = proj_content.splitlines(keepends=True)
+            new_lines = worker_content.splitlines(keepends=True)
+            diff = list(difflib.unified_diff(
+                old_lines, new_lines,
+                fromfile=f"a/{rel_posix}", tofile=f"b/{rel_posix}",
+                n=context_lines,
+            ))
+            diff_text = "".join(diff)
+            if len(diff_text.encode("utf-8")) > MAX_FILE_BYTES:
+                return _json.dumps({"error": f"patch 过大: {rel_posix}"}, ensure_ascii=False)
+            has_changes = worker_content != proj_content
+            return _json.dumps({
+                "patch": diff_text,
+                "path": rel_posix,
+                "status": "modified" if has_changes else "same",
+                "worker_bytes": len(worker_content.encode("utf-8")),
+                "project_bytes": len(proj_content.encode("utf-8")),
+                "has_changes": has_changes,
+                "workspace_path": lease.workspace_path,
+                "lease_id": lease.lease_id,
+                "worker_id": worker_id,
+                "task_id": task_id,
+            }, ensure_ascii=False)
+        try:
+            max_files = max(1, min(int(max_files or 50), 200))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "max_files 必须是整数"}, ensure_ascii=False)
+        patches = []
+        skipped = []
+        total_patch_bytes = 0
+        try:
+            for target in sorted(ws_root.rglob("*")):
+                if len(patches) >= max_files:
+                    break
+                if not target.is_file():
+                    continue
+                try:
+                    resolved_target = target.resolve()
+                except OSError:
+                    continue
+                try:
+                    resolved_target.relative_to(ws_root)
+                except ValueError:
+                    continue
+                rel = target.relative_to(ws_root)
+                if _has_denied_workspace_part(rel.parts):
+                    continue
+                try:
+                    resolved_rel = resolved_target.relative_to(ws_root)
+                    if _has_denied_workspace_part(resolved_rel.parts):
+                        continue
+                except ValueError:
+                    continue
+                rel_posix = rel.as_posix()
+                worker_content, worker_meta = _safe_read_file_content(target)
+                if not worker_meta.get("text"):
+                    skipped.append({"path": rel_posix, "reason": "worker_not_text"})
+                    continue
+                proj_path = project_root / rel
+                project_safe, project_reason = _safe_project_path_for_worker_export(project_root, proj_path)
+                if not project_safe:
+                    skipped.append({"path": rel_posix, "reason": project_reason})
+                    continue
+                proj_content, proj_meta = _safe_read_file_content(proj_path)
+                if not proj_meta.get("exists"):
+                    old_lines = "".splitlines(keepends=True)
+                    new_lines = worker_content.splitlines(keepends=True)
+                    diff = list(difflib.unified_diff(
+                        old_lines, new_lines,
+                        fromfile=f"/dev/null", tofile=f"b/{rel_posix}",
+                        n=context_lines,
+                    ))
+                    diff_text = "".join(diff)
+                    if diff_text:
+                        patch_entry = {
+                            "patch": diff_text,
+                            "path": rel_posix,
+                            "status": "created",
+                            "worker_bytes": len(worker_content.encode("utf-8")),
+                            "project_bytes": 0,
+                            "has_changes": True,
+                        }
+                        total_patch_bytes, _added, stop = _append_worker_patch_if_bounded(
+                            patches, skipped, patch_entry, total_patch_bytes,
+                        )
+                        if stop:
+                            break
+                    continue
+                if not proj_meta.get("text"):
+                    skipped.append({"path": rel_posix, "reason": "project_not_text"})
+                    continue
+                if worker_content == proj_content:
+                    continue
+                old_lines = proj_content.splitlines(keepends=True)
+                new_lines = worker_content.splitlines(keepends=True)
+                diff = list(difflib.unified_diff(
+                    old_lines, new_lines,
+                    fromfile=f"a/{rel_posix}", tofile=f"b/{rel_posix}",
+                    n=context_lines,
+                ))
+                diff_text = "".join(diff)
+                if diff_text:
+                    patch_entry = {
+                        "patch": diff_text,
+                        "path": rel_posix,
+                        "status": "modified",
+                        "worker_bytes": len(worker_content.encode("utf-8")),
+                        "project_bytes": len(proj_content.encode("utf-8")),
+                        "has_changes": True,
+                    }
+                    total_patch_bytes, _added, stop = _append_worker_patch_if_bounded(
+                        patches, skipped, patch_entry, total_patch_bytes,
+                    )
+                    if stop:
+                        break
+        except OSError:
+            return _json.dumps({"error": "workspace 目录读取失败"}, ensure_ascii=False)
+        return _json.dumps({
+            "patches": patches,
+            "count": len(patches),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "patch_bytes": total_patch_bytes,
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "summarize_worker_workspace_changes",
+        "对比 worker workspace 和 project root，返回每个文件的变更状态摘要。",
+        _summarize_worker_workspace_changes_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+    registry.register(
+        "export_worker_workspace_patch",
+        "导出 worker workspace 相对于 project root 的 unified diff patch。",
+        _export_worker_workspace_patch_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "path": {"type": "string", "description": "单文件路径（可选，不填则导出所有变更文件）"},
+                "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
+                "context_lines": {"type": "integer", "description": "diff 上下文行数，默认 3"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

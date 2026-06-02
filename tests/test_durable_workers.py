@@ -1,6 +1,7 @@
 """Tests for durable worker registry (TASK-030)."""
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -2491,6 +2492,737 @@ class WorkspaceFileWriteTests(unittest.TestCase):
         ))
         self.assertEqual(result["operation"], "write")
         self.assertTrue(result["changed"])
+
+
+class WorkspaceChangeSummaryTests(unittest.TestCase):
+    """Tests for worker workspace change summary and patch export tools (TASK-070)."""
+
+    SECRET_SENTINEL = "SECRET_GOAL_78901"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    def _write_project_file(self, rel_path, content):
+        p = self.root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    def _write_ws_file(self, ws_path, rel_path, content):
+        p = Path(ws_path) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    # --- summarize_worker_workspace_changes ---
+
+    def test_summary_detects_created_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "new.py", "new content")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        created = [f for f in result["files"] if f["status"] == "created"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["path"], "new.py")
+        self.assertFalse(created[0]["project"]["exists"])
+        self.assertEqual(result["created"], 1)
+
+    def test_summary_detects_modified_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original")
+        self._write_ws_file(ws, "app.py", "modified")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        modified = [f for f in result["files"] if f["status"] == "modified"]
+        self.assertEqual(len(modified), 1)
+        self.assertEqual(modified[0]["path"], "app.py")
+        self.assertEqual(result["modified"], 1)
+
+    def test_summary_detects_same_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "same content")
+        self._write_ws_file(ws, "app.py", "same content")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        same = [f for f in result["files"] if f["status"] == "same"]
+        self.assertEqual(len(same), 1)
+        self.assertEqual(result["same"], 1)
+
+    def test_summary_skips_env_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, ".env", "SECRET=1")
+        self._write_ws_file(ws, "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertIn("app.py", paths)
+        self.assertNotIn(".env", paths)
+
+    def test_summary_skips_env_directory_component_without_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        sentinel = "SECRET_ENV_DIRECTORY_COMPONENT_789"
+        (ws / ".env").mkdir()
+        (ws / ".env" / "config").write_text(sentinel, encoding="utf-8")
+        self._write_ws_file(str(ws), "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        serialized = json.dumps(result)
+        paths = [f["path"] for f in result["files"]]
+        self.assertIn("app.py", paths)
+        self.assertNotIn(".env/config", paths)
+        self.assertNotIn(sentinel, serialized)
+
+    def test_summary_skips_env_local_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, ".env.local", "LOCAL=1")
+        self._write_ws_file(ws, "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertNotIn(".env.local", paths)
+
+    def test_summary_skips_env_production_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, ".env.production", "PROD=1")
+        self._write_ws_file(ws, "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertNotIn(".env.production", paths)
+
+    def test_summary_skips_git_dir(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / ".git").mkdir()
+        (ws / ".git" / "config").write_text("[core]")
+        self._write_ws_file(str(ws), "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertNotIn(".git/config", paths)
+
+    def test_summary_skips_logs_dir(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "logs").mkdir()
+        (ws / "logs" / "app.log").write_text("log")
+        self._write_ws_file(str(ws), "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertNotIn("logs/app.log", paths)
+
+    def test_summary_skips_data_dir(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "data").mkdir()
+        (ws / "data" / "db.csv").write_text("a,b")
+        self._write_ws_file(str(ws), "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [f["path"] for f in result["files"]]
+        self.assertNotIn("data/db.csv", paths)
+
+    def test_summary_max_files_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        for i in range(10):
+            self._write_ws_file(ws, f"f{i}.py", f"content {i}")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id, max_files=3,
+        ))
+
+        self.assertEqual(result["count"], 3)
+
+    def test_summary_bad_max_files_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id, max_files="abc",
+        ))
+
+        self.assertIn("error", result)
+
+    def test_summary_unknown_worker_error(self):
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w999", task_id="dtask_1",
+        ))
+        self.assertIn("error", result)
+
+    def test_summary_no_lease_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("lease", result["error"])
+
+    def test_summary_task_mismatch_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        task2 = json.loads(self.registry.call("create_durable_task", goal="other", steps="other"))
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task2["task_id"],
+        ))
+        self.assertIn("error", result)
+
+    def test_summary_offline_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("离线", result["error"])
+
+    def test_summary_idle_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="idle", current_task_id=None)
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+    def test_summary_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "app.py", "code")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_summary_no_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original")
+        self._write_ws_file(ws, "app.py", "modified")
+
+        self.registry.call("summarize_worker_workspace_changes", worker_id="w1", task_id=task_id)
+
+        # Project file unchanged
+        self.assertEqual((self.root / "app.py").read_text(), "original")
+        # Worker file unchanged
+        self.assertEqual((Path(ws) / "app.py").read_text(), "modified")
+        # Worker/task/lease state unchanged
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+
+    def test_summary_returns_safe_metadata(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.txt", "data")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+        self.assertIn("created", result)
+        self.assertIn("modified", result)
+        self.assertIn("same", result)
+        self.assertIn("skipped", result)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_summary_skips_project_symlink_escape(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        # Create a symlink in project root pointing truly outside
+        outside_dir = tempfile.mkdtemp()
+        outside = Path(outside_dir) / "outside_target.txt"
+        outside.write_text("outside")
+        (self.root / "escape_link").symlink_to(outside)
+        # Create a file in worker workspace with same name
+        self._write_ws_file(str(ws), "escape_link", "worker content")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        entry = next((f for f in result["files"] if f["path"] == "escape_link"), None)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["status"], "skipped")
+        self.assertIn("symlink", entry["reason"])
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+    def test_summary_oversized_project_file_skipped(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        big = "x" * (64 * 1024 + 1)
+        (self.root / "big.txt").write_text(big)
+        self._write_ws_file(ws, "big.txt", "small")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        entry = next((f for f in result["files"] if f["path"] == "big.txt"), None)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["status"], "skipped")
+        self.assertIn("oversized", entry["reason"])
+
+    def test_summary_skips_worker_binary_and_oversized_created_files(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "binary.bin").write_bytes(b"\xff\xfe\x00")
+        (ws / "huge.txt").write_text("x" * (64 * 1024 + 1), encoding="utf-8")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        by_path = {f["path"]: f for f in result["files"]}
+        self.assertEqual(by_path["binary.bin"]["status"], "skipped")
+        self.assertEqual(by_path["binary.bin"]["reason"], "worker_binary")
+        self.assertEqual(by_path["huge.txt"]["status"], "skipped")
+        self.assertEqual(by_path["huge.txt"]["reason"], "worker_oversized")
+
+    def test_summary_skips_project_symlink_to_sensitive_file_without_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        sentinel = "SECRET_PROJECT_SYMLINK_ENV_321"
+        (self.root / ".env").write_text(sentinel, encoding="utf-8")
+        (self.root / "safe_link").symlink_to(self.root / ".env")
+        self._write_ws_file(lease["workspace_path"], "safe_link", "worker content")
+
+        result = json.loads(self.registry.call(
+            "summarize_worker_workspace_changes", worker_id="w1", task_id=task_id,
+        ))
+
+        serialized = json.dumps(result)
+        entry = next((f for f in result["files"] if f["path"] == "safe_link"), None)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["status"], "skipped")
+        self.assertEqual(entry["reason"], "project_sensitive_path")
+        self.assertNotIn(sentinel, serialized)
+
+    # --- export_worker_workspace_patch ---
+
+    def test_patch_export_created_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "new.py", "new content\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertEqual(result["count"], 1)
+        p = result["patches"][0]
+        self.assertEqual(p["path"], "new.py")
+        self.assertEqual(p["status"], "created")
+        self.assertTrue(p["has_changes"])
+        self.assertIn("new content", p["patch"])
+        self.assertIn("/dev/null", p["patch"])
+
+    def test_patch_export_modified_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "line1\nline2\nline3\n")
+        self._write_ws_file(ws, "app.py", "line1\nline2_modified\nline3\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertEqual(result["count"], 1)
+        p = result["patches"][0]
+        self.assertEqual(p["path"], "app.py")
+        self.assertEqual(p["status"], "modified")
+        self.assertIn("line2_modified", p["patch"])
+        self.assertIn("-line2", p["patch"])
+
+    def test_patch_export_same_file_excluded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "same content")
+        self._write_ws_file(ws, "app.py", "same content")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertEqual(result["count"], 0)
+
+    def test_patch_export_single_path_no_change(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "same content")
+        self._write_ws_file(ws, "app.py", "same content")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="app.py",
+        ))
+
+        self.assertEqual(result["path"], "app.py")
+        self.assertEqual(result["status"], "same")
+        self.assertFalse(result["has_changes"])
+
+    def test_patch_export_single_path_created(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "new.py", "new\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="new.py",
+        ))
+
+        self.assertEqual(result["status"], "created")
+        self.assertTrue(result["has_changes"])
+        self.assertIn("new", result["patch"])
+
+    def test_patch_export_max_files_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        for i in range(10):
+            self._write_ws_file(ws, f"f{i}.py", f"content {i}\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, max_files=3,
+        ))
+
+        self.assertEqual(result["count"], 3)
+
+    def test_patch_export_context_lines(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        lines = "\n".join(f"line{i}" for i in range(20)) + "\n"
+        self._write_project_file("big.py", lines)
+        modified = lines.replace("line10", "line10_modified")
+        self._write_ws_file(ws, "big.py", modified)
+
+        result_default = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="big.py",
+        ))
+        result_wide = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="big.py", context_lines=10,
+        ))
+
+        self.assertTrue(len(result_wide["patch"]) >= len(result_default["patch"]))
+
+    def test_patch_export_bad_context_lines_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.txt", "x")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="f.txt", context_lines="abc",
+        ))
+
+        self.assertIn("error", result)
+
+    def test_patch_export_path_traversal_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="../escape.py",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("workspace", result["error"])
+
+    def test_patch_export_env_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path=".env",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("敏感", result["error"])
+
+    def test_patch_export_skips_env_directory_component_without_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        sentinel = "SECRET_PATCH_ENV_DIRECTORY_COMPONENT_123"
+        (ws / ".env").mkdir()
+        (ws / ".env" / "config").write_text(sentinel, encoding="utf-8")
+        self._write_ws_file(str(ws), "app.py", "code\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        serialized = json.dumps(result)
+        paths = [p["path"] for p in result["patches"]]
+        self.assertIn("app.py", paths)
+        self.assertNotIn(".env/config", paths)
+        self.assertNotIn(sentinel, serialized)
+
+    def test_patch_export_unknown_worker_error(self):
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w999", task_id="dtask_1",
+        ))
+        self.assertIn("error", result)
+
+    def test_patch_export_no_lease_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("lease", result["error"])
+
+    def test_patch_export_offline_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("离线", result["error"])
+
+    def test_patch_export_idle_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="idle", current_task_id=None)
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+    def test_patch_export_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.py", "new\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_patch_export_no_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original")
+        self._write_ws_file(ws, "app.py", "modified")
+
+        self.registry.call("export_worker_workspace_patch", worker_id="w1", task_id=task_id)
+
+        self.assertEqual((self.root / "app.py").read_text(), "original")
+        self.assertEqual((Path(ws) / "app.py").read_text(), "modified")
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+
+    def test_patch_export_returns_safe_metadata(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.txt", "data\n")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_patch_export_skips_project_symlink_escape(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        outside_dir = tempfile.mkdtemp()
+        outside = Path(outside_dir) / "outside.txt"
+        outside.write_text("outside")
+        (self.root / "escape_link").symlink_to(outside)
+        self._write_ws_file(str(ws), "escape_link", "worker content")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        paths = [p["path"] for p in result["patches"]]
+        self.assertNotIn("escape_link", paths)
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+    def test_patch_export_rejects_project_symlink_to_sensitive_file_without_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        sentinel = "SECRET_PROJECT_PATCH_SYMLINK_ENV_654"
+        (self.root / ".env").write_text(sentinel, encoding="utf-8")
+        (self.root / "safe_link").symlink_to(self.root / ".env")
+        self._write_ws_file(lease["workspace_path"], "safe_link", "worker content")
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="safe_link",
+        ))
+
+        serialized = json.dumps(result)
+        self.assertIn("error", result)
+        self.assertIn("project_sensitive_path", result["error"])
+        self.assertNotIn(sentinel, serialized)
+
+    def test_patch_export_single_file_patch_size_is_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "big_created.txt", "x" * (64 * 1024))
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, path="big_created.txt",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("patch 过大", result["error"])
+
+    def test_patch_export_multi_file_total_patch_size_is_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "large_a.txt", "a" * (40 * 1024))
+        self._write_ws_file(ws, "large_b.txt", "b" * (40 * 1024))
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertLessEqual(result["patch_bytes"], 64 * 1024)
+        self.assertEqual(result["count"], 1)
+        self.assertTrue(any(
+            item["path"] == "large_b.txt" and item["reason"] == "patch_budget_exceeded"
+            for item in result["skipped"]
+        ))
+
+    # --- compatibility ---
+
+    def test_read_list_preview_write_still_work_after_summary_and_patch(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original")
+        self._write_ws_file(ws, "app.py", "modified")
+        self._write_ws_file(ws, "new.py", "new")
+
+        # Run summary and patch export
+        self.registry.call("summarize_worker_workspace_changes", worker_id="w1", task_id=task_id)
+        self.registry.call("export_worker_workspace_patch", worker_id="w1", task_id=task_id)
+
+        # Existing tools still work
+        files = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+        self.assertIn("app.py", files["files"])
+        self.assertIn("new.py", files["files"])
+
+        content = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="app.py"))
+        self.assertEqual(content["content"], "modified")
+
+        preview = json.loads(self.registry.call("preview_worker_workspace_write", worker_id="w1", task_id=task_id, path="app.py", content="final"))
+        self.assertIn("preview", preview)
+
+        write_result = json.loads(self.registry.call(
+            "write_worker_workspace_file", worker_id="w1", task_id=task_id, path="another.py", content="x",
+        ))
+        self.assertEqual(write_result["operation"], "write")
+
+    def test_patch_export_bad_max_files_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "export_worker_workspace_patch", worker_id="w1", task_id=task_id, max_files="abc",
+        ))
+
+        self.assertIn("error", result)
 
 
 if __name__ == "__main__":
