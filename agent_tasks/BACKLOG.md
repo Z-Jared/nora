@@ -6,16 +6,22 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-072: Worker workspace review gate artifact v1
+### TASK-073: Deterministic eval coverage for worker workspace review gate artifacts
 - 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-070/TASK-071
-- 分配: Claude A
-- 目标: 在 worker workspace change summary / patch export 之后，新增一个只读/记录型 review gate artifact 能力，用安全元数据记录某个 worker workspace 输出是否已通过 PM/reviewer 审查，为后续 merge workflow 做前置门禁；本任务不执行 project-root merge、不应用 patch、不 commit、不 push。
+- 预计: 1 小时
+- 依赖: TASK-072 runtime present
+- 分配: Claude B
+- 目标: 为 worker workspace review gate artifact 增加离线 deterministic eval，覆盖 approved/changes_requested/blocked 记录、latest gate 查询、validation errors、安全不泄漏、event-store failure、query failure、no mutation，以及 compatibility。
 - 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace change export tools；`mini_agent/durable_events.py` review gate / task action event patterns；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / Priority 4 Worker isolation。
+- 参考: `evals/run_evals.py` worker workspace change export eval 区域；`mini_agent/toolkits/registry_builder.py` worker workspace review gate tools；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / Priority 5 Eval harness。
 
 ## 已完成
+
+### TASK-072: Worker workspace review gate artifact v1 ✅
+- 完成者: Claude A；Codex PM 补强 reviewer sanitization / event failure / query failure review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 261 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 593 tests OK；`python3 evals/run_evals.py` 260 passed；`python3 -m unittest discover -s tests` 1787 tests OK；`git diff --check` OK。
+- 内容: 新增 worker workspace review gate artifact tools：`record_worker_workspace_review_gate(worker_id, task_id, decision, reviewer="codex_pm", summary="", checks_passed=True, patch_exported=True)` 和 `get_worker_workspace_review_gate(worker_id, task_id)`；复用 active worker/task/workspace lease 校验；支持 `approved`、`changes_requested`、`blocked` 决策；以 `REVIEW_GATE_FINISHED` durable event 记录安全元数据，包括 worker/task/lease、decision、safe reviewer label、summary_present/summary_length、checks_passed、patch_exported；查询最新 gate 或返回 bounded no-gate；不记录 raw summary、patch/diff、task goal/steps、shell/env/request strings 或 secrets；event/query failure 返回 bounded JSON error；不做 project-root merge、不应用 patch、不改 project root 或 worker workspace。
 
 ### TASK-071: Deterministic eval coverage for worker workspace change export tools ✅
 - 完成者: Claude B；Codex PM 补强 validation / project symlink / patch budget review fixes

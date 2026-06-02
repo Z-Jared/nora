@@ -3225,5 +3225,445 @@ class WorkspaceChangeSummaryTests(unittest.TestCase):
         self.assertIn("error", result)
 
 
+class WorkspaceReviewGateTests(unittest.TestCase):
+    """Tests for worker workspace review gate tools (TASK-072)."""
+
+    SECRET_SENTINEL = "REVIEW_GATE_SECRET_999"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    # --- record_worker_workspace_review_gate ---
+
+    def test_approved_gate_records_safe_metadata(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        ))
+
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["decision"], "approved")
+        self.assertEqual(result["reviewer"], "codex_pm")
+        self.assertTrue(result["checks_passed"])
+        self.assertTrue(result["patch_exported"])
+        self.assertIn("event_id", result)
+        self.assertIn("created_at", result)
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+
+    def test_changes_requested_decision_accepted(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="changes_requested",
+        ))
+
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["decision"], "changes_requested")
+
+    def test_blocked_decision_accepted(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="blocked",
+        ))
+
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["decision"], "blocked")
+
+    def test_custom_reviewer_and_summary(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+            reviewer="human", summary="Looks good, all tests pass",
+        ))
+
+        self.assertEqual(result["reviewer"], "human")
+        self.assertTrue(result["summary_present"])
+        self.assertGreater(result["summary_length"], 0)
+
+    def test_sensitive_reviewer_redacted_in_record_get_and_event(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        sensitive_reviewer = "OPENAI_API_KEY=reviewer_secret_123"
+
+        result_str = self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+            reviewer=sensitive_reviewer,
+        )
+        result = json.loads(result_str)
+
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["reviewer"], "[redacted]")
+        self.assertNotIn("reviewer_secret_123", result_str)
+
+        get_str = self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        )
+        self.assertNotIn("reviewer_secret_123", get_str)
+
+        events = json.loads(self.registry.call(
+            "list_durable_events", task_id=task_id, event_type="review_gate_finished",
+        ))
+        self.assertNotIn("reviewer_secret_123", json.dumps(events))
+
+    def test_summary_length_bounded_in_output(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        long_summary = "x" * 500
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+            summary=long_summary,
+        ))
+
+        self.assertTrue(result["summary_present"])
+        self.assertEqual(result["summary_length"], 500)
+        self.assertNotIn(long_summary, json.dumps(result))
+
+    def test_checks_passed_false(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="changes_requested",
+            checks_passed=False, patch_exported=False,
+        ))
+
+        self.assertFalse(result["checks_passed"])
+        self.assertFalse(result["patch_exported"])
+
+    def test_unknown_decision_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="maybe",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("decision", result["error"])
+
+    def test_unknown_worker_error(self):
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w999", task_id="dtask_1", decision="approved",
+        ))
+        self.assertIn("error", result)
+
+    def test_no_lease_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        ))
+        self.assertIn("error", result)
+        self.assertIn("lease", result["error"])
+
+    def test_task_mismatch_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        task2 = json.loads(self.registry.call("create_durable_task", goal="other", steps="other"))
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task2["task_id"], decision="approved",
+        ))
+        self.assertIn("error", result)
+
+    def test_offline_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        ))
+        self.assertIn("error", result)
+        self.assertIn("离线", result["error"])
+
+    def test_idle_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="idle", current_task_id=None)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        ))
+        self.assertIn("error", result)
+        self.assertIn("空闲", result["error"])
+
+    def test_no_goal_leak_in_record(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        ))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_no_summary_body_leak_in_record(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        sensitive_summary = "This contains secret: PASSWORD_ABC123"
+
+        result = json.loads(self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+            summary=sensitive_summary,
+        ))
+
+        self.assertNotIn("PASSWORD_ABC123", json.dumps(result))
+        self.assertTrue(result["summary_present"])
+        self.assertEqual(result["summary_length"], len(sensitive_summary))
+
+    def test_no_goal_leak_in_event_payload(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        self._prepare_workspace("w1", task_id)
+
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+
+        events = json.loads(self.registry.call(
+            "list_durable_events", task_id=task_id, event_type="review_gate_finished",
+        ))
+        for evt in events:
+            self.assertNotIn(self.SECRET_SENTINEL, json.dumps(evt))
+
+    def test_record_no_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data")
+
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+
+        # Project root unchanged
+        self.assertFalse((self.root / "f.txt").exists())
+        # Worker workspace unchanged
+        self.assertEqual((ws / "f.txt").read_text(), "data")
+        # Worker/task/lease state unchanged
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+        self.assertEqual(worker["current_task_id"], task_id)
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+
+    def test_record_event_failure_bounded_error_no_mutation(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data")
+
+        original_record = self.registry.durable_event_store.record
+
+        def broken_record(*args, **kwargs):
+            raise RuntimeError("raw failure " + self.SECRET_SENTINEL)
+
+        self.registry.durable_event_store.record = broken_record
+        try:
+            result = json.loads(self.registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w1", task_id=task_id, decision="approved",
+            ))
+        finally:
+            self.registry.durable_event_store.record = original_record
+
+        self.assertIn("error", result)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+        self.assertEqual((ws / "f.txt").read_text(), "data")
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+
+    # --- get_worker_workspace_review_gate ---
+
+    def test_get_gate_returns_no_gate_before_record(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["has_gate"])
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+
+    def test_get_gate_returns_latest_after_record(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="changes_requested",
+            summary="Fix the bugs",
+        )
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+            summary="All fixed",
+        )
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["has_gate"])
+        self.assertEqual(result["decision"], "approved")
+        self.assertTrue(result["summary_present"])
+        self.assertGreater(result["summary_length"], 0)
+
+    def test_get_gate_unknown_worker_error(self):
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w999", task_id="dtask_1",
+        ))
+        self.assertIn("error", result)
+
+    def test_get_gate_no_lease_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+        self.assertIn("lease", result["error"])
+
+    def test_get_gate_offline_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_get_gate_idle_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="idle", current_task_id=None)
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_get_gate_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        self._prepare_workspace("w1", task_id)
+
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+
+        result = json.loads(self.registry.call(
+            "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_get_gate_query_failure_bounded_error(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        self._prepare_workspace("w1", task_id)
+        original_list_events = self.registry.durable_event_store.list_events
+
+        def broken_list_events(*args, **kwargs):
+            raise RuntimeError("raw query failure " + self.SECRET_SENTINEL)
+
+        self.registry.durable_event_store.list_events = broken_list_events
+        try:
+            result = json.loads(self.registry.call(
+                "get_worker_workspace_review_gate", worker_id="w1", task_id=task_id,
+            ))
+        finally:
+            self.registry.durable_event_store.list_events = original_list_events
+
+        self.assertIn("error", result)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_gate(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        (Path(ws) / "app.py").write_text("code")
+        (self.root / "app.py").write_text("original")
+
+        # Record a gate
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+
+        # All existing tools still work
+        files = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+        self.assertIn("app.py", files["files"])
+
+        content = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="app.py"))
+        self.assertEqual(content["content"], "code")
+
+        preview = json.loads(self.registry.call("preview_worker_workspace_write", worker_id="w1", task_id=task_id, path="app.py", content="new"))
+        self.assertIn("preview", preview)
+
+        write_result = json.loads(self.registry.call(
+            "write_worker_workspace_file", worker_id="w1", task_id=task_id, path="new.py", content="x",
+        ))
+        self.assertEqual(write_result["operation"], "write")
+
+        summary = json.loads(self.registry.call("summarize_worker_workspace_changes", worker_id="w1", task_id=task_id))
+        self.assertIn("files", summary)
+
+        patch = json.loads(self.registry.call("export_worker_workspace_patch", worker_id="w1", task_id=task_id))
+        self.assertIn("patches", patch)
+
+
 if __name__ == "__main__":
     unittest.main()

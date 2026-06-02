@@ -10,7 +10,7 @@ from mini_agent.database import NoraDB
 from mini_agent.diagnostics import Diagnostics
 from mini_agent.git_tools import GitTools
 from mini_agent.logs import JsonlToolLogger
-from mini_agent.memory import LongTermMemory
+from mini_agent.memory import LongTermMemory, is_sensitive_text
 from mini_agent.memory_records import MemoryRecordStore
 from mini_agent.process_manager import ProcessManager
 from mini_agent.rag import ProjectRAG
@@ -43,6 +43,7 @@ from mini_agent.durable_events import (
     FILE_EDIT_FINISHED,
     FILE_EDIT_STARTED,
     RECOVERY_PLANNED,
+    REVIEW_GATE_FINISHED,
     TASK_CREATED,
     TASK_STATUS_CHANGED,
     TASK_RETRIED,
@@ -2197,6 +2198,146 @@ def build_default_registry(
                 "path": {"type": "string", "description": "单文件路径（可选，不填则导出所有变更文件）"},
                 "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
                 "context_lines": {"type": "integer", "description": "diff 上下文行数，默认 3"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
+    _VALID_DECISIONS = {"approved", "changes_requested", "blocked"}
+
+    def _safe_review_gate_reviewer(reviewer: str) -> str:
+        label = (reviewer or "").strip() or "codex_pm"
+        if is_sensitive_text(label):
+            return "[redacted]"
+        if len(label) > 80:
+            return label[:80] + "..."
+        return label
+
+    def _record_worker_workspace_review_gate_json(
+        worker_id: str,
+        task_id: str,
+        decision: str,
+        reviewer: str = "codex_pm",
+        summary: str = "",
+        checks_passed: bool = True,
+        patch_exported: bool = True,
+    ) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        decision = decision.strip().lower()
+        if decision not in _VALID_DECISIONS:
+            return _json.dumps({
+                "error": f"decision 必须是 {', '.join(sorted(_VALID_DECISIONS))} 之一",
+                "decision": decision,
+            }, ensure_ascii=False)
+        summary_present = bool(summary.strip())
+        summary_length = len(summary.strip()) if summary_present else 0
+        safe_reviewer = _safe_review_gate_reviewer(reviewer)
+        payload = {
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "lease_id": lease.lease_id,
+            "decision": decision,
+            "reviewer": safe_reviewer,
+            "checks_passed": bool(checks_passed),
+            "patch_exported": bool(patch_exported),
+            "summary_present": summary_present,
+            "summary_length": summary_length,
+        }
+        try:
+            event = registry.durable_event_store.record(
+                event_type=REVIEW_GATE_FINISHED,
+                task_id=task_id,
+                worker_id=worker_id,
+                source="review_gate",
+                summary=f"review gate: {decision} for {worker_id}/{task_id}",
+                severity="info" if decision == "approved" else "warning",
+                payload=payload,
+            )
+        except Exception:
+            return _json.dumps({"error": "review gate 记录失败"}, ensure_ascii=False)
+        return _json.dumps({
+            "recorded": True,
+            "event_id": event.event_id,
+            "decision": decision,
+            "reviewer": payload["reviewer"],
+            "summary_present": summary_present,
+            "summary_length": summary_length,
+            "checks_passed": payload["checks_passed"],
+            "patch_exported": payload["patch_exported"],
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "created_at": event.created_at,
+        }, ensure_ascii=False)
+
+    def _get_worker_workspace_review_gate_json(worker_id: str, task_id: str) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        try:
+            events = registry.durable_event_store.list_events(
+                task_id=task_id,
+                event_type=REVIEW_GATE_FINISHED,
+                worker_id=worker_id,
+                max_results=1,
+            )
+        except Exception:
+            return _json.dumps({"error": "review gate 查询失败"}, ensure_ascii=False)
+        if not events:
+            return _json.dumps({
+                "has_gate": False,
+                "worker_id": worker_id,
+                "task_id": task_id,
+                "lease_id": lease.lease_id,
+            }, ensure_ascii=False)
+        event = events[0]
+        payload = event.payload or {}
+        return _json.dumps({
+            "has_gate": True,
+            "event_id": event.event_id,
+            "decision": payload.get("decision", ""),
+            "reviewer": payload.get("reviewer", ""),
+            "summary_present": payload.get("summary_present", False),
+            "summary_length": payload.get("summary_length", 0),
+            "checks_passed": payload.get("checks_passed", True),
+            "patch_exported": payload.get("patch_exported", True),
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "created_at": event.created_at,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "record_worker_workspace_review_gate",
+        "记录 worker workspace 的 review gate 决策（approved/changes_requested/blocked）。",
+        _record_worker_workspace_review_gate_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "decision": {"type": "string", "description": "审批决策: approved, changes_requested, blocked"},
+                "reviewer": {"type": "string", "description": "审核人，默认 codex_pm"},
+                "summary": {"type": "string", "description": "审核摘要（可选，不存储原文，只存预览）"},
+                "checks_passed": {"type": "boolean", "description": "检查是否通过，默认 true"},
+                "patch_exported": {"type": "boolean", "description": "patch 是否已导出，默认 true"},
+            },
+            "required": ["worker_id", "task_id", "decision"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+    registry.register(
+        "get_worker_workspace_review_gate",
+        "查询 worker workspace 最新的 review gate 记录。",
+        _get_worker_workspace_review_gate_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
             },
             "required": ["worker_id", "task_id"],
         },
