@@ -4,15 +4,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+## 进行中
+
 ### TASK-074: Worker workspace reviewed merge dry-run v1
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-072/TASK-073
+- 分配: Claude A
 - 目标: 在 review gate artifact 之后，新增一个只读 dry-run 能力，基于 worker workspace patch export 和最新 review gate，生成将来 project-root merge 的安全预检结果；本任务不执行 project-root 写入、不应用 patch、不 commit、不 push。
 - 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
 - 参考: `mini_agent/toolkits/registry_builder.py` worker workspace change export / review gate tools；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / merge workflow。
-
-## 进行中
 
 ## 已完成
 
