@@ -1,47 +1,52 @@
-# Claude B Completion Report — TASK-073
+# Claude B Completion Report — TASK-075
 
-Status: approved by Codex review
+Status: approved by Codex PM
 
 ## Summary
 
-Added 5 deterministic offline eval cases for worker workspace review gate artifacts (TASK-072 runtime): `record_worker_workspace_review_gate` and `get_worker_workspace_review_gate`.
+Added deterministic offline eval coverage for worker workspace reviewed merge dry-run (`dry_run_worker_workspace_merge`).
 
-Only `evals/run_evals.py` was edited. No TASK-072 runtime bugs discovered.
+Codex PM review fixes:
+
+- Added project symlink-to-sensitive-file dry-run eval coverage.
+- Added multi-file patch budget overflow dry-run eval coverage.
+- Strengthened raw patch/reviewer summary/shell/request-string leak assertions.
+- Strengthened no-mutation assertions for primitive worker/task/lease/gate state.
+- Added missing `preview_worker_workspace_write` compatibility assertion.
 
 ## Evals Added
 
-1. **review_gate_basics** — records `approved`, `changes_requested`, and `blocked` decisions; `get` returns `has_gate: false` before any record; `get` returns the latest recorded gate after multiple decisions.
-
-2. **review_gate_validation_errors** — unknown decision, unknown worker, no lease, task mismatch, offline worker, and idle worker rejected; covers both record and get paths where applicable.
-
-3. **review_gate_safety_no_leak** — reviewer, summary, patch/diff, shell, env, task goal/steps sentinels do not leak in record output, get output, or event payloads. Sensitive reviewer is redacted; summary body is never stored.
-
-4. **review_gate_event_and_no_mutation** — event-store failure returns bounded JSON error without leaking raw exception; does not mutate project root, worker workspace, worker/task state, or lease ownership. Query failure returns bounded JSON error.
-
-5. **review_gate_compatibility** — review gate tools do not break worker/task registry tools, workspace lease tools, sandbox guard tools, file inspection tools, write tools, change summary/patch export tools, claim, or dispatch.
+1. `dryrun_ready_path`
+2. `dryrun_not_ready_review_states`
+3. `dryrun_skipped_and_budget`
+4. `dryrun_validation_errors`
+5. `dryrun_safety_no_leak`
+6. `dryrun_no_mutation`
+7. `dryrun_compatibility`
 
 ## Diff
 
-```
- evals/run_evals.py | 433 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 433 insertions(+)
+```text
+ evals/run_evals.py | 457 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 457 insertions(+)
 ```
 
 ## Verification
 
-```
+```text
 python3 evals/run_evals.py
-265 passed, 0 failed
+272 passed, 0 failed
 
-python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 593 tests in 13.867s — OK
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+Ran 451 tests in 8.002s
+OK
 
 git diff --check
-clean
+OK
 ```
 
 ## Notes
 
 - No runtime code changed.
-- Codex PM review fixes strengthened no-lease/get validation coverage, filesystem no-mutation assertions, and claim/dispatch compatibility.
 - No push performed.
+- TASK-075 is approved; next runtime step is reviewed project-root merge apply.

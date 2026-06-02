@@ -316,6 +316,14 @@ def main() -> int:
         EvalCase("review_gate_safety_no_leak", eval_review_gate_safety_no_leak),
         EvalCase("review_gate_event_and_no_mutation", eval_review_gate_event_and_no_mutation),
         EvalCase("review_gate_compatibility", eval_review_gate_compatibility),
+        # TASK-075: Dry-run merge evals
+        EvalCase("dryrun_ready_path", eval_dryrun_ready_path),
+        EvalCase("dryrun_not_ready_review_states", eval_dryrun_not_ready_review_states),
+        EvalCase("dryrun_skipped_and_budget", eval_dryrun_skipped_and_budget),
+        EvalCase("dryrun_validation_errors", eval_dryrun_validation_errors),
+        EvalCase("dryrun_safety_no_leak", eval_dryrun_safety_no_leak),
+        EvalCase("dryrun_no_mutation", eval_dryrun_no_mutation),
+        EvalCase("dryrun_compatibility", eval_dryrun_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -11252,6 +11260,455 @@ def eval_review_gate_compatibility():
             ))
             assert get2["has_gate"] is True
             assert get2["decision"] == "changes_requested"
+        finally:
+            db.close()
+
+
+# --- TASK-075: Dry-run merge eval sentinels ---
+_DRYRUN_SENTINEL_GOAL = "NORA_EVAL_DRYRUN_GOAL_SENTINEL_r3s4t5"
+_DRYRUN_SENTINEL_SECRET = "NORA_EVAL_DRYRUN_SECRET_sk-dryrun-u6v7w8"
+_DRYRUN_SENTINEL_STEP = "NORA_EVAL_DRYRUN_STEP_SENTINEL_x9y0z1"
+_DRYRUN_SENTINEL_FILE = "NORA_EVAL_DRYRUN_FILE_SECRET_a2b3c4d5"
+_DRYRUN_SENTINEL_ENV = "NORA_EVAL_DRYRUN_ENV_SECRET_e6f7g8h9"
+_DRYRUN_SENTINEL_REVIEW = "NORA_EVAL_DRYRUN_REVIEW_SENTINEL_i1j2k3"
+_DRYRUN_SENTINEL_SHELL = "NORA_EVAL_DRYRUN_SHELL_OUTPUT_l4m5n6"
+_DRYRUN_SENTINEL_REQUEST = "NORA_EVAL_DRYRUN_REQUEST_STRING_o7p8q9"
+
+
+def _setup_dryrun_worker(registry, worker_id="w_dr"):
+    """Helper for dry-run evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_DRYRUN_SENTINEL_GOAL + " " + _DRYRUN_SENTINEL_SECRET,
+        steps=[{"text": _DRYRUN_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def _record_gate(registry, worker_id, task_id, decision, **kwargs):
+    """Helper to record a review gate."""
+    return json.loads(registry.call(
+        "record_worker_workspace_review_gate",
+        worker_id=worker_id, task_id=task_id, decision=decision, **kwargs,
+    ))
+
+
+def eval_dryrun_ready_path():
+    """Approved gate + created/modified files → ready=true with correct counts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Create a new file in workspace only (created)
+            (ws_root / "new_file.txt").write_text("new content", encoding="utf-8")
+
+            # Create a file in both project and workspace with different content (modified)
+            (project_root / "shared.txt").write_text("original", encoding="utf-8")
+            (ws_root / "shared.txt").write_text("modified", encoding="utf-8")
+
+            # Record approved gate
+            _record_gate(registry, "w_dr", tid, "approved")
+
+            # Dry-run should be ready
+            result = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert result["ready"] is True, f"expected ready=true: {result}"
+            assert result["reasons"] == [], f"expected no reasons: {result['reasons']}"
+            assert result["has_review_gate"] is True
+            assert result["decision"] == "approved"
+            assert result["requires_review"] is False
+            assert result["created"] >= 1, f"expected created>=1: {result['created']}"
+            assert result["modified"] >= 1, f"expected modified>=1: {result['modified']}"
+            assert result["patch_count"] >= 1, f"expected patch_count>=1: {result['patch_count']}"
+            assert result["lease_id"] == lease_id
+            assert result["worker_id"] == "w_dr"
+            assert result["task_id"] == tid
+        finally:
+            db.close()
+
+
+def eval_dryrun_not_ready_review_states():
+    """No gate, changes_requested, blocked, no changes → ready=false with correct reasons."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Create a file so there are changes
+            (ws_root / "file.txt").write_text("content", encoding="utf-8")
+
+            # No gate → ready=false, requires_review=true
+            result_no_gate = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert result_no_gate["ready"] is False
+            assert "no_review_gate" in result_no_gate["reasons"]
+            assert result_no_gate["requires_review"] is True
+            assert result_no_gate["has_review_gate"] is False
+
+            # changes_requested → ready=false
+            _record_gate(registry, "w_dr", tid, "changes_requested")
+            result_cr = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert result_cr["ready"] is False
+            assert "gate_changes_requested" in result_cr["reasons"]
+
+            # blocked → ready=false
+            _record_gate(registry, "w_dr", tid, "blocked")
+            result_blocked = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert result_blocked["ready"] is False
+            assert "gate_blocked" in result_blocked["reasons"]
+
+            # approved but no changes → ready=false
+            tid2, ws_path2, lease_id2 = _setup_dryrun_worker(registry, worker_id="w_dr2")
+            _record_gate(registry, "w_dr2", tid2, "approved")
+            result_no_changes = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr2", task_id=tid2,
+            ))
+            assert result_no_changes["ready"] is False
+            assert "no_changes" in result_no_changes["reasons"]
+        finally:
+            db.close()
+
+
+def eval_dryrun_skipped_and_budget():
+    """Sensitive file not ready, binary/oversized skipped, budget overflow not ready."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Sensitive file (.env) — create in workspace only
+            (ws_root / ".env").write_text(_DRYRUN_SENTINEL_ENV, encoding="utf-8")
+            _record_gate(registry, "w_dr", tid, "approved")
+            result_sensitive = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            # .env is filtered out entirely (not enumerated), so not ready (no_changes)
+            assert result_sensitive["ready"] is False, f"expected not ready for .env: {result_sensitive}"
+            # Sentinel should not leak
+            result_str = json.dumps(result_sensitive)
+            assert _DRYRUN_SENTINEL_ENV not in result_str, f".env content leaked: {result_str}"
+
+            # Oversized file (create in workspace only, >64KB)
+            tid2, ws_path2, _ = _setup_dryrun_worker(registry, worker_id="w_dr2")
+            ws_root2 = Path(ws_path2)
+            large_content = "x" * (64 * 1024 + 1)
+            (ws_root2 / "large.txt").write_text(large_content, encoding="utf-8")
+            _record_gate(registry, "w_dr2", tid2, "approved")
+            result_oversized = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr2", task_id=tid2,
+            ))
+            # Oversized file should be skipped
+            assert result_oversized["skipped_summary"] >= 1 or result_oversized["skipped_patch_count"] >= 1, \
+                f"expected skip for oversized: {result_oversized}"
+
+            # Binary file (create in workspace only)
+            tid3, ws_path3, _ = _setup_dryrun_worker(registry, worker_id="w_dr3")
+            ws_root3 = Path(ws_path3)
+            (ws_root3 / "binary.bin").write_bytes(b"\x00\x01\x02\x03\xff")
+            _record_gate(registry, "w_dr3", tid3, "approved")
+            result_binary = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr3", task_id=tid3,
+            ))
+            assert result_binary["skipped_summary"] >= 1 or result_binary["skipped_patch_count"] >= 1, \
+                f"expected skip for binary: {result_binary}"
+
+            # Project symlink to sensitive file must be skipped and not leak target content.
+            tid4, ws_path4, _ = _setup_dryrun_worker(registry, worker_id="w_dr4")
+            ws_root4 = Path(ws_path4)
+            symlink_sentinel = "NORA_EVAL_DRYRUN_PROJECT_SYMLINK_SECRET_r1s2t3"
+            (project_root / ".env").write_text(symlink_sentinel, encoding="utf-8")
+            (project_root / "safe_link").symlink_to(project_root / ".env")
+            (ws_root4 / "safe_link").write_text("worker content", encoding="utf-8")
+            _record_gate(registry, "w_dr4", tid4, "approved")
+            result_symlink = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr4", task_id=tid4,
+            ))
+            result_symlink_str = json.dumps(result_symlink)
+            assert result_symlink["ready"] is False, f"expected not ready for project symlink: {result_symlink}"
+            assert "summary_has_skipped" in result_symlink["reasons"], result_symlink
+            assert "patch_export_has_skipped" in result_symlink["reasons"], result_symlink
+            assert symlink_sentinel not in result_symlink_str, f"project symlink target leaked: {result_symlink_str}"
+
+            # Multi-file patch budget overflow must be not ready.
+            tid5, ws_path5, _ = _setup_dryrun_worker(registry, worker_id="w_dr5")
+            ws_root5 = Path(ws_path5)
+            (ws_root5 / "large_a.txt").write_text("a" * (40 * 1024), encoding="utf-8")
+            (ws_root5 / "large_b.txt").write_text("b" * (40 * 1024), encoding="utf-8")
+            _record_gate(registry, "w_dr5", tid5, "approved")
+            result_budget = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr5", task_id=tid5,
+            ))
+            assert result_budget["ready"] is False, f"expected not ready for patch budget: {result_budget}"
+            assert "patch_export_has_skipped" in result_budget["reasons"], result_budget
+            assert "patch_budget_exceeded" in result_budget["reasons"], result_budget
+            assert result_budget["patch_bytes"] <= 64 * 1024, result_budget
+        finally:
+            db.close()
+
+
+def eval_dryrun_validation_errors():
+    """Unknown worker, no lease, task mismatch, offline, idle, bad max_files rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+
+            # Unknown worker
+            r1 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="nonexistent", task_id=tid,
+            ))
+            assert "error" in r1, f"expected error for unknown worker: {r1}"
+
+            # No lease
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_dr_no_lease", role="coder")
+            no_lease_task = ts.create_task(goal="no lease", steps=[{"text": "x"}])
+            ts.assign_worker(no_lease_task.task_id, "w_dr_no_lease")
+            ws.update_status("w_dr_no_lease", "assigned", current_task_id=no_lease_task.task_id)
+            ts.update_status(no_lease_task.task_id, "running")
+            r2 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr_no_lease", task_id=no_lease_task.task_id,
+            ))
+            assert "error" in r2 and "lease" in r2["error"], f"expected no-lease error: {r2}"
+
+            # Task mismatch
+            other_task = ts.create_task(goal="other", steps=[{"text": "x"}])
+            ts.assign_worker(other_task.task_id, "w_dr")
+            ws.update_status("w_dr", "assigned", current_task_id=other_task.task_id)
+            ts.update_status(other_task.task_id, "running")
+            r3 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert "error" in r3, f"expected task mismatch error: {r3}"
+
+            # Restore for offline/idle tests
+            ts.assign_worker(tid, "w_dr")
+            ws.update_status("w_dr", "assigned", current_task_id=tid)
+
+            # Offline
+            ws.update_status("w_dr", "offline")
+            r4 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert "error" in r4, f"expected offline error: {r4}"
+
+            # Idle
+            ws.update_status("w_dr", "idle")
+            r5 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            assert "error" in r5, f"expected idle error: {r5}"
+
+            # Restore
+            ws.update_status("w_dr", "assigned", current_task_id=tid)
+
+            # Bad max_files
+            r6 = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid, max_files="bad",
+            ))
+            assert "error" in r6, f"expected bad max_files error: {r6}"
+        finally:
+            db.close()
+
+
+def eval_dryrun_safety_no_leak():
+    """Output does not leak task goal, steps, raw patch, raw file content, env, or sentinels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+
+            # Create file with sentinel content and review summary sentinels.
+            (ws_root / "secret.txt").write_text(_DRYRUN_SENTINEL_FILE, encoding="utf-8")
+            _record_gate(
+                registry,
+                "w_dr",
+                tid,
+                "approved",
+                summary=(
+                    f"{_DRYRUN_SENTINEL_REVIEW}\n"
+                    f"{_DRYRUN_SENTINEL_SHELL}\n"
+                    f"{_DRYRUN_SENTINEL_REQUEST}"
+                ),
+            )
+
+            result = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid,
+            ))
+            result_str = json.dumps(result)
+
+            # No sentinel leak
+            assert _DRYRUN_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_FILE not in result_str, f"file content leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_REVIEW not in result_str, f"review summary leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_SHELL not in result_str, f"shell output leaked: {result_str[:200]}"
+            assert _DRYRUN_SENTINEL_REQUEST not in result_str, f"request string leaked: {result_str[:200]}"
+
+            # No raw patch text in output
+            assert "--- " not in result_str, f"raw patch from-file leaked: {result_str[:200]}"
+            assert "+++ " not in result_str, f"raw patch to-file leaked: {result_str[:200]}"
+            assert "@@ " not in result_str, f"raw patch hunk leaked: {result_str[:200]}"
+
+            # Error output also bounded
+            r_err = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="nonexistent", task_id=tid,
+            ))
+            err_str = json.dumps(r_err)
+            assert _DRYRUN_SENTINEL_GOAL not in err_str, f"goal leaked in error: {err_str}"
+            assert _DRYRUN_SENTINEL_SECRET not in err_str, f"secret leaked in error: {err_str}"
+        finally:
+            db.close()
+
+
+def eval_dryrun_no_mutation():
+    """Dry-run does not mutate project root, worker workspace, worker/task state, lease, or review gate."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Create files and record gate
+            (ws_root / "file.txt").write_text("workspace content", encoding="utf-8")
+            (project_root / "project.txt").write_text("project content", encoding="utf-8")
+            _record_gate(registry, "w_dr", tid, "approved")
+
+            # Snapshot before
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            worker_before = ws.get_worker("w_dr")
+            task_before = ts.get_task(tid)
+            lease_before = registry.workspace_lease_store.get_lease_by_worker("w_dr")
+            gate_before = json.loads(registry.call("get_worker_workspace_review_gate", worker_id="w_dr", task_id=tid))
+            worker_before_status = worker_before.status
+            worker_before_task = worker_before.current_task_id
+            task_before_status = task_before.status
+            lease_before_id = lease_before.lease_id
+            ws_file_before = (ws_root / "file.txt").read_text(encoding="utf-8")
+            proj_file_before = (project_root / "project.txt").read_text(encoding="utf-8")
+
+            # Run dry-run
+            registry.call("dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid)
+
+            # Verify no mutation
+            worker_after = ws.get_worker("w_dr")
+            task_after = ts.get_task(tid)
+            lease_after = registry.workspace_lease_store.get_lease_by_worker("w_dr")
+            assert worker_after.status == worker_before_status, "worker status mutated"
+            assert worker_after.current_task_id == worker_before_task, "worker task mutated"
+            assert task_after.status == task_before_status, "task status mutated"
+            assert lease_after is not None, "lease disappeared"
+            assert lease_after.lease_id == lease_before_id, "lease id mutated"
+            assert (ws_root / "file.txt").read_text(encoding="utf-8") == ws_file_before, "workspace file mutated"
+            assert (project_root / "project.txt").read_text(encoding="utf-8") == proj_file_before, "project file mutated"
+
+            # Review gate unchanged
+            gate_after = json.loads(registry.call("get_worker_workspace_review_gate", worker_id="w_dr", task_id=tid))
+            assert gate_after["event_id"] == gate_before["event_id"], "review gate event mutated"
+            assert gate_after["decision"] == "approved", "review gate decision mutated"
+        finally:
+            db.close()
+
+
+def eval_dryrun_compatibility():
+    """Existing tools still work after dry_run: registry, lease, sandbox, read/list/preview/write, claim, dispatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_dryrun_worker(registry)
+            ws_root = Path(ws_path)
+            (ws_root / "test.txt").write_text("hello", encoding="utf-8")
+            _record_gate(registry, "w_dr", tid, "approved")
+
+            # Run dry-run
+            registry.call("dry_run_worker_workspace_merge", worker_id="w_dr", task_id=tid)
+
+            # Registry tools still work
+            worker = json.loads(registry.call("get_worker", worker_id="w_dr"))
+            assert worker["worker_id"] == "w_dr"
+            task = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert task["task_id"] == tid
+
+            # Workspace lease tools still work
+            lease = json.loads(registry.call("get_worker_workspace", worker_id="w_dr", task_id=tid))
+            assert lease["lease_id"] == lease_id
+
+            # Sandbox guard tools still work
+            valid = json.loads(registry.call("validate_worker_workspace_path", worker_id="w_dr", task_id=tid, path=str(ws_root / "test.txt")))
+            assert valid.get("valid") is True
+
+            # File inspection tools still work
+            files = json.loads(registry.call("list_worker_workspace_files", worker_id="w_dr", task_id=tid))
+            assert "files" in files
+            read_result = json.loads(registry.call("read_worker_workspace_file", worker_id="w_dr", task_id=tid, path="test.txt"))
+            assert read_result.get("content") == "hello"
+            preview = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_dr", task_id=tid, path="test.txt", content="hello2",
+            ))
+            assert "preview" in preview
+
+            # Write tools still work
+            write_result = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_dr", task_id=tid, path="new.txt", content="world",
+            ))
+            assert write_result.get("operation") == "write"
+
+            # Change summary/patch export still work
+            summary = json.loads(registry.call("summarize_worker_workspace_changes", worker_id="w_dr", task_id=tid))
+            assert "files" in summary
+            patch = json.loads(registry.call("export_worker_workspace_patch", worker_id="w_dr", task_id=tid))
+            assert "patches" in patch
+
+            # Review gate still works
+            gate = json.loads(registry.call("get_worker_workspace_review_gate", worker_id="w_dr", task_id=tid))
+            assert gate["has_gate"] is True
+
+            # Claim/dispatch still work
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_dr_claim", role="coder")
+            claim_task = ts.create_task(goal="claim after dryrun", steps=[{"text": "x"}])
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_dr_claim"))
+            assert claim.get("task_id") == claim_task.task_id
+            ws.register_worker("w_dr_dispatch", role="coder")
+            ts.create_task(goal="dispatch after dryrun", steps=[{"text": "x"}])
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
         finally:
             db.close()
 

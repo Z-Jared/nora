@@ -6,16 +6,22 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-075: Deterministic eval coverage for worker workspace reviewed merge dry-run
+### TASK-076: Worker workspace reviewed merge apply v1
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-074
-- 分配: Claude B
-- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `dry_run_worker_workspace_merge` 的 ready/not-ready、validation、安全不泄漏、no-mutation 和 compatibility 行为。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 worker workspace dry-run / change export / review gate tools；TASK-074 审查记录。
+- 依赖: TASK-074/TASK-075
+- 分配: Claude A
+- 目标: 在 approved dry-run 之后，新增 guarded apply tool，把 worker workspace 中已审查通过的安全 created/modified text changes 写入 project root；必须重跑 dry-run、阻断 skipped/unsafe/budget 情况、支持失败 rollback；本任务不做 git commit/push、不执行 shell、不删除文件。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace dry-run / change export / review gate tools；TASK-074/TASK-075 审查记录。
 
 ## 已完成
+
+### TASK-075: Deterministic eval coverage for worker workspace reviewed merge dry-run ✅
+- 完成者: Claude B；Codex PM 补强 project symlink / patch budget / preview compatibility / safety assertions review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 272 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 451 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval coverage，覆盖 `dry_run_worker_workspace_merge` approved ready path、no gate / changes_requested / blocked / no changes not-ready states、sensitive worker path filtering、project symlink-to-sensitive-file、binary/oversized skipped entries、multi-file patch budget overflow、unknown worker/no lease/task mismatch/offline/idle/bad max_files validation、安全不泄漏 raw patch/file content/task goal/steps/reviewer summary/shell/request strings/secrets、dry-run no mutation，以及 worker/task registry、workspace lease、sandbox guard、read/list/preview/write、change summary/patch export、review gate、claim、dispatch compatibility。
 
 ### TASK-074: Worker workspace reviewed merge dry-run v1 ✅
 - 优先级: high

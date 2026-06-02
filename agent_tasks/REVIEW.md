@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-074 Worker workspace reviewed merge dry-run v1
-Workers: Claude A (TASK-074)
+Reviewed: TASK-075 Deterministic eval coverage for worker workspace reviewed merge dry-run
+Workers: Claude B (TASK-075)
 Status: APPROVED
 
 ## Findings
@@ -12,31 +12,22 @@ Status: APPROVED
 
 ### Review Notes
 
-- Added registry-level read-only `dry_run_worker_workspace_merge(worker_id, task_id, max_files=50)`.
-- Reuses active worker/task/workspace lease validation, current change summary, patch export, and latest review gate lookup.
-- Output is bounded metadata only: readiness, reason labels, review-gate state, change counts, patch counts/bytes, and worker/task/lease ids.
-- PM review fixes made patch-budget readiness detection reachable by using patch export `patch_bytes` and skipped patch reasons.
-- PM review also strengthened patch-budget, project symlink-to-sensitive-file, preview/write, claim, and dispatch compatibility tests.
-- Scope stayed dry-run only: no project-root merge, no patch apply, no git operations, no shell/process isolation, no UI, no model routing.
+- Added 7 deterministic offline evals for TASK-074 `dry_run_worker_workspace_merge`.
+- Coverage includes approved ready path, no gate, changes requested, blocked, no changes, validation errors, no mutation, safety no-leak, and compatibility.
+- Codex PM review fixes added missing project symlink-to-sensitive-file and patch budget overflow coverage.
+- Codex PM review also strengthened raw patch/reviewer summary/shell/request string leak checks, primitive state no-mutation checks, and preview/write compatibility coverage.
+- Scope stayed eval-only for runtime code: only `evals/run_evals.py` changed outside task report/inbox/task-management files.
+- No TASK-074 runtime bug was found.
 
 ## Checks Run
 
 ```text
-python3 -m unittest tests.test_durable_workers
-Ran 284 tests in 3.362s
-OK
+python3 evals/run_evals.py
+272 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 451 tests in 8.670s
+Ran 451 tests in 8.002s
 OK
-
-python3 evals/run_evals.py
-265 passed, 0 failed
-
-python3 -m unittest discover -s tests
-Ran 1810 tests in 117.193s
-OK
-Warning: failed to load plugin broken.py: bad
 
 git diff --check
 OK
@@ -44,6 +35,6 @@ OK
 
 ## Verdict
 
-TASK-074 APPROVED.
+TASK-075 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.
