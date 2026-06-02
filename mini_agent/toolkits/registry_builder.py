@@ -1,3 +1,4 @@
+import difflib
 import json as _json
 from pathlib import Path
 from typing import Callable, Optional
@@ -1169,6 +1170,210 @@ def build_default_registry(
                 },
             },
             "required": ["worker_id", "task_id", "path"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
+    from mini_agent.toolkits.workspace import DENIED_FILE_NAMES, DENIED_DIR_NAMES, MAX_FILE_BYTES
+
+    def _resolve_workspace_path(lease, path: str):
+        """Resolve a path under a workspace lease, with safety checks.
+
+        Returns (resolved_path, None) on success or (None, error_dict) on failure.
+        """
+        path = path.strip()
+        if not path:
+            return None, {"error": "path 不能为空"}
+        ws_root = Path(lease.workspace_path).resolve()
+        candidate = Path(path)
+        if candidate.is_absolute():
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                return None, {"error": f"path 解析失败: {path}"}
+        else:
+            try:
+                resolved = (ws_root / candidate).resolve()
+            except OSError:
+                return None, {"error": f"path 解析失败: {path}"}
+        try:
+            resolved.relative_to(ws_root)
+        except ValueError:
+            return None, {
+                "error": "path 不在 workspace 内",
+                "path": path,
+                "workspace_path": lease.workspace_path,
+            }
+        if resolved.name in DENIED_FILE_NAMES:
+            return None, {"error": f"拒绝访问敏感文件: {resolved.name}"}
+        rel_parts = resolved.relative_to(ws_root).parts
+        if any(part in DENIED_DIR_NAMES for part in rel_parts):
+            return None, {"error": f"path 包含禁止访问的目录"}
+        return resolved, None
+
+    def _list_worker_workspace_files_json(worker_id: str, task_id: str, max_files: int = 50) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        try:
+            max_files = max(1, min(int(max_files or 50), 200))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "max_files 必须是整数"}, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path).resolve()
+        files = []
+        try:
+            for target in sorted(ws_root.rglob("*")):
+                if len(files) >= max_files:
+                    break
+                if not target.is_file():
+                    continue
+                # Resolve symlinks and ensure the real target stays inside workspace
+                try:
+                    resolved = target.resolve()
+                except OSError:
+                    continue
+                try:
+                    resolved.relative_to(ws_root)
+                except ValueError:
+                    continue
+                rel = target.relative_to(ws_root)
+                if resolved.name in DENIED_FILE_NAMES or target.name in DENIED_FILE_NAMES:
+                    continue
+                if any(part in DENIED_DIR_NAMES for part in rel.parts):
+                    continue
+                # Also check resolved target path for denied directories
+                try:
+                    resolved_rel = resolved.relative_to(ws_root)
+                    if any(part in DENIED_DIR_NAMES for part in resolved_rel.parts):
+                        continue
+                except ValueError:
+                    continue
+                files.append(rel.as_posix())
+        except OSError:
+            return _json.dumps({"error": "workspace 目录读取失败"}, ensure_ascii=False)
+        return _json.dumps({
+            "files": files,
+            "count": len(files),
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+        }, ensure_ascii=False)
+
+    def _read_worker_workspace_file_json(worker_id: str, task_id: str, path: str) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        resolved, err = _resolve_workspace_path(lease, path)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        if not resolved.exists():
+            return _json.dumps({"error": f"文件不存在: {path}"}, ensure_ascii=False)
+        if not resolved.is_file():
+            return _json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+        if resolved.stat().st_size > MAX_FILE_BYTES:
+            return _json.dumps({"error": f"文件过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        try:
+            content = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return _json.dumps({"error": "只支持 UTF-8 文本文件"}, ensure_ascii=False)
+        except OSError as e:
+            return _json.dumps({"error": f"读取失败"}, ensure_ascii=False)
+        rel = resolved.relative_to(Path(lease.workspace_path).resolve()).as_posix()
+        return _json.dumps({
+            "content": content,
+            "path": rel,
+            "size": len(content),
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+        }, ensure_ascii=False)
+
+    def _preview_worker_workspace_write_json(worker_id: str, task_id: str, path: str, content: str, context_lines: int = 3) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        resolved, err = _resolve_workspace_path(lease, path)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > MAX_FILE_BYTES:
+            return _json.dumps({"error": f"内容过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+        try:
+            context_lines = max(0, min(int(context_lines or 3), 20))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "context_lines 必须是整数"}, ensure_ascii=False)
+        current = ""
+        if resolved.exists():
+            if not resolved.is_file():
+                return _json.dumps({"error": f"不是文件: {path}"}, ensure_ascii=False)
+            if resolved.stat().st_size > MAX_FILE_BYTES:
+                return _json.dumps({"error": f"文件过大: 最大支持 {MAX_FILE_BYTES} bytes"}, ensure_ascii=False)
+            try:
+                current = resolved.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return _json.dumps({"error": "只支持 UTF-8 文本文件"}, ensure_ascii=False)
+            except OSError:
+                return _json.dumps({"error": "读取失败"}, ensure_ascii=False)
+        old_lines = current.splitlines(keepends=True)
+        new_lines = content.splitlines(keepends=True)
+        diff = list(difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+            n=context_lines,
+        ))
+        rel = resolved.relative_to(Path(lease.workspace_path).resolve()).as_posix()
+        return _json.dumps({
+            "preview": "".join(diff),
+            "path": rel,
+            "current_size": len(current),
+            "new_size": content_bytes,
+            "will_create": not resolved.exists(),
+            "workspace_path": lease.workspace_path,
+            "lease_id": lease.lease_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "list_worker_workspace_files",
+        "列出 worker workspace 中的文件（相对路径）。只列出非敏感文件。",
+        _list_worker_workspace_files_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+    registry.register(
+        "read_worker_workspace_file",
+        "读取 worker workspace 中的一个文件。只支持 UTF-8 文本。",
+        _read_worker_workspace_file_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "path": {"type": "string", "description": "文件路径（相对于 workspace 或绝对路径）"},
+            },
+            "required": ["worker_id", "task_id", "path"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+    registry.register(
+        "preview_worker_workspace_write",
+        "预览写入 worker workspace 文件的 diff。不实际写入。",
+        _preview_worker_workspace_write_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "path": {"type": "string", "description": "文件路径"},
+                "content": {"type": "string", "description": "要写入的内容"},
+                "context_lines": {"type": "integer", "description": "diff 上下文行数，默认 3"},
+            },
+            "required": ["worker_id", "task_id", "path", "content"],
         },
         permission=ToolPermission(category="task", risk="read"),
     )

@@ -1,61 +1,84 @@
-# Claude A Completion Report — TASK-064: Worker Workspace Sandbox Guard v1
+# Claude A Completion Report — TASK-066: Worker Workspace File Inspection Tools v1
 
 Status: ready for Codex review
 
-## Review Fix
+## Review Fix (Must Fix #1, #2, #3, #4)
 
-**Must Fix #1 — sandbox guard must reject offline/idle workers**
+**#1 — `max_files` non-integer input:**
+- Wrapped `int(max_files or 50)` in `try/except (ValueError, TypeError)`, returns bounded JSON error `{"error": "max_files 必须是整数"}`.
+- Regression test: `test_list_files_bad_max_files_returns_error`
 
-Added `WorkerStatus.OFFLINE` and `WorkerStatus.IDLE` checks to `_resolve_and_validate_lease()` before the `current_task_id` check. A worker that has gone offline or returned to idle cannot use sandbox tools even if they still have a stale lease and `current_task_id`.
+**#2 — `context_lines` non-integer input:**
+- Wrapped `int(context_lines or 3)` in `try/except (ValueError, TypeError)`, returns bounded JSON error `{"error": "context_lines 必须是整数"}`.
+- Regression test: `test_preview_write_bad_context_lines_returns_error`
 
-Regression tests added:
-- `test_get_workspace_offline_worker_returns_error`
-- `test_validate_path_offline_worker_returns_error`
-- `test_get_workspace_idle_worker_with_task_id_returns_error`
-- `test_validate_path_idle_worker_with_task_id_returns_error`
+**#3 — Symlink escape in `list_worker_workspace_files`:**
+- After `target.is_file()`, now calls `target.resolve()` and checks `resolved.relative_to(ws_root)` to ensure the real file target stays inside workspace. Symlinks pointing outside are skipped.
+- Also checks `resolved.name` against `DENIED_FILE_NAMES` (in case symlink target is a sensitive filename).
+- Regression test: `test_list_files_skips_symlink_escape` — creates a symlink inside workspace pointing outside, verifies it is excluded from listing.
+
+**#4 — Symlink to denied directory (e.g. `.git/config`):**
+- Added check on `resolved.relative_to(ws_root).parts` against `DENIED_DIR_NAMES`. Previously only the symlink's own path was checked, so `gitlink -> .git/config` was listed.
+- Regression tests: `test_list_files_skips_symlink_to_git_dir` (symlink to `.git/config`), `test_list_files_skips_symlink_to_logs_dir` (symlink to `logs/app.log`).
 
 ## Summary
 
-Added two read-only sandbox guard tools and a shared validation helper that ensure worker file/command operations can only target paths within their active workspace lease directory.
+Added three worker-scoped file inspection tools that operate only inside the active workspace lease: `list_worker_workspace_files`, `read_worker_workspace_file`, and `preview_worker_workspace_write`. All tools reuse the existing lease validation and workspace file safety rules (`.env`, `.git`, etc.).
 
 ## Changes
 
 ### `mini_agent/toolkits/registry_builder.py`
 
-**`_resolve_and_validate_lease(worker_id, task_id)` — shared helper:**
-- Validates worker exists
-- Validates `worker.status` is not OFFLINE or IDLE
-- Validates `worker.current_task_id == task_id`, task exists, `task.worker_id == worker_id`
-- Validates lease exists for the worker and `lease.task_id == task_id`
-- Returns `(lease, None)` on success or `(None, error_dict)` on failure
-- Used by both new tools to avoid duplication
+Added `import difflib` at top.
 
-**`get_worker_workspace(worker_id, task_id)` — read-only tool:**
-- Returns `DurableWorkspaceLease.to_dict()` if validation passes
-- Returns bounded JSON error otherwise
-- Registered with `risk="read"` permission
+**`_resolve_workspace_path(lease, path)` — shared path resolver:**
+- Handles both relative paths (resolved under workspace root) and absolute paths (only allowed if they resolve inside workspace)
+- Checks path traversal via `relative_to()`
+- Rejects sensitive file names (`DENIED_FILE_NAMES`: `.env`, `.env.local`, `.env.production`)
+- Rejects paths containing sensitive directory names (`DENIED_DIR_NAMES`: `.git`, `__pycache__`, `.pytest_cache`, `data`, `logs`)
+- Returns `(resolved_path, None)` or `(None, error_dict)`
 
-**`validate_worker_workspace_path(worker_id, task_id, path)` — read-only tool:**
-- Resolves the target path via `Path.resolve()` (normalizes `..`, symlinks)
-- Checks `resolved.relative_to(ws_root.resolve())` to ensure path is within workspace
-- Path traversal (`../../etc/passwd`), absolute path escape (`/etc/passwd`), and any path outside workspace return `{"error": "path 不在 workspace 内", ...}`
-- Empty path returns error
-- On success returns `{"valid": True, "path": ..., "workspace_path": ..., "lease_id": ...}`
+**`list_worker_workspace_files(worker_id, task_id, max_files=50)`:**
+- Lists files recursively under workspace, returning bounded relative paths
+- Skips sensitive files and directories
+- Skips symlinks whose resolved target escapes workspace
+- `max_files` bounded to 1..200; non-integer returns bounded JSON error
+- Returns `{"files": [...], "count": N, "workspace_path": ..., "lease_id": ...}`
+
+**`read_worker_workspace_file(worker_id, task_id, path)`:**
+- Reads UTF-8 text file content
+- Rejects missing files, non-files, oversized files, binary files, sensitive paths
+- Returns `{"content": ..., "path": ..., "size": ..., "workspace_path": ..., "lease_id": ...}`
+
+**`preview_worker_workspace_write(worker_id, task_id, path, content, context_lines=3)`:**
+- Generates unified diff preview without writing any files
+- `context_lines` bounded to 0..20; non-integer returns bounded JSON error
+- Returns `{"preview": ..., "path": ..., "current_size": ..., "new_size": ..., "will_create": bool, ...}`
+
+All three tools:
 - Registered with `risk="read"` permission
+- Reuse `_resolve_and_validate_lease()` for worker/task/lease validation
+- Reject offline and idle workers
+- Output does not leak task goal, steps, or secrets
 
 ### `tests/test_durable_workers.py`
-- Added `WorkspaceSandboxGuardTests` class with 20 tests:
-  - **get_worker_workspace** (7 tests): returns lease, no lease error, unknown worker error, task mismatch error, worker not executing task error, offline worker error, idle worker error
-  - **validate_worker_workspace_path** (13 tests): path inside workspace, workspace root itself, `..` traversal escape, absolute path escape, no lease error, unknown worker error, empty path error, worker-task mismatch error, lease for different task error, no goal leak, `..` that stays within workspace (normalized), offline worker error, idle worker error
+- Added `WorkspaceFileInspectionTests` class with 32 tests:
+  - **list** (10): empty workspace, relative paths, skips .env, skips .git dir, max bounded, no lease error, unknown worker error, no goal leak, no mutation, bad max_files error
+  - **read** (10): returns content, absolute inside workspace, traversal rejected, absolute escape rejected, missing file error, .env rejected, empty path error, offline worker error, no goal leak, no mutation
+  - **preview** (9): new file, existing file (diff), no actual write, traversal rejected, .env rejected, no goal leak, no task mutation, context_lines, bad context_lines error
+  - **symlink** (3): symlink escape skipped, symlink to .git/config skipped, symlink to logs skipped
 
 ## Verification
 
 ```
 $ python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 585 tests — OK
+Ran 617 tests — OK
+
+$ python3 -m unittest tests.test_workspace tests.test_workspace_extra
+Ran 42 tests — OK
 
 $ python3 -m unittest discover -s tests
-Ran 1641 tests — OK
+Ran 1673 tests — OK
 
 $ python3 evals/run_evals.py
 228 passed, 0 failed
@@ -67,8 +90,8 @@ clean
 ## Diff
 
 ```
- mini_agent/toolkits/registry_builder.py | 106 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---------
- tests/test_durable_workers.py           | 172 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
+ mini_agent/toolkits/registry_builder.py | 189 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ tests/test_durable_workers.py           | 227 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++----
  2 files changed
 ```
 
@@ -76,6 +99,6 @@ clean
 
 - No push or commit performed.
 - BACKLOG.md untouched.
-- Both tools are read-only (`risk="read"`) — they validate paths but do not create files.
-- The `_resolve_and_validate_lease` helper is reusable for future sandbox enforcement in file edit, shell command, and other tools.
-- `Path.resolve()` handles symlink normalization and `..` traversal safely.
+- All three tools are read-only (`risk="read"`) — preview never writes files.
+- Reuses `DENIED_FILE_NAMES` and `DENIED_DIR_NAMES` from `workspace.py` for consistent safety rules.
+- `_resolve_workspace_path` is reusable for future workspace-scoped tools.

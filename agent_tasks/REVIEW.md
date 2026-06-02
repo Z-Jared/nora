@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-064 Worker workspace sandbox guard v1; TASK-065 deterministic eval coverage
-Workers: Claude A (TASK-064), Claude B (TASK-065)
+Reviewed: TASK-066 Worker workspace file inspection tools v1
+Workers: Claude A (TASK-066)
 Status: APPROVED
 
 ## Findings
@@ -12,11 +12,15 @@ Status: APPROVED
 
 ### Review Notes
 
-- `get_worker_workspace(worker_id, task_id)` and `validate_worker_workspace_path(worker_id, task_id, path)` are registered as read-only task tools.
-- `_resolve_and_validate_lease()` now rejects offline and idle workers before checking `current_task_id`, task ownership, and lease ownership.
-- `validate_worker_workspace_path` rejects traversal and absolute-path escapes by resolving the target path and checking containment under the resolved workspace root.
-- TASK-065 now includes offline/idle eval coverage and replaced the previous loose validation assertion with a strict `valid is True` assertion using an absolute path inside the claimed workspace.
-- Relative paths are intentionally treated as process-cwd paths by `Path.resolve()` and therefore are rejected unless they resolve inside the workspace.
+- `list_worker_workspace_files`, `read_worker_workspace_file`, and `preview_worker_workspace_write` are present and registered as read-risk tools.
+- The tools reuse active worker/task/lease validation and reject offline/idle workers, missing leases, task mismatch, traversal, absolute escape, and sensitive `.env` / denied directory paths.
+- Relative read/preview paths resolve under the lease workspace root; absolute paths are allowed only when their resolved target stays inside that root.
+- Preview returns a diff and does not create or mutate files.
+- Review regressions were fixed:
+  - bad `max_files` returns bounded JSON error
+  - bad `context_lines` returns bounded JSON error
+  - symlinks resolving outside workspace are skipped by list
+  - symlinks resolving into denied workspace directories such as `.git` and `logs` are skipped by list
 
 ## Checks Run
 
@@ -24,36 +28,30 @@ Status: APPROVED
 Reviewed:
 - git status --short --branch
 - agent_tasks/A_DONE.md
-- agent_tasks/B_DONE.md
 - agent_tasks/REVIEW.md
 - mini_agent/toolkits/registry_builder.py
 - tests/test_durable_workers.py
-- evals/run_evals.py
+
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+Ran 314 tests in 6.323s
+OK
 
 python3 evals/run_evals.py
 228 passed, 0 failed
 
-python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
-Ran 585 tests in 14.149s
-OK
-
-python3 -m unittest discover -s tests
-Ran 1641 tests in 115.892s
-OK
-Warning: failed to load plugin broken.py: bad
-
 git diff --check
 OK
 
-Ad hoc reproduction:
-- assigned worker with absolute path under workspace -> valid true
-- same lease after worker marked offline -> error
-- same lease after worker marked idle with current_task_id preserved -> error
+Ad hoc reproductions:
+- list_worker_workspace_files(max_files="bad") -> bounded JSON error
+- preview_worker_workspace_write(context_lines="bad") -> bounded JSON error
+- symlink inside workspace pointing outside -> not listed
+- symlink inside workspace pointing to .git/config -> not listed
+- symlink inside workspace pointing to logs/app.log -> not listed
 ```
 
 ## Verdict
 
-TASK-064 APPROVED.
-TASK-065 APPROVED.
+TASK-066 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.

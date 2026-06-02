@@ -1,40 +1,46 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-065: Deterministic eval coverage for worker workspace sandbox guard.
+TASK-067: Deterministic eval coverage for worker workspace file inspection.
 
-Codex PM approved this task after review. TASK-064 runtime is integrated locally.
+TASK-066 runtime is approved locally by Codex PM. Start implementation now.
 
 ## Scope
 
-Edit `evals/run_evals.py` only unless a real TASK-064 runtime bug is discovered. Do not call external APIs. Do not start real agents or terminals.
+When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-066 runtime bug.
 
-Deterministic offline eval coverage:
+Do not call external APIs. Do not start real agents, terminals, shell commands through Nora, or browser sessions.
 
-1. Valid sandbox paths:
-   - `get_worker_workspace` returns bounded lease metadata
-   - `validate_worker_workspace_path` accepts absolute paths inside the workspace
-   - workspace root itself is valid
+Planned deterministic offline eval coverage:
 
-2. Rejection cases:
-   - path traversal that escapes workspace
-   - absolute path escape outside workspace
-   - unknown worker
-   - worker with no lease
-   - task mismatch
-   - empty path
-   - offline worker with stale current_task_id and lease
-   - idle worker with stale current_task_id and lease
+1. Valid scoped file inspection:
+   - Prepare/claim a worker workspace.
+   - Create files under the leased workspace using test setup code.
+   - `list_worker_workspace_files` returns bounded relative paths only.
+   - `read_worker_workspace_file` reads only inside the active lease.
+   - `preview_worker_workspace_write` returns a diff/preview and does not mutate files.
 
-3. Safety and compatibility:
-   - outputs do not leak raw task goal, steps, prompts, shell output, diffs, env vars, or secrets
-   - sandbox guard errors do not break worker/task list/get tools
-   - claim still works after sandbox guard errors
-   - post-claim validation uses an absolute path inside the claimed workspace and strictly asserts `valid is True`
+2. Sandbox rejection:
+   - Relative traversal escape rejected.
+   - Absolute path escape rejected.
+   - Empty path error.
+   - Unknown worker, no lease, task mismatch, offline worker, and idle worker rejected.
+   - Sensitive paths such as `.env` and `.git` rejected.
+
+3. Safety:
+   - Outputs do not leak raw task goals, steps, prompts, shell output, env vars, request strings, or secret-like sentinels.
+   - Listing output is bounded and relative.
+   - Read output is bounded and handles missing/oversized/binary or unsafe files without crashing.
+
+4. Compatibility:
+   - File inspection and preview do not mutate task/worker/lease/event state.
+   - Error calls do not break existing worker/task registry tools, workspace lease tools, sandbox guard tools, or claim/dispatch.
+
+Keep evals deterministic and offline.
 
 ## Verification
 
@@ -42,12 +48,14 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_workers tests.test_durable_tasks tests.test_durable_events tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
 git diff --check
 ```
 
+If you touch anything outside `evals/run_evals.py`, also run focused tests for those files and explain why in `agent_tasks/B_DONE.md`.
+
 ## Completion Report
 
-Written in `agent_tasks/B_DONE.md`.
+Update `agent_tasks/B_DONE.md` with summary, diff stat, exact checks run, and known limitations.
 
 Do not commit or push.

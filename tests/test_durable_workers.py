@@ -1411,5 +1411,421 @@ class WorkspaceSandboxGuardTests(unittest.TestCase):
         self.assertIn("空闲", result["error"])
 
 
+class WorkspaceFileInspectionTests(unittest.TestCase):
+    """Tests for worker workspace file inspection tools (TASK-066)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    def _write_file(self, ws_path, rel_path, content):
+        p = Path(ws_path) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    # --- list_worker_workspace_files ---
+
+    def test_list_files_empty_workspace(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+
+        self.assertEqual(result["files"], [])
+        self.assertEqual(result["count"], 0)
+
+    def test_list_files_returns_relative_paths(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "src/main.py", "print('hi')")
+        self._write_file(ws, "README.md", "# hello")
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+
+        self.assertIn("src/main.py", result["files"])
+        self.assertIn("README.md", result["files"])
+        self.assertEqual(result["count"], 2)
+
+    def test_list_files_skips_sensitive_files(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "app.py", "code")
+        self._write_file(ws, ".env", "SECRET=1")
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+
+        self.assertIn("app.py", result["files"])
+        self.assertNotIn(".env", result["files"])
+
+    def test_list_files_skips_sensitive_dirs(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "src/app.py", "code")
+        self._write_file(ws, ".git/config", "[core]")
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+
+        self.assertIn("src/app.py", result["files"])
+        for f in result["files"]:
+            self.assertFalse(f.startswith(".git/"), f"should not list .git files: {f}")
+
+    def test_list_files_max_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        for i in range(5):
+            self._write_file(ws, f"f{i}.txt", f"content {i}")
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id, max_files=3))
+
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(len(result["files"]), 3)
+
+    def test_list_files_no_lease_returns_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+        self.assertIn("error", result)
+
+    def test_list_files_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w999", task_id="dtask_1"))
+        self.assertIn("error", result)
+
+    def test_list_files_no_goal_leak(self):
+        task_id = self._register_and_assign(goal="SECRET_LIST_GOAL_555")
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+
+        self.assertNotIn("SECRET_LIST_GOAL_555", json.dumps(result))
+        self.assertNotIn("step one", json.dumps(result))
+
+    # --- read_worker_workspace_file ---
+
+    def test_read_file_returns_content(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "hello.py", "print('hello world')")
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="hello.py"))
+
+        self.assertEqual(result["content"], "print('hello world')")
+        self.assertEqual(result["path"], "hello.py")
+
+    def test_read_file_absolute_inside_workspace(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "data.txt", "some data")
+        abs_path = str(Path(ws) / "data.txt")
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path=abs_path))
+
+        self.assertEqual(result["content"], "some data")
+
+    def test_read_file_traversal_rejected(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="../../etc/passwd"))
+
+        self.assertIn("error", result)
+        self.assertIn("不在 workspace 内", result["error"])
+
+    def test_read_file_absolute_escape_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="/etc/passwd"))
+
+        self.assertIn("error", result)
+
+    def test_read_file_missing_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="no_such_file.txt"))
+
+        self.assertIn("error", result)
+        self.assertIn("不存在", result["error"])
+
+    def test_read_file_sensitive_rejected(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, ".env", "SECRET=value")
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path=".env"))
+
+        self.assertIn("error", result)
+        self.assertIn("敏感", result["error"])
+
+    def test_read_file_empty_path_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path=""))
+
+        self.assertIn("error", result)
+
+    def test_read_file_offline_worker_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "f.txt", "data")
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="f.txt"))
+        self.assertIn("error", result)
+        self.assertIn("已离线", result["error"])
+
+    def test_read_file_no_goal_leak(self):
+        task_id = self._register_and_assign(goal="SECRET_READ_GOAL_666")
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "f.txt", "normal content")
+
+        result = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="f.txt"))
+
+        self.assertNotIn("SECRET_READ_GOAL_666", json.dumps(result))
+        self.assertNotIn("step one", json.dumps(result))
+
+    # --- preview_worker_workspace_write ---
+
+    def test_preview_write_new_file(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="new_file.py", content="print('new')",
+        ))
+
+        self.assertIn("preview", result)
+        self.assertTrue(result["will_create"])
+        self.assertIn("print('new')", result["preview"])
+
+    def test_preview_write_existing_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "existing.py", "old content")
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="existing.py", content="new content",
+        ))
+
+        self.assertIn("preview", result)
+        self.assertFalse(result["will_create"])
+        self.assertIn("-old content", result["preview"])
+        self.assertIn("+new content", result["preview"])
+
+    def test_preview_write_no_actual_file_change(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="phantom.py", content="should not exist",
+        )
+
+        self.assertFalse((Path(self.registry.workspace_lease_store.get_lease_by_worker("w1").workspace_path) / "phantom.py").exists())
+
+    def test_preview_write_traversal_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="../../etc/evil", content="bad",
+        ))
+
+        self.assertIn("error", result)
+
+    def test_preview_write_sensitive_rejected(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path=".env", content="SECRET=1",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("敏感", result["error"])
+
+    def test_preview_write_no_goal_leak(self):
+        task_id = self._register_and_assign(goal="SECRET_PREVIEW_GOAL_777")
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="f.txt", content="safe content",
+        ))
+
+        self.assertNotIn("SECRET_PREVIEW_GOAL_777", json.dumps(result))
+        self.assertNotIn("step one", json.dumps(result))
+
+    def test_preview_write_no_mutation_of_task_state(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="f.txt", content="data",
+        )
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+
+    def test_preview_write_context_lines(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="f.txt", content="line1\nline2\nline3",
+            context_lines=0,
+        ))
+
+        self.assertIn("preview", result)
+
+    def test_list_files_no_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "f.txt", "data")
+
+        self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id)
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+
+    def test_read_file_no_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_file(ws, "f.txt", "data")
+
+        self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="f.txt")
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+
+    def test_list_files_bad_max_files_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_files", worker_id="w1", task_id=task_id, max_files="bad",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("max_files", result["error"])
+
+    def test_preview_write_bad_context_lines_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "preview_worker_workspace_write",
+            worker_id="w1", task_id=task_id,
+            path="f.txt", content="data", context_lines="bad",
+        ))
+
+        self.assertIn("error", result)
+        self.assertIn("context_lines", result["error"])
+
+    def test_list_files_skips_symlink_escape(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        # Create a file outside the workspace
+        outside = self.root / "outside.txt"
+        outside.write_text("outside content")
+        # Create a symlink inside workspace pointing outside
+        (ws / "link.txt").symlink_to(outside)
+        # Create a normal file too
+        (ws / "real.txt").write_text("real content")
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_files", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("real.txt", result["files"])
+        self.assertNotIn("link.txt", result["files"])
+
+    def test_list_files_skips_symlink_to_git_dir(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        # Create .git/config inside workspace
+        git_dir = ws / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text("[core]\n\tbare = false")
+        # Create a symlink at workspace root pointing to .git/config
+        (ws / "gitlink").symlink_to(git_dir / "config")
+        (ws / "real.txt").write_text("real content")
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_files", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("real.txt", result["files"])
+        self.assertNotIn("gitlink", result["files"])
+
+    def test_list_files_skips_symlink_to_logs_dir(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        # Create logs/app.log inside workspace
+        logs_dir = ws / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "app.log").write_text("log data")
+        # Create a symlink pointing to logs/app.log
+        (ws / "loglink").symlink_to(logs_dir / "app.log")
+        (ws / "main.py").write_text("print('hi')")
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_files", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("main.py", result["files"])
+        self.assertNotIn("loglink", result["files"])
+
+
 if __name__ == "__main__":
     unittest.main()

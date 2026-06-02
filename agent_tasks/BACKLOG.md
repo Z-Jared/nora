@@ -6,7 +6,22 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-067: Deterministic eval coverage for worker workspace file inspection
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-066 runtime present
+- 分配: Claude B
+- 目标: 为 TASK-066 的 worker workspace file inspection/preview 工具增加离线 deterministic eval，覆盖 valid scoped read/list/preview、path escape rejection、missing lease/worker/task mismatch errors、安全不泄漏、以及 existing worker/task registry compatibility。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `evals/run_evals.py` sandbox guard / workspace lease eval 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation / Priority 5 Eval harness。
+
 ## 已完成
+
+### TASK-066: Worker workspace file inspection tools v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 314 tests OK；`python3 evals/run_evals.py` 228 passed；`git diff --check` OK。
+- 内容: 新增 worker-scoped read-only file inspection tools：`list_worker_workspace_files(worker_id, task_id, max_files=50)`、`read_worker_workspace_file(worker_id, task_id, path)`、`preview_worker_workspace_write(worker_id, task_id, path, content, context_lines=3)`；复用 active worker/task/workspace lease 校验；relative path 在 lease root 下解析，absolute path 仅允许 resolved target 留在 workspace 内；拒绝 traversal、absolute escape、offline/idle worker、missing/no lease、task mismatch、敏感 `.env`/denied dirs；preview 只返回 diff 不写文件；list 跳过 symlink escape、symlink to denied dirs、bad numeric inputs 返回 bounded JSON error。
 
 ### TASK-065: Deterministic eval coverage for worker workspace sandbox guard ✅
 - 完成者: Claude B
