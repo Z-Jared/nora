@@ -4,20 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-（暂无）
+### TASK-071: Deterministic eval coverage for worker workspace change export tools
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-070 runtime present
+- 目标: 为 worker workspace change summary / patch export tools 增加离线 deterministic eval，覆盖 changed/created/same file classification、bounded patch export、project-root path safety、sensitive path rejection、安全不泄漏、no mutation，以及 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
+- 参考: `evals/run_evals.py` worker workspace write eval 区域；`mini_agent/toolkits/registry_builder.py` worker workspace file inspection/write 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation / Priority 5 Eval harness。
 
 ## 进行中
 
-### TASK-069: Deterministic eval coverage for worker workspace write tools
+### TASK-070: Worker workspace change summary / patch export tools v1
 - 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-068 approved runtime present
-- 分配: Claude B
-- 目标: 为 worker workspace write/replace/patch tools 增加离线 deterministic eval，覆盖 valid scoped writes、path escape rejection、missing lease/worker/task mismatch、offline/idle rejection、sensitive/symlink paths、安全不泄漏、oversized/binary bounded errors、no mutation on errors，以及 compatibility。
+- 预计: 1-2 小时
+- 依赖: TASK-068/TASK-069
+- 分配: Claude A
+- 目标: 新增只读 worker workspace change summary / patch export tools，让 Codex PM 能在 merge 之前审查 worker workspace 相对项目根目录的变更，作为后续 review gate / merge workflow 的前置能力；本任务不执行真实合并、不写 project root。
 - 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `evals/run_evals.py` workspace file inspection eval 区域；`mini_agent/toolkits/registry_builder.py` worker workspace file inspection/write 区域；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation / Priority 5 Eval harness。
+- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace file inspection/write 区域；`mini_agent/toolkits/workspace.py` diff helpers；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 4 Worker isolation。
 
 ## 已完成
+
+### TASK-069: Deterministic eval coverage for worker workspace write tools ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 245 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 353 tests OK；`git diff --check` OK。
+- 内容: 新增 9 个 deterministic offline eval，覆盖 worker workspace write/replace/patch valid scoped writes、relative/absolute path escape、empty path/old_text/patch、unknown worker/no lease/task mismatch、offline/idle rejection、敏感文件/目录与 symlink escape/symlink-to-denied-dir、安全不泄漏 outputs/events、oversized content/result/patch、binary/non-UTF8 existing files、error no-mutation，以及 write tools 与 worker/task registry、workspace lease、sandbox guard、file inspection、claim/dispatch 的 compatibility。
 
 ### TASK-068: Worker workspace write tools v1 ✅
 - 完成者: Claude A；Codex PM 补强 sensitive path / event / rollback review fixes

@@ -286,6 +286,15 @@ def main() -> int:
         EvalCase("workspace_file_inspection_oversized_binary", eval_workspace_file_inspection_oversized_binary),
         EvalCase("workspace_file_inspection_symlink_sensitive_paths", eval_workspace_file_inspection_symlink_sensitive_paths),
         EvalCase("workspace_file_inspection_compatibility", eval_workspace_file_inspection_compatibility),
+        EvalCase("workspace_write_valid_write_replace_patch", eval_workspace_write_valid_write_replace_patch),
+        EvalCase("workspace_write_path_escape_rejected", eval_workspace_write_path_escape_rejected),
+        EvalCase("workspace_write_missing_lease_worker_mismatch", eval_workspace_write_missing_lease_worker_mismatch),
+        EvalCase("workspace_write_offline_idle_rejected", eval_workspace_write_offline_idle_rejected),
+        EvalCase("workspace_write_sensitive_symlink_paths", eval_workspace_write_sensitive_symlink_paths),
+        EvalCase("workspace_write_safety_no_leak", eval_workspace_write_safety_no_leak),
+        EvalCase("workspace_write_oversized_binary_errors", eval_workspace_write_oversized_binary_errors),
+        EvalCase("workspace_write_no_mutation_on_error", eval_workspace_write_no_mutation_on_error),
+        EvalCase("workspace_write_compatibility", eval_workspace_write_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -9458,6 +9467,626 @@ def eval_workspace_file_inspection_compatibility():
             dispatch_r = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch_r, f"dispatch broken after file inspection: {dispatch_r}"
             assert dispatch_r["dispatched"] >= 1, f"dispatch should assign at least 1: {dispatch_r}"
+        finally:
+            db.close()
+
+
+# --- Workspace write eval sentinels ---
+
+_FILE_WRITE_SENTINEL_GOAL = "NORA_EVAL_FILEWRITE_GOAL_SENTINEL_p1q2r3"
+_FILE_WRITE_SENTINEL_SECRET = "NORA_EVAL_FILEWRITE_SECRET_sk-filewrite-s4t5u6"
+_FILE_WRITE_SENTINEL_STEP = "NORA_EVAL_FILEWRITE_STEP_SENTINEL_v7w8x9"
+_FILE_WRITE_SENTINEL_CONTENT = "NORA_EVAL_FILEWRITE_CONTENT_SECRET_y0z1a2"
+_FILE_WRITE_SENTINEL_REASON = "NORA_EVAL_FILEWRITE_REASON_b3c4d5"
+
+
+def _setup_write_worker_with_files(registry, worker_id="w_fw"):
+    """Helper for write evals: register worker, create task with sentinels, assign, set running, prepare workspace lease, create test files.
+    Returns (task_id, workspace_path)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(goal=_FILE_WRITE_SENTINEL_GOAL + " " + _FILE_WRITE_SENTINEL_SECRET, steps=[{"text": _FILE_WRITE_SENTINEL_STEP}])
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    ws_path = Path(parsed["workspace_path"])
+    # Create test files for replace/patch tests
+    (ws_path / "src").mkdir(parents=True, exist_ok=True)
+    (ws_path / "src" / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    (ws_path / "README.md").write_text("# Test Project\n", encoding="utf-8")
+    (ws_path / "data.txt").write_text("original data\n", encoding="utf-8")
+    return tid, str(ws_path)
+
+
+def eval_workspace_write_valid_write_replace_patch():
+    """Valid scoped writes: write creates/overwrites, replace replaces existing text, patch applies unified diff. After writes, read/list/preview still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_write_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # --- write_worker_workspace_file: create new file ---
+            write_new = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="new_file.py", content="print('new')\n", reason=_FILE_WRITE_SENTINEL_REASON,
+            ))
+            assert write_new["operation"] == "write"
+            assert write_new["created"] is True
+            assert write_new["changed"] is True
+            assert write_new["bytes_after"] == len("print('new')\n".encode("utf-8"))
+            assert "lease_id" in write_new
+            assert write_new["worker_id"] == "w_fw"
+            assert write_new["task_id"] == tid
+            assert (ws_root / "new_file.py").read_text(encoding="utf-8") == "print('new')\n"
+
+            # --- write_worker_workspace_file: overwrite existing ---
+            write_over = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="README.md", content="# Modified\n", reason="overwrite",
+            ))
+            assert write_over["operation"] == "write"
+            assert write_over["created"] is False
+            assert write_over["changed"] is True
+            assert write_over["bytes_before"] == len("# Test Project\n".encode("utf-8"))
+            assert (ws_root / "README.md").read_text(encoding="utf-8") == "# Modified\n"
+
+            # --- write creates parent dirs ---
+            write_nested = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="deep/nested/file.txt", content="nested\n",
+            ))
+            assert write_nested["created"] is True
+            assert (ws_root / "deep" / "nested" / "file.txt").exists()
+
+            # --- replace_worker_workspace_file ---
+            (ws_root / "replace_me.txt").write_text("foo bar baz\n", encoding="utf-8")
+            replace_r = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="replace_me.txt", old_text="foo", new_text="qux",
+            ))
+            assert replace_r["operation"] == "replace"
+            assert replace_r["created"] is False
+            assert replace_r["changed"] is True
+            assert (ws_root / "replace_me.txt").read_text(encoding="utf-8") == "qux bar baz\n"
+
+            # --- apply_worker_workspace_patch ---
+            (ws_root / "patch_target.py").write_text("line1\nline2\nline3\n", encoding="utf-8")
+            patch = """--- a/patch_target.py
++++ b/patch_target.py
+@@ -1,3 +1,3 @@
+ line1
+-line2
++line2_modified
+ line3
+"""
+            patch_r = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch,
+            ))
+            assert patch_r["operation"] == "patch"
+            assert patch_r["changed"] is True
+            assert patch_r["file_count"] >= 1
+            assert "patch_target.py" in patch_r["files"]
+            assert (ws_root / "patch_target.py").read_text(encoding="utf-8") == "line1\nline2_modified\nline3\n"
+
+            # --- After writes, read/list/preview still work ---
+            read_r = json.loads(registry.call(
+                "read_worker_workspace_file", worker_id="w_fw", task_id=tid, path="new_file.py",
+            ))
+            assert "content" in read_r
+            assert "print('new')" in read_r["content"]
+
+            list_r = json.loads(registry.call(
+                "list_worker_workspace_files", worker_id="w_fw", task_id=tid,
+            ))
+            assert "files" in list_r
+            assert list_r["count"] >= 3
+
+            preview_r = json.loads(registry.call(
+                "preview_worker_workspace_write", worker_id="w_fw", task_id=tid,
+                path="new_file.py", content="print('preview')\n",
+            ))
+            assert "preview" in preview_r
+        finally:
+            db.close()
+
+
+def eval_workspace_write_path_escape_rejected():
+    """Relative traversal, absolute path escape, empty path rejected by all three write tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_write_worker_with_files(registry)
+
+            # Relative traversal
+            r1 = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="../../etc/evil", content="bad",
+            ))
+            assert "error" in r1, f"traversal write should error: {r1}"
+
+            r2 = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="../../etc/evil", old_text="x", new_text="y",
+            ))
+            assert "error" in r2, f"traversal replace should error: {r2}"
+
+            # Absolute path escape
+            r3 = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="/etc/evil", content="bad",
+            ))
+            assert "error" in r3, f"absolute write should error: {r3}"
+
+            r4 = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="/etc/passwd", old_text="root", new_text="hacked",
+            ))
+            assert "error" in r4, f"absolute replace should error: {r4}"
+
+            # Patch with traversal path
+            patch_traversal = """--- a/../../etc/evil
++++ b/../../etc/evil
+@@ -0,0 +1 @@
++bad
+"""
+            r5 = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch_traversal,
+            ))
+            assert "error" in r5, f"traversal patch should error: {r5}"
+
+            # Empty path
+            r6 = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="", content="x",
+            ))
+            assert "error" in r6, f"empty path write should error: {r6}"
+
+            r7 = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="", old_text="x", new_text="y",
+            ))
+            assert "error" in r7, f"empty path replace should error: {r7}"
+
+            # Empty old_text for replace
+            r8 = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="README.md", old_text="", new_text="y",
+            ))
+            assert "error" in r8, f"empty old_text should error: {r8}"
+
+            # Empty patch
+            r9 = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch="",
+            ))
+            assert "error" in r9, f"empty patch should error: {r9}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_missing_lease_worker_mismatch():
+    """Unknown worker, no lease, task mismatch -> errors for all three write tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Unknown worker
+            for tool, kw in [
+                ("write_worker_workspace_file", {"path": "f.txt", "content": "x"}),
+                ("replace_worker_workspace_file", {"path": "f.txt", "old_text": "a", "new_text": "b"}),
+                ("apply_worker_workspace_patch", {"patch": "--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1\n+x\n"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_ghost", task_id="dtask_x", **kw))
+                assert "error" in r, f"unknown worker {tool} should error: {r}"
+
+            # Worker with no lease (assigned but no workspace prepared)
+            ws.register_worker("w_nolease", role="coder")
+            task_nl = ts.create_task(goal="no lease task", steps=[{"text": "s"}])
+            ts.assign_worker(task_nl.task_id, "w_nolease")
+            ws.update_status("w_nolease", "assigned", current_task_id=task_nl.task_id)
+            ts.update_status(task_nl.task_id, "running")
+
+            for tool, kw in [
+                ("write_worker_workspace_file", {"path": "f.txt", "content": "x"}),
+                ("replace_worker_workspace_file", {"path": "f.txt", "old_text": "a", "new_text": "b"}),
+                ("apply_worker_workspace_patch", {"patch": "--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1\n+x\n"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_nolease", task_id=task_nl.task_id, **kw))
+                assert "error" in r, f"no lease {tool} should error: {r}"
+
+            # Task mismatch (worker executing different task)
+            ws.register_worker("w_mismatch", role="coder")
+            task_a = ts.create_task(goal="task A", steps=[{"text": "s"}])
+            task_b = ts.create_task(goal="task B", steps=[{"text": "s"}])
+            ts.assign_worker(task_a.task_id, "w_mismatch")
+            ws.update_status("w_mismatch", "assigned", current_task_id=task_a.task_id)
+            ts.update_status(task_a.task_id, "running")
+            registry.call("prepare_worker_workspace", worker_id="w_mismatch", task_id=task_a.task_id)
+
+            for tool, kw in [
+                ("write_worker_workspace_file", {"path": "f.txt", "content": "x"}),
+                ("replace_worker_workspace_file", {"path": "f.txt", "old_text": "a", "new_text": "b"}),
+                ("apply_worker_workspace_patch", {"patch": "--- a/f.txt\n+++ b/f.txt\n@@ -0,0 +1\n+x\n"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_mismatch", task_id=task_b.task_id, **kw))
+                assert "error" in r, f"task mismatch {tool} should error: {r}"
+
+            # old_text not found in file
+            tid, ws_path = _setup_write_worker_with_files(registry, worker_id="w_replace_miss")
+            r_miss = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_replace_miss", task_id=tid,
+                path="README.md", old_text="NONEXISTENT_TEXT_XYZ", new_text="replacement",
+            ))
+            assert "error" in r_miss, f"old_text not found should error: {r_miss}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_offline_idle_rejected():
+    """Offline and idle workers with stale current_task_id and lease are rejected by all three write tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+
+            # Offline worker
+            tid_off, _ = _setup_write_worker_with_files(registry, worker_id="w_offline")
+            ws.update_status("w_offline", "offline", current_task_id=tid_off)
+
+            for tool, kw in [
+                ("write_worker_workspace_file", {"path": "f.txt", "content": "x"}),
+                ("replace_worker_workspace_file", {"path": "README.md", "old_text": "# Test", "new_text": "# Modified"}),
+                ("apply_worker_workspace_patch", {"patch": "--- a/README.md\n+++ b/README.md\n@@ -1 +1\n-# Test Project\n+# Modified\n"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_offline", task_id=tid_off, **kw))
+                assert "error" in r, f"offline {tool} should error: {r}"
+
+            # Idle worker
+            tid_idle, _ = _setup_write_worker_with_files(registry, worker_id="w_idle")
+            ws.update_status("w_idle", "idle", current_task_id=tid_idle)
+
+            for tool, kw in [
+                ("write_worker_workspace_file", {"path": "f.txt", "content": "x"}),
+                ("replace_worker_workspace_file", {"path": "README.md", "old_text": "# Test", "new_text": "# Modified"}),
+                ("apply_worker_workspace_patch", {"patch": "--- a/README.md\n+++ b/README.md\n@@ -1 +1\n-# Test Project\n+# Modified\n"}),
+            ]:
+                r = json.loads(registry.call(tool, worker_id="w_idle", task_id=tid_idle, **kw))
+                assert "error" in r, f"idle {tool} should error: {r}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_sensitive_symlink_paths():
+    """Sensitive paths (.env, .git, logs, data) and symlinks rejected by write tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_write_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # Sensitive file names
+            for sensitive in [".env", ".env.local", ".env.production"]:
+                r = json.loads(registry.call(
+                    "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                    path=sensitive, content="SECRET=abc",
+                ))
+                assert "error" in r, f"write {sensitive} should error: {r}"
+
+            # Sensitive directories
+            for denied_path in [".git/config", "__pycache__/cache.pyc", ".pytest_cache/v/cache", "data/secret.json", "logs/app.log"]:
+                r = json.loads(registry.call(
+                    "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                    path=denied_path, content="blocked",
+                ))
+                assert "error" in r, f"write {denied_path} should error: {r}"
+
+            # Symlink escape: create symlink pointing outside workspace
+            outside = Path(tmpdir) / "outside.txt"
+            outside.write_text("outside content")
+            symlink_path = ws_root / "escape_link"
+            try:
+                symlink_path.symlink_to(outside)
+            except OSError:
+                pass  # skip if symlinks not supported
+            else:
+                r_sym = json.loads(registry.call(
+                    "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                    path="escape_link", content="hacked",
+                ))
+                assert "error" in r_sym, f"symlink write should error: {r_sym}"
+
+            # Symlink to denied dir inside workspace
+            git_link = ws_root / "git_link"
+            try:
+                git_link.symlink_to(ws_root / ".git")
+            except OSError:
+                pass
+            else:
+                r_git_link = json.loads(registry.call(
+                    "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                    path="git_link/config", content="blocked",
+                ))
+                assert "error" in r_git_link, f"symlink-to-denied-dir write should error: {r_git_link}"
+
+            # Replace and patch also reject sensitive paths
+            r_rep = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path=".env", old_text="x", new_text="y",
+            ))
+            assert "error" in r_rep, f"replace .env should error: {r_rep}"
+
+            patch_env = "--- a/.env\n+++ b/.env\n@@ -0,0 +1\n+SECRET\n"
+            r_patch = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch_env,
+            ))
+            assert "error" in r_patch, f"patch .env should error: {r_patch}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_safety_no_leak():
+    """Outputs/events do not leak raw task goals, steps, secrets, content, or reason sentinels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_write_worker_with_files(registry)
+
+            # Write with sentinel content and reason
+            write_r = registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="safe.txt", content=_FILE_WRITE_SENTINEL_CONTENT, reason=_FILE_WRITE_SENTINEL_REASON,
+            )
+            # Check output does not leak sentinels
+            assert _FILE_WRITE_SENTINEL_GOAL not in write_r, f"goal leaked in write: {write_r}"
+            assert _FILE_WRITE_SENTINEL_SECRET not in write_r, f"secret leaked in write: {write_r}"
+            assert _FILE_WRITE_SENTINEL_STEP not in write_r, f"step leaked in write: {write_r}"
+            assert _FILE_WRITE_SENTINEL_CONTENT not in write_r, f"content leaked in write: {write_r}"
+            assert _FILE_WRITE_SENTINEL_REASON not in write_r, f"reason leaked in write: {write_r}"
+
+            # Replace with sentinel reason
+            replace_r = registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="README.md", old_text="# Test", new_text="# Safe", reason=_FILE_WRITE_SENTINEL_REASON,
+            )
+            assert _FILE_WRITE_SENTINEL_GOAL not in replace_r, f"goal leaked in replace: {replace_r}"
+            assert _FILE_WRITE_SENTINEL_SECRET not in replace_r, f"secret leaked in replace: {replace_r}"
+            assert _FILE_WRITE_SENTINEL_STEP not in replace_r, f"step leaked in replace: {replace_r}"
+            assert _FILE_WRITE_SENTINEL_REASON not in replace_r, f"reason leaked in replace: {replace_r}"
+
+            # Patch with sentinel reason
+            (Path(ws_path) / "patch_safe.py").write_text("line1\n", encoding="utf-8")
+            patch = "--- a/patch_safe.py\n+++ b/patch_safe.py\n@@ -1 +1\n-line1\n+line2\n"
+            patch_r = registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch, reason=_FILE_WRITE_SENTINEL_REASON,
+            )
+            assert _FILE_WRITE_SENTINEL_GOAL not in patch_r, f"goal leaked in patch: {patch_r}"
+            assert _FILE_WRITE_SENTINEL_SECRET not in patch_r, f"secret leaked in patch: {patch_r}"
+            assert _FILE_WRITE_SENTINEL_STEP not in patch_r, f"step leaked in patch: {patch_r}"
+            assert _FILE_WRITE_SENTINEL_REASON not in patch_r, f"reason leaked in patch: {patch_r}"
+
+            # Error outputs also should not leak sentinels
+            err_r = registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="../../etc/evil", content=_FILE_WRITE_SENTINEL_CONTENT,
+            )
+            assert _FILE_WRITE_SENTINEL_GOAL not in err_r, f"goal leaked in error: {err_r}"
+            assert _FILE_WRITE_SENTINEL_SECRET not in err_r, f"secret leaked in error: {err_r}"
+            assert _FILE_WRITE_SENTINEL_CONTENT not in err_r, f"content leaked in error: {err_r}"
+
+            # Events should not leak sentinels
+            es = registry.durable_event_store
+            events = es.list_events(task_id=tid)
+            for ev in events:
+                ev_str = json.dumps(ev.payload) if ev.payload else ""
+                assert _FILE_WRITE_SENTINEL_GOAL not in ev_str, f"goal leaked in event: {ev_str}"
+                assert _FILE_WRITE_SENTINEL_SECRET not in ev_str, f"secret leaked in event: {ev_str}"
+                assert _FILE_WRITE_SENTINEL_STEP not in ev_str, f"step leaked in event: {ev_str}"
+                assert _FILE_WRITE_SENTINEL_CONTENT not in ev_str, f"content leaked in event: {ev_str}"
+                assert _FILE_WRITE_SENTINEL_REASON not in ev_str, f"reason leaked in event: {ev_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_oversized_binary_errors():
+    """Oversized content/file and binary/non-UTF8 existing files return bounded JSON errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path = _setup_write_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # Oversized content for write (> 64KB)
+            big_content = "x" * (64 * 1024 + 1)
+            r_big = json.loads(registry.call(
+                "write_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="big.txt", content=big_content,
+            ))
+            assert "error" in r_big, f"oversized write should error: {r_big}"
+
+            # Oversized content for replace (result too large)
+            # Create a file close to limit, then replace to exceed
+            near_limit = "a" * (64 * 1024 - 10)
+            (ws_root / "near_limit.txt").write_text(near_limit, encoding="utf-8")
+            r_replace_big = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="near_limit.txt", old_text="a" * 10, new_text="b" * 100,
+            ))
+            assert "error" in r_replace_big, f"replace-to-oversize should error: {r_replace_big}"
+
+            # Oversized patch
+            big_patch = "--- a/README.md\n+++ b/README.md\n@@ -1 +1\n-" + "x" * (64 * 1024) + "\n+y\n"
+            r_big_patch = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=big_patch,
+            ))
+            assert "error" in r_big_patch, f"oversized patch should error: {r_big_patch}"
+
+            # Binary/non-UTF8 existing file for replace
+            (ws_root / "binary.bin").write_bytes(b"\x80\x81\x82\xff\xfe")
+            r_bin = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="binary.bin", old_text="x", new_text="y",
+            ))
+            assert "error" in r_bin, f"binary replace should error: {r_bin}"
+
+            # Binary file for patch
+            patch_bin = "--- a/binary.bin\n+++ b/binary.bin\n@@ -0,0 +1\n+x\n"
+            r_bin_patch = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch_bin,
+            ))
+            assert "error" in r_bin_patch, f"binary patch should error: {r_bin_patch}"
+
+            # Oversized existing file for replace
+            (ws_root / "large_existing.txt").write_text("x" * (64 * 1024 + 1), encoding="utf-8")
+            r_large = json.loads(registry.call(
+                "replace_worker_workspace_file", worker_id="w_fw", task_id=tid,
+                path="large_existing.txt", old_text="x", new_text="y",
+            ))
+            assert "error" in r_large, f"replace oversized file should error: {r_large}"
+
+            # Oversized existing file for patch
+            (ws_root / "large_patch_target.txt").write_text("x" * (64 * 1024 + 1), encoding="utf-8")
+            patch_large = "--- a/large_patch_target.txt\n+++ b/large_patch_target.txt\n@@ -0,0 +1\n+x\n"
+            r_large_patch = json.loads(registry.call(
+                "apply_worker_workspace_patch", worker_id="w_fw", task_id=tid, patch=patch_large,
+            ))
+            assert "error" in r_large_patch, f"patch oversized file should error: {r_large_patch}"
+
+            # Check no sentinel leak in error outputs
+            for r_str in [json.dumps(r_big), json.dumps(r_replace_big), json.dumps(r_bin)]:
+                assert _FILE_WRITE_SENTINEL_GOAL not in r_str, f"goal leaked in error: {r_str}"
+                assert _FILE_WRITE_SENTINEL_SECRET not in r_str, f"secret leaked in error: {r_str}"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_no_mutation_on_error():
+    """Error calls do not mutate filesystem or durable state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, ws_path = _setup_write_worker_with_files(registry)
+            ws_root = Path(ws_path)
+
+            # Snapshot state
+            before_task = ts.get_task(tid)
+            before_status = before_task.status
+            before_worker = ws.get_worker("w_fw")
+            before_worker_status = before_worker.status
+            readme_before = (ws_root / "README.md").read_text(encoding="utf-8")
+
+            # Error: traversal
+            registry.call("write_worker_workspace_file", worker_id="w_fw", task_id=tid, path="../../etc/evil", content="bad")
+            assert (ws_root / "README.md").read_text(encoding="utf-8") == readme_before, "file mutated after traversal error"
+
+            # Error: sensitive path
+            registry.call("write_worker_workspace_file", worker_id="w_fw", task_id=tid, path=".env", content="SECRET=x")
+            assert not (ws_root / ".env").exists(), ".env created after sensitive path error"
+
+            # Error: empty old_text
+            registry.call("replace_worker_workspace_file", worker_id="w_fw", task_id=tid, path="README.md", old_text="", new_text="x")
+            assert (ws_root / "README.md").read_text(encoding="utf-8") == readme_before, "file mutated after empty old_text error"
+
+            # Error: old_text not found
+            registry.call("replace_worker_workspace_file", worker_id="w_fw", task_id=tid, path="README.md", old_text="NONEXISTENT_XYZ", new_text="x")
+            assert (ws_root / "README.md").read_text(encoding="utf-8") == readme_before, "file mutated after old_text not found error"
+
+            # Error: unknown worker
+            registry.call("write_worker_workspace_file", worker_id="w_ghost", task_id="dtask_x", path="f.txt", content="x")
+
+            # Task/worker state unchanged
+            after_task = ts.get_task(tid)
+            assert after_task.status == before_status, f"task status mutated: {before_status} -> {after_task.status}"
+            after_worker = ws.get_worker("w_fw")
+            assert after_worker.status == before_worker_status, f"worker status mutated"
+        finally:
+            db.close()
+
+
+def eval_workspace_write_compatibility():
+    """Write tools do not mutate task/worker/lease ownership. Error/success calls don't break other tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+            tid, ws_path = _setup_write_worker_with_files(registry)
+
+            # Snapshot state
+            before_task = ts.get_task(tid)
+            before_status = before_task.status
+            before_worker = ws.get_worker("w_fw")
+            before_worker_status = before_worker.status
+
+            # Successful write
+            registry.call("write_worker_workspace_file", worker_id="w_fw", task_id=tid, path="compat.txt", content="ok")
+
+            # Task state unchanged
+            after_task = ts.get_task(tid)
+            assert after_task.status == before_status, f"task status mutated: {before_status} -> {after_task.status}"
+            assert len(after_task.steps) == len(before_task.steps), "steps mutated"
+
+            # Worker state unchanged
+            after_worker = ws.get_worker("w_fw")
+            assert after_worker.status == before_worker_status, f"worker status mutated"
+
+            # Error calls don't break existing tools
+            registry.call("write_worker_workspace_file", worker_id="w_fw", task_id=tid, path="../../etc/evil", content="bad")
+            registry.call("replace_worker_workspace_file", worker_id="w_fw", task_id=tid, path="README.md", old_text="NONEXISTENT", new_text="x")
+
+            # Worker/task registry tools still work
+            assert "error" not in json.loads(registry.call("get_worker", worker_id="w_fw"))
+            assert "error" not in json.loads(registry.call("get_durable_task", task_id=tid))
+            assert isinstance(json.loads(registry.call("list_workers")), list)
+            assert isinstance(json.loads(registry.call("list_durable_tasks")), list)
+
+            # Workspace lease tools still work
+            gw = json.loads(registry.call("get_worker_workspace", worker_id="w_fw", task_id=tid))
+            assert "lease_id" in gw, f"get_worker_workspace broken after write: {gw}"
+
+            # Sandbox guard tools still work
+            ws_root = Path(ws_path)
+            valid_path = str(ws_root / "src" / "main.py")
+            vp = json.loads(registry.call("validate_worker_workspace_path", worker_id="w_fw", task_id=tid, path=valid_path))
+            assert vp.get("valid") is True, f"validate broken after write: {vp}"
+
+            # File inspection tools still work
+            read_r = json.loads(registry.call("read_worker_workspace_file", worker_id="w_fw", task_id=tid, path="compat.txt"))
+            assert "content" in read_r, f"read broken after write: {read_r}"
+            assert read_r["content"] == "ok"
+
+            list_r = json.loads(registry.call("list_worker_workspace_files", worker_id="w_fw", task_id=tid))
+            assert "files" in list_r, f"list broken after write: {list_r}"
+            assert "compat.txt" in list_r["files"]
+
+            # Claim/dispatch still work
+            ws.register_worker("w_claimer_w", role="coder")
+            claim_task = ts.create_task(goal="claim test write", steps=[{"text": "s"}])
+            claim_r = json.loads(registry.call("claim_durable_task", worker_id="w_claimer_w"))
+            assert "task_id" in claim_r, f"claim broken after write: {claim_r}"
+
+            ws.register_worker("w_dispatch_w", role="coder")
+            ts.create_task(goal="dispatch test write", steps=[{"text": "s"}])
+            dispatch_r = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch_r, f"dispatch broken after write: {dispatch_r}"
         finally:
             db.close()
 
