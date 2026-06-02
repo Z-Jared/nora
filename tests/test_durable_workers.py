@@ -10,7 +10,7 @@ from unittest.mock import patch
 from mini_agent.database import NoraDB
 from mini_agent.durable_workers import DurableWorkerStore, DurableWorker, WorkerStatus
 from mini_agent.tools import build_default_registry
-from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, TASK_STATUS_CHANGED
+from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, TASK_STATUS_CHANGED
 
 
 class DurableWorkerStoreSqliteTests(unittest.TestCase):
@@ -4070,6 +4070,604 @@ class WorkspaceDryRunMergeTests(unittest.TestCase):
         self.registry.call("create_durable_task", goal="dispatch", steps="s")
         dispatch = json.loads(self.registry.call("dispatch_durable_tasks"))
         self.assertIn("dispatched", dispatch)
+
+
+class WorkspaceApplyMergeTests(unittest.TestCase):
+    """Tests for apply_reviewed_worker_workspace_merge (TASK-076)."""
+
+    SECRET_SENTINEL = "APPLY_MERGE_SECRET_789"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    def _write_project_file(self, rel_path, content):
+        p = self.root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    def _write_ws_file(self, ws_path, rel_path, content):
+        p = Path(ws_path) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    def _record_gate(self, task_id, decision="approved", **kwargs):
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision=decision, **kwargs,
+        )
+
+    # --- apply happy paths ---
+
+    def test_apply_created_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "new.py", "new content\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["created_count"], 1)
+        self.assertEqual(result["applied_count"], 1)
+        self.assertEqual((self.root / "new.py").read_text(), "new content\n")
+
+    def test_apply_modified_file(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original\n")
+        self._write_ws_file(ws, "app.py", "modified\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["modified_count"], 1)
+        self.assertEqual((self.root / "app.py").read_text(), "modified\n")
+
+    def test_apply_mixed_created_and_modified(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("existing.py", "old\n")
+        self._write_ws_file(ws, "existing.py", "updated\n")
+        self._write_ws_file(ws, "brand_new.py", "brand new\n")
+        self._write_project_file("same.py", "same")
+        self._write_ws_file(ws, "same.py", "same")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["created_count"], 1)
+        self.assertEqual(result["modified_count"], 1)
+        self.assertEqual(result["applied_count"], 2)
+        self.assertEqual((self.root / "existing.py").read_text(), "updated\n")
+        self.assertEqual((self.root / "brand_new.py").read_text(), "brand new\n")
+        # Same file should not be touched
+        self.assertEqual((self.root / "same.py").read_text(), "same")
+
+    def test_apply_creates_parent_dirs(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "a/b/c/deep.py", "deep\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["applied"])
+        self.assertEqual((self.root / "a/b/c/deep.py").read_text(), "deep\n")
+
+    # --- reject cases ---
+
+    def test_reject_no_gate(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "new.py", "new\n")
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("no_review_gate", result["reasons"])
+
+    def test_reject_changes_requested(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "new.py", "new\n")
+        self._record_gate(task_id, decision="changes_requested")
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("gate_changes_requested", result["reasons"])
+
+    def test_reject_blocked(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "new.py", "new\n")
+        self._record_gate(task_id, decision="blocked")
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("gate_blocked", result["reasons"])
+
+    def test_reject_no_changes(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_project_file("app.py", "same")
+        self._write_ws_file(lease["workspace_path"], "app.py", "same")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("no_changes", result["reasons"])
+
+    def test_reject_summary_has_skipped(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        big = "x" * (64 * 1024 + 1)
+        (self.root / "big.txt").write_text(big)
+        self._write_ws_file(str(ws), "big.txt", "small")
+        self._write_ws_file(str(ws), "good.py", "ok\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("summary_has_skipped", result["reasons"])
+
+    def test_reject_patch_budget_exceeded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "large_a.txt", "a" * (40 * 1024))
+        self._write_ws_file(ws, "large_b.txt", "b" * (40 * 1024))
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("patch_export_has_skipped", result["reasons"])
+        self.assertIn("patch_budget_exceeded", result["reasons"])
+        self.assertFalse((self.root / "large_a.txt").exists())
+        self.assertFalse((self.root / "large_b.txt").exists())
+
+    def test_reject_project_symlink_to_sensitive_file_without_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        sentinel = "APPLY_PROJECT_SYMLINK_SECRET"
+        (self.root / ".env").write_text(sentinel, encoding="utf-8")
+        (self.root / "safe_link").symlink_to(self.root / ".env")
+        self._write_ws_file(lease["workspace_path"], "safe_link", "worker content")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        serialized = json.dumps(result)
+        self.assertFalse(result["applied"])
+        self.assertIn("summary_has_skipped", result["reasons"])
+        self.assertNotIn(sentinel, serialized)
+
+    def test_reject_worker_binary_and_oversized(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = Path(lease["workspace_path"])
+        (ws / "binary.bin").write_bytes(b"\xff\xfe\x00")
+        (ws / "huge.txt").write_text("x" * (64 * 1024 + 1), encoding="utf-8")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["applied"])
+        self.assertIn("summary_has_skipped", result["reasons"])
+        self.assertFalse((self.root / "binary.bin").exists())
+        self.assertFalse((self.root / "huge.txt").exists())
+
+    # --- validation errors ---
+
+    def test_unknown_worker_error(self):
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w999", task_id="dtask_1",
+        ))
+        self.assertIn("error", result)
+
+    def test_no_lease_error(self):
+        task_id = self._register_and_assign()
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_task_mismatch_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        task2 = json.loads(self.registry.call("create_durable_task", goal="other", steps="other"))
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task2["task_id"],
+        ))
+        self.assertIn("error", result)
+
+    def test_offline_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_idle_worker_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="idle", current_task_id=None)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_bad_max_files_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id, max_files="abc",
+        ))
+        self.assertIn("error", result)
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.py", "new\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_no_reviewer_summary_shell_env_request_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        review_secret = "APPLY_REVIEW_SUMMARY_SECRET"
+        shell_secret = "APPLY_SHELL_OUTPUT_SECRET"
+        request_secret = "APPLY_REQUEST_STRING_SECRET"
+        env_secret = "APPLY_ENV_SECRET=abc123"
+        self._write_ws_file(lease["workspace_path"], "f.py", "new\n")
+        self._record_gate(
+            task_id,
+            summary=f"{review_secret}\n{shell_secret}\n{request_secret}\n{env_secret}",
+        )
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        serialized = json.dumps(result)
+        self.assertNotIn(review_secret, serialized)
+        self.assertNotIn(shell_secret, serialized)
+        self.assertNotIn(request_secret, serialized)
+        self.assertNotIn(env_secret, serialized)
+
+    def test_no_raw_content_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        secret = "API_KEY=super_secret_12345"
+        self._write_ws_file(lease["workspace_path"], "config.py", secret)
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        # The raw content should not appear in the result JSON
+        serialized = json.dumps(result)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("--- ", serialized)
+        self.assertNotIn("+++ ", serialized)
+        self.assertNotIn("@@ ", serialized)
+
+    def test_write_failure_error_is_bounded(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "config.py", "safe content")
+        self._record_gate(task_id)
+        raw_error = "RAW_DISK_SECRET_SHOULD_NOT_LEAK"
+
+        original_write_text = Path.write_text
+
+        def failing_write_text(self_path, data, encoding="utf-8"):
+            if self_path.name == "config.py":
+                raise OSError(raw_error)
+            return original_write_text(self_path, data, encoding=encoding)
+
+        with patch.object(Path, "write_text", failing_write_text):
+            result = json.loads(self.registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+            ))
+
+        serialized = json.dumps(result)
+        self.assertFalse(result["applied"])
+        self.assertEqual(result["error"], "project_write_failed")
+        self.assertIn("project_write_failed", result["reasons"])
+        self.assertNotIn(raw_error, serialized)
+
+    def test_returns_safe_metadata(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.py", "new\n")
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertIn("lease_id", result)
+        self.assertEqual(result["worker_id"], "w1")
+        self.assertEqual(result["task_id"], task_id)
+        self.assertIn("applied", result)
+        self.assertIn("applied_count", result)
+        self.assertIn("created_count", result)
+        self.assertIn("modified_count", result)
+        self.assertIn("files", result)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_apply_event_safe_metadata(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        secret = "APPLY_EVENT_FILE_SECRET"
+        self._write_ws_file(lease["workspace_path"], "f.py", secret)
+        self._record_gate(task_id)
+
+        result = json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertTrue(result["applied"])
+        events = self.registry.durable_event_store.list_events(
+            task_id=task_id, event_type=FILE_EDIT_FINISHED, max_results=20,
+        )
+        merge_events = [event for event in events if event.source == "workspace_merge"]
+        self.assertEqual(len(merge_events), 1)
+        serialized = json.dumps({
+            "summary": merge_events[0].summary,
+            "payload": merge_events[0].payload,
+        })
+        self.assertIn("workspace_merge_apply", serialized)
+        self.assertNotIn(self.SECRET_SENTINEL, serialized)
+        self.assertNotIn(secret, serialized)
+
+    def test_no_deletion(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("keep.py", "keep me")
+        self._write_ws_file(ws, "new.py", "new\n")
+        self._record_gate(task_id)
+
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        # Original file should still exist
+        self.assertEqual((self.root / "keep.py").read_text(), "keep me")
+
+    # --- rollback ---
+
+    def test_rollback_removes_created_file_on_later_failure(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "good.py", "good\n")
+        self._write_ws_file(ws, "a/b/ok.py", "ok\n")
+        self._record_gate(task_id)
+
+        # Inject a write failure after the first file succeeds
+        original_write_text = Path.write_text
+        call_count = [0]
+        def failing_write_text(self_path, data, encoding="utf-8"):
+            call_count[0] += 1
+            if call_count[0] > 1:
+                raise OSError("disk full")
+            return original_write_text(self_path, data, encoding=encoding)
+
+        with patch.object(Path, "write_text", failing_write_text):
+            result = json.loads(self.registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+            ))
+
+        self.assertFalse(result["applied"])
+        self.assertEqual(result["rollback"], "ok")
+        # Created files should be rolled back
+        self.assertFalse((self.root / "good.py").exists())
+        self.assertFalse((self.root / "a/b/ok.py").exists())
+
+    def test_rollback_restores_modified_file_on_failure(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("existing.py", "original\n")
+        self._write_ws_file(ws, "existing.py", "modified\n")
+        self._write_ws_file(ws, "will_fail.py", "fail\n")
+        self._record_gate(task_id)
+
+        # Make writes to will_fail.py fail, but allow rollback writes
+        original_write_text = Path.write_text
+        def failing_write_text(self_path, data, encoding="utf-8"):
+            if self_path.name == "will_fail.py" and not self_path.parent.name == "existing.py":
+                raise OSError("disk full")
+            return original_write_text(self_path, data, encoding=encoding)
+
+        with patch.object(Path, "write_text", failing_write_text):
+            result = json.loads(self.registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+            ))
+
+        self.assertFalse(result["applied"])
+        # Modified file should be restored to original
+        self.assertEqual((self.root / "existing.py").read_text(), "original\n")
+
+    # --- worker/workspace/task/lease state unchanged ---
+
+    def test_apply_no_state_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_ws_file(ws, "new.py", "new\n")
+        self._record_gate(task_id)
+
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+        self.assertEqual(worker["current_task_id"], task_id)
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+        # Worker workspace file still exists
+        self.assertEqual((Path(ws) / "new.py").read_text(), "new\n")
+
+    def test_apply_review_gate_unchanged(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._write_ws_file(lease["workspace_path"], "f.py", "new\n")
+        self._record_gate(task_id)
+
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        gate = json.loads(self.registry.call("get_worker_workspace_review_gate", worker_id="w1", task_id=task_id))
+        self.assertTrue(gate["has_gate"])
+        self.assertEqual(gate["decision"], "approved")
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_apply(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original\n")
+        self._write_ws_file(ws, "app.py", "modified\n")
+        self._write_ws_file(ws, "new.py", "new\n")
+        self._record_gate(task_id)
+
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        # Dry-run still works
+        dry = json.loads(self.registry.call("dry_run_worker_workspace_merge", worker_id="w1", task_id=task_id))
+        self.assertIn("ready", dry)
+
+        # Summary still works
+        summary = json.loads(self.registry.call("summarize_worker_workspace_changes", worker_id="w1", task_id=task_id))
+        self.assertIn("files", summary)
+
+        # Patch export still works
+        patch = json.loads(self.registry.call("export_worker_workspace_patch", worker_id="w1", task_id=task_id))
+        self.assertIn("patches", patch)
+
+        # Review gate still works
+        gate = json.loads(self.registry.call("get_worker_workspace_review_gate", worker_id="w1", task_id=task_id))
+        self.assertTrue(gate["has_gate"])
+
+        # Read/list/write still work
+        files = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+        self.assertIn("app.py", files["files"])
+
+        content = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="app.py"))
+        self.assertEqual(content["content"], "modified\n")
+
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+
+        valid = json.loads(self.registry.call(
+            "validate_worker_workspace_path", worker_id="w1", task_id=task_id, path=str(Path(ws) / "app.py"),
+        ))
+        self.assertTrue(valid["valid"])
+
+        preview = json.loads(self.registry.call(
+            "preview_worker_workspace_write", worker_id="w1", task_id=task_id, path="app.py", content="again\n",
+        ))
+        self.assertIn("preview", preview)
+
+        write = json.loads(self.registry.call(
+            "write_worker_workspace_file", worker_id="w1", task_id=task_id, path="after_apply.py", content="ok\n",
+        ))
+        self.assertEqual(write["operation"], "write")
+
+        self.registry.call("register_worker", worker_id="w_claim")
+        claim_task = json.loads(self.registry.call("create_durable_task", goal="claim", steps="s"))
+        claim = json.loads(self.registry.call("claim_durable_task", worker_id="w_claim"))
+        self.assertEqual(claim["task_id"], claim_task["task_id"])
+
+        self.registry.call("register_worker", worker_id="w_dispatch")
+        self.registry.call("create_durable_task", goal="dispatch", steps="s")
+        dispatch = json.loads(self.registry.call("dispatch_durable_tasks"))
+        self.assertIn("dispatched", dispatch)
+
+    def test_apply_idempotent_dry_run_after_apply(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        ws = lease["workspace_path"]
+        self._write_project_file("app.py", "original\n")
+        self._write_ws_file(ws, "app.py", "modified\n")
+        self._record_gate(task_id)
+
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        # After apply, dry-run should show no_changes (project now matches worker)
+        dry = json.loads(self.registry.call("dry_run_worker_workspace_merge", worker_id="w1", task_id=task_id))
+        self.assertFalse(dry["ready"])
+        self.assertIn("no_changes", dry["reasons"])
 
 
 if __name__ == "__main__":

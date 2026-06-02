@@ -6,16 +6,22 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-076: Worker workspace reviewed merge apply v1
+### TASK-077: Deterministic eval coverage for worker workspace reviewed merge apply
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-074/TASK-075
-- 分配: Claude A
-- 目标: 在 approved dry-run 之后，新增 guarded apply tool，把 worker workspace 中已审查通过的安全 created/modified text changes 写入 project root；必须重跑 dry-run、阻断 skipped/unsafe/budget 情况、支持失败 rollback；本任务不做 git commit/push、不执行 shell、不删除文件。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace dry-run / change export / review gate tools；TASK-074/TASK-075 审查记录。
+- 依赖: TASK-076
+- 分配: Claude B
+- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `apply_reviewed_worker_workspace_merge` 的 approved apply、not-ready rejection、safety skipped/budget cases、validation、安全不泄漏、rollback/no-mutation、event metadata 和 compatibility 行为。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/dry-run/change export/review gate tools；TASK-076 审查记录。
 
 ## 已完成
+
+### TASK-076: Worker workspace reviewed merge apply v1 ✅
+- 完成者: Claude A；Codex PM 补强 apply-time skipped/budget recheck、bounded failure errors、rollback metadata、safety/compatibility tests
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceApplyMergeTests` 31 tests OK；`python3 -m unittest tests.test_durable_workers` 315 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 482 tests OK；`python3 evals/run_evals.py` 272 passed；`python3 -m unittest discover -s tests` 1841 tests OK；`git diff --check` OK。
+- 内容: 新增 guarded project-root apply tool `apply_reviewed_worker_workspace_merge(worker_id, task_id, max_files=50)`；apply 时重跑 dry-run 且 ready 才允许写入；再次检查 summary skipped、patch skipped 和 patch budget；仅复制 safe created/modified text files 到 project root；拒绝 sensitive/binary/oversized/symlink escape/project symlink-to-sensitive-file/patch budget 情况；失败后 rollback modified/created writes；输出和 `workspace_merge` file-edit event 只含 bounded safe metadata；不做 git、不执行 shell、不删除文件。
 
 ### TASK-075: Deterministic eval coverage for worker workspace reviewed merge dry-run ✅
 - 完成者: Claude B；Codex PM 补强 project symlink / patch budget / preview compatibility / safety assertions review fixes

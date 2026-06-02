@@ -2440,6 +2440,220 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _apply_reviewed_worker_workspace_merge_json(worker_id: str, task_id: str, max_files: int = 50) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        try:
+            max_files_int = max(1, min(int(max_files or 50), 200))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "max_files 必须是整数"}, ensure_ascii=False)
+        dry_run_json = _dry_run_worker_workspace_merge_json(worker_id, task_id, max_files_int)
+        try:
+            dry_run = _json.loads(dry_run_json)
+        except Exception:
+            return _json.dumps({"error": "dry-run 获取失败"}, ensure_ascii=False)
+        if "error" in dry_run:
+            return _json.dumps({"error": f"dry-run: {dry_run['error']}"}, ensure_ascii=False)
+        if not dry_run.get("ready", False):
+            return _json.dumps({
+                "applied": False,
+                "reasons": dry_run.get("reasons", ["dry_run_not_ready"]),
+                "dry_run": dry_run,
+                "lease_id": lease.lease_id,
+                "worker_id": worker_id,
+                "task_id": task_id,
+            }, ensure_ascii=False)
+        summary_json = _summarize_worker_workspace_changes_json(worker_id, task_id, max_files_int)
+        try:
+            summary = _json.loads(summary_json)
+        except Exception:
+            return _json.dumps({"error": "change summary 获取失败"}, ensure_ascii=False)
+        if "error" in summary:
+            return _json.dumps({"error": f"change summary: {summary['error']}"}, ensure_ascii=False)
+        if summary.get("skipped", 0) > 0:
+            return _json.dumps({
+                "applied": False,
+                "reasons": ["summary_has_skipped"],
+                "skipped_summary": summary.get("skipped", 0),
+                "lease_id": lease.lease_id,
+                "worker_id": worker_id,
+                "task_id": task_id,
+            }, ensure_ascii=False)
+        patch_json = _export_worker_workspace_patch_json(worker_id, task_id, max_files=max_files_int)
+        try:
+            patch_result = _json.loads(patch_json)
+        except Exception:
+            return _json.dumps({"error": "patch export 获取失败"}, ensure_ascii=False)
+        if "error" in patch_result:
+            return _json.dumps({"error": f"patch export: {patch_result['error']}"}, ensure_ascii=False)
+        skipped_patches = patch_result.get("skipped", [])
+        skipped_patch_count = len(skipped_patches) if isinstance(skipped_patches, list) else 0
+        patch_bytes = patch_result.get("patch_bytes")
+        if not isinstance(patch_bytes, int):
+            patch_bytes = sum(len(p.get("patch", "").encode("utf-8")) for p in patch_result.get("patches", []))
+        skipped_patch_reasons = {
+            item.get("reason")
+            for item in skipped_patches
+            if isinstance(item, dict)
+        }
+        apply_block_reasons = []
+        if skipped_patch_count > 0:
+            apply_block_reasons.append("patch_export_has_skipped")
+        if patch_bytes > MAX_FILE_BYTES or skipped_patch_reasons & {"patch_budget_exceeded", "patch_too_large"}:
+            apply_block_reasons.append("patch_budget_exceeded")
+        if apply_block_reasons:
+            return _json.dumps({
+                "applied": False,
+                "reasons": apply_block_reasons,
+                "skipped_patch_count": skipped_patch_count,
+                "patch_bytes": patch_bytes,
+                "lease_id": lease.lease_id,
+                "worker_id": worker_id,
+                "task_id": task_id,
+            }, ensure_ascii=False)
+        ws_root = Path(lease.workspace_path).resolve()
+        project_root = root.resolve()
+        apply_list = []
+        for entry in summary.get("files", []):
+            if entry.get("status") in ("created", "modified"):
+                apply_list.append(entry)
+        if not apply_list:
+            return _json.dumps({
+                "applied": False,
+                "reasons": ["no_applyable_files"],
+                "lease_id": lease.lease_id,
+                "worker_id": worker_id,
+                "task_id": task_id,
+            }, ensure_ascii=False)
+        applied_files = []
+        rollback_data = {}
+        class _ApplyMergeError(Exception):
+            def __init__(self, reason: str, path: str = ""):
+                super().__init__(reason)
+                self.reason = reason
+                self.path = path
+
+        try:
+            for entry in apply_list:
+                rel_posix = entry["path"]
+                rel = Path(rel_posix)
+                ws_file = ws_root / rel
+                proj_file = project_root / rel
+                ws_content, ws_meta = _safe_read_file_content(ws_file)
+                if not ws_meta.get("text"):
+                    raise _ApplyMergeError("worker_not_text", rel_posix)
+                safe, reason = _safe_project_path_for_worker_export(project_root, proj_file)
+                if not safe:
+                    raise _ApplyMergeError(reason or "project_path_unsafe", rel_posix)
+                if entry["status"] == "modified":
+                    if not proj_file.exists():
+                        raise _ApplyMergeError("project_missing", rel_posix)
+                    if not proj_file.is_file():
+                        raise _ApplyMergeError("project_not_file", rel_posix)
+                    try:
+                        if proj_file.stat().st_size > MAX_FILE_BYTES:
+                            raise _ApplyMergeError("project_oversized", rel_posix)
+                    except OSError:
+                        raise _ApplyMergeError("project_stat_failed", rel_posix)
+                    try:
+                        original_content = proj_file.read_text(encoding="utf-8")
+                    except (UnicodeDecodeError, OSError):
+                        raise _ApplyMergeError("project_read_failed", rel_posix)
+                    rollback_data[rel_posix] = {"status": "modified", "content": original_content}
+                elif entry["status"] == "created":
+                    if proj_file.exists():
+                        raise _ApplyMergeError("project_created_exists", rel_posix)
+                    rollback_data[rel_posix] = {"status": "created"}
+                try:
+                    proj_file.parent.mkdir(parents=True, exist_ok=True)
+                    proj_file.write_text(ws_content, encoding="utf-8")
+                except OSError:
+                    raise _ApplyMergeError("project_write_failed", rel_posix)
+                applied_files.append({
+                    "path": rel_posix,
+                    "status": entry["status"],
+                    "bytes": len(ws_content.encode("utf-8")),
+                })
+        except _ApplyMergeError as write_err:
+            rollback_errors = []
+            for rel_posix, rdata in rollback_data.items():
+                rpath = project_root / Path(rel_posix)
+                try:
+                    if rdata["status"] == "modified":
+                        rpath.write_text(rdata["content"], encoding="utf-8")
+                    elif rdata["status"] == "created":
+                        if rpath.exists():
+                            rpath.unlink()
+                except OSError as rb_err:
+                    rollback_errors.append({
+                        "path": rel_posix,
+                        "reason": "rollback_failed",
+                    })
+            result = {
+                "applied": False,
+                "reasons": ["write_failed", write_err.reason],
+                "error": write_err.reason,
+                "failed_path": write_err.path,
+                "applied_before_failure": len(applied_files),
+                "rollback": "failed" if rollback_errors else "ok",
+            }
+            if rollback_errors:
+                result["rollback_errors"] = rollback_errors[:5]
+            result["lease_id"] = lease.lease_id
+            result["worker_id"] = worker_id
+            result["task_id"] = task_id
+            return _json.dumps(result, ensure_ascii=False)
+        created_count = sum(1 for f in applied_files if f["status"] == "created")
+        modified_count = sum(1 for f in applied_files if f["status"] == "modified")
+        try:
+            registry.durable_event_store.record(
+                event_type=FILE_EDIT_FINISHED,
+                task_id=task_id,
+                worker_id=worker_id,
+                source="workspace_merge",
+                summary=f"workspace merge applied: {len(applied_files)} files for {worker_id}/{task_id}",
+                severity="info",
+                payload={
+                    "operation": "workspace_merge_apply",
+                    "worker_id": worker_id,
+                    "task_id": task_id,
+                    "lease_id": lease.lease_id,
+                    "applied_count": len(applied_files),
+                    "created_count": created_count,
+                    "modified_count": modified_count,
+                    "paths": [f["path"] for f in applied_files],
+                },
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "applied": True,
+            "applied_count": len(applied_files),
+            "created_count": created_count,
+            "modified_count": modified_count,
+            "files": applied_files,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "apply_reviewed_worker_workspace_merge",
+        "通过 dry-run 检查后，将 worker workspace 变更写入 project root。",
+        _apply_reviewed_worker_workspace_merge_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:
