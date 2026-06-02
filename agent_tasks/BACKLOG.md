@@ -4,18 +4,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-074: Worker workspace reviewed merge dry-run v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-072/TASK-073
+- 目标: 在 review gate artifact 之后，新增一个只读 dry-run 能力，基于 worker workspace patch export 和最新 review gate，生成将来 project-root merge 的安全预检结果；本任务不执行 project-root 写入、不应用 patch、不 commit、不 push。
+- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace change export / review gate tools；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / merge workflow。
+
 ## 进行中
 
-### TASK-073: Deterministic eval coverage for worker workspace review gate artifacts
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-072 runtime present
-- 分配: Claude B
-- 目标: 为 worker workspace review gate artifact 增加离线 deterministic eval，覆盖 approved/changes_requested/blocked 记录、latest gate 查询、validation errors、安全不泄漏、event-store failure、query failure、no mutation，以及 compatibility。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `evals/run_evals.py` worker workspace change export eval 区域；`mini_agent/toolkits/registry_builder.py` worker workspace review gate tools；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / Priority 5 Eval harness。
-
 ## 已完成
+
+### TASK-073: Deterministic eval coverage for worker workspace review gate artifacts ✅
+- 完成者: Claude B；Codex PM 补强 no-lease/get validation / filesystem no-mutation / claim-dispatch compatibility review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 265 passed；`python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 593 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic offline eval，覆盖 review gate approved/changes_requested/blocked 记录、no-gate/latest gate 查询、unknown decision/unknown worker/no lease/task mismatch/offline/idle validation、安全不泄漏 reviewer/summary/patch/diff/shell/env/task goal/steps、sensitive reviewer redaction、event payload safe metadata、event-store failure bounded error/no mutation、query failure bounded error，以及 worker/task registry、workspace lease、sandbox guard、file inspection、write tools、change summary/patch export、claim/dispatch compatibility。
 
 ### TASK-072: Worker workspace review gate artifact v1 ✅
 - 完成者: Claude A；Codex PM 补强 reviewer sanitization / event failure / query failure review fixes

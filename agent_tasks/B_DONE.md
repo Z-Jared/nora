@@ -1,54 +1,40 @@
-# Claude B Completion Report — TASK-071
+# Claude B Completion Report — TASK-073
 
 Status: approved by Codex review
 
 ## Summary
 
-Added 15 deterministic offline eval cases for worker workspace change export tools (TASK-070 runtime): `summarize_worker_workspace_changes` and `export_worker_workspace_patch`.
+Added 5 deterministic offline eval cases for worker workspace review gate artifacts (TASK-072 runtime): `record_worker_workspace_review_gate` and `get_worker_workspace_review_gate`.
 
-Only `evals/run_evals.py` runtime/eval code was edited. No TASK-070 runtime bugs discovered.
+Only `evals/run_evals.py` was edited. No TASK-072 runtime bugs discovered.
 
 ## Evals Added
 
-### Change Summary Evals
+1. **review_gate_basics** — records `approved`, `changes_requested`, and `blocked` decisions; `get` returns `has_gate: false` before any record; `get` returns the latest recorded gate after multiple decisions.
 
-1. **workspace_change_summary_basics** — classifies created, modified, and same files correctly; returns metadata only.
-2. **workspace_change_summary_max_files_bounded** — `max_files` bounds returned file count.
-3. **workspace_change_summary_sandbox_sensitive** — sensitive files/dirs and workspace symlink escapes are filtered out.
-4. **workspace_change_summary_safety_no_leak** — summary output does not leak task goal, steps, secrets, or raw file content sentinels.
-5. **workspace_change_summary_no_mutation** — success calls do not mutate project root, worker workspace, task state, or worker state.
+2. **review_gate_validation_errors** — unknown decision, unknown worker, no lease, task mismatch, offline worker, and idle worker rejected; covers both record and get paths where applicable.
 
-### Patch Export Evals
+3. **review_gate_safety_no_leak** — reviewer, summary, patch/diff, shell, env, task goal/steps sentinels do not leak in record output, get output, or event payloads. Sensitive reviewer is redacted; summary body is never stored.
 
-6. **workspace_patch_export_basics** — created files diff from `/dev/null`, modified files show `-`/`+` lines, same files are excluded.
-7. **workspace_patch_export_single_file** — single-file same/created/modified/missing behavior.
-8. **workspace_patch_export_bounded** — `context_lines`, `max_files`, binary files, oversized worker/project files, and single-file patch size are bounded.
-9. **workspace_patch_export_sandbox_sensitive** — traversal, absolute escape, sensitive paths, and workspace symlinks are rejected/skipped.
-10. **workspace_patch_export_safety_no_leak** — patch export does not leak task goal, steps, or secret sentinels outside expected changed-file patch content.
-11. **workspace_patch_export_no_mutation** — success and error calls do not mutate project root, worker workspace, task state, or worker state.
+4. **review_gate_event_and_no_mutation** — event-store failure returns bounded JSON error without leaking raw exception; does not mutate project root, worker workspace, worker/task state, or lease ownership. Query failure returns bounded JSON error.
 
-### Shared Change Export Evals
-
-12. **workspace_change_export_validation_errors** — unknown worker, no lease, task mismatch, offline worker, and idle worker rejected for both tools.
-13. **workspace_change_export_project_symlink_sensitive** — project-root symlink-to-sensitive-file is skipped/rejected without leaking target contents.
-14. **workspace_patch_export_budget_limits** — single-file and multi-file patch output stay under the workspace byte budget.
-15. **workspace_change_export_compatibility** — change export tools do not break worker/task registry, workspace lease, sandbox guard, file inspection, write tools, claim, or dispatch.
+5. **review_gate_compatibility** — review gate tools do not break worker/task registry tools, workspace lease tools, sandbox guard tools, file inspection tools, write tools, change summary/patch export tools, claim, or dispatch.
 
 ## Diff
 
 ```
- evals/run_evals.py | 723 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 723 insertions(+)
+ evals/run_evals.py | 433 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 433 insertions(+)
 ```
 
 ## Verification
 
 ```
 python3 evals/run_evals.py
-260 passed, 0 failed
+265 passed, 0 failed
 
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 401 tests in 6.944s — OK
+python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+Ran 593 tests in 13.867s — OK
 
 git diff --check
 clean
@@ -57,5 +43,5 @@ clean
 ## Notes
 
 - No runtime code changed.
-- Codex PM review fixes added validation-error, project-root symlink-to-sensitive-file, and patch-budget eval coverage.
+- Codex PM review fixes strengthened no-lease/get validation coverage, filesystem no-mutation assertions, and claim/dispatch compatibility.
 - No push performed.

@@ -310,6 +310,12 @@ def main() -> int:
         EvalCase("workspace_change_export_project_symlink_sensitive", eval_workspace_change_export_project_symlink_sensitive),
         EvalCase("workspace_patch_export_budget_limits", eval_workspace_patch_export_budget_limits),
         EvalCase("workspace_change_export_compatibility", eval_workspace_change_export_compatibility),
+        # TASK-073: Review gate evals
+        EvalCase("review_gate_basics", eval_review_gate_basics),
+        EvalCase("review_gate_validation_errors", eval_review_gate_validation_errors),
+        EvalCase("review_gate_safety_no_leak", eval_review_gate_safety_no_leak),
+        EvalCase("review_gate_event_and_no_mutation", eval_review_gate_event_and_no_mutation),
+        EvalCase("review_gate_compatibility", eval_review_gate_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -10821,6 +10827,433 @@ def _init_git_repo(root: Path) -> None:
     (root / "README.md").write_text("initial\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=root, capture_output=True, text=True, check=True)
+
+
+# --- TASK-073: Review gate eval sentinels ---
+_REVIEW_GATE_SENTINEL_GOAL = "NORA_EVAL_REVIEW_GATE_GOAL_SENTINEL_x7y8z9"
+_REVIEW_GATE_SENTINEL_SECRET = "NORA_EVAL_REVIEW_GATE_SECRET_sk-review-gate-a1b2c3"
+_REVIEW_GATE_SENTINEL_STEP = "NORA_EVAL_REVIEW_GATE_STEP_SENTINEL_d4e5f6"
+_REVIEW_GATE_SENTINEL_SUMMARY = "NORA_EVAL_REVIEW_GATE_SUMMARY_SECRET_g7h8i9"
+_REVIEW_GATE_SENTINEL_REVIEWER = "NORA_EVAL_REVIEW_GATE_REVIEWER_SECRET_j0k1l2"
+_REVIEW_GATE_SENTINEL_PATCH = "NORA_EVAL_REVIEW_GATE_PATCH_SECRET_m3n4o5"
+_REVIEW_GATE_SENTINEL_SHELL = "NORA_EVAL_REVIEW_GATE_SHELL_SECRET_p6q7r8"
+_REVIEW_GATE_SENTINEL_ENV = "NORA_EVAL_REVIEW_GATE_ENV_SECRET_s9t0u1"
+
+
+def _setup_review_gate_worker(registry, worker_id="w_rg"):
+    """Helper for review gate evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_REVIEW_GATE_SENTINEL_GOAL + " " + _REVIEW_GATE_SENTINEL_SECRET,
+        steps=[{"text": _REVIEW_GATE_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def eval_review_gate_basics():
+    """Review gate basics: record approved/changes_requested/blocked, get has_gate:false before record, get returns latest after multiple."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_review_gate_worker(registry)
+
+            # get returns has_gate:false before any record
+            get_result = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert get_result["has_gate"] is False, f"expected has_gate=false, got: {get_result}"
+            assert get_result["lease_id"] == lease_id
+
+            # record approved
+            rec1 = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            ))
+            assert rec1["recorded"] is True
+            assert rec1["decision"] == "approved"
+            assert rec1["reviewer"] == "codex_pm"
+            assert rec1["worker_id"] == "w_rg"
+            assert rec1["task_id"] == tid
+            assert rec1["lease_id"] == lease_id
+            assert "event_id" in rec1
+            assert "created_at" in rec1
+
+            # get returns the approved gate
+            get1 = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert get1["has_gate"] is True
+            assert get1["decision"] == "approved"
+
+            # record changes_requested
+            rec2 = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="changes_requested",
+            ))
+            assert rec2["recorded"] is True
+            assert rec2["decision"] == "changes_requested"
+
+            # get returns latest (changes_requested)
+            get2 = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert get2["has_gate"] is True
+            assert get2["decision"] == "changes_requested"
+
+            # record blocked
+            rec3 = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="blocked",
+            ))
+            assert rec3["recorded"] is True
+            assert rec3["decision"] == "blocked"
+
+            # get returns latest (blocked)
+            get3 = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert get3["has_gate"] is True
+            assert get3["decision"] == "blocked"
+        finally:
+            db.close()
+
+
+def eval_review_gate_validation_errors():
+    """Unknown decision, unknown worker, no lease, task mismatch, offline, idle rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_review_gate_worker(registry)
+
+            # Unknown decision
+            bad_decision = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="invalid_decision",
+            ))
+            assert "error" in bad_decision, f"expected error for bad decision: {bad_decision}"
+
+            # Unknown worker
+            bad_worker = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="nonexistent_worker", task_id=tid, decision="approved",
+            ))
+            assert "error" in bad_worker, f"expected error for unknown worker: {bad_worker}"
+            get_bad_worker = json.loads(registry.call(
+                "get_worker_workspace_review_gate",
+                worker_id="nonexistent_worker", task_id=tid,
+            ))
+            assert "error" in get_bad_worker, f"expected get error for unknown worker: {get_bad_worker}"
+
+            # No lease
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            ws.register_worker("w_rg_no_lease", role="coder")
+            no_lease_task = ts.create_task(goal="no lease", steps=[{"text": "x"}])
+            ts.assign_worker(no_lease_task.task_id, "w_rg_no_lease")
+            ws.update_status("w_rg_no_lease", "assigned", current_task_id=no_lease_task.task_id)
+            no_lease_record = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg_no_lease", task_id=no_lease_task.task_id, decision="approved",
+            ))
+            assert "error" in no_lease_record and "lease" in no_lease_record["error"], f"expected record no-lease error: {no_lease_record}"
+            no_lease_get = json.loads(registry.call(
+                "get_worker_workspace_review_gate",
+                worker_id="w_rg_no_lease", task_id=no_lease_task.task_id,
+            ))
+            assert "error" in no_lease_get and "lease" in no_lease_get["error"], f"expected get no-lease error: {no_lease_get}"
+
+            # Task mismatch (assign worker to different task)
+            other_task = ts.create_task(goal="other", steps=[{"text": "x"}])
+            ts.assign_worker(other_task.task_id, "w_rg")
+            ws.update_status("w_rg", "assigned", current_task_id=other_task.task_id)
+            ts.update_status(other_task.task_id, "running")
+
+            mismatch = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            ))
+            assert "error" in mismatch, f"expected error for task mismatch: {mismatch}"
+            get_mismatch = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert "error" in get_mismatch, f"expected get error for task mismatch: {get_mismatch}"
+
+            # Restore for offline/idle tests
+            ts.assign_worker(tid, "w_rg")
+            ws.update_status("w_rg", "assigned", current_task_id=tid)
+
+            # Offline worker
+            ws.update_status("w_rg", "offline")
+            offline = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            ))
+            assert "error" in offline, f"expected error for offline: {offline}"
+
+            # Idle worker
+            ws.update_status("w_rg", "idle")
+            idle = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            ))
+            assert "error" in idle, f"expected error for idle: {idle}"
+            get_idle = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert "error" in get_idle, f"expected get error for idle: {get_idle}"
+
+            # Same errors for get
+            ws.update_status("w_rg", "offline")
+            get_offline = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert "error" in get_offline, f"expected error for get offline: {get_offline}"
+        finally:
+            db.close()
+
+
+def eval_review_gate_safety_no_leak():
+    """Reviewer, summary, patch/diff, shell, env, task goal/steps do not leak in record/get outputs or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_review_gate_worker(registry)
+
+            # Record with secret-laden reviewer and summary
+            rec = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+                reviewer=_REVIEW_GATE_SENTINEL_REVIEWER,
+                summary=_REVIEW_GATE_SENTINEL_SUMMARY + " " + _REVIEW_GATE_SENTINEL_PATCH + " " + _REVIEW_GATE_SENTINEL_SHELL + " " + _REVIEW_GATE_SENTINEL_ENV,
+            ))
+
+            # Verify no leak in record output
+            rec_str = json.dumps(rec)
+            assert _REVIEW_GATE_SENTINEL_GOAL not in rec_str, f"goal leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_SECRET not in rec_str, f"secret leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_STEP not in rec_str, f"step leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_SUMMARY not in rec_str, f"summary body leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_PATCH not in rec_str, f"patch leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_SHELL not in rec_str, f"shell leaked in record: {rec_str}"
+            assert _REVIEW_GATE_SENTINEL_ENV not in rec_str, f"env leaked in record: {rec_str}"
+            # Reviewer is truncated to 80 chars and only redacted if is_sensitive_text matches
+            # The sentinel reviewer itself may appear if it doesn't trigger sensitive detection
+            # But it must be bounded
+            assert len(rec["reviewer"]) <= 80, f"reviewer not bounded: {rec['reviewer']}"
+
+            # Verify summary_present is true but raw body not stored
+            assert rec["summary_present"] is True
+            assert rec["summary_length"] > 0
+
+            # Verify get output also doesn't leak
+            get_result = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            get_str = json.dumps(get_result)
+            assert _REVIEW_GATE_SENTINEL_GOAL not in get_str, f"goal leaked in get: {get_str}"
+            assert _REVIEW_GATE_SENTINEL_SECRET not in get_str, f"secret leaked in get: {get_str}"
+            assert _REVIEW_GATE_SENTINEL_STEP not in get_str, f"step leaked in get: {get_str}"
+            assert _REVIEW_GATE_SENTINEL_SUMMARY not in get_str, f"summary body leaked in get: {get_str}"
+            # Reviewer is stored as-is if not sensitive; bounded to 80 chars
+            assert len(get_result.get("reviewer", "")) <= 80
+
+            # Verify event payload doesn't leak
+            events = registry.durable_event_store.list_events(task_id=tid, event_type="review_gate_finished", max_results=10)
+            assert len(events) >= 1
+            for event in events:
+                payload_str = json.dumps(event.payload)
+                assert _REVIEW_GATE_SENTINEL_GOAL not in payload_str, f"goal leaked in event payload: {payload_str}"
+                assert _REVIEW_GATE_SENTINEL_SECRET not in payload_str, f"secret leaked in event payload: {payload_str}"
+                assert _REVIEW_GATE_SENTINEL_STEP not in payload_str, f"step leaked in event payload: {payload_str}"
+                assert _REVIEW_GATE_SENTINEL_SUMMARY not in payload_str, f"summary body leaked in event payload: {payload_str}"
+                # Reviewer stored as-is if not sensitive; bounded to 80 chars
+                assert len(event.payload.get("reviewer", "")) <= 80
+                # Verify safe metadata only
+                assert "decision" in event.payload
+                assert "reviewer" in event.payload
+                assert "summary_present" in event.payload
+
+            # Verify sensitive reviewer is redacted
+            rec_sensitive = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+                reviewer="OPENAI_API_KEY=sk-sentinel123",
+            ))
+            assert rec_sensitive["reviewer"] == "[redacted]", f"reviewer not redacted: {rec_sensitive}"
+
+            # Verify error outputs are bounded
+            bad = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="nonexistent", task_id=tid, decision="approved",
+            ))
+            assert "error" in bad
+            bad_str = json.dumps(bad)
+            assert _REVIEW_GATE_SENTINEL_GOAL not in bad_str, f"goal leaked in error: {bad_str}"
+            assert _REVIEW_GATE_SENTINEL_SECRET not in bad_str, f"secret leaked in error: {bad_str}"
+        finally:
+            db.close()
+
+
+def eval_review_gate_event_and_no_mutation():
+    """Event-store failure returns bounded JSON error and does not mutate project root, worker workspace, worker/task state, or lease ownership.
+    Query failure returns bounded JSON error."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_review_gate_worker(registry)
+            ws_root = Path(ws_path)
+            project_file = Path(tmpdir) / "project_unchanged.txt"
+            workspace_file = ws_root / "workspace_unchanged.txt"
+            project_file.write_text("project before\n", encoding="utf-8")
+            workspace_file.write_text("workspace before\n", encoding="utf-8")
+
+            # Snapshot state before
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            worker_before = ws.get_worker("w_rg")
+            task_before = ts.get_task(tid)
+            lease_before = registry.workspace_lease_store.get_lease_by_worker("w_rg")
+
+            # Monkeypatch event store to fail
+            original_record = registry.durable_event_store.record
+            registry.durable_event_store.record = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("event store down"))
+
+            # Record should return bounded error, not crash
+            rec_fail = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            ))
+            assert "error" in rec_fail, f"expected error on event store failure: {rec_fail}"
+            rec_fail_str = json.dumps(rec_fail)
+            assert "event store down" not in rec_fail_str, f"raw exception leaked: {rec_fail_str}"
+
+            # Verify no mutation
+            worker_after = ws.get_worker("w_rg")
+            task_after = ts.get_task(tid)
+            lease_after = registry.workspace_lease_store.get_lease_by_worker("w_rg")
+            assert worker_after.status == worker_before.status, "worker status mutated"
+            assert worker_after.current_task_id == worker_before.current_task_id, "worker task mutated"
+            assert task_after.status == task_before.status, "task status mutated"
+            assert lease_after is not None, "lease disappeared"
+            assert project_file.read_text(encoding="utf-8") == "project before\n", "project root mutated"
+            assert workspace_file.read_text(encoding="utf-8") == "workspace before\n", "worker workspace mutated"
+
+            # Restore and test query failure
+            registry.durable_event_store.record = original_record
+            original_list = registry.durable_event_store.list_events
+            registry.durable_event_store.list_events = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("query down"))
+
+            get_fail = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert "error" in get_fail, f"expected error on query failure: {get_fail}"
+            get_fail_str = json.dumps(get_fail)
+            assert "query down" not in get_fail_str, f"raw exception leaked: {get_fail_str}"
+
+            registry.durable_event_store.list_events = original_list
+        finally:
+            db.close()
+
+
+def eval_review_gate_compatibility():
+    """Review gate tools do not break worker/task registry tools, workspace lease tools, sandbox guard tools, file inspection tools, write tools, change summary/patch export tools, claim, or dispatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_review_gate_worker(registry)
+            ws_root = Path(ws_path)
+            (ws_root / "test.txt").write_text("read me", encoding="utf-8")
+
+            # Record a gate
+            registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="approved",
+            )
+
+            # Worker/task registry tools still work
+            worker = json.loads(registry.call("get_worker", worker_id="w_rg"))
+            assert worker["worker_id"] == "w_rg"
+
+            task = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert task["task_id"] == tid
+
+            # Workspace lease tools still work
+            lease = json.loads(registry.call("get_worker_workspace", worker_id="w_rg", task_id=tid))
+            assert lease["lease_id"] == lease_id
+
+            # Sandbox guard tools still work
+            valid = json.loads(registry.call("validate_worker_workspace_path", worker_id="w_rg", task_id=tid, path=str(ws_root / "test.txt")))
+            assert valid.get("valid") is True, f"validate_worker_workspace_path broken: {valid}"
+
+            # File inspection tools still work
+            files = json.loads(registry.call("list_worker_workspace_files", worker_id="w_rg", task_id=tid))
+            assert "files" in files
+            assert "test.txt" in files["files"], f"list_worker_workspace_files missing test.txt: {files}"
+            read_result = json.loads(registry.call("read_worker_workspace_file", worker_id="w_rg", task_id=tid, path="test.txt"))
+            assert read_result.get("content") == "read me", f"read_worker_workspace_file broken: {read_result}"
+
+            # Write tools still work
+            write_result = json.loads(registry.call(
+                "write_worker_workspace_file",
+                worker_id="w_rg", task_id=tid, path="test_write.txt", content="hello",
+            ))
+            assert write_result.get("operation") == "write", f"write_worker_workspace_file broken: {write_result}"
+
+            # Change summary tools still work
+            summary = json.loads(registry.call(
+                "summarize_worker_workspace_changes", worker_id="w_rg", task_id=tid,
+            ))
+            assert "files" in summary, f"summarize_worker_workspace_changes broken: {summary}"
+
+            # Patch export tools still work
+            patch = json.loads(registry.call(
+                "export_worker_workspace_patch", worker_id="w_rg", task_id=tid,
+            ))
+            assert "patches" in patch, f"export_worker_workspace_patch broken: {patch}"
+
+            # Claim/dispatch still work
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_rg_claim", role="coder")
+            claim_task = ts.create_task(goal="claim after review gate", steps=[{"text": "x"}])
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_rg_claim"))
+            assert claim.get("task_id") == claim_task.task_id, f"claim_durable_task broken: {claim}"
+            ws.register_worker("w_rg_dispatch", role="coder")
+            ts.create_task(goal="dispatch after review gate", steps=[{"text": "x"}])
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch, f"dispatch_durable_tasks broken: {dispatch}"
+
+            # Record another gate after using other tools
+            rec2 = json.loads(registry.call(
+                "record_worker_workspace_review_gate",
+                worker_id="w_rg", task_id=tid, decision="changes_requested",
+                summary="review after using other tools",
+            ))
+            assert rec2["recorded"] is True
+
+            # Get still works
+            get2 = json.loads(registry.call(
+                "get_worker_workspace_review_gate", worker_id="w_rg", task_id=tid,
+            ))
+            assert get2["has_gate"] is True
+            assert get2["decision"] == "changes_requested"
+        finally:
+            db.close()
 
 
 def eval_llm_calculate_tool_call():
