@@ -6,16 +6,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-074: Worker workspace reviewed merge dry-run v1
+### TASK-075: Deterministic eval coverage for worker workspace reviewed merge dry-run
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-074
+- 分配: Claude B
+- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `dry_run_worker_workspace_merge` 的 ready/not-ready、validation、安全不泄漏、no-mutation 和 compatibility 行为。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 worker workspace dry-run / change export / review gate tools；TASK-074 审查记录。
+
+## 已完成
+
+### TASK-074: Worker workspace reviewed merge dry-run v1 ✅
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-072/TASK-073
-- 分配: Claude A
-- 目标: 在 review gate artifact 之后，新增一个只读 dry-run 能力，基于 worker workspace patch export 和最新 review gate，生成将来 project-root merge 的安全预检结果；本任务不执行 project-root 写入、不应用 patch、不 commit、不 push。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` worker workspace change export / review gate tools；`docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Review gate / merge workflow。
-
-## 已完成
+- 完成者: Claude A；Codex PM 补强 patch budget / project symlink / compatibility review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 284 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 451 tests OK；`python3 evals/run_evals.py` 265 passed；`python3 -m unittest discover -s tests` 1810 tests OK；`git diff --check` OK。
+- 内容: 新增只读 worker workspace reviewed merge dry-run tool：`dry_run_worker_workspace_merge(worker_id, task_id, max_files=50)`；复用 active worker/task/workspace lease 校验、TASK-070 change summary/patch export safety、TASK-072 latest review gate lookup；返回 bounded metadata，包括 `ready`、safe reason labels、review gate state、created/modified/same/skipped counts、patch/skipped patch counts、patch bytes 和 worker/task/lease ids；只有 approved gate、存在安全变更、无 summary/patch skipped、patch bytes 未超预算时才 ready；不返回 raw patch、file content、summary body、task goal/steps、reviewer notes、shell/env/request strings 或 secrets；不写 project root、worker workspace 或 durable state。
 
 ### TASK-073: Deterministic eval coverage for worker workspace review gate artifacts ✅
 - 完成者: Claude B；Codex PM 补强 no-lease/get validation / filesystem no-mutation / claim-dispatch compatibility review fixes

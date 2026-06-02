@@ -1,42 +1,46 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Goal
 
-TASK-073: Deterministic eval coverage for worker workspace review gate artifacts.
+TASK-075: Deterministic eval coverage for worker workspace reviewed merge dry-run.
 
-TASK-072 runtime is approved and visible in the worktree. Start implementation now.
+TASK-074 runtime is approved and visible in the worktree. Start implementation now.
 
 ## Scope
 
-When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-072 runtime bug.
+When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-074 runtime bug.
 
-Do not call external APIs. Do not start real agents, terminals, shell commands through Nora, or browser sessions.
+Do not call external APIs. Do not start real agents, terminals, shell commands through Nora, browser sessions, project-root merges, patch applies, git writes, process isolation, Docker, UI changes, or model routing.
 
 Planned deterministic offline eval coverage:
 
-1. Review gate basics:
+1. Ready path:
    - Prepare/claim a worker workspace.
-   - `record_worker_workspace_review_gate` records `approved`, `changes_requested`, and `blocked` decisions.
-   - `get_worker_workspace_review_gate` returns `has_gate: false` before any record exists.
-   - `get_worker_workspace_review_gate` returns the latest recorded gate after multiple decisions.
+   - Create and modify safe files.
+   - Record approved review gate.
+   - `dry_run_worker_workspace_merge` returns `ready: true`, no reasons, approved decision, counts, patch counts, patch bytes, worker/task/lease ids.
 
-2. Validation and safety:
-   - Unknown decision rejected.
-   - Unknown worker, no lease, task mismatch, offline worker, and idle worker rejected.
-   - Reviewer and summary inputs do not leak secrets, env-var-looking strings, raw patch/diff text, shell output, request strings, task goal, or steps.
-   - Record/get error outputs are bounded and do not leak raw exception strings or secret sentinels.
+2. Not-ready review states:
+   - No review gate returns `ready: false`, `requires_review: true`, `no_review_gate`.
+   - Latest `changes_requested` and `blocked` gates return `ready: false` with `gate_changes_requested` / `gate_blocked`.
+   - Approved gate with no changes returns `ready: false`, `no_changes`.
 
-3. Event and no-mutation behavior:
-   - Review gate durable event payload contains safe metadata only.
-   - Raw summary body, reviewer secret, task goal/steps, patch/diff, shell/env/request strings are not serialized in events.
-   - Event-store failure returns bounded JSON error and does not mutate project root, worker workspace, worker/task state, or lease ownership.
-   - Query failure returns bounded JSON error.
+3. Skipped and budget cases:
+   - Sensitive/project symlink-to-sensitive-file case is not ready and does not leak the sentinel.
+   - Binary or oversized skipped entries are not ready.
+   - Multi-file patch budget overflow is not ready with `patch_export_has_skipped` and `patch_budget_exceeded`.
 
-4. Compatibility:
-   - Review gate tools do not break worker/task registry tools, workspace lease tools, sandbox guard tools, file inspection tools, write tools, change summary/patch export tools, claim, or dispatch.
+4. Validation and safety:
+   - Unknown worker, no lease, task mismatch, offline worker, idle worker, and bad `max_files` are rejected.
+   - Output does not leak raw patch text, raw file content, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
+   - Error outputs are bounded and do not leak raw exception strings.
+
+5. No-mutation and compatibility:
+   - Dry-run does not mutate project root, worker workspace, worker/task state, lease ownership, or review gate.
+   - Existing worker/task registry, workspace lease, sandbox guard, read/list/preview/write, change summary/patch export, review gate, claim, and dispatch tools still work after dry-run.
 
 Keep evals deterministic and offline.
 
@@ -46,7 +50,7 @@ Run at minimum:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_workers tests.test_durable_events tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
 git diff --check
 ```
 

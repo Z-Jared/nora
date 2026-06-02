@@ -2344,6 +2344,102 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _dry_run_worker_workspace_merge_json(worker_id: str, task_id: str, max_files: int = 50) -> str:
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps(err, ensure_ascii=False)
+        try:
+            max_files_int = max(1, min(int(max_files or 50), 200))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "max_files 必须是整数"}, ensure_ascii=False)
+        reasons = []
+        summary_json = _summarize_worker_workspace_changes_json(worker_id, task_id, max_files_int)
+        try:
+            summary = _json.loads(summary_json)
+        except Exception:
+            return _json.dumps({"error": "change summary 获取失败"}, ensure_ascii=False)
+        if "error" in summary:
+            return _json.dumps({"error": f"change summary: {summary['error']}"}, ensure_ascii=False)
+        patch_json = _export_worker_workspace_patch_json(worker_id, task_id, max_files=max_files_int)
+        try:
+            patch_result = _json.loads(patch_json)
+        except Exception:
+            return _json.dumps({"error": "patch export 获取失败"}, ensure_ascii=False)
+        if "error" in patch_result:
+            return _json.dumps({"error": f"patch export: {patch_result['error']}"}, ensure_ascii=False)
+        gate_json = _get_worker_workspace_review_gate_json(worker_id, task_id)
+        try:
+            gate = _json.loads(gate_json)
+        except Exception:
+            return _json.dumps({"error": "review gate 查询失败"}, ensure_ascii=False)
+        if "error" in gate:
+            return _json.dumps({"error": f"review gate: {gate['error']}"}, ensure_ascii=False)
+        has_gate = gate.get("has_gate", False)
+        decision = gate.get("decision", "") if has_gate else ""
+        created = summary.get("created", 0)
+        modified = summary.get("modified", 0)
+        same = summary.get("same", 0)
+        skipped_summary = summary.get("skipped", 0)
+        patches = patch_result.get("patches", [])
+        patch_count = len(patches)
+        skipped_patches = patch_result.get("skipped", [])
+        skipped_patch_count = len(skipped_patches) if isinstance(skipped_patches, list) else 0
+        patch_bytes = patch_result.get("patch_bytes")
+        if not isinstance(patch_bytes, int):
+            patch_bytes = sum(len(p.get("patch", "").encode("utf-8")) for p in patches)
+        skipped_patch_reasons = {
+            item.get("reason")
+            for item in skipped_patches
+            if isinstance(item, dict)
+        }
+        has_changes = (created + modified) > 0 or patch_count > 0
+        if not has_gate:
+            reasons.append("no_review_gate")
+        elif decision != "approved":
+            reasons.append(f"gate_{decision}")
+        if not has_changes:
+            reasons.append("no_changes")
+        if skipped_summary > 0:
+            reasons.append("summary_has_skipped")
+        if skipped_patch_count > 0:
+            reasons.append("patch_export_has_skipped")
+        if patch_bytes > MAX_FILE_BYTES or skipped_patch_reasons & {"patch_budget_exceeded", "patch_too_large"}:
+            reasons.append("patch_budget_exceeded")
+        ready = len(reasons) == 0
+        return _json.dumps({
+            "ready": ready,
+            "reasons": reasons,
+            "has_review_gate": has_gate,
+            "decision": decision,
+            "requires_review": not has_gate,
+            "created": created,
+            "modified": modified,
+            "same": same,
+            "skipped_summary": skipped_summary,
+            "patch_count": patch_count,
+            "skipped_patch_count": skipped_patch_count,
+            "patch_bytes": patch_bytes,
+            "lease_id": lease.lease_id,
+            "worker_id": worker_id,
+            "task_id": task_id,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "dry_run_worker_workspace_merge",
+        "预检 worker workspace 是否准备好合并（只读，不实际 merge）。",
+        _dry_run_worker_workspace_merge_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "max_files": {"type": "integer", "description": "最大文件数，默认 50，上限 200"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:
