@@ -4,7 +4,28 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-096: Deterministic eval coverage for scheduler retry planning v1
+- 优先级: high
+- 预计: 1-2h
+- 依赖: TASK-095
+- 目标: 为 worker lifecycle retry planning/explainability 增加 deterministic offline eval coverage，覆盖 retryable failed task、max-retries exhausted、active-owner/invalid-owner 跳过、安全不泄漏与 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8；`mini_agent/toolkits/registry_builder.py`；`evals/run_evals.py`
+
+### TASK-097: Guarded scheduler retry execution v1
+- 优先级: medium
+- 预计: 1-2h
+- 依赖: TASK-095
+- 目标: 在 `run_worker_lifecycle_once` / `run_worker_lifecycle_scheduler_tick` / `run_worker_lifecycle_scheduler_loop` 中纳入 retryable failed task 规划，并在 `dry_run=False` 时仅对安全可重试任务执行 bounded retry。
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8；`docs/knowledge/PROJECT_WAKEUP.md` near-term priority 1；`mini_agent/toolkits/registry_builder.py`
+
 ## 进行中
+
+### TASK-095: Retryable failed-task planning for worker lifecycle scheduler v1
+- 分配给: Claude A
+- 目标: 扩展 `plan_worker_lifecycle_actions` 与 `explain_worker_lifecycle_scheduler_state`，识别可安全重试的 failed durable tasks，并输出稳定的 retry reason/action labels 与 bounded metadata，不执行实际 retry。
+- 状态: assigned
 
 ### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
 - 分配给: Claude B
