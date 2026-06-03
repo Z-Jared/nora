@@ -1,8 +1,8 @@
 # Code Review Report
 
-Reviewed: TASK-077 deterministic apply evals + TASK-078 merge apply audit/history
-Workers: Claude B (TASK-077), Claude A (TASK-078)
-Status: APPROVED
+Reviewed: TASK-079 audit eval coverage + TASK-080 workspace merge finalization
+Workers: Claude B (TASK-079), Claude A (TASK-080)
+Status: APPROVED after Codex PM fixes
 
 ## Findings
 
@@ -10,31 +10,38 @@ Status: APPROVED
 
 - None remaining.
 
-### Review Notes
+### Fixed During Review
 
-- TASK-077 added deterministic offline evals for `apply_reviewed_worker_workspace_merge`.
-- TASK-078 added read-only `list_worker_workspace_merge_applies(worker_id="", task_id="", limit=20)`.
-- PM review fixes strengthened TASK-077 coverage for project symlink-to-sensitive, workspace symlink escape, patch budget overflow, raw patch/reviewer/shell/request leakage, and rollback cleanup.
-- PM review fixes strengthened TASK-078 safety by filtering after operation matching and sanitizing malformed/sensitive audit ids and paths.
-- Runtime scope stayed read-only for TASK-078; TASK-077 stayed eval-only.
-- No TASK-076 apply runtime bug was found during TASK-077 review.
+- `finalize_worker_workspace_merge` now reuses active worker/task/workspace lease validation before first-time finalization.
+- Finalization now requires a successful `workspace_merge_apply` event for the same worker, task, and active lease id.
+- Stale apply events from a previous lease no longer allow finalization.
+- `release_workspace` now rejects non-boolean values with bounded JSON error output.
+- Repeated finalization after task completion remains bounded/idempotent.
+- Successful finalization and lease release events use safe metadata-only payloads.
+
+## Review Notes
+
+- TASK-079 stayed eval-only and added deterministic offline audit/history coverage in `evals/run_evals.py`.
+- TASK-080 added guarded runtime finalization in `mini_agent/toolkits/registry_builder.py`.
+- Finalization does not delete workspace directories, does not apply patches, does not run shell/git, and does not add project-root write behavior beyond the already-reviewed apply tool.
+- Output and events avoid raw file content, patch text, task goal/steps, reviewer summaries, shell/env/request strings, and secret sentinels.
 
 ## Checks Run
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkspaceMergeAuditTests
-Ran 17 tests in 0.288s
+python3 -m unittest tests.test_durable_workers.WorkspaceMergeFinalizeTests
+Ran 23 tests in 0.525s
 OK
 
 python3 evals/run_evals.py
-278 passed, 0 failed
+283 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 499 tests in 9.525s
+Ran 522 tests in 9.903s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1858 tests in 121.117s
+Ran 1881 tests in 119.003s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -44,6 +51,6 @@ OK
 
 ## Verdict
 
-TASK-077 and TASK-078 APPROVED.
+TASK-079 and TASK-080 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.

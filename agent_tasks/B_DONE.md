@@ -1,47 +1,37 @@
-# Claude B Completion Report — TASK-077
+# Claude B Completion Report - TASK-079
 
 Status: approved by Codex PM
 
 ## Summary
 
-Added deterministic offline eval coverage for worker workspace reviewed merge apply (`apply_reviewed_worker_workspace_merge`).
+Added deterministic offline eval coverage for `list_worker_workspace_merge_applies` audit/history behavior.
 
-Codex PM review fixes:
-
-- Added project symlink-to-sensitive-file coverage.
-- Added workspace symlink escape coverage.
-- Added multi-file patch budget overflow coverage.
-- Strengthened reviewer summary, shell output, request string, and raw patch leak assertions.
-- Strengthened rollback eval to assert earlier created files are removed.
-
-## Evals Added
-
-1. `apply_merge_approved_path`
-2. `apply_merge_not_ready_rejection`
-3. `apply_merge_safety_boundaries`
-4. `apply_merge_validation_errors`
-5. `apply_merge_rollback_no_mutation`
-6. `apply_merge_event_and_compatibility`
+Coverage added:
+- Empty results and successful apply audit row basics.
+- Worker/task filters, limit bounds, bad limit error, and filtering behavior.
+- Malformed payload safety for counts, paths, ids, sensitive paths, traversal, absolute paths, and long paths.
+- No-leak/read-only checks for task goal, steps, file content, secrets, worker/task state, lease ownership, project root, and worker workspace.
+- Compatibility checks for apply, dry-run, summary, patch export, review gate, lease, registry, claim, and dispatch tools after audit queries.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 454 ++++++++++++++++++++++++++++++++
- 1 file changed, 454 insertions(+)
+ evals/run_evals.py | 316 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 316 insertions(+)
 ```
 
 ## Verification
 
 ```text
 python3 evals/run_evals.py
-278 passed, 0 failed
+283 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 499 tests in 9.525s
+Ran 522 tests in 9.903s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1858 tests in 121.117s
+Ran 1881 tests in 119.003s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -51,6 +41,6 @@ OK
 
 ## Notes
 
-- No runtime apply code changed by B.
 - No push performed.
-- TASK-077 is approved.
+- No runtime code changes were needed for TASK-079.
+- Codex PM approved the eval coverage after running full verification.

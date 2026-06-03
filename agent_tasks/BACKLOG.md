@@ -6,25 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-080: Worker workspace merge finalization v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-076/TASK-078
-- 分配: Claude A
-- 目标: 新增 guarded finalize tool，在 successful workspace merge apply 之后完成 durable task/worker/workspace lease 收尾：确认存在 apply audit event，标记 task completed、worker idle、release workspace lease；不写 project root、不执行 shell/git、不删除 workspace 目录。
-- 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/audit/lease/lifecycle tools；TASK-076/TASK-078。
-
-### TASK-079: Deterministic eval coverage for worker workspace merge apply audit/history
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-078
-- 分配: Claude B
-- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `list_worker_workspace_merge_applies` 的 empty/results/filter/limit/malformed payload/safety/read-only/compatibility 行为。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 audit/apply event tools；TASK-078 审查记录。
-
 ## 已完成
+
+### TASK-080: Worker workspace merge finalization v1 ✅
+- 完成者: Claude A；Codex PM 补强 active lease validation / lease_id-bound apply event / invalid release flag review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceMergeFinalizeTests` 23 tests OK；`python3 evals/run_evals.py` 283 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 522 tests OK；`python3 -m unittest discover -s tests` 1881 tests OK；`git diff --check` OK。
+- 内容: 新增 guarded `finalize_worker_workspace_merge(worker_id, task_id, release_workspace=True)`；未完成任务必须通过 active worker/task/workspace lease 校验；必须存在同 worker/task/active lease 的 successful `workspace_merge_apply` audit event；完成 task、将 worker 置 idle 并清空 current_task_id，默认释放 lease；支持 `release_workspace=False` 保留 lease；重复完成后返回 bounded `already_finalized`；输出和事件仅含 safe metadata；不删除 workspace、不执行 shell/git、不写 project root、不应用 patch。
+
+### TASK-079: Deterministic eval coverage for worker workspace merge apply audit/history ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 283 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 522 tests OK；`python3 -m unittest discover -s tests` 1881 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval coverage，覆盖 `list_worker_workspace_merge_applies` empty/result basics、worker/task filters、limit bounds、bad limit error、filtering behavior、malformed payload safety、sensitive/traversal/absolute/long path filtering、no-leak/read-only behavior，以及 apply/dry-run/summary/patch export/review gate/lease/registry/claim/dispatch compatibility。
 
 ### TASK-078: Worker workspace merge apply audit/history v1 ✅
 - 完成者: Claude A；Codex PM 补强 operation-after-limit filtering / malformed sensitive path-id filtering review fixes

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from mini_agent.database import NoraDB
 from mini_agent.durable_workers import DurableWorkerStore, DurableWorker, WorkerStatus
 from mini_agent.tools import build_default_registry
-from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, TASK_STATUS_CHANGED
+from mini_agent.durable_events import DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, TASK_STATUS_CHANGED, WORKSPACE_RELEASED
 
 
 class DurableWorkerStoreSqliteTests(unittest.TestCase):
@@ -4987,6 +4987,366 @@ class WorkspaceMergeAuditTests(unittest.TestCase):
 
         content = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="f.py"))
         self.assertEqual(content["content"], "x\n")
+
+
+class WorkspaceMergeFinalizeTests(unittest.TestCase):
+    SECRET_SENTINEL = "finalize_secret_789xyz"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one", status="running"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status=status, current_task_id=task_id)
+        if status == "running":
+            self.registry.call("update_durable_task", task_id=task_id, status="running")
+        return task_id
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    def _write_ws_file(self, ws_path, rel_path, content):
+        p = Path(ws_path) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    def _record_gate_and_apply(self, task_id, ws_path, files):
+        for rel, content in files:
+            self._write_ws_file(ws_path, rel, content)
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+        return json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+    # --- happy path ---
+
+    def test_finalize_after_apply(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertTrue(result["finalized"])
+        self.assertEqual(result["task_status_before"], "running")
+        self.assertEqual(result["task_status_after"], "completed")
+        self.assertEqual(result["worker_status_before"], "running")
+        self.assertEqual(result["worker_status_after"], "idle")
+        self.assertTrue(result["workspace_released"])
+        self.assertEqual(result["lease_id"], lease["lease_id"])
+
+    def test_finalize_task_marked_completed(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "completed")
+
+    def test_finalize_worker_marked_idle(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "idle")
+        self.assertIsNone(worker.get("current_task_id"))
+
+    def test_finalize_lease_released(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertIn("error", lease_info)
+
+    # --- no apply event ---
+
+    def test_rejects_without_apply_event(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertFalse(result["finalized"])
+        self.assertEqual(result["reason"], "no_successful_apply")
+
+    # --- release_workspace=false ---
+
+    def test_release_workspace_false_keeps_lease(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id, release_workspace=False,
+        ))
+        self.assertTrue(result["finalized"])
+        self.assertFalse(result["workspace_released"])
+
+        # Lease still exists in the store (worker is now idle so get_worker_workspace rejects)
+        stored_lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNotNone(stored_lease)
+        self.assertEqual(stored_lease.lease_id, lease["lease_id"])
+
+    def test_no_active_lease_blocks_finalize(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.workspace_lease_store.release_lease(lease["lease_id"])
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["finalized"])
+        self.assertEqual(result["reason"], "workspace_lease_invalid")
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(task["status"], "running")
+        self.assertEqual(worker["status"], "running")
+        self.assertEqual(worker["current_task_id"], task_id)
+
+    def test_apply_event_must_match_active_lease(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.workspace_lease_store.create_lease("w_other", "dtask_other", str(self.root / "other_workspace"))
+        self.registry.workspace_lease_store.release_lease(lease["lease_id"])
+        replacement_path = str(Path(lease["workspace_path"]).with_name("replacement_workspace"))
+        replacement = self.registry.workspace_lease_store.create_lease("w1", task_id, replacement_path)
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertFalse(result["finalized"])
+        self.assertEqual(result["reason"], "no_successful_apply")
+        self.assertEqual(result["lease_id"], replacement.lease_id)
+        stored_lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNotNone(stored_lease)
+        self.assertEqual(stored_lease.lease_id, replacement.lease_id)
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "running")
+
+    def test_invalid_release_workspace_returns_error(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id, release_workspace="false",
+        ))
+
+        self.assertIn("error", result)
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "running")
+
+    # --- idempotency ---
+
+    def test_repeated_finalize_returns_already_finalized(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        first = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertTrue(first["finalized"])
+
+        second = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertFalse(second["finalized"])
+        self.assertEqual(second["reason"], "already_finalized")
+        self.assertEqual(second["task_status_before"], "completed")
+        self.assertEqual(second["task_status_after"], "completed")
+        self.assertFalse(second["workspace_released"])
+
+    # --- validation errors ---
+
+    def test_unknown_worker_returns_error(self):
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="nope", task_id="dtask_x",
+        ))
+        self.assertIn("error", result)
+
+    def test_empty_worker_id_returns_error(self):
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="", task_id="dtask_x",
+        ))
+        self.assertIn("error", result)
+
+    def test_empty_task_id_returns_error(self):
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id="",
+        ))
+        self.assertIn("error", result)
+
+    def test_offline_worker_returns_error(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_task_not_assigned_to_worker_returns_error(self):
+        task_id = self._register_and_assign(worker_id="w1")
+        self._prepare_workspace("w1", task_id)
+        self.registry.call("register_worker", worker_id="w2")
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w2", task_id=task_id,
+        ))
+        self.assertIn("error", result)
+
+    def test_task_not_running_returns_error(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="assigned", current_task_id=task_id)
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        self.assertFalse(result["finalized"])
+        self.assertEqual(result["reason"], "task_not_running")
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_goal_leak_in_already_finalized(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_goal_leak_in_no_apply(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "finalize_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_finalize_event_payload_safe(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [
+            ("a.py", self.SECRET_SENTINEL),
+        ])
+
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        events = self.registry.durable_event_store.list_events(
+            task_id=task_id, worker_id="w1", max_results=20,
+        )
+        finalized = [
+            e for e in events
+            if e.event_type == TASK_STATUS_CHANGED
+            and (e.payload or {}).get("operation") == "workspace_merge_finalize"
+        ]
+        released = [
+            e for e in events
+            if e.event_type == WORKSPACE_RELEASED
+            and (e.payload or {}).get("operation") == "workspace_merge_finalize_release"
+        ]
+        self.assertEqual(len(finalized), 1)
+        self.assertEqual(len(released), 1)
+        payload = finalized[0].payload
+        self.assertEqual(payload["lease_id"], lease["lease_id"])
+        serialized = json.dumps([e.to_dict() for e in finalized + released], ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, serialized)
+        self.assertNotIn("step one", serialized)
+
+    def test_does_not_mutate_project_root(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        before = sorted(p.name for p in self.root.iterdir())
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+        after = sorted(p.name for p in self.root.iterdir())
+        self.assertEqual(before, after)
+
+    def test_does_not_mutate_workspace_contents(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+
+        ws = Path(lease["workspace_path"])
+        before = sorted(p.name for p in ws.rglob("*") if p.is_file())
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+        after = sorted(p.name for p in ws.rglob("*") if p.is_file())
+        self.assertEqual(before, after)
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_finalize(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("a.py", "a\n")])
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        # Audit tool still works
+        audit = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+        self.assertGreaterEqual(audit["count"], 1)
+
+        # Worker tools still work
+        workers = json.loads(self.registry.call("list_workers"))
+        self.assertGreaterEqual(len(workers), 1)
+
+        # Task tools still work
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "completed")
+
+        # Register new worker still works
+        self.registry.call("register_worker", worker_id="w2")
+        w2 = json.loads(self.registry.call("get_worker", worker_id="w2"))
+        self.assertEqual(w2["worker_id"], "w2")
 
 
 if __name__ == "__main__":

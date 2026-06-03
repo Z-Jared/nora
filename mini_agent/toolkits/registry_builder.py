@@ -2732,6 +2732,168 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _finalize_worker_workspace_merge_json(worker_id: str, task_id: str, release_workspace: bool = True) -> str:
+        if not isinstance(release_workspace, bool):
+            return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
+        worker_id = worker_id.strip()
+        task_id = task_id.strip()
+        if not worker_id:
+            return _json.dumps({"error": "worker_id 不能为空"}, ensure_ascii=False)
+        if not task_id:
+            return _json.dumps({"error": "task_id 不能为空"}, ensure_ascii=False)
+        worker = durable_worker_store.get_worker(worker_id)
+        if worker is None:
+            return _json.dumps({"error": f"未找到 worker: {worker_id}"}, ensure_ascii=False)
+        task = durable_task_store.get_task(task_id)
+        if task is None:
+            return _json.dumps({"error": f"未找到 durable task: {task_id}"}, ensure_ascii=False)
+        if task.worker_id != worker_id:
+            return _json.dumps({"error": f"task {task_id} 未分配给 worker {worker_id}"}, ensure_ascii=False)
+        if task.status == "completed":
+            return _json.dumps({
+                "finalized": False,
+                "reason": "already_finalized",
+                "worker_id": worker_id,
+                "task_id": task_id,
+                "lease_id": "",
+                "task_status_before": task.status,
+                "task_status_after": task.status,
+                "worker_status_before": worker.status,
+                "worker_status_after": worker.status,
+                "workspace_released": False,
+            }, ensure_ascii=False)
+        if worker.status == WorkerStatus.OFFLINE:
+            return _json.dumps({"error": f"worker {worker_id} 已离线"}, ensure_ascii=False)
+        if task.status != "running":
+            return _json.dumps({
+                "finalized": False,
+                "reason": "task_not_running",
+                "worker_id": worker_id,
+                "task_id": task_id,
+                "task_status": task.status,
+            }, ensure_ascii=False)
+        lease, err = _resolve_and_validate_lease(worker_id, task_id)
+        if err:
+            return _json.dumps({
+                "finalized": False,
+                "reason": "workspace_lease_invalid",
+                "worker_id": worker_id,
+                "task_id": task_id,
+                "lease_id": "",
+                "task_status_before": task.status,
+                "task_status_after": task.status,
+                "worker_status_before": worker.status,
+                "worker_status_after": worker.status,
+                "workspace_released": False,
+            }, ensure_ascii=False)
+        try:
+            events = registry.durable_event_store.list_events(
+                task_id=task_id,
+                source="workspace_merge",
+                worker_id=worker_id,
+                max_results=100,
+            )
+        except Exception:
+            return _json.dumps({"error": "event 查询失败"}, ensure_ascii=False)
+        has_apply = any(
+            (e.payload or {}).get("operation") == "workspace_merge_apply"
+            and (e.payload or {}).get("lease_id") == lease.lease_id
+            for e in events
+        )
+        if not has_apply:
+            return _json.dumps({
+                "finalized": False,
+                "reason": "no_successful_apply",
+                "worker_id": worker_id,
+                "task_id": task_id,
+                "lease_id": lease.lease_id,
+                "task_status_before": task.status,
+                "task_status_after": task.status,
+                "worker_status_before": worker.status,
+                "worker_status_after": worker.status,
+                "workspace_released": False,
+            }, ensure_ascii=False)
+        task_status_before = task.status
+        worker_status_before = worker.status
+        try:
+            updated_task = durable_task_store.update_status(task_id, "completed")
+        except ValueError:
+            return _json.dumps({"error": "task 状态更新失败"}, ensure_ascii=False)
+        if updated_task is None:
+            return _json.dumps({"error": "task 状态更新失败"}, ensure_ascii=False)
+        updated_worker = durable_worker_store.update_status(worker_id, WorkerStatus.IDLE, current_task_id=None)
+        if updated_worker is None:
+            return _json.dumps({"error": "worker 状态更新失败"}, ensure_ascii=False)
+        lease_id = lease.lease_id
+        workspace_released = False
+        if release_workspace:
+            workspace_released = bool(workspace_lease_store.release_lease(lease_id))
+            if workspace_released:
+                try:
+                    registry.durable_event_store.record(
+                        event_type=WORKSPACE_RELEASED,
+                        worker_id=worker_id,
+                        task_id=task_id,
+                        summary="workspace lease released after finalization",
+                        payload={
+                            "operation": "workspace_merge_finalize_release",
+                            "lease_id": lease_id,
+                            "worker_id": worker_id,
+                            "task_id": task_id,
+                        },
+                        source="registry",
+                        severity="info",
+                    )
+                except Exception:
+                    pass
+        try:
+            registry.durable_event_store.record(
+                event_type=TASK_STATUS_CHANGED,
+                task_id=task_id,
+                worker_id=worker_id,
+                summary="task finalized after workspace merge",
+                payload={
+                    "operation": "workspace_merge_finalize",
+                    "task_id": task_id,
+                    "lease_id": lease_id,
+                    "status": "completed",
+                    "previous_status": task_status_before,
+                    "worker_id": worker_id,
+                    "workspace_released": workspace_released,
+                },
+                source="registry",
+                severity="info",
+            )
+        except Exception:
+            pass
+        return _json.dumps({
+            "finalized": True,
+            "worker_id": worker_id,
+            "task_id": task_id,
+            "lease_id": lease_id,
+            "task_status_before": task_status_before,
+            "task_status_after": "completed",
+            "worker_status_before": worker_status_before,
+            "worker_status_after": WorkerStatus.IDLE,
+            "workspace_released": workspace_released,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "finalize_worker_workspace_merge",
+        "在成功 apply 后，完成 task/worker/lease 收尾。",
+        _finalize_worker_workspace_merge_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "worker id"},
+                "task_id": {"type": "string", "description": "durable task id"},
+                "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+            },
+            "required": ["worker_id", "task_id"],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:
