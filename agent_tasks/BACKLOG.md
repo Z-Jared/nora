@@ -22,17 +22,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-095: Retryable failed-task planning for worker lifecycle scheduler v1
-- 分配给: Claude A
-- 目标: 扩展 `plan_worker_lifecycle_actions` 与 `explain_worker_lifecycle_scheduler_state`，识别可安全重试的 failed durable tasks，并输出稳定的 retry reason/action labels 与 bounded metadata，不执行实际 retry。
-- 状态: assigned
-
 ### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
 - 分配给: Claude B
 - 目标: 为 scheduler blocker/explanation 工具增加 deterministic offline eval coverage，覆盖 pending/idle、not-ready closeout、missing lease、offline worker、already finalized、limit/bad params、安全不泄漏和 compatibility。
-- 状态: assigned
+- 状态: waiting for rerun after TASK-095 integrated runtime fixes
 
 ## 已完成
+
+### TASK-095: Retryable failed-task planning for worker lifecycle scheduler v1 ✅
+- 完成者: Claude A；包含 TASK-093 两个 blocker 修复
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecyclePlannerTests tests.test_durable_workers.WorkerLifecycleExplainStateTests tests.test_durable_workers.RetryableTaskPlannerTests tests.test_durable_workers.RetryableTaskExplainTests tests.test_durable_workers.BlockerFixTests` 77 tests OK；`python3 -m unittest tests.test_durable_workers` 543 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 710 tests OK；`python3 evals/run_evals.py` 323 passed；`git diff --check` OK。
+- 内容: 扩展只读 `plan_worker_lifecycle_actions` 与 `explain_worker_lifecycle_scheduler_state`，识别 `failed` 且 `retry_count < max_retries` 且无 active owner worker 的 retryable durable tasks；规划 `retry_failed_task`，保持 closeout > retry > dispatch ordering；explain 输出 `retry_available`、`retry_exhausted`、`retry_blocked_active_worker`、`retry_blocked_missing_capacity`、`retry_not_needed` 等 bounded reason/action metadata；不执行 retry、不 mutation、不泄漏 task goal/steps/file content/reviewer/shell/env/request/workspace paths/secrets；修复 `worker_unavailable` closeout candidate 映射为 `worker_offline`，以及 `worker_id` filter 顶层 tasks 不再泄漏其他 worker 的 task。
 
 ### TASK-093: Worker lifecycle scheduler blocker explanation v1 ✅
 - 完成者: Claude A；按 PM 三轮初审反馈修正 filter semantics

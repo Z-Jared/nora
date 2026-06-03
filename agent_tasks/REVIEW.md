@@ -1,6 +1,6 @@
 # CCB Code Review Report
 
-Reviewed: TASK-093 Worker lifecycle scheduler blocker explanation v1
+Reviewed: TASK-095 Retryable failed-task planning for worker lifecycle scheduler v1
 Worker: Claude A
 Status: **APPROVED**
 
@@ -8,164 +8,164 @@ Status: **APPROVED**
 
 ## Review Scope
 
-### 1. Filter Semantics (worker_id/task_id)
+### 1. Retry Logic Correctness
 
 **Verdict: ✅ CORRECT**
 
-**Post-filter logic (registry_builder.py):**
+**Retryable detection (registry_builder.py planner):**
 ```python
-if task_id:
-    blocked_reasons = [r for r in blocked_reasons if r.get("task_id") == task_id or r.get("reason") == "no_action_needed"]
-    next_actions = [a for a in next_actions if a.get("task_id") == task_id]
-if worker_id:
-    blocked_reasons = [r for r in blocked_reasons if r.get("worker_id") == worker_id or r.get("reason") == "no_action_needed"]
-    next_actions = [a for a in next_actions if a.get("worker_id") == worker_id]
+failed_tasks = [t for t in tasks if t.status == "failed"]
+retryable_tasks = []
+for t in failed_tasks:
+    if t.retry_count >= t.max_retries:
+        retry_exhausted_count += 1
+        continue
+    # Check if an active/running worker is still attached
+    owner_worker = None
+    for w in workers:
+        if w.current_task_id == t.task_id and w.status in (WorkerStatus.RUNNING, WorkerStatus.ASSIGNED):
+            owner_worker = w
+            break
+    if owner_worker:
+        retry_blocked_count += 1
+        continue
+    retryable_tasks.append(t)
 ```
 
-**Filter behavior:**
-- ✅ Equality check (`==`) used, not truthy check (PM Round 3 fix)
-- ✅ `task_id` filter: keeps only entries where `task_id == requested_task_id` (or `no_action_needed`)
-- ✅ `worker_id` filter: keeps only entries where `worker_id == requested_worker_id` (or `no_action_needed`)
-- ✅ `planned_actions` filtered during generation: skips actions that don't match requested worker_id/task_id
-- ✅ Empty-field entries skipped when filter set (PM Round 2 fix)
+**Semantic correctness:**
+- ✅ Checks `t.status == "failed"` — only failed tasks considered
+- ✅ Checks `t.retry_count >= t.max_retries` — exhausted retries excluded
+- ✅ Checks active worker (`RUNNING` or `ASSIGNED`) still attached — prevents retry while worker active
+- ✅ Uses existing `DurableTask.retry_count` and `DurableTask.max_retries` fields
+- ✅ Consistent with `retry_durable_task` semantics (which increments retry_count)
 
-**Verified by Round 3 tests:**
-- ✅ `test_task_filter_excludes_other_running_task`: Two workers + two tasks, filter by dtask_1 → dtask_2/w2 excluded from blocked_reasons/next_actions/planned_actions
-- ✅ `test_worker_filter_excludes_other_running_worker`: Two workers + two running tasks, filter by w1 → w2/dtask_2 excluded
+### 2. Planner Action Ordering
 
-### 2. Read-Only Verification
+**Verdict: ✅ CORRECT**
 
-**Verdict: ✅ READ-ONLY**
+**Ordering: closeout > retry > dispatch**
 
-**Implementation analysis:**
-- ✅ Calls `durable_worker_store.list_workers()` — read-only
-- ✅ Calls `durable_task_store.list_tasks()` — read-only
-- ✅ Calls `_list_worker_workspace_merge_closeout_candidates_json()` — read-only
-- ✅ Calls `_plan_worker_lifecycle_actions_json()` — read-only
-- ✅ No `create`, `update`, `delete`, `record`, `upsert` calls on any store
-- ✅ Registered with `category="task"`, `risk="read"`, `requires_confirmation=False`
+```python
+# Closeouts added first (existing code)
+for w in ready_closeout_workers:
+    actions.append({"action": "finalize_ready_workspace_merge", ...})
 
-**Verified by tests:**
-- ✅ `test_dry_run_no_mutation`: Compares task list before/after, no changes
-- ✅ `test_permission_read_only_no_confirmation`: Verifies `requires_confirmation=False`
+# Retry actions come after closeouts, before dispatch
+for t in retryable_tasks:
+    if len(actions) >= limit:
+        break
+    actions.append({"action": "retry_failed_task", ...})
 
-### 3. Bounded/Safe Output
+# Dispatch comes last (existing code)
+if idle_workers and pending_tasks and len(actions) < limit:
+    actions.append({"action": "dispatch_pending_task", ...})
+```
 
-**Verdict: ✅ SAFE**
+**Verified by test:**
+- ✅ `test_closeout_priority_ahead_of_retry`: Creates ready closeout + failed task, verifies `finalize_ready_workspace_merge` index < `retry_failed_task` index
 
-**Output fields:**
-- ✅ `scheduler`, `filters`, `limit`, `summary` — safe metadata
-- ✅ `workers` — worker_id, status, current_task_id only
-- ✅ `tasks` — task_id, status, worker_id only
-- ✅ `closeout_candidates` — worker_id, task_id, ready, reason, task_status, worker_status, lease_id
-- ✅ `planned_actions` — action, worker_id, task_id only
-- ✅ `blocked_reasons` — worker_id, task_id, reason, detail
-- ✅ `next_actions` — action, worker_id, task_id, reason
+**Read-only planner:**
+- ✅ Planner only adds `retry_failed_task` actions to plan
+- ✅ Does NOT execute `retry_durable_task` (no mutation)
+- ✅ `test_no_mutation` verifies task status and retry_count unchanged after planning
 
-**Safety assertions in tests:**
-- ✅ `test_no_goal_leak`: Sentinel goal absent from output
-- ✅ `test_no_steps_leak`: Step text absent from output
-- ✅ `test_no_file_content_leak`: File content absent from output
-- ✅ `test_no_reviewer_leak`: Reviewer summary absent from output
-- ✅ `test_no_shell_env_leak`: Shell/env/request sentinels absent from output
-- ✅ `test_no_workspace_path_leak`: Workspace path fragment absent from output
-- ✅ `test_no_secret_sentinel_leak`: Secret sentinel absent from output
+### 3. Explain Output Safety
 
-**Parameter validation:**
-- ✅ `worker_id` must be string (non-string returns error)
-- ✅ `task_id` must be string (non-string returns error)
-- ✅ `limit` must be int (bool/float/string returns error), clamped 1..100
+**Verdict: ✅ SAFE AND BOUNDED**
 
-### 4. Test Coverage Quality
+**Retry reasons in explain output:**
+- ✅ `retry_available` — task is retryable, idle workers exist
+- ✅ `retry_exhausted` — max retries reached
+- ✅ `retry_blocked_active_worker` — worker still active on task
+- ✅ `retry_blocked_missing_capacity` — no idle workers available
+- ✅ `retry_not_needed` — task not in failed status (when task_id filter set)
+
+**Retry next_actions:**
+- ✅ `retry_failed_task` with worker_id="", task_id, reason="retry_available"
+
+**Filter compatibility:**
+- ✅ `task_id` filter: retry reasons/actions only for matching task_id
+- ✅ `worker_id` filter: retry reasons/actions preserved (worker_id="" entries allowed)
+- ✅ No leak of unrelated retry actions when filter set
+
+**Safety assertions:**
+- ✅ `test_no_goal_leak_in_retry`: Sentinel goal absent from planner output
+- ✅ `test_no_goal_leak`: Sentinel goal absent from explain output
+- ✅ `test_no_steps_leak`: Step text absent from explain output
+- ✅ `test_task_filter_no_leak_unrelated_retry`: task_id filter excludes unrelated retry reasons
+
+### 4. TASK-093 Blocker Fixes
+
+**Verdict: ✅ CORRECT**
+
+**Blocker fix 1: `worker_unavailable` → `worker_offline`**
+```python
+elif c.get("reason") == "worker_unavailable":
+    blocked_reasons.append({
+        "worker_id": wid, "task_id": tid,
+        "reason": "worker_offline",
+        "detail": "no unsafe action",
+    })
+```
+- ✅ Maps `worker_unavailable` closeout candidate reason to `worker_offline` in blocked_reasons
+- ✅ Consistent with existing `worker_offline` handling
+- ✅ `test_offline_assigned_worker_returns_worker_offline` verifies mapping
+
+**Blocker fix 2: `worker_id` filter on top-level tasks**
+```python
+if task_id:
+    filtered_tasks = [t for t in all_tasks if t.task_id == task_id]
+elif worker_id:
+    filtered_tasks = [t for t in all_tasks if t.worker_id == worker_id]
+else:
+    filtered_tasks = list(all_tasks)
+```
+- ✅ `task_id` filter takes precedence (existing behavior)
+- ✅ `worker_id` filter applied only when `task_id` not set
+- ✅ `test_worker_filter_excludes_other_worker_tasks_from_top_level` verifies: w1 filter → only w1's tasks in top-level `tasks`
+- ✅ `test_worker_filter_excludes_other_worker_tasks_from_planned_actions` verifies: w1 filter → no w2/dtask_2 in planned_actions
+
+### 5. Test Coverage
 
 **Verdict: ✅ COMPREHENSIVE**
 
-`WorkerLifecycleExplainStateTests` class (37 tests):
+**`RetryableTaskPlannerTests` (7 tests):**
+1. `test_failed_task_with_retries_remaining_is_retryable` — retry_count < max_retries → retry_failed_task action
+2. `test_failed_task_exhausted_retries_not_recommended` — retry_count >= max_retries → no retry action
+3. `test_failed_task_with_active_worker_is_blocked` — RUNNING/ASSIGNED worker → no retry action
+4. `test_closeout_priority_ahead_of_retry` — closeout actions before retry actions
+5. `test_retry_summary_fields` — summary contains retryable_tasks, retry_exhausted, retry_blocked_active_worker
+6. `test_no_goal_leak_in_retry` — sentinel goal absent from planner output
+7. `test_no_mutation` — task status/retry_count unchanged after planning
 
-**State explanation:**
-1. `test_empty_state_returns_no_action_needed` — empty system returns no_action_needed
-2. `test_ready_closeout_explains_finalize` — ready closeout explains finalize action
-3. `test_not_ready_closeout_explains_waiting` — not-ready closeout explains waiting
-4. `test_pending_task_idle_worker_dispatch_available` — pending task + idle worker = dispatch available
-5. `test_pending_task_no_idle_workers` — pending task but no idle workers
-6. `test_idle_worker_no_pending_tasks` — idle worker but no pending tasks
-7. `test_offline_worker_reports_worker_offline` — offline worker reports offline
+**`RetryableTaskExplainTests` (11 tests):**
+8. `test_retryable_failed_task_surfaced` — retry_available in blocked_reasons, retry_failed_task in next_actions
+9. `test_exhausted_retry_not_recommended` — retry_exhausted in blocked_reasons
+10. `test_active_worker_blocks_retry` — retry_blocked_active_worker in blocked_reasons
+11. `test_missing_capacity_blocks_retry` — retry_blocked_missing_capacity in blocked_reasons
+12. `test_task_filter_no_leak_unrelated_retry` — task_id filter excludes unrelated retry reasons
+13. `test_non_failed_task_retry_not_needed` — retry_not_needed for non-failed task
+14. `test_no_goal_leak` — sentinel goal absent
+15. `test_no_steps_leak` — step text absent
+16. `test_no_mutation` — task status/retry_count unchanged
+17. `test_compatibility_with_planner` — explain works after planner
+18. `test_compatibility_with_tick_loop` — explain works after tick/loop
 
-**Filters:**
-8. `test_worker_id_filter` — worker_id filter works
-9. `test_task_id_filter` — task_id filter works
-10. `test_planned_actions_filtered_by_worker_id` — planned_actions filtered by worker_id
-11. `test_planned_actions_filtered_by_task_id` — planned_actions filtered by task_id
-12. `test_task_filter_excludes_unrelated_workers_and_empty_dispatch` — PM Round 2 fix
-13. `test_worker_filter_excludes_unrelated_tasks_and_empty_worker_actions` — PM Round 2 fix
-14. `test_task_filter_excludes_other_running_task` — PM Round 3 fix
-15. `test_worker_filter_excludes_other_running_worker` — PM Round 3 fix
-
-**Parameter validation:**
-16. `test_limit_clamp_low` — limit=0 → 1
-17. `test_limit_clamp_high` — limit=999 → 100
-18. `test_limit_bool_returns_error` — bool rejected
-19. `test_limit_float_returns_error` — float rejected
-20. `test_limit_string_returns_error` — string rejected
-21. `test_worker_id_non_string_returns_error` — non-string rejected
-22. `test_task_id_non_string_returns_error` — non-string rejected
-
-**Safety/no-leak:**
-23. `test_no_goal_leak` — sentinel goal absent
-24. `test_no_steps_leak` — step text absent
-25. `test_no_file_content_leak` — file content absent
-26. `test_no_reviewer_leak` — reviewer summary absent
-27. `test_no_shell_env_leak` — shell/env/request absent
-28. `test_no_workspace_path_leak` — workspace path absent
-29. `test_no_secret_sentinel_leak` — secret sentinel absent
-
-**Permission/mutation:**
-30. `test_permission_read_only_no_confirmation` — read-only, no confirmation
-31. `test_dry_run_no_mutation` — no task state mutation
-
-**Output structure:**
-32. `test_output_has_required_fields` — all required fields present
-
-**Compatibility:**
-33. `test_compatibility_with_planner` — works alongside planner
-34. `test_compatibility_with_scheduler_tick` — works alongside scheduler tick
-35. `test_compatibility_with_scheduler_loop` — works alongside scheduler loop
-36. `test_compatibility_with_run_once` — works alongside run-once
-37. `test_compatibility_with_closeout_candidates` — works alongside closeout candidates
-
-### 5. Compatibility with Existing Tools
-
-**Verdict: ✅ COMPATIBLE**
-
-- ✅ Reuses `list_workers`, `list_tasks`, closeout candidates, planner helpers
-- ✅ No conflicts with planner, tick, loop, run-once, closeout candidate tools
-- ✅ Verified by 5 compatibility tests
-
----
-
-## Test Gaps / Residual Risks
-
-**None identified.**
-
-All critical explain-state behaviors are covered:
-- ✅ Filter semantics (equality check, Round 3 fixes)
-- ✅ Read-only verification
-- ✅ Bounded/safe output (7 safety tests)
-- ✅ Parameter validation (7 tests)
-- ✅ State explanation (7 scenarios)
-- ✅ Compatibility (5 tools)
+**`BlockerFixTests` (4 tests):**
+19. `test_offline_assigned_worker_returns_worker_offline` — worker_unavailable → worker_offline mapping
+20. `test_offline_assigned_worker_no_mutation` — no state change
+21. `test_worker_filter_excludes_other_worker_tasks_from_top_level` — worker_id filter on tasks
+22. `test_worker_filter_excludes_other_worker_tasks_from_planned_actions` — worker_id filter on actions
 
 ---
 
 ## Checks Run
 
 ```text
-WorkerLifecycleExplainStateTests → 37 OK
-Scheduler-related (102) → OK
-test_durable_workers (521) → OK
-broader suite (688) → OK
+Planner+Explain+Retry+Blocker (77) → OK
+test_durable_workers (543) → OK
+broader suite (710) → OK
 python3 evals/run_evals.py → 323 passed, 0 failed
-python3 -m unittest discover -s tests → 2047 OK
 git diff --check → clean
 ```
 
@@ -183,10 +183,24 @@ git diff --check → clean
 
 ---
 
+## Residual Risk
+
+**None identified.**
+
+All critical retryable-task behaviors are covered:
+- ✅ Retry logic (retry_count/max_retries, active worker check)
+- ✅ Action ordering (closeout > retry > dispatch)
+- ✅ Explain output (5 retry reasons, filter compatibility)
+- ✅ Blocker fixes (worker_unavailable mapping, worker_id task filter)
+- ✅ Safety (no goal/steps leak, no mutation)
+- ✅ Compatibility (planner, tick, loop)
+
+---
+
 ## Recommendation
 
 **APPROVE and merge.**
 
-TASK-093 provides a read-only scheduler blocker explanation tool with correct filter semantics (equality check after PM Round 3 fix), bounded safe output, comprehensive test coverage (37 tests), and compatibility with 5 existing tools. No blockers, no technical debt, no known risks.
+TASK-095 correctly extends planner and explain to surface retryable failed tasks using existing DurableTask retry semantics. Action ordering is correct (closeout > retry > dispatch). Explain output is bounded/safe with proper filter compatibility. TASK-093 blocker fixes are correct. Comprehensive test coverage (22 new tests). No blockers, no technical debt, no known risks.
 
 **Next Action**: PM can proceed with git commit and push.

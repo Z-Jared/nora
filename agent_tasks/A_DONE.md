@@ -1,44 +1,47 @@
 # Claude A — Completion Report
 
 Owner: Claude A
-Task: TASK-093 — Worker lifecycle scheduler blocker explanation v1
-Status: **DONE** (PM round 3 filter equality fix)
+Task: TASK-095 — Retryable failed-task planning for worker lifecycle scheduler v1
+Status: **DONE** (includes TASK-093 blocker fixes)
 
 ## Summary
 
-Added `explain_worker_lifecycle_scheduler_state` read-only tool that answers "why is worker lifecycle work not moving, and what would the scheduler do next?"
+Extended `plan_worker_lifecycle_actions` and `explain_worker_lifecycle_scheduler_state` to detect and surface retryable failed tasks. Also fixed two TASK-093 blockers exposed by TASK-094 eval.
 
 ## Changes
 
-### `mini_agent/toolkits/registry_builder.py` (+290 lines)
+### `mini_agent/toolkits/registry_builder.py` (+~70 lines)
 
-- `_explain_worker_lifecycle_scheduler_state_json(worker_id="", task_id="", limit=20)`.
-- `task/read` permission, `requires_confirmation=False`.
-- Reuses `list_workers`, `list_tasks`, closeout candidates, planner helpers.
-- No state mutation.
+**Blocker fix 1: `worker_unavailable` closeout candidate mapping**
+- Added `worker_unavailable` reason handling in closeout candidate processing → maps to `worker_offline` with detail `no unsafe action`.
 
-**PM round 1:** `planned_actions` filtered by `worker_id`/`task_id`.
+**Blocker fix 2: `worker_id` filter on top-level `tasks`**
+- When `worker_id` filter is set, `filtered_tasks` now only includes tasks where `task.worker_id == worker_id`.
+- `task_id` filter takes precedence; `worker_id` task filter is applied only when `task_id` is not set.
 
-**PM round 2:** `planned_actions` skip empty-field when filter set; post-filter `blocked_reasons`/`next_actions` remove empty-field entries.
+**Retry planning (TASK-095):**
+- Planner: detects failed tasks with `retry_count < max_retries` and no active worker; adds `retry_failed_task` actions after closeouts before dispatch; adds summary fields `retryable_tasks`, `retry_exhausted`, `retry_blocked_active_worker`.
+- Explain: adds blocked_reasons for `retry_available`, `retry_exhausted`, `retry_blocked_active_worker`, `retry_blocked_missing_capacity`, `retry_not_needed`; adds `retry_failed_task` next_actions.
 
-**PM round 3 (this round):** Post-filter changed from truthy check to equality check:
-- `task_id` filter: keep only entries where `task_id == requested_task_id` (or `no_action_needed`).
-- `worker_id` filter: keep only entries where `worker_id == requested_worker_id` (or `no_action_needed`).
-- This prevents `dtask_2`/`w2` leaking when filtering by `task_id=dtask_1`.
+### `tests/test_durable_workers.py` (+~290 lines)
 
-### `tests/test_durable_workers.py` (+345 lines)
+**`RetryableTaskPlannerTests`** (7 tests): retry available, exhausted, active worker blocked, closeout priority, summary fields, no leak, no mutation.
 
-Added `WorkerLifecycleExplainStateTests` class with 37 tests including:
-- **Round 3 tests:** `test_task_filter_excludes_other_running_task`, `test_worker_filter_excludes_other_running_worker` — two workers + two tasks, one running, assert filtered output excludes non-matching task/worker in `blocked_reasons`, `next_actions`, `planned_actions`.
+**`RetryableTaskExplainTests`** (11 tests): retry surfaced, exhausted, active worker, missing capacity, filter no leak, retry_not_needed, no leak, no mutation, compatibility.
+
+**`BlockerFixTests`** (4 tests):
+- `test_offline_assigned_worker_returns_worker_offline` — offline worker with task → `worker_offline` in blocked_reasons.
+- `test_offline_assigned_worker_no_mutation` — no state change.
+- `test_worker_filter_excludes_other_worker_tasks_from_top_level` — `worker_id` filter excludes other worker's tasks from top-level `tasks`.
+- `test_worker_filter_excludes_other_worker_tasks_from_planned_actions` — `worker_id` filter excludes other worker's planned actions.
 
 ## Verification
 
 ```text
-WorkerLifecycleExplainStateTests → 37 OK
-Scheduler-related (102) → OK
-test_durable_workers (521) → OK
-broader suite (688) → OK
-git diff --check → clean
+Planner+Explain+Retry+Blocker (77) → OK
+test_durable_workers (543) → OK
+broader suite (710) → OK
+git diff →check → clean
 ```
 
 ## Boundaries
@@ -46,3 +49,4 @@ git diff --check → clean
 - ✅ Only edited registry_builder.py and test_durable_workers.py
 - ✅ No B_TASK/B_DONE, CODEX_TERMINAL_HANDOFF.md, designs/
 - ✅ No commit/push
+- ✅ Read-only planner/explain, no mutation

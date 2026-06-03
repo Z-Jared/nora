@@ -7309,5 +7309,352 @@ class WorkerLifecycleExplainStateTests(unittest.TestCase):
         self.assertGreater(len(w1_reasons), 0)
 
 
+class RetryableTaskPlannerTests(unittest.TestCase):
+    """Tests for retryable failed-task planning in plan_worker_lifecycle_actions (TASK-095)."""
+
+    SECRET_SENTINEL = "RETRY_PLANNER_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_failed_task(self, goal="g", steps="s"):
+        """Create a task, assign to worker, run then fail it. Returns (task_id, worker_id)."""
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps=steps))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="wf")
+        self.registry.call("update_worker_status", worker_id="wf", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        # Clear worker attachment
+        self.registry.call("update_worker_status", worker_id="wf", status="idle")
+        return task_id
+
+    def test_failed_task_with_retries_remaining_is_retryable(self):
+        task_id = self._create_failed_task()
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        retry_actions = [a for a in result["actions"] if a.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_actions), 0)
+        self.assertEqual(retry_actions[0]["task_id"], task_id)
+        self.assertEqual(retry_actions[0]["reason"], "retry_available")
+        self.assertEqual(retry_actions[0]["retry_count"], 0)
+        self.assertEqual(retry_actions[0]["max_retries"], 3)
+
+    def test_failed_task_exhausted_retries_not_recommended(self):
+        task_id = self._create_failed_task()
+        # Exhaust retries: retry → pending → running → fail (3 times)
+        for _ in range(3):
+            self.registry.call("retry_durable_task", task_id=task_id)
+            self.registry.call("update_durable_task", task_id=task_id, status="running")
+            self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        retry_actions = [a for a in result["actions"] if a.get("action") == "retry_failed_task"]
+        self.assertEqual(len(retry_actions), 0)
+        self.assertEqual(result["summary"]["retry_exhausted"], 1)
+
+    def test_failed_task_with_active_worker_is_blocked(self):
+        self.registry.call("register_worker", worker_id="w_active")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_active")
+        self.registry.call("update_worker_status", worker_id="w_active", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        # Worker still active (not cleared)
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        retry_actions = [a for a in result["actions"] if a.get("action") == "retry_failed_task"]
+        self.assertEqual(len(retry_actions), 0)
+        self.assertEqual(result["summary"]["retry_blocked_active_worker"], 1)
+
+    def test_closeout_priority_ahead_of_retry(self):
+        # Set up a ready closeout
+        self.registry.call("register_worker", worker_id="w_close")
+        task_c = json.loads(self.registry.call("create_durable_task", goal="closeout_task", steps="s"))
+        self.registry.call("assign_durable_task", task_id=task_c["task_id"], worker_id="w_close")
+        self.registry.call("update_worker_status", worker_id="w_close", status="running", current_task_id=task_c["task_id"])
+        self.registry.call("update_durable_task", task_id=task_c["task_id"], status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w_close", task_id=task_c["task_id"]))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id="w_close", task_id=task_c["task_id"], decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w_close", task_id=task_c["task_id"])
+
+        # Also create a failed task
+        self._create_failed_task(goal="retry_task")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        actions = result["actions"]
+        # Closeout should come before retry
+        closeout_idx = next((i for i, a in enumerate(actions) if a["action"] == "finalize_ready_workspace_merge"), None)
+        retry_idx = next((i for i, a in enumerate(actions) if a["action"] == "retry_failed_task"), None)
+        self.assertIsNotNone(closeout_idx)
+        self.assertIsNotNone(retry_idx)
+        self.assertLess(closeout_idx, retry_idx)
+
+    def test_retry_summary_fields(self):
+        self._create_failed_task()
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertIn("retryable_tasks", result["summary"])
+        self.assertIn("retry_exhausted", result["summary"])
+        self.assertIn("retry_blocked_active_worker", result["summary"])
+        self.assertEqual(result["summary"]["retryable_tasks"], 1)
+
+    def test_no_goal_leak_in_retry(self):
+        self._create_failed_task(goal=self.SECRET_SENTINEL)
+        result = self.registry.call("plan_worker_lifecycle_actions")
+        self.assertNotIn(self.SECRET_SENTINEL, result)
+
+    def test_no_mutation(self):
+        task_id = self._create_failed_task()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.registry.call("plan_worker_lifecycle_actions")
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(before["retry_count"], after["retry_count"])
+
+
+class RetryableTaskExplainTests(unittest.TestCase):
+    """Tests for retryable failed-task explanation in explain_worker_lifecycle_scheduler_state (TASK-095)."""
+
+    SECRET_SENTINEL = "RETRY_EXPLAIN_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_failed_task(self, goal="g", steps="s"):
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps=steps))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="wf")
+        self.registry.call("update_worker_status", worker_id="wf", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        self.registry.call("update_worker_status", worker_id="wf", status="idle")
+        return task_id
+
+    def test_retryable_failed_task_surfaced(self):
+        task_id = self._create_failed_task()
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        retry_reasons = [r for r in result["blocked_reasons"] if r.get("reason") == "retry_available"]
+        self.assertGreater(len(retry_reasons), 0)
+        self.assertEqual(retry_reasons[0]["task_id"], task_id)
+        retry_actions = [a for a in result["next_actions"] if a.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_actions), 0)
+
+    def test_exhausted_retry_not_recommended(self):
+        task_id = self._create_failed_task()
+        for _ in range(3):
+            self.registry.call("retry_durable_task", task_id=task_id)
+            self.registry.call("update_durable_task", task_id=task_id, status="running")
+            self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        retry_reasons = [r for r in result["blocked_reasons"] if r.get("reason") == "retry_exhausted"]
+        self.assertGreater(len(retry_reasons), 0)
+        self.assertEqual(retry_reasons[0]["task_id"], task_id)
+
+    def test_active_worker_blocks_retry(self):
+        self.registry.call("register_worker", worker_id="w_active")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_active")
+        self.registry.call("update_worker_status", worker_id="w_active", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        retry_reasons = [r for r in result["blocked_reasons"] if r.get("reason") == "retry_blocked_active_worker"]
+        self.assertGreater(len(retry_reasons), 0)
+        self.assertEqual(retry_reasons[0]["worker_id"], "w_active")
+
+    def test_missing_capacity_blocks_retry(self):
+        self._create_failed_task()
+        # Make all workers busy
+        self.registry.call("register_worker", worker_id="w_busy")
+        self.registry.call("update_worker_status", worker_id="w_busy", status="running")
+        # wf is idle from _create_failed_task, but let's also make it busy
+        self.registry.call("update_worker_status", worker_id="wf", status="running")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        retry_reasons = [r for r in result["blocked_reasons"] if r.get("reason") == "retry_blocked_missing_capacity"]
+        self.assertGreater(len(retry_reasons), 0)
+
+    def test_task_filter_no_leak_unrelated_retry(self):
+        """task_id filter must not leak unrelated retry entries."""
+        t1_id = self._create_failed_task(goal="g1")
+        # Create a second failed task
+        self.registry.call("register_worker", worker_id="wf2")
+        task2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s"))
+        t2_id = task2["task_id"]
+        self.registry.call("assign_durable_task", task_id=t2_id, worker_id="wf2")
+        self.registry.call("update_worker_status", worker_id="wf2", status="running", current_task_id=t2_id)
+        self.registry.call("update_durable_task", task_id=t2_id, status="failed", failure_reason="test")
+        self.registry.call("update_worker_status", worker_id="wf2", status="idle")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=t1_id))
+        for reason in result["blocked_reasons"]:
+            if reason.get("task_id"):
+                self.assertEqual(reason["task_id"], t1_id)
+        for action in result["next_actions"]:
+            if action.get("task_id"):
+                self.assertEqual(action["task_id"], t1_id)
+
+    def test_non_failed_task_retry_not_needed(self):
+        """Explicitly filtering a non-failed task shows retry_not_needed."""
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        # Task stays pending (no worker assignment, no closeout reason)
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=task_id))
+        retry_reasons = [r for r in result["blocked_reasons"] if r.get("reason") == "retry_not_needed"]
+        self.assertGreater(len(retry_reasons), 0)
+
+    def test_no_goal_leak(self):
+        self._create_failed_task(goal=self.SECRET_SENTINEL)
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn(self.SECRET_SENTINEL, result)
+
+    def test_no_steps_leak(self):
+        self._create_failed_task()
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("step_text_secret", result.lower())
+
+    def test_no_mutation(self):
+        task_id = self._create_failed_task()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.registry.call("explain_worker_lifecycle_scheduler_state")
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(before["retry_count"], after["retry_count"])
+
+    def test_compatibility_with_planner(self):
+        self._create_failed_task()
+        plan = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("retryable_tasks", plan["summary"])
+        retry_reasons = [r for r in explain["blocked_reasons"] if r.get("reason") == "retry_available"]
+        self.assertGreater(len(retry_reasons), 0)
+
+    def test_compatibility_with_tick_loop(self):
+        self._create_failed_task()
+        tick = json.loads(self.registry.call("run_worker_lifecycle_scheduler_tick"))
+        loop = json.loads(self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1))
+        self.assertIn("tick_id", tick)
+        self.assertIn("loop_id", loop)
+
+
+class BlockerFixTests(unittest.TestCase):
+    """Tests for TASK-093 blocker fixes exposed by TASK-094 eval (TASK-095 PM directive)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def test_offline_assigned_worker_returns_worker_offline(self):
+        """Offline worker with assigned/running task must surface worker_offline in blocked_reasons."""
+        self.registry.call("register_worker", worker_id="w_off")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_off")
+        self.registry.call("update_worker_status", worker_id="w_off", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        # Go offline
+        self.registry.call("update_worker_status", worker_id="w_off", status="offline")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        offline_reasons = [r for r in result["blocked_reasons"]
+                          if r.get("reason") == "worker_offline" and r.get("worker_id") == "w_off"]
+        self.assertGreater(len(offline_reasons), 0)
+
+    def test_offline_assigned_worker_no_mutation(self):
+        """Explain with offline worker must not mutate state."""
+        self.registry.call("register_worker", worker_id="w_off")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_off")
+        self.registry.call("update_worker_status", worker_id="w_off", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_worker_status", worker_id="w_off", status="offline")
+
+        before_task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.registry.call("explain_worker_lifecycle_scheduler_state")
+        after_task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(before_task["status"], after_task["status"])
+
+    def test_worker_filter_excludes_other_worker_tasks_from_top_level(self):
+        """worker_id filter must exclude other worker's tasks from top-level tasks list."""
+        # Two ready workers/tasks
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        self.registry.call("assign_durable_task", task_id=t1["task_id"], worker_id="w1")
+        self.registry.call("assign_durable_task", task_id=t2["task_id"], worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=t1["task_id"])
+        self.registry.call("update_worker_status", worker_id="w2", status="running", current_task_id=t2["task_id"])
+        self.registry.call("update_durable_task", task_id=t1["task_id"], status="running")
+        self.registry.call("update_durable_task", task_id=t2["task_id"], status="running")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1"))
+
+        # Top-level tasks must only contain w1's task
+        for t in result["tasks"]:
+            self.assertEqual(t["worker_id"], "w1")
+        # blocked_reasons must not contain w2/dtask_2
+        for r in result["blocked_reasons"]:
+            self.assertNotEqual(r.get("worker_id"), "w2")
+            self.assertNotEqual(r.get("task_id"), t2["task_id"])
+        # next_actions must not contain w2/dtask_2
+        for a in result["next_actions"]:
+            self.assertNotEqual(a.get("worker_id"), "w2")
+            self.assertNotEqual(a.get("task_id"), t2["task_id"])
+
+    def test_worker_filter_excludes_other_worker_tasks_from_planned_actions(self):
+        """worker_id filter must exclude other worker's planned actions."""
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        self.registry.call("assign_durable_task", task_id=t1["task_id"], worker_id="w1")
+        self.registry.call("assign_durable_task", task_id=t2["task_id"], worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=t1["task_id"])
+        self.registry.call("update_worker_status", worker_id="w2", status="running", current_task_id=t2["task_id"])
+        self.registry.call("update_durable_task", task_id=t1["task_id"], status="running")
+        self.registry.call("update_durable_task", task_id=t2["task_id"], status="running")
+
+        result = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1"))
+
+        for a in result["planned_actions"]:
+            if a.get("worker_id"):
+                self.assertEqual(a["worker_id"], "w1")
+            if a.get("task_id"):
+                self.assertEqual(a["task_id"], t1["task_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

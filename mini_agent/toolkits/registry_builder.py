@@ -3253,6 +3253,39 @@ def build_default_registry(
         pending_tasks = [t for t in tasks if t.status == "pending" and not t.worker_id]
         summary["idle_workers"] = len(idle_workers)
         summary["pending_tasks"] = len(pending_tasks)
+        # Retryable failed tasks: status=failed, retry_count < max_retries, no active worker
+        failed_tasks = [t for t in tasks if t.status == "failed"]
+        retryable_tasks = []
+        retry_exhausted_count = 0
+        retry_blocked_count = 0
+        for t in failed_tasks:
+            if t.retry_count >= t.max_retries:
+                retry_exhausted_count += 1
+                continue
+            # Check if an active/running worker is still attached
+            owner_worker = None
+            for w in workers:
+                if w.current_task_id == t.task_id and w.status in (WorkerStatus.RUNNING, WorkerStatus.ASSIGNED):
+                    owner_worker = w
+                    break
+            if owner_worker:
+                retry_blocked_count += 1
+                continue
+            retryable_tasks.append(t)
+        summary["retryable_tasks"] = len(retryable_tasks)
+        summary["retry_exhausted"] = retry_exhausted_count
+        summary["retry_blocked_active_worker"] = retry_blocked_count
+        # Retry actions come after closeouts, before dispatch
+        for t in retryable_tasks:
+            if len(actions) >= limit:
+                break
+            actions.append({
+                "action": "retry_failed_task",
+                "task_id": t.task_id,
+                "retry_count": t.retry_count,
+                "max_retries": t.max_retries,
+                "reason": "retry_available",
+            })
         if idle_workers and pending_tasks and len(actions) < limit:
             actions.append({
                 "action": "dispatch_pending_task",
@@ -3676,6 +3709,8 @@ def build_default_registry(
             filtered_workers = list(all_workers)
         if task_id:
             filtered_tasks = [t for t in all_tasks if t.task_id == task_id]
+        elif worker_id:
+            filtered_tasks = [t for t in all_tasks if t.worker_id == worker_id]
         else:
             filtered_tasks = list(all_tasks)
 
@@ -3831,6 +3866,12 @@ def build_default_registry(
                         "reason": "task_worker_mismatch",
                         "detail": "worker and task are not paired",
                     })
+                elif c.get("reason") == "worker_unavailable":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "worker_offline",
+                        "detail": "no unsafe action",
+                    })
             else:
                 # No closeout candidate - check basic state
                 if w.status == WorkerStatus.OFFLINE:
@@ -3873,6 +3914,60 @@ def build_default_registry(
                         "worker_id": "", "task_id": t.task_id,
                         "reason": "pending_task_unassigned",
                         "detail": "no_idle_workers",
+                    })
+
+        # Retryable failed tasks
+        for t in filtered_tasks:
+            if t.status != "failed":
+                continue
+            if t.retry_count >= t.max_retries:
+                blocked_reasons.append({
+                    "worker_id": "", "task_id": t.task_id,
+                    "reason": "retry_exhausted",
+                    "detail": f"max retries ({t.max_retries}) reached",
+                })
+                continue
+            # Check if active worker still attached
+            owner_worker = None
+            for w in all_workers:
+                if w.current_task_id == t.task_id and w.status in (WorkerStatus.RUNNING, WorkerStatus.ASSIGNED):
+                    owner_worker = w
+                    break
+            if owner_worker:
+                blocked_reasons.append({
+                    "worker_id": owner_worker.worker_id, "task_id": t.task_id,
+                    "reason": "retry_blocked_active_worker",
+                    "detail": "worker still active on this task",
+                })
+                continue
+            # Retryable
+            idle_workers = [w for w in all_workers if w.status == WorkerStatus.IDLE and not w.current_task_id]
+            if idle_workers:
+                blocked_reasons.append({
+                    "worker_id": "", "task_id": t.task_id,
+                    "reason": "retry_available",
+                    "detail": f"retry {t.retry_count + 1}/{t.max_retries} available",
+                })
+                next_actions.append({
+                    "action": "retry_failed_task",
+                    "worker_id": "", "task_id": t.task_id,
+                    "reason": "retry_available",
+                })
+            else:
+                blocked_reasons.append({
+                    "worker_id": "", "task_id": t.task_id,
+                    "reason": "retry_blocked_missing_capacity",
+                    "detail": "no idle workers available for retry",
+                })
+
+        # For explicitly filtered non-failed tasks, note retry_not_needed
+        if task_id:
+            for t in filtered_tasks:
+                if t.status != "failed" and t.task_id == task_id:
+                    blocked_reasons.append({
+                        "worker_id": "", "task_id": t.task_id,
+                        "reason": "retry_not_needed",
+                        "detail": f"task status is {t.status}, not failed",
                     })
 
         # If nothing found at all
