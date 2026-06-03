@@ -324,6 +324,13 @@ def main() -> int:
         EvalCase("dryrun_safety_no_leak", eval_dryrun_safety_no_leak),
         EvalCase("dryrun_no_mutation", eval_dryrun_no_mutation),
         EvalCase("dryrun_compatibility", eval_dryrun_compatibility),
+        # TASK-077: Apply merge evals
+        EvalCase("apply_merge_approved_path", eval_apply_merge_approved_path),
+        EvalCase("apply_merge_not_ready_rejection", eval_apply_merge_not_ready_rejection),
+        EvalCase("apply_merge_safety_boundaries", eval_apply_merge_safety_boundaries),
+        EvalCase("apply_merge_validation_errors", eval_apply_merge_validation_errors),
+        EvalCase("apply_merge_rollback_no_mutation", eval_apply_merge_rollback_no_mutation),
+        EvalCase("apply_merge_event_and_compatibility", eval_apply_merge_event_and_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -11707,6 +11714,453 @@ def eval_dryrun_compatibility():
             assert claim.get("task_id") == claim_task.task_id
             ws.register_worker("w_dr_dispatch", role="coder")
             ts.create_task(goal="dispatch after dryrun", steps=[{"text": "x"}])
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+# --- TASK-077: Apply merge eval sentinels ---
+_APPLY_SENTINEL_GOAL = "NORA_EVAL_APPLY_GOAL_SENTINEL_s1t2u3"
+_APPLY_SENTINEL_SECRET = "NORA_EVAL_APPLY_SECRET_sk-apply-v4w5x6"
+_APPLY_SENTINEL_STEP = "NORA_EVAL_APPLY_STEP_SENTINEL_y7z8a9"
+_APPLY_SENTINEL_FILE = "NORA_EVAL_APPLY_FILE_SECRET_b0c1d2e3"
+_APPLY_SENTINEL_ENV = "NORA_EVAL_APPLY_ENV_SECRET_f4g5h6i7"
+_APPLY_SENTINEL_REVIEW = "NORA_EVAL_APPLY_REVIEW_SENTINEL_j7k8l9m0"
+_APPLY_SENTINEL_SHELL = "NORA_EVAL_APPLY_SHELL_OUTPUT_n1o2p3q4"
+_APPLY_SENTINEL_REQUEST = "NORA_EVAL_APPLY_REQUEST_STRING_r5s6t7u8"
+
+
+def _setup_apply_merge_worker(registry, worker_id="w_am"):
+    """Helper for apply merge evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_APPLY_SENTINEL_GOAL + " " + _APPLY_SENTINEL_SECRET,
+        steps=[{"text": _APPLY_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def eval_apply_merge_approved_path():
+    """Approved apply writes intended project files only and returns bounded metadata. After apply, dry-run reports no_changes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Create a new file in workspace only (created)
+            (ws_root / "new_file.txt").write_text("new content from workspace", encoding="utf-8")
+
+            # Create a file in both project and workspace with different content (modified)
+            (project_root / "shared.txt").write_text("original project content", encoding="utf-8")
+            (ws_root / "shared.txt").write_text("modified workspace content", encoding="utf-8")
+
+            # Record approved gate with summary sentinels that must not leak.
+            _record_gate(
+                registry,
+                "w_am",
+                tid,
+                "approved",
+                summary=(
+                    f"{_APPLY_SENTINEL_REVIEW}\n"
+                    f"{_APPLY_SENTINEL_SHELL}\n"
+                    f"{_APPLY_SENTINEL_REQUEST}"
+                ),
+            )
+
+            # Apply should succeed
+            result = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result["applied"] is True, f"expected applied=true: {result}"
+            assert result["applied_count"] >= 2, f"expected applied_count>=2: {result}"
+            assert result["created_count"] >= 1, f"expected created_count>=1: {result}"
+            assert result["modified_count"] >= 1, f"expected modified_count>=1: {result}"
+            assert result["lease_id"] == lease_id
+            assert result["worker_id"] == "w_am"
+            assert result["task_id"] == tid
+            assert "files" in result
+            assert len(result["files"]) >= 2
+            result_str = json.dumps(result)
+            assert _APPLY_SENTINEL_REVIEW not in result_str, f"review leaked: {result_str[:200]}"
+            assert _APPLY_SENTINEL_SHELL not in result_str, f"shell leaked: {result_str[:200]}"
+            assert _APPLY_SENTINEL_REQUEST not in result_str, f"request leaked: {result_str[:200]}"
+            assert "--- " not in result_str and "+++ " not in result_str and "@@ " not in result_str, \
+                f"raw patch leaked: {result_str[:200]}"
+
+            # Verify files actually written to project root
+            assert (project_root / "new_file.txt").exists(), "new file not created in project"
+            assert (project_root / "new_file.txt").read_text(encoding="utf-8") == "new content from workspace"
+            assert (project_root / "shared.txt").read_text(encoding="utf-8") == "modified workspace content"
+
+            # After apply, dry-run should report no_changes
+            dry_result = json.loads(registry.call(
+                "dry_run_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert dry_result["ready"] is False, f"dry-run should report not ready after apply: {dry_result}"
+            assert "no_changes" in dry_result["reasons"], f"expected no_changes reason: {dry_result['reasons']}"
+        finally:
+            db.close()
+
+
+def eval_apply_merge_not_ready_rejection():
+    """No gate, changes_requested, blocked, no changes all return applied: false with safe reason labels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+            ws_root = Path(ws_path)
+
+            # Create a file so there are changes
+            (ws_root / "file.txt").write_text("content", encoding="utf-8")
+
+            # No gate → applied: false
+            result_no_gate = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result_no_gate["applied"] is False
+            assert "no_review_gate" in result_no_gate["reasons"]
+
+            # changes_requested → applied: false
+            _record_gate(registry, "w_am", tid, "changes_requested")
+            result_cr = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result_cr["applied"] is False
+            assert "gate_changes_requested" in result_cr["reasons"]
+
+            # blocked → applied: false
+            _record_gate(registry, "w_am", tid, "blocked")
+            result_blocked = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result_blocked["applied"] is False
+            assert "gate_blocked" in result_blocked["reasons"]
+
+            # approved but no changes → applied: false
+            tid2, ws_path2, _ = _setup_apply_merge_worker(registry, worker_id="w_am2")
+            _record_gate(registry, "w_am2", tid2, "approved")
+            result_no_changes = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am2", task_id=tid2,
+            ))
+            assert result_no_changes["applied"] is False
+            assert "no_changes" in result_no_changes["reasons"]
+        finally:
+            db.close()
+
+
+def eval_apply_merge_safety_boundaries():
+    """Sensitive path, binary, oversized, symlink escape, project symlink-to-sensitive are rejected. No sentinel leak."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+            ws_root = Path(ws_path)
+
+            # Sensitive .env file
+            (ws_root / ".env").write_text(_APPLY_SENTINEL_ENV, encoding="utf-8")
+            _record_gate(registry, "w_am", tid, "approved")
+            result_env = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result_env["applied"] is False
+            result_str = json.dumps(result_env)
+            assert _APPLY_SENTINEL_ENV not in result_str, f".env content leaked: {result_str}"
+
+            # Binary file
+            tid2, ws_path2, _ = _setup_apply_merge_worker(registry, worker_id="w_am2")
+            ws_root2 = Path(ws_path2)
+            (ws_root2 / "binary.bin").write_bytes(b"\x00\x01\x02\x03\xff")
+            _record_gate(registry, "w_am2", tid2, "approved")
+            result_binary = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am2", task_id=tid2,
+            ))
+            assert result_binary["applied"] is False
+
+            # Oversized file (>64KB)
+            tid3, ws_path3, _ = _setup_apply_merge_worker(registry, worker_id="w_am3")
+            ws_root3 = Path(ws_path3)
+            large_content = "x" * (64 * 1024 + 1)
+            (ws_root3 / "large.txt").write_text(large_content, encoding="utf-8")
+            _record_gate(registry, "w_am3", tid3, "approved")
+            result_oversized = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am3", task_id=tid3,
+            ))
+            assert result_oversized["applied"] is False
+
+            # Workspace symlink escape is rejected/ignored without leaking target content.
+            tid4, ws_path4, _ = _setup_apply_merge_worker(registry, worker_id="w_am4")
+            ws_root4 = Path(ws_path4)
+            with tempfile.TemporaryDirectory() as outside_dir:
+                outside = Path(outside_dir) / "outside.txt"
+                outside_secret = "NORA_EVAL_APPLY_SYMLINK_ESCAPE_SECRET"
+                outside.write_text(outside_secret, encoding="utf-8")
+                (ws_root4 / "escape_link").symlink_to(outside)
+                _record_gate(registry, "w_am4", tid4, "approved")
+                result_symlink_escape = json.loads(registry.call(
+                    "apply_reviewed_worker_workspace_merge", worker_id="w_am4", task_id=tid4,
+                ))
+                assert result_symlink_escape["applied"] is False
+                assert outside_secret not in json.dumps(result_symlink_escape), result_symlink_escape
+
+            # Project symlink to sensitive file blocks apply and does not leak target content.
+            tid5, ws_path5, _ = _setup_apply_merge_worker(registry, worker_id="w_am5")
+            ws_root5 = Path(ws_path5)
+            project_root = Path(tmpdir)
+            project_symlink_secret = "NORA_EVAL_APPLY_PROJECT_SYMLINK_SECRET"
+            (project_root / ".env").write_text(project_symlink_secret, encoding="utf-8")
+            (project_root / "safe_link").symlink_to(project_root / ".env")
+            (ws_root5 / "safe_link").write_text("worker content", encoding="utf-8")
+            _record_gate(registry, "w_am5", tid5, "approved")
+            result_project_symlink = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am5", task_id=tid5,
+            ))
+            assert result_project_symlink["applied"] is False
+            assert "summary_has_skipped" in result_project_symlink.get("reasons", []), result_project_symlink
+            assert project_symlink_secret not in json.dumps(result_project_symlink), result_project_symlink
+
+            # Multi-file patch budget overflow blocks apply before project writes.
+            tid6, ws_path6, _ = _setup_apply_merge_worker(registry, worker_id="w_am6")
+            ws_root6 = Path(ws_path6)
+            (ws_root6 / "large_a.txt").write_text("a" * (40 * 1024), encoding="utf-8")
+            (ws_root6 / "large_b.txt").write_text("b" * (40 * 1024), encoding="utf-8")
+            _record_gate(registry, "w_am6", tid6, "approved")
+            result_budget = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am6", task_id=tid6,
+            ))
+            assert result_budget["applied"] is False
+            assert "patch_export_has_skipped" in result_budget.get("reasons", []), result_budget
+            assert "patch_budget_exceeded" in result_budget.get("reasons", []), result_budget
+            assert not (project_root / "large_a.txt").exists(), "budget overflow wrote large_a"
+            assert not (project_root / "large_b.txt").exists(), "budget overflow wrote large_b"
+
+            # Safety: no sentinel leak in any output
+            for r in [
+                result_env,
+                result_binary,
+                result_oversized,
+                result_project_symlink,
+                result_budget,
+            ]:
+                r_str = json.dumps(r)
+                assert _APPLY_SENTINEL_GOAL not in r_str, f"goal leaked: {r_str[:200]}"
+                assert _APPLY_SENTINEL_SECRET not in r_str, f"secret leaked: {r_str[:200]}"
+                assert _APPLY_SENTINEL_STEP not in r_str, f"step leaked: {r_str[:200]}"
+                assert _APPLY_SENTINEL_FILE not in r_str, f"file content leaked: {r_str[:200]}"
+
+            # Error output also bounded
+            r_err = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="nonexistent", task_id=tid,
+            ))
+            err_str = json.dumps(r_err)
+            assert _APPLY_SENTINEL_GOAL not in err_str, f"goal leaked in error: {err_str}"
+            assert _APPLY_SENTINEL_SECRET not in err_str, f"secret leaked in error: {err_str}"
+        finally:
+            db.close()
+
+
+def eval_apply_merge_validation_errors():
+    """Unknown worker, no lease, task mismatch, offline, idle, bad max_files rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+
+            # Unknown worker
+            r1 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="nonexistent", task_id=tid,
+            ))
+            assert "error" in r1, f"expected error for unknown worker: {r1}"
+
+            # No lease
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_am_no_lease", role="coder")
+            no_lease_task = ts.create_task(goal="no lease", steps=[{"text": "x"}])
+            ts.assign_worker(no_lease_task.task_id, "w_am_no_lease")
+            ws.update_status("w_am_no_lease", "assigned", current_task_id=no_lease_task.task_id)
+            ts.update_status(no_lease_task.task_id, "running")
+            r2 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am_no_lease", task_id=no_lease_task.task_id,
+            ))
+            assert "error" in r2 and "lease" in r2["error"], f"expected no-lease error: {r2}"
+
+            # Task mismatch
+            other_task = ts.create_task(goal="other", steps=[{"text": "x"}])
+            ts.assign_worker(other_task.task_id, "w_am")
+            ws.update_status("w_am", "assigned", current_task_id=other_task.task_id)
+            ts.update_status(other_task.task_id, "running")
+            r3 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert "error" in r3, f"expected task mismatch error: {r3}"
+
+            # Restore for offline/idle tests
+            ts.assign_worker(tid, "w_am")
+            ws.update_status("w_am", "assigned", current_task_id=tid)
+
+            # Offline
+            ws.update_status("w_am", "offline")
+            r4 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert "error" in r4, f"expected offline error: {r4}"
+
+            # Idle
+            ws.update_status("w_am", "idle")
+            r5 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert "error" in r5, f"expected idle error: {r5}"
+
+            # Restore
+            ws.update_status("w_am", "assigned", current_task_id=tid)
+
+            # Bad max_files
+            r6 = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid, max_files="bad",
+            ))
+            assert "error" in r6, f"expected bad max_files error: {r6}"
+        finally:
+            db.close()
+
+
+def eval_apply_merge_rollback_no_mutation():
+    """Simulated write failure rolls back earlier files. Worker workspace, worker/task state, lease, review gate unchanged."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+
+            # Create files in workspace
+            (ws_root / "file_a.txt").write_text("content a", encoding="utf-8")
+            (ws_root / "file_b.txt").write_text("content b", encoding="utf-8")
+
+            # Snapshot before
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            worker_before = ws.get_worker("w_am")
+            task_before = ts.get_task(tid)
+            lease_before = registry.workspace_lease_store.get_lease_by_worker("w_am")
+
+            # Record approved gate
+            _record_gate(registry, "w_am", tid, "approved")
+
+            # Monkeypatch write_text to fail on second file
+            original_write_text = Path.write_text
+            call_count = [0]
+            def failing_write_text(self, data, encoding="utf-8"):
+                call_count[0] += 1
+                if call_count[0] > 1 and self.name == "file_b.txt":
+                    raise OSError("disk full")
+                return original_write_text(self, data, encoding)
+
+            import unittest.mock
+            with unittest.mock.patch.object(Path, "write_text", failing_write_text):
+                result = json.loads(registry.call(
+                    "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+                ))
+
+            # Should fail with rollback
+            assert result["applied"] is False
+            assert "write_failed" in result.get("reasons", [])
+
+            # Verify rollback: first file should be rolled back too
+            # (if file_a was written before the failure, it should be rolled back)
+            assert not (project_root / "file_a.txt").exists(), "file_a should be removed after rollback"
+            assert not (project_root / "file_b.txt").exists(), "file_b should not exist after rollback"
+
+            # Worker/workspace/state unchanged
+            worker_after = ws.get_worker("w_am")
+            task_after = ts.get_task(tid)
+            lease_after = registry.workspace_lease_store.get_lease_by_worker("w_am")
+            assert worker_after.status == worker_before.status, "worker status mutated"
+            assert worker_after.current_task_id == worker_before.current_task_id, "worker task mutated"
+            assert task_after.status == task_before.status, "task status mutated"
+            assert lease_after is not None, "lease disappeared"
+
+            # Workspace files unchanged
+            assert (ws_root / "file_a.txt").read_text(encoding="utf-8") == "content a"
+            assert (ws_root / "file_b.txt").read_text(encoding="utf-8") == "content b"
+        finally:
+            db.close()
+
+
+def eval_apply_merge_event_and_compatibility():
+    """Successful apply records safe workspace_merge event. Existing tools still work after apply."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_apply_merge_worker(registry)
+            ws_root = Path(ws_path)
+            (ws_root / "applied.txt").write_text("applied content", encoding="utf-8")
+            _record_gate(registry, "w_am", tid, "approved")
+
+            # Apply
+            result = json.loads(registry.call(
+                "apply_reviewed_worker_workspace_merge", worker_id="w_am", task_id=tid,
+            ))
+            assert result["applied"] is True
+
+            # Check event recorded
+            events = registry.durable_event_store.list_events(task_id=tid, event_type="file_edit_finished", max_results=10)
+            merge_events = [e for e in events if e.payload.get("operation") == "workspace_merge_apply"]
+            assert len(merge_events) >= 1, f"expected workspace_merge event: {[e.payload for e in events]}"
+            event = merge_events[0]
+            assert event.source == "workspace_merge"
+            assert event.payload.get("worker_id") == "w_am"
+            assert event.payload.get("task_id") == tid
+            assert event.payload.get("lease_id") == lease_id
+            # Event payload should not leak sentinels
+            payload_str = json.dumps(event.payload)
+            assert _APPLY_SENTINEL_GOAL not in payload_str, f"goal leaked in event: {payload_str}"
+            assert _APPLY_SENTINEL_SECRET not in payload_str, f"secret leaked in event: {payload_str}"
+
+            # list_worker_workspace_merge_applies tool works
+            applies = json.loads(registry.call("list_worker_workspace_merge_applies", worker_id="w_am", task_id=tid))
+            assert applies["count"] >= 1, f"expected applies>=1: {applies}"
+
+            # Existing tools still work
+            worker = json.loads(registry.call("get_worker", worker_id="w_am"))
+            assert worker["worker_id"] == "w_am"
+            task = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert task["task_id"] == tid
+            lease = json.loads(registry.call("get_worker_workspace", worker_id="w_am", task_id=tid))
+            assert lease["lease_id"] == lease_id
+
+            # Review gate still works
+            gate = json.loads(registry.call("get_worker_workspace_review_gate", worker_id="w_am", task_id=tid))
+            assert gate["has_gate"] is True
+
+            # Claim/dispatch still work
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_am_claim", role="coder")
+            claim_task = ts.create_task(goal="claim after apply", steps=[{"text": "x"}])
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_am_claim"))
+            assert claim.get("task_id") == claim_task.task_id
+            ws.register_worker("w_am_dispatch", role="coder")
+            ts.create_task(goal="dispatch after apply", steps=[{"text": "x"}])
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
         finally:

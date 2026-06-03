@@ -5,43 +5,40 @@ Status: assigned
 
 ## Goal
 
-TASK-077: Deterministic eval coverage for worker workspace reviewed merge apply.
+TASK-079: Deterministic eval coverage for worker workspace merge apply audit/history.
 
-TASK-076 runtime is approved and visible in the worktree. Start implementation now.
+TASK-078 runtime is approved and visible in the worktree. Start implementation now.
 
 ## Scope
 
-When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-076 runtime bug.
+When assigned, edit `evals/run_evals.py` only unless you discover a real TASK-078 runtime bug.
 
 Do not call external APIs. Do not start real agents, terminals, shell commands through Nora, browser sessions, git writes, project pushes, process isolation, Docker, UI changes, or model routing.
 
 Planned deterministic offline eval coverage:
 
-1. Approved apply path:
-   - Prepare worker workspace with safe created and modified text files.
-   - Record approved review gate.
-   - `apply_reviewed_worker_workspace_merge` writes intended project files only and returns bounded apply metadata.
-   - After apply, dry-run reports `no_changes`.
+1. Empty and result basics:
+   - `list_worker_workspace_merge_applies` returns empty list before apply.
+   - Successful apply creates an audit row with event_id, created_at, worker_id, task_id, lease_id, applied_count, created_count, modified_count, and safe paths.
 
-2. Not-ready rejection:
-   - No gate, changes_requested, blocked, and no changes all return `applied: false` with safe reason labels.
-   - Patch budget overflow and skipped summary/patch cases are rejected before project writes.
+2. Filters and limits:
+   - worker_id and task_id filters work.
+   - limit is bounded to 1..100.
+   - bad limit returns bounded JSON error.
+   - limit applies after operation filtering so unrelated workspace_merge events do not hide valid apply events.
 
-3. Safety boundaries:
-   - Sensitive path, worker binary, worker oversized, symlink escape, and project symlink-to-sensitive-file cases are rejected and do not leak sentinels.
-   - Output does not leak raw file content, raw patch text, task goal, steps, reviewer summary, shell/env/request strings, or secrets.
-   - Error outputs are bounded and do not leak raw exception strings.
+3. Malformed payload safety:
+   - Malformed counts become 0.
+   - Non-list paths become [].
+   - Sensitive, redacted, denied, traversal, and absolute paths are omitted.
+   - Malformed/sensitive ids do not leak secrets.
 
-4. Validation:
-   - Unknown worker, no lease, task mismatch, offline worker, idle worker, and bad `max_files` are rejected.
+4. No-leak / read-only:
+   - Output does not leak raw file content, patch text, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
+   - Audit query does not mutate project root, worker workspace, worker/task state, lease ownership, or review gate.
 
-5. Rollback / no-mutation:
-   - Simulated later write failure rolls back earlier created/modified project files.
-   - Worker workspace, worker/task state, lease ownership, and review gate remain unchanged.
-
-6. Event and compatibility:
-   - Successful apply records safe `workspace_merge` file-edit event metadata only.
-   - Existing dry-run, summary, patch export, review gate, workspace lease, sandbox guard, read/list/preview/write, claim, and dispatch tools still work after apply.
+5. Compatibility:
+   - Existing apply, dry-run, summary, patch export, review gate, workspace lease, sandbox guard, read/list/preview/write, claim, and dispatch tools still work after audit query.
 
 Keep evals deterministic and offline.
 

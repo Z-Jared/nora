@@ -4670,5 +4670,324 @@ class WorkspaceApplyMergeTests(unittest.TestCase):
         self.assertIn("no_changes", dry["reasons"])
 
 
+class WorkspaceMergeAuditTests(unittest.TestCase):
+    """Tests for list_worker_workspace_merge_applies (TASK-078)."""
+
+    SECRET_SENTINEL = "AUDIT_SECRET_321"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _register_and_assign(self, worker_id="w1", goal="task one"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step one"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="assigned", current_task_id=task["task_id"])
+        return task["task_id"]
+
+    def _prepare_workspace(self, worker_id, task_id):
+        return json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+
+    def _write_ws_file(self, ws_path, rel_path, content):
+        p = Path(ws_path) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    def _record_gate_and_apply(self, task_id, ws_path, files):
+        for rel, content in files:
+            self._write_ws_file(ws_path, rel, content)
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+        return json.loads(self.registry.call(
+            "apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id,
+        ))
+
+    # --- empty list ---
+
+    def test_no_apply_events_returns_empty(self):
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["applies"], [])
+
+    def test_no_apply_events_filtered(self):
+        task_id = self._register_and_assign()
+        self._prepare_workspace("w1", task_id)
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", worker_id="w1", task_id=task_id,
+        ))
+
+        self.assertEqual(result["count"], 0)
+
+    # --- successful apply audit entry ---
+
+    def test_apply_creates_audit_entry(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("new.py", "new\n")])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertEqual(result["count"], 1)
+        entry = result["applies"][0]
+        self.assertEqual(entry["worker_id"], "w1")
+        self.assertEqual(entry["task_id"], task_id)
+        self.assertEqual(entry["lease_id"], lease["lease_id"])
+        self.assertEqual(entry["applied_count"], 1)
+        self.assertEqual(entry["created_count"], 1)
+        self.assertEqual(entry["modified_count"], 0)
+        self.assertIn("new.py", entry["paths"])
+        self.assertIn("event_id", entry)
+        self.assertIn("created_at", entry)
+
+    def test_apply_mixed_counts(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        (self.root / "existing.py").write_text("old\n")
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [
+            ("existing.py", "updated\n"),
+            ("brand_new.py", "brand\n"),
+        ])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        entry = result["applies"][0]
+        self.assertEqual(entry["applied_count"], 2)
+        self.assertEqual(entry["created_count"], 1)
+        self.assertEqual(entry["modified_count"], 1)
+
+    # --- filtering ---
+
+    def test_filter_by_worker_id(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "x\n")])
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", worker_id="w1",
+        ))
+        self.assertEqual(result["count"], 1)
+
+        result_empty = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", worker_id="w_other",
+        ))
+        self.assertEqual(result_empty["count"], 0)
+
+    def test_filter_by_task_id(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "x\n")])
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", task_id=task_id,
+        ))
+        self.assertEqual(result["count"], 1)
+
+        result_empty = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", task_id="dtask_other",
+        ))
+        self.assertEqual(result_empty["count"], 0)
+
+    # --- limit ---
+
+    def test_limit_bounds(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        for i in range(5):
+            self._write_ws_file(lease["workspace_path"], f"f{i}.py", f"content {i}\n")
+        self.registry.call(
+            "record_worker_workspace_review_gate",
+            worker_id="w1", task_id=task_id, decision="approved",
+        )
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=task_id)
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", limit=1,
+        ))
+        self.assertEqual(result["count"], 1)
+
+    def test_bad_limit_returns_error(self):
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", limit="abc",
+        ))
+        self.assertIn("error", result)
+
+    # --- malformed events ignored ---
+
+    def test_unrelated_file_edit_events_ignored(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        # Record an unrelated file edit event
+        self.registry.call(
+            "write_worker_workspace_file",
+            worker_id="w1", task_id=task_id, path="f.txt", content="data",
+        )
+        # Also do a merge apply
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("new.py", "new\n")])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        # The write and the merge apply both produce workspace_merge source events,
+        # but only the apply event has operation="workspace_merge_apply".
+        # f.txt was written before the apply, so it's included in the apply.
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["applies"][0]["applied_count"], 2)
+
+    def test_malformed_payload_returns_safe_defaults(self):
+        # Record a workspace_merge event with missing/malformed payload directly
+        registry = self.registry
+        lease_secret = "OPENAI_API_KEY=lease_secret_123"
+        path_secret = "API_KEY=path_secret_456"
+        registry.durable_event_store.record(
+            event_type="file_edit_finished",
+            task_id="dtask_x",
+            worker_id="w_x",
+            source="workspace_merge",
+            summary="malformed",
+            payload={
+                "operation": "workspace_merge_apply",
+                "lease_id": lease_secret,
+                "applied_count": "not_int",
+                "paths": ["safe.py", ".env", "../escape.py", path_secret, "/tmp/abs.py"],
+            },
+        )
+
+        result = json.loads(registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertEqual(result["count"], 1)
+        entry = result["applies"][0]
+        self.assertEqual(entry["applied_count"], 0)
+        self.assertEqual(entry["lease_id"], "[redacted]")
+        self.assertEqual(entry["paths"], ["safe.py"])
+        serialized = json.dumps(result)
+        self.assertNotIn("lease_secret_123", serialized)
+        self.assertNotIn("path_secret_456", serialized)
+
+    def test_limit_applies_after_operation_filter(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("new.py", "new\n")])
+        self.registry.durable_event_store.record(
+            event_type="file_edit_finished",
+            task_id=task_id,
+            worker_id="w1",
+            source="workspace_merge",
+            summary="unrelated workspace merge event",
+            payload={"operation": "not_workspace_merge_apply"},
+        )
+
+        result = json.loads(self.registry.call(
+            "list_worker_workspace_merge_applies", limit=1,
+        ))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["applies"][0]["applied_count"], 1)
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "x\n")])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_no_raw_content_leak(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        secret = "API_KEY=super_secret_value"
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("config.py", secret)])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_returns_safe_metadata_only(self):
+        task_id = self._register_and_assign(goal=self.SECRET_SENTINEL)
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "data\n")])
+
+        result = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+
+        self.assertIn("count", result)
+        self.assertIn("applies", result)
+        entry = result["applies"][0]
+        for key in ("event_id", "created_at", "worker_id", "task_id", "lease_id",
+                     "applied_count", "created_count", "modified_count", "paths"):
+            self.assertIn(key, entry)
+        # Should NOT contain raw content fields
+        result_str = json.dumps(result)
+        self.assertNotIn("data\n", result_str)
+        self.assertNotIn(self.SECRET_SENTINEL, result_str)
+
+    # --- read-only ---
+
+    def test_audit_is_read_only(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        (self.root / "existing.py").write_text("original\n")
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [
+            ("existing.py", "modified\n"),
+            ("new.py", "new\n"),
+        ])
+
+        before_root_files = set(self.root.rglob("*"))
+        self.registry.call("list_worker_workspace_merge_applies")
+
+        after_root_files = set(self.root.rglob("*"))
+        self.assertEqual(before_root_files, after_root_files)
+        self.assertEqual((self.root / "existing.py").read_text(), "modified\n")
+
+    def test_audit_no_state_mutation(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "x\n")])
+
+        self.registry.call("list_worker_workspace_merge_applies")
+
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "assigned")
+        lease_info = json.loads(self.registry.call("get_worker_workspace", worker_id="w1", task_id=task_id))
+        self.assertEqual(lease_info["lease_id"], lease["lease_id"])
+        gate = json.loads(self.registry.call("get_worker_workspace_review_gate", worker_id="w1", task_id=task_id))
+        self.assertTrue(gate["has_gate"])
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_audit(self):
+        task_id = self._register_and_assign()
+        lease = self._prepare_workspace("w1", task_id)
+        self._record_gate_and_apply(task_id, lease["workspace_path"], [("f.py", "x\n")])
+
+        self.registry.call("list_worker_workspace_merge_applies")
+
+        # All existing tools still work
+        dry = json.loads(self.registry.call("dry_run_worker_workspace_merge", worker_id="w1", task_id=task_id))
+        self.assertIn("ready", dry)
+
+        summary = json.loads(self.registry.call("summarize_worker_workspace_changes", worker_id="w1", task_id=task_id))
+        self.assertIn("files", summary)
+
+        files = json.loads(self.registry.call("list_worker_workspace_files", worker_id="w1", task_id=task_id))
+        self.assertIn("f.py", files["files"])
+
+        content = json.loads(self.registry.call("read_worker_workspace_file", worker_id="w1", task_id=task_id, path="f.py"))
+        self.assertEqual(content["content"], "x\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,25 +6,37 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-078: Worker workspace merge apply audit/history v1
+### TASK-080: Worker workspace merge finalization v1
 - 优先级: medium
 - 预计: 1-2 小时
-- 依赖: TASK-076
+- 依赖: TASK-076/TASK-078
 - 分配: Claude A
-- 目标: 新增只读 audit/history 工具，查询 `apply_reviewed_worker_workspace_merge` 成功 apply 产生的 workspace merge events，支持 worker/task/limit 过滤，输出 bounded safe metadata；本任务不改 apply 行为、不改 evals、不执行 shell/git/UI。
+- 目标: 新增 guarded finalize tool，在 successful workspace merge apply 之后完成 durable task/worker/workspace lease 收尾：确认存在 apply audit event，标记 task completed、worker idle、release workspace lease；不写 project root、不执行 shell/git、不删除 workspace 目录。
 - 验证: `python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 `apply_reviewed_worker_workspace_merge` 和 `workspace_merge` event payload；TASK-076/TASK-077。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/audit/lease/lifecycle tools；TASK-076/TASK-078。
 
-### TASK-077: Deterministic eval coverage for worker workspace reviewed merge apply
+### TASK-079: Deterministic eval coverage for worker workspace merge apply audit/history
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-076
+- 依赖: TASK-078
 - 分配: Claude B
-- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `apply_reviewed_worker_workspace_merge` 的 approved apply、not-ready rejection、safety skipped/budget cases、validation、安全不泄漏、rollback/no-mutation、event metadata 和 compatibility 行为。
+- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `list_worker_workspace_merge_applies` 的 empty/results/filter/limit/malformed payload/safety/read-only/compatibility 行为。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/dry-run/change export/review gate tools；TASK-076 审查记录。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 audit/apply event tools；TASK-078 审查记录。
 
 ## 已完成
+
+### TASK-078: Worker workspace merge apply audit/history v1 ✅
+- 完成者: Claude A；Codex PM 补强 operation-after-limit filtering / malformed sensitive path-id filtering review fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceMergeAuditTests` 17 tests OK；`python3 evals/run_evals.py` 278 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 499 tests OK；`python3 -m unittest discover -s tests` 1858 tests OK；`git diff --check` OK。
+- 内容: 新增只读 `list_worker_workspace_merge_applies(worker_id="", task_id="", limit=20)`；查询 `workspace_merge` / `workspace_merge_apply` file edit events，支持 worker/task/limit 过滤，输出 event_id、created_at、worker/task/lease ids、applied/created/modified counts、safe paths；对 malformed payload 使用 safe defaults，过滤 sensitive/denied/traversal/absolute/redacted paths；不返回 raw content、patch、task goal/steps、reviewer summary、shell/env/request strings 或 secrets。
+
+### TASK-077: Deterministic eval coverage for worker workspace reviewed merge apply ✅
+- 完成者: Claude B；Codex PM 补强 symlink/project symlink/patch budget/safety/rollback eval coverage
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 278 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 499 tests OK；`python3 -m unittest discover -s tests` 1858 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval coverage，覆盖 `apply_reviewed_worker_workspace_merge` approved created/modified apply、post-apply dry-run no_changes、no gate/changes_requested/blocked/no changes rejection、sensitive/binary/oversized/workspace symlink escape/project symlink-to-sensitive/patch budget safety boundaries、validation errors、安全不泄漏 raw patch/file content/task goal/steps/reviewer summary/shell/request strings/secrets、rollback/no-mutation、workspace_merge event metadata，以及 audit/dry-run/review gate/registry/lease/claim/dispatch compatibility。
 
 ### TASK-076: Worker workspace reviewed merge apply v1 ✅
 - 完成者: Claude A；Codex PM 补强 apply-time skipped/budget recheck、bounded failure errors、rollback metadata、safety/compatibility tests

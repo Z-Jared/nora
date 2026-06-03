@@ -2654,6 +2654,84 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _list_worker_workspace_merge_applies_json(worker_id: str = "", task_id: str = "", limit: int = 20) -> str:
+        try:
+            limit = max(1, min(int(limit or 20), 100))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        try:
+            events = registry.durable_event_store.list_events(
+                task_id=task_id or "",
+                source="workspace_merge",
+                worker_id=worker_id or "",
+                max_results=100,
+            )
+        except Exception:
+            return _json.dumps({"error": "event 查询失败"}, ensure_ascii=False)
+        def _safe_audit_label(value, max_len: int = 120) -> str:
+            if not isinstance(value, str):
+                return ""
+            if is_sensitive_text(value):
+                return "[redacted]"
+            if len(value) > max_len:
+                return value[:max_len] + "..."
+            return value
+
+        def _safe_audit_path(value) -> str:
+            if not isinstance(value, str) or value == "[redacted]" or len(value) > 240 or is_sensitive_text(value):
+                return ""
+            path = Path(value)
+            if path.is_absolute() or ".." in path.parts or _has_denied_workspace_part(path.parts):
+                return ""
+            return value
+
+        applies = []
+        for event in events:
+            payload = event.payload or {}
+            if payload.get("operation") != "workspace_merge_apply":
+                continue
+            paths = payload.get("paths", [])
+            if not isinstance(paths, list):
+                paths = []
+            safe_paths = []
+            for p in paths:
+                safe_path = _safe_audit_path(p)
+                if safe_path:
+                    safe_paths.append(safe_path)
+            applies.append({
+                "event_id": _safe_audit_label(event.event_id),
+                "created_at": event.created_at,
+                "worker_id": _safe_audit_label(event.worker_id or ""),
+                "task_id": _safe_audit_label(event.task_id or ""),
+                "lease_id": _safe_audit_label(payload.get("lease_id", "")),
+                "applied_count": payload.get("applied_count", 0) if isinstance(payload.get("applied_count"), int) else 0,
+                "created_count": payload.get("created_count", 0) if isinstance(payload.get("created_count"), int) else 0,
+                "modified_count": payload.get("modified_count", 0) if isinstance(payload.get("modified_count"), int) else 0,
+                "paths": safe_paths,
+            })
+            if len(applies) >= limit:
+                break
+        return _json.dumps({
+            "applies": applies,
+            "count": len(applies),
+        }, ensure_ascii=False)
+
+    registry.register(
+        "list_worker_workspace_merge_applies",
+        "列出 worker workspace merge apply 的审计记录。",
+        _list_worker_workspace_merge_applies_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "按 worker_id 过滤（可选）"},
+                "task_id": {"type": "string", "description": "按 task_id 过滤（可选）"},
+                "limit": {"type": "integer", "description": "最大返回数，默认 20，上限 100"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

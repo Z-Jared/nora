@@ -5,55 +5,69 @@ Status: assigned
 
 ## Goal
 
-TASK-078: Worker workspace merge apply audit/history v1.
+TASK-080: Worker workspace merge finalization v1.
 
-TASK-076 runtime is approved and TASK-077 eval coverage is running in parallel with Claude B. Start implementation now.
+TASK-076 reviewed merge apply and TASK-078 merge apply audit/history are approved. TASK-079 audit eval coverage is running in parallel with Claude B. Start implementation now.
 
-Nora can now apply reviewed worker workspace changes to the project root. The next step is a read-only audit/history surface so Codex PM can inspect prior workspace merge apply events without reading raw file content or patch text.
+Nora can now apply reviewed worker workspace changes and audit those apply events. The next step is a guarded finalization tool that lets Codex PM close out the durable task/worker/lease after a successful apply.
 
-Do not implement new apply behavior, git commits, git pushes, shell execution, process isolation, Docker, UI changes, model routing, worker auto-start, or deletion semantics in this task.
+Do not implement project-root writes, git commits, git pushes, shell execution, process isolation, Docker, UI changes, model routing, worker auto-start, or deletion of workspace directories in this task.
 
 ## Scope
 
-1. Add a read-only registry-level audit tool near the worker workspace merge apply section in `mini_agent/toolkits/registry_builder.py`.
+1. Add a registry-level finalization tool near the worker workspace apply/audit section in `mini_agent/toolkits/registry_builder.py`.
 
    Suggested tool name:
-   - `list_worker_workspace_merge_applies(worker_id="", task_id="", limit=20)`
+   - `finalize_worker_workspace_merge(worker_id, task_id, release_workspace=True)`
 
-2. Query behavior:
-   - Read durable events for successful `apply_reviewed_worker_workspace_merge` operations.
-   - Filter by optional `worker_id` and/or `task_id`.
-   - Bound `limit` to 1..100 and reject non-integer input with bounded JSON error.
-   - Return newest-first results consistent with existing durable event query behavior.
-   - Return only events whose source/operation identify workspace merge apply.
+2. Gate finalization strictly:
+   - Reuse existing worker/task/workspace lease validation.
+   - Require at least one successful `workspace_merge_apply` audit event for the worker/task/lease.
+   - If no successful apply event exists, return bounded JSON with `finalized: false` and safe reason label.
+   - Do not trust caller-provided apply metadata.
 
-3. Output:
+3. Finalization behavior:
+   - Mark the durable task completed using existing lifecycle/store patterns.
+   - Mark the worker idle and clear current_task_id.
+   - If `release_workspace` is true, release the active workspace lease using existing release behavior.
+   - Do not delete workspace directories.
+   - Do not write project root files.
+   - Do not apply patches.
+   - Keep operation idempotent where possible: repeated finalization after completion should return bounded already-finalized metadata rather than corrupting state.
+
+4. Output:
    - Return JSON only.
    - Return bounded safe metadata:
-     - count
-     - event_id, created_at, worker_id, task_id, lease_id
-     - applied_count, created_count, modified_count
-     - bounded safe paths/status metadata if present
+     - finalized boolean
+     - worker_id, task_id, lease_id
+     - task_status_before/after
+     - worker_status_before/after
+     - workspace_released boolean
+     - safe reason labels / error labels
    - Avoid raw file content, raw patch text, summary body, task goal, steps, prompts, env vars, shell output, request strings, reviewer notes, raw exception strings, or secrets.
-   - If event payloads are malformed or missing fields, return safe defaults rather than raw payload values.
 
-4. Compatibility:
-   - Preserve existing behavior of apply, dry-run, summary, patch export, review gate, workspace lease, sandbox guard, read/list/preview/write, claim/dispatch, durable task/worker/event tools, and project-level workspace tools.
-   - Since B is running TASK-077 in parallel, do not edit `evals/run_evals.py` in this task.
-   - If you discover a TASK-076 runtime bug that blocks this audit tool, stop and write it in `agent_tasks/A_DONE.md`; do not broad-refactor.
+5. Event/audit:
+   - Record a safe durable event for successful finalization if an established event pattern is available.
+   - Event payload must contain only safe metadata.
+   - Event-store failure must not corrupt finalized task/worker/lease state; follow existing best-effort patterns.
+
+6. Compatibility:
+   - Preserve existing apply, audit, dry-run, summary, patch export, review gate, workspace lease, sandbox guard, read/list/preview/write, claim/dispatch, durable task/worker/event tools, and project-level workspace tools.
+   - Since B is running TASK-079 in parallel, do not edit `evals/run_evals.py` in this task.
+   - If you discover a TASK-078 runtime bug that blocks this task, stop and write it in `agent_tasks/A_DONE.md`; do not broad-refactor.
 
 ## Tests
 
 Add focused unit tests in `tests/test_durable_workers.py` covering:
 
-- No merge apply events returns empty list.
-- Successful apply creates an audit entry with safe counts and ids.
-- Filtering by worker_id and task_id works.
-- Limit bounds and bad limit handling.
-- Malformed/unrelated file edit events are ignored or safely bounded.
-- Output does not leak raw file content, patch text, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
-- Audit tool is read-only and does not mutate project root, worker workspace, worker/task state, lease ownership, or review gate.
-- Existing apply/dry-run/summary/patch/review gate/read/list/write/preview/claim/dispatch tools still work after audit query.
+- Finalizes after successful apply event: task completed, worker idle/current_task cleared, lease released when requested.
+- Rejects finalization before apply.
+- `release_workspace=false` keeps lease while still completing task/worker.
+- Repeated finalization is bounded/idempotent.
+- Unknown worker, no lease when release required, task mismatch, offline/idle edge cases, and invalid `release_workspace` handling if applicable.
+- Output and event payload do not leak raw file content, patch text, task goal, steps, reviewer summary, shell/env/request strings, or secret sentinels.
+- Does not mutate project root or worker workspace contents.
+- Existing apply/audit/dry-run/summary/patch/review gate/read/list/write/preview/claim/dispatch tools still behave after finalization where applicable.
 
 ## Verification
 

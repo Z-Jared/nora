@@ -1,45 +1,49 @@
-# Claude B Completion Report — TASK-075
+# Claude B Completion Report — TASK-077
 
 Status: approved by Codex PM
 
 ## Summary
 
-Added deterministic offline eval coverage for worker workspace reviewed merge dry-run (`dry_run_worker_workspace_merge`).
+Added deterministic offline eval coverage for worker workspace reviewed merge apply (`apply_reviewed_worker_workspace_merge`).
 
 Codex PM review fixes:
 
-- Added project symlink-to-sensitive-file dry-run eval coverage.
-- Added multi-file patch budget overflow dry-run eval coverage.
-- Strengthened raw patch/reviewer summary/shell/request-string leak assertions.
-- Strengthened no-mutation assertions for primitive worker/task/lease/gate state.
-- Added missing `preview_worker_workspace_write` compatibility assertion.
+- Added project symlink-to-sensitive-file coverage.
+- Added workspace symlink escape coverage.
+- Added multi-file patch budget overflow coverage.
+- Strengthened reviewer summary, shell output, request string, and raw patch leak assertions.
+- Strengthened rollback eval to assert earlier created files are removed.
 
 ## Evals Added
 
-1. `dryrun_ready_path`
-2. `dryrun_not_ready_review_states`
-3. `dryrun_skipped_and_budget`
-4. `dryrun_validation_errors`
-5. `dryrun_safety_no_leak`
-6. `dryrun_no_mutation`
-7. `dryrun_compatibility`
+1. `apply_merge_approved_path`
+2. `apply_merge_not_ready_rejection`
+3. `apply_merge_safety_boundaries`
+4. `apply_merge_validation_errors`
+5. `apply_merge_rollback_no_mutation`
+6. `apply_merge_event_and_compatibility`
 
 ## Diff
 
 ```text
- evals/run_evals.py | 457 ++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 457 insertions(+)
+ evals/run_evals.py | 454 ++++++++++++++++++++++++++++++++
+ 1 file changed, 454 insertions(+)
 ```
 
 ## Verification
 
 ```text
 python3 evals/run_evals.py
-272 passed, 0 failed
+278 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 451 tests in 8.002s
+Ran 499 tests in 9.525s
 OK
+
+python3 -m unittest discover -s tests
+Ran 1858 tests in 121.117s
+OK
+Warning: failed to load plugin broken.py: bad
 
 git diff --check
 OK
@@ -47,6 +51,6 @@ OK
 
 ## Notes
 
-- No runtime code changed.
+- No runtime apply code changed by B.
 - No push performed.
-- TASK-075 is approved; next runtime step is reviewed project-root merge apply.
+- TASK-077 is approved.
