@@ -6,6 +6,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-092: Deterministic eval coverage for scheduler loop v1
+- 分配给: Claude B
+- 目标: 为 scheduler loop v1 增加 deterministic offline eval coverage，覆盖 dry-run no mutation、bounded max_ticks、stop_when_idle、safe closeout-only execution、dispatch/wait blocked reasons、event safety、bad args 和 compatibility。
+- 状态: assigned
+
+### TASK-091: Worker lifecycle scheduler loop v1
+- 分配给: Claude A
+- 目标: 在 `run_worker_lifecycle_scheduler_tick` 之上新增 guarded scheduler loop 工具；默认 dry-run，不启动后台进程，按 max_ticks 执行有限轮 tick，记录 bounded loop summary 和 blocked reason labels。
+- 状态: assigned
+
 ## 已完成
 
 ### TASK-090: Deterministic eval coverage for worker lifecycle run-once ✅
