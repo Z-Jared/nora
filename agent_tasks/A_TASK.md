@@ -1,7 +1,7 @@
 # Claude A Task
 
 Owner: Claude A
-Status: assigned
+Status: completed
 
 ## Task
 
@@ -113,4 +113,5 @@ agent_tasks/notify_codex.sh A
 
 ## Notes
 
-- Do not commit or push.
+- TASK-093 has landed on `main` in commit `1b092a1`.
+- No active task assigned.

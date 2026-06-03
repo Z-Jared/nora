@@ -4,14 +4,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无（TASK-093 已完成）
-- 目标: 为 scheduler blocker/explanation 工具增加 deterministic offline eval coverage，覆盖 pending/idle、not-ready closeout、missing lease、offline worker、already finalized、limit/bad params、安全不泄漏和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
-
 ## 进行中
+
+### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
+- 分配给: Claude B
+- 目标: 为 scheduler blocker/explanation 工具增加 deterministic offline eval coverage，覆盖 pending/idle、not-ready closeout、missing lease、offline worker、already finalized、limit/bad params、安全不泄漏和 compatibility。
+- 状态: assigned
 
 ## 已完成
 
