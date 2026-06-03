@@ -1,75 +1,87 @@
-# TASK-097 — Guarded scheduler retry execution v1
+# TASK-098 — Deterministic eval coverage for guarded scheduler retry execution v1
 
 **Status: APPROVED**
 
 ## Review Summary
 
-The implementation correctly extends `run_worker_lifecycle_once` to execute `retry_failed_task` actions with comprehensive guards. All five guard checks are present and in correct order. Dry-run remains read-only. Output is bounded with no sensitive data leakage.
+All 9 eval cases are substantive, deterministic, and cover every requirement from B_TASK.md. No runtime changes. No weak assertions, test pollution, or resource leaks.
 
 ---
 
-## 1. Retry Execution Scope
+## 1. Coverage of B_TASK.md Requirements
 
-✅ `retry_failed_task` + `retry_available` only.
+| Requirement | Eval | ✓ |
+|------------|------|---|
+| dry-run/no-mutation | `retry_exec_dry_run_once` | ✅ |
+| non-dry-run retry | `retry_exec_non_dry_run_once` | ✅ |
+| tick/loop wrapper | `retry_exec_tick_and_loop` | ✅ |
+| no idle capacity | `retry_exec_no_capacity_skips` | ✅ |
+| active ASSIGNED/RUNNING owner | `retry_exec_active_owner_blocks` | ✅ |
+| stale execution-time guard | `retry_exec_stale_guard` | ✅ |
+| closeout before retry / dispatch skipped | `retry_exec_priority_closeout_before_retry` | ✅ |
+| safety no-leak | `retry_exec_safety_no_leak` | ✅ |
+| compatibility | `retry_exec_compatibility` | ✅ |
 
-Lines 139-146: `reason != "retry_available"` → skip. Only `retry_available` proceeds to dry_run or execution path.
-
-## 2. Execution-Time Guards
-
-All five guards present in correct order:
-
-| Guard | Skip Reason | Line |
-|-------|------------|------|
-| Task exists | `task_not_found` | 158-165 |
-| Status still `failed` | `task_not_failed` | 166-173 |
-| `retry_count < max_retries` | `retry_exhausted` | 174-181 |
-| No active ASSIGNED/RUNNING worker | `retry_blocked_active_worker` | 183-200 |
-| Idle capacity exists | `retry_blocked_missing_capacity` | 202-214 |
-| All pass | `retry_durable_task()` | 216-225 |
-
-Exception handling wraps `retry_durable_task()` → `retry_execution_error` on failure.
-
-## 3. Dry-Run / Dispatch / Ordering
-
-- **Dry-run**: Lines 147-154 return `would_execute=True`, no mutation. ✅
-- **Dispatch not executed**: Only `retry_failed_task` action type is handled in this block; dispatch/closeout handled elsewhere. ✅
-- **Ordering**: Planner produces closeout > retry > dispatch; `run_worker_lifecycle_once` iterates in order. `test_closeout_ahead_of_retry` verifies with `actions.index()`. ✅
-
-## 4. Output Bounded / No Leak
-
-Result fields are all safe: `task_id`, `retry_count`, `max_retries`, `would_execute`, `executed`, `skipped`, `reason`. No goal, steps, failure_reason, workspace path, shell/env/request/secrets.
-
-Five dedicated leak tests:
-- `test_no_goal_leak` — sentinel goal absent
-- `test_no_failure_reason_leak` — "failure_reason" absent
-- `test_no_steps_leak` — sentinel steps absent
-- `test_no_workspace_path_leak` — "/tmp/" and "workspace_path" absent
-- `test_no_shell_env_secret_leak` — sentinel absent
-
-## 5. Test Quality
-
-16 tests, all substantive. No vacuous passes. Key strengths:
-- `test_stale_state_guard` uses mock to simulate state change between planning and execution — proves guard works
-- `test_active_worker_retry_skipped` uses `subTest` for RUNNING/ASSIGNED
-- `test_non_dry_run_retries_failed_task` verifies task becomes `pending` with `retry_count==1`
+All 9 requirements covered. ✅
 
 ---
 
-## Findings
+## 2. `retry_exec_active_owner_blocks` — Not Vacuous
 
-### Minor (Non-blocking)
+This eval proves three things for both ASSIGNED and RUNNING states:
 
-**`test_active_worker_retry_skipped` calls `self.setUp()` inside loop without prior `tearDown()`** (line 342): First iteration's tmpdir/db are not explicitly closed before second iteration creates new ones. `TemporaryDirectory.__del__` will clean up on GC, but explicit `self.tearDown()` before `self.setUp()` in the loop would be cleaner. Does not affect test correctness or CI stability.
+1. **Summary reports blocked**: `summary.retry_blocked_active_worker >= 1` ✅
+2. **No retry action produced**: `len(retry_results) == 0` ✅
+3. **Task not mutated**: `status == "failed"`, `retry_count == 0` ✅
+
+The eval uses `_setup_failed_task(set_worker_idle=False)` to keep the worker assigned, then calls `run_worker_lifecycle_once(dry_run=False)`. Since the planner filters out tasks with active owners, no retry action appears in results. The summary counter and task state prove the blocking is real, not vacuous.
+
+Both ASSIGNED and RUNNING covered in the same eval (two code paths). ✅
+
+---
+
+## 3. `retry_exec_stale_guard` — Proves What It Claims
+
+The eval demonstrates the planner-vs-execution gap:
+
+1. **Planner sees retry**: Calls `plan_worker_lifecycle_actions`, asserts `retry_failed_task` action exists for the task. ✅
+2. **Execution sees stale state**: Monkey-patches `ts.get_task` to return `status="completed"` for the target task. ✅
+3. **Execution skips safely**: Result shows `skipped=True`, `reason="task_not_failed"`. ✅
+4. **Real DB unchanged**: Reads from real DB (not mock), confirms `status=="failed"`, `retry_count==0`. ✅
+
+The `copy.deepcopy` + `patch.object` pattern correctly isolates the mock from real DB state. The eval proves the execution-time guard catches state changes between planning and execution. ✅
+
+---
+
+## 4. Weak Assertions, Pollution, Flakiness, Resource Leaks
+
+**Weak assertions**: None. All assertions check concrete values:
+- `result["dry_run"] is True`
+- `retry_results[0]["would_execute"] is True`
+- `after_task.status == "pending"`
+- `after_task.retry_count == 1`
+- `retry_results[0].get("reason") == "task_not_failed"`
+- `closeout_idx < retry_idx`
+
+**Test pollution**: None. Each eval uses `tempfile.TemporaryDirectory()` with isolated DB. ✅
+
+**Ordering flakiness**: `retry_exec_priority_closeout_before_retry` uses `enumerate` index comparison (`closeout_idx < retry_idx`), which is deterministic for the action list produced by a single run-once call. ✅
+
+**Resource leaks**: All evals use `try/finally: db.close()` pattern. ✅
+
+---
+
+## 5. Runtime Changes
+
+Confirmed: **None**. Diff only modifies `evals/run_evals.py`. B_DONE.md states "None. All evals pass against existing TASK-097 runtime." ✅
 
 ---
 
 ## Checks
 
-- `retry_failed_task` only executes when `reason == "retry_available"` ✅
-- All 5 guards checked at execution time ✅
-- Dry-run read-only ✅
-- Dispatch not executed ✅
-- closeout > retry > dispatch ordering ✅
-- Output bounded, no sensitive leak ✅
-- No weak/vacuous assertions ✅
-- No runtime fix needed ✅
+- 9 evals cover all B_TASK.md requirements ✅
+- `retry_exec_active_owner_blocks` not vacuous (summary + no action + no mutation) ✅
+- `retry_exec_stale_guard` proves planner-sees-retry but execution-skips ✅
+- No weak assertions, pollution, flakiness, or resource leaks ✅
+- No runtime changes ✅
+- PM verified: 358 passed, 726 tests OK, git diff --check clean ✅

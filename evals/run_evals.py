@@ -410,6 +410,15 @@ def main() -> int:
         EvalCase("retry_read_only_no_mutation", eval_retry_read_only_no_mutation),
         EvalCase("retry_safety_no_leak", eval_retry_safety_no_leak),
         EvalCase("retry_compatibility", eval_retry_compatibility),
+        EvalCase("retry_exec_dry_run_once", eval_retry_exec_dry_run_once),
+        EvalCase("retry_exec_non_dry_run_once", eval_retry_exec_non_dry_run_once),
+        EvalCase("retry_exec_tick_and_loop", eval_retry_exec_tick_and_loop),
+        EvalCase("retry_exec_active_owner_blocks", eval_retry_exec_active_owner_blocks),
+        EvalCase("retry_exec_stale_guard", eval_retry_exec_stale_guard),
+        EvalCase("retry_exec_no_capacity_skips", eval_retry_exec_no_capacity_skips),
+        EvalCase("retry_exec_priority_closeout_before_retry", eval_retry_exec_priority_closeout_before_retry),
+        EvalCase("retry_exec_safety_no_leak", eval_retry_exec_safety_no_leak),
+        EvalCase("retry_exec_compatibility", eval_retry_exec_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -15168,6 +15177,306 @@ def eval_retry_compatibility():
 
             # Claim and dispatch still work
             claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_retry"))
+            assert "task_id" in claim or "error" in claim
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+def eval_retry_exec_dry_run_once():
+    """run_worker_lifecycle_once(dry_run=True) returns retry would-execute metadata and does not mutate failed task state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, wid = _setup_failed_task(registry, worker_id="w_retry_dry", retry_count=0, max_retries=3)
+
+            # Snapshot
+            before_task = ts.get_task(tid)
+            before_retry_count = before_task.retry_count
+            before_status = before_task.status
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert result["dry_run"] is True
+            assert result["executed_count"] == 0, f"dry_run should not execute: {result}"
+
+            retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+            assert len(retry_results) >= 1, f"no retry result: {result['results']}"
+            assert retry_results[0]["would_execute"] is True
+            assert retry_results[0]["task_id"] == tid
+
+            # No mutation
+            after_task = ts.get_task(tid)
+            assert after_task.retry_count == before_retry_count, f"retry_count mutated: {after_task.retry_count}"
+            assert after_task.status == before_status, f"status mutated: {after_task.status}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_non_dry_run_once():
+    """run_worker_lifecycle_once(dry_run=False) retries a safe retryable failed task, moving it to pending and incrementing retry_count."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            tid, wid = _setup_failed_task(registry, worker_id="w_retry_exec", retry_count=0, max_retries=3)
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True))
+            assert result["dry_run"] is False
+            assert result["executed_count"] >= 1, f"no execution: {result}"
+
+            retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task" and r.get("task_id") == tid]
+            assert len(retry_results) >= 1, f"no retry result: {result['results']}"
+            assert retry_results[0].get("executed") is True, f"retry not executed: {retry_results[0]}"
+
+            # Task moved to pending, retry_count incremented
+            after_task = ts.get_task(tid)
+            assert after_task.status == "pending", f"task should be pending: {after_task.status}"
+            assert after_task.retry_count == 1, f"retry_count should be 1: {after_task.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_tick_and_loop():
+    """Scheduler tick and loop wrappers execute retry path when dry_run=False."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            # Tick
+            tid1, _ = _setup_failed_task(registry, worker_id="w_retry_tick", retry_count=0, max_retries=3)
+            tick_result = json.loads(registry.call("run_worker_lifecycle_scheduler_tick", limit=5, dry_run=False, release_workspace=True, record_event=False))
+            assert tick_result["executed_count"] >= 1, f"tick no execution: {tick_result}"
+            after1 = ts.get_task(tid1)
+            assert after1.status == "pending", f"tick: task should be pending: {after1.status}"
+            assert after1.retry_count == 1, f"tick: retry_count should be 1: {after1.retry_count}"
+
+            # Loop
+            tid2, _ = _setup_failed_task(registry, worker_id="w_retry_loop", retry_count=0, max_retries=3)
+            loop_result = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=5, dry_run=False, release_workspace=True, stop_when_idle=True, record_event=False))
+            assert loop_result["executed_count"] >= 1, f"loop no execution: {loop_result}"
+            after2 = ts.get_task(tid2)
+            assert after2.status == "pending", f"loop: task should be pending: {after2.status}"
+            assert after2.retry_count == 1, f"loop: retry_count should be 1: {after2.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_active_owner_blocks():
+    """Active owner worker (ASSIGNED or RUNNING) blocks retry execution; summary reports retry_blocked_active_worker."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Case 1: ASSIGNED owner — worker stays assigned to failed task
+            tid1, wid1 = _setup_failed_task(registry, worker_id="w_blk_a", retry_count=0, max_retries=3, set_worker_idle=False)
+            result1 = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False))
+            # Planner should not produce retry action; summary should count blocked
+            assert result1["summary"]["retry_blocked_active_worker"] >= 1, f"ASSIGNED: summary missing blocked: {result1['summary']}"
+            retry_results1 = [r for r in result1["results"] if r.get("action") == "retry_failed_task"]
+            assert len(retry_results1) == 0, f"ASSIGNED: should not have retry action in results: {retry_results1}"
+            # No mutation
+            after1 = ts.get_task(tid1)
+            assert after1.status == "failed", f"ASSIGNED: task mutated: {after1.status}"
+            assert after1.retry_count == 0, f"ASSIGNED: retry_count mutated: {after1.retry_count}"
+
+            # Case 2: RUNNING owner
+            tid2, wid2 = _setup_failed_task(registry, worker_id="w_blk_r", retry_count=0, max_retries=3, set_worker_idle=False)
+            ws.update_status(wid2, "running", current_task_id=tid2)
+            result2 = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False))
+            assert result2["summary"]["retry_blocked_active_worker"] >= 1, f"RUNNING: summary missing blocked: {result2['summary']}"
+            retry_results2 = [r for r in result2["results"] if r.get("action") == "retry_failed_task"]
+            assert len(retry_results2) == 0, f"RUNNING: should not have retry action in results: {retry_results2}"
+            after2 = ts.get_task(tid2)
+            assert after2.status == "failed", f"RUNNING: task mutated: {after2.status}"
+            assert after2.retry_count == 0, f"RUNNING: retry_count mutated: {after2.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_stale_guard():
+    """Stale execution-time guard: planner sees retry action, but get_task returns changed state at execution time."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid, wid = _setup_failed_task(registry, worker_id="w_retry_stale", retry_count=0, max_retries=3, set_worker_idle=True)
+
+            # Verify planner would produce a retry action
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            retry_actions = [a for a in plan["actions"] if a.get("action") == "retry_failed_task" and a.get("task_id") == tid]
+            assert len(retry_actions) >= 1, f"planner should see retry: {plan['actions']}"
+
+            # Monkey-patch get_task to return a "completed" task at execution time.
+            # The planner uses list_tasks (pre-loaded), so it still sees the original failed state.
+            # The execution calls get_task per action, so it sees the patched state.
+            import copy
+            original_task = ts.get_task(tid)
+            stale_task = copy.deepcopy(original_task)
+            stale_task.status = "completed"
+
+            original_get_task = ts.get_task
+
+            def mock_get_task(task_id):
+                if task_id == tid:
+                    return stale_task
+                return original_get_task(task_id)
+
+            from unittest.mock import patch
+            with patch.object(ts, 'get_task', side_effect=mock_get_task):
+                result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False))
+
+            retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task" and r.get("task_id") == tid]
+            assert len(retry_results) >= 1, f"should have retry result: {result['results']}"
+            assert retry_results[0].get("skipped") is True, f"stale guard should skip: {retry_results[0]}"
+            assert retry_results[0].get("reason") == "task_not_failed", f"wrong reason: {retry_results[0]}"
+
+            # Task NOT retried (real DB state unchanged)
+            after_task = ts.get_task(tid)
+            assert after_task.status == "failed", f"task should still be failed: {after_task.status}"
+            assert after_task.retry_count == 0, f"retry_count should be 0: {after_task.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_no_capacity_skips():
+    """No idle capacity skips retry with retry_blocked_missing_capacity and does not mutate the task."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            # Create failed task, set worker idle so planner sees it as retryable,
+            # then set worker offline so execution sees no idle capacity
+            tid, wid = _setup_failed_task(registry, worker_id="w_retry_nocap", retry_count=0, max_retries=3, set_worker_idle=True)
+            ws.update_status(wid, "offline", current_task_id="")
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False))
+            retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task" and r.get("task_id") == tid]
+            assert len(retry_results) >= 1, f"no retry result: {result['results']}"
+            assert retry_results[0].get("skipped") is True, f"should be skipped: {retry_results[0]}"
+            assert retry_results[0].get("reason") == "retry_blocked_missing_capacity", f"wrong reason: {retry_results[0]}"
+
+            # No mutation
+            after_task = ts.get_task(tid)
+            assert after_task.status == "failed", f"task mutated: {after_task.status}"
+            assert after_task.retry_count == 0, f"retry_count mutated: {after_task.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_priority_closeout_before_retry():
+    """Ready closeout still happens before retry; dispatch remains skipped."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Setup ready closeout worker
+            tid_close, wspath, lease_id = _setup_lifecycle_ready_worker(registry, worker_id="w_close_retry_exec")
+            # Setup retryable failed task
+            tid_retry, _ = _setup_failed_task(registry, worker_id="w_retry_prio", retry_count=0, max_retries=3)
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=10, dry_run=False, release_workspace=True))
+            results = result["results"]
+
+            # Find indices
+            closeout_idx = next((i for i, r in enumerate(results) if r.get("action") == "finalize_ready_workspace_merge"), None)
+            retry_idx = next((i for i, r in enumerate(results) if r.get("action") == "retry_failed_task"), None)
+            dispatch_results = [r for r in results if r.get("action") == "dispatch_pending_task"]
+
+            assert closeout_idx is not None, f"no closeout result: {results}"
+            assert retry_idx is not None, f"no retry result: {results}"
+            assert closeout_idx < retry_idx, f"closeout should be before retry: closeout={closeout_idx}, retry={retry_idx}"
+            # Dispatch should be skipped
+            for dr in dispatch_results:
+                assert dr.get("skipped") is True, f"dispatch should be skipped: {dr}"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_safety_no_leak():
+    """Retry execution output does not leak goals, steps, failure reason, shell/env/request sentinels, workspace paths, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, _ = _setup_failed_task(registry, worker_id="w_retry_safe_exec", retry_count=0, max_retries=3)
+
+            # Dry-run
+            result_dry = registry.call("run_worker_lifecycle_once", limit=5, dry_run=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_dry, "goal leaked in dry-run"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_dry, "secret leaked in dry-run"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_dry, "step leaked in dry-run"
+            assert _LIFECYCLE_SENTINEL_FAILURE not in result_dry, "failure reason leaked in dry-run"
+            assert _LIFECYCLE_SENTINEL_ENV not in result_dry, "env sentinel leaked in dry-run"
+            assert _LIFECYCLE_SENTINEL_REQUEST not in result_dry, "request string leaked in dry-run"
+            assert ".workspaces" not in result_dry, "workspace path leaked in dry-run"
+
+            # Non-dry-run
+            result_exec = registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_exec, "goal leaked in non-dry-run"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_exec, "secret leaked in non-dry-run"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_exec, "step leaked in non-dry-run"
+            assert _LIFECYCLE_SENTINEL_FAILURE not in result_exec, "failure reason leaked in non-dry-run"
+        finally:
+            db.close()
+
+
+def eval_retry_exec_compatibility():
+    """Existing tools still work after retry execution calls."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            tid, _ = _setup_failed_task(registry, worker_id="w_retry_compat_exec", retry_count=0, max_retries=3)
+            registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True)
+
+            # Planner still works
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert "actions" in plan
+
+            # Explain still works
+            explain = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            assert "tasks" in explain
+
+            # Scheduler tick still works
+            tick = json.loads(registry.call("run_worker_lifecycle_scheduler_tick", limit=5, dry_run=True))
+            assert "planned_count" in tick
+
+            # Scheduler loop still works
+            loop = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=5, dry_run=True))
+            assert "planned_count" in loop
+
+            # Run-once still works
+            once = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert "planned_count" in once
+
+            # Worker/task registry still works
+            ws = registry.durable_worker_store
+            ws.register_worker("w_after_retry_exec", role="coder")
+            assert ws.get_worker("w_after_retry_exec") is not None
+            new_task = ts.create_task(goal="compat test task", steps=[{"text": "step1"}])
+            assert ts.get_task(new_task.task_id) is not None
+
+            # Claim and dispatch still work
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_retry_exec"))
             assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch

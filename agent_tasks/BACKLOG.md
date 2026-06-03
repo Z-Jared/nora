@@ -14,12 +14,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-098: Deterministic eval coverage for guarded scheduler retry execution v1
-- 分配给: Claude B
-- 目标: 为 TASK-097 的 guarded retry execution 增加 deterministic offline eval coverage，覆盖 dry-run/no-mutation、non-dry-run retry、tick/loop wrapper、missing capacity、active owner、stale guard、安全不泄漏与 compatibility。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-098: Deterministic eval coverage for guarded scheduler retry execution v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补齐 active ASSIGNED/RUNNING owner 和 stale execution-time guard eval
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 358 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 726 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-097 guarded scheduler retry execution 增加 9 个 deterministic offline eval，覆盖 run-once dry-run/no-mutation、non-dry-run retry、tick/loop wrapper retry、active ASSIGNED/RUNNING owner blocking、stale execution-time guard、missing idle capacity skip、closeout before retry/dispatch skipped、安全 no-leak 和 compatibility；无 runtime 变更。
 
 ### TASK-097: Guarded scheduler retry execution v1 ✅
 - 完成者: Claude A；按 PM 初审反馈补强 idle capacity execution guard、ASSIGNED/RUNNING owner、stale execution-time guard 和 safety no-leak 测试
