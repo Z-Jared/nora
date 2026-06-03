@@ -14,12 +14,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-096: Deterministic eval coverage for scheduler retry planning v1
-- 分配给: Claude B
-- 目标: 为 worker lifecycle retry planning/explainability 增加 deterministic offline eval coverage，覆盖 retryable failed task、max-retries exhausted、active-owner/invalid-owner 跳过、安全不泄漏与 compatibility。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-096: Deterministic eval coverage for scheduler retry planning v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补强 RUNNING owner、failure_reason sentinel、read-only/no-mutation 和 filter no-leak 断言
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 349 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 710 tests OK；`git diff --check` OK。
+- 内容: 为 scheduler retry planning/explainability 增加 13 个 deterministic offline eval，覆盖 retryable failed task、max-retries exhausted、active ASSIGNED/RUNNING owner blocking、missing idle capacity、retry ordering（closeout > retry > dispatch）、task/worker filter no-leak、planner/explain read-only no-mutation、failure_reason/secret/workspace safety no-leak 和 compatibility；无 runtime 变更。
 
 ### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1 ✅
 - 完成者: Claude B；包含 PM 初审发现后的 3 行 task filter runtime fix

@@ -1,73 +1,70 @@
 # CCB Code Review Report
 
-Reviewed: TASK-094 — Deterministic eval coverage for scheduler blocker explanation v1
+Reviewed: TASK-096 — Deterministic eval coverage for scheduler retry planning v1
 Worker: Claude B
 Status: **APPROVED**
 
 ---
 
-## 1. Eval Coverage (13 cases)
+## 1. Coverage of TASK-096 Requirements
 
-All 13 evals have substantive assertions covering the required scenarios:
+All 13 evals cover the required scenarios with substantive assertions:
 
 | # | Eval | Key Assertions |
 |---|------|---------------|
-| 1 | `explain_empty_state` | `total_workers==0`, `total_tasks==0`, exactly 1 reason `"no_action_needed"` with correct detail |
-| 2 | `explain_ready_closeout` | `ready_closeout` reason with correct `worker_id`/`task_id`, `"finalize"` in detail, `finalize_ready_workspace_merge` next action |
-| 3 | `explain_not_ready_closeout` | Not-ready worker has blocked reason from expected set (`waiting_for_workspace_merge_apply`, `missing_active_lease`, etc.) |
-| 4 | `explain_dispatch_available` | `dispatch_available` reason with specific worker_id, `detail=="dispatch_blocked_in_scheduler"`, `dispatch_pending_task` next action |
-| 5 | `explain_pending_no_idle_workers` | `pending_task_unassigned` reason with `detail=="no_idle_workers"` |
-| 6 | `explain_idle_no_pending` | Idle worker has `"no_pending_tasks"` reason |
-| 7 | `explain_offline_worker` | Offline worker has `"worker_offline"` reason |
-| 8 | `explain_worker_filter` | `worker_id` filter: all reasons match filtered worker, all workers output match |
-| 9 | `explain_task_filter` | `task_id` filter: all reasons match filtered task, all tasks output match |
-| 10 | `explain_filter_no_leak` | Two ready workers, filter by one → other worker_id absent from full JSON output; two tasks, filter by one → other task_id absent |
-| 11 | `explain_limit_clamp_and_bad_args` | Bad `worker_id`/`task_id`/`limit` types → error; `limit=0→1`, `limit=999→100` |
-| 12 | `explain_safety_no_leak` | 8 sentinels (goal, secret, step, file, reviewer, shell, request, env) + `.workspaces` path fragment all absent |
-| 13 | `explain_compatibility` | Planner, tick, loop, run-once, closeout query, worker/task registry, claim, dispatch all still work |
+| 1 | `retry_planner_available` | `retry_failed_task` action present with `task_id==tid`, `reason=="retry_available"`, `retry_count==0`, `max_retries==3` |
+| 2 | `retry_planner_exhausted` | No retry action for exhausted task; `summary.retry_exhausted >= 1` |
+| 3 | `retry_planner_blocked_active_worker` | Both ASSIGNED and RUNNING owner cases: no retry action, `summary.retry_blocked_active_worker >= 1` |
+| 4 | `retry_explain_available` | `retry_available` reason with `"retry 2/3"` in detail; `retry_failed_task` next action present |
+| 5 | `retry_explain_exhausted` | `retry_exhausted` reason with `"max retries"` in detail |
+| 6 | `retry_explain_blocked_active_worker` | Both ASSIGNED and RUNNING: `retry_blocked_active_worker` reason with correct `worker_id` and `"active"` in detail |
+| 7 | `retry_explain_missing_capacity` | `retry_blocked_missing_capacity` reason with `"no idle workers"` in detail |
+| 8 | `retry_priority_vs_closeout` | `closeout_idx < retry_idx` (index comparison) |
+| 9 | `retry_priority_vs_dispatch` | `retry_idx < dispatch_idx` (index comparison) |
+| 10 | `retry_filter_no_leak` | `task_id` filter: tid2/w_f2 absent from full JSON; `worker_id` filter: retry entries (empty worker_id) excluded, tid2/w_f2 absent |
+| 11 | `retry_read_only_no_mutation` | 5 fields (status, retry_count, worker_id, worker status, current_task_id) unchanged after planner AND explain |
+| 12 | `retry_safety_no_leak` | 5 sentinels (goal, secret, step, failure_reason) + workspace path absent from planner AND explain output |
+| 13 | `retry_compatibility` | Planner, explain, tick, loop, run-once, registry, claim, dispatch all still work |
 
-**Verdict: ✅ All evals have substantive assertions.**
-
----
-
-## 2. Runtime Fix (3 lines)
-
-```python
-# When task_id filter is set, also filter workers to those assigned to that task
-if task_id:
-    filtered_workers = [w for w in filtered_workers if w.current_task_id == task_id]
-```
-
-**Analysis:**
-- Placed after `filtered_tasks` logic, before `workers_out` generation
-- Only activates when `task_id` is set (no effect on `worker_id` filter or unfiltered calls)
-- Filters by `current_task_id == task_id` — a worker is relevant to a task only if assigned to it
-- Cannot hide relevant workers: a worker with `current_task_id` matching the requested task is the only worker that matters for that task's explanation
-- `worker_id` filter already narrows workers at line 3707, so this fix only affects the `task_id`-only filter path
-
-**Verdict: ✅ Correct, no risk of hiding relevant workers.**
+**PM fixes verified:**
+- ✅ RUNNING owner explicitly tested (items 3, 6)
+- ✅ `_LIFECYCLE_SENTINEL_FAILURE` sentinel added and asserted absent (item 12)
+- ✅ `eval_retry_read_only_no_mutation` covers both planner and explain (item 11)
+- ✅ Filter assertions strengthened with tid2/w_f2 exclusion (item 10)
 
 ---
 
-## 3. Output Safety
+## 2. Deterministic/Offline
 
-- ✅ Read-only: `explain_worker_lifecycle_scheduler_state` is registered with `task/read` permission, `requires_confirmation=False`
-- ✅ Bounded: output contains only `scheduler`, `filters`, `limit`, `summary`, `workers`, `tasks`, `closeout_candidates`, `planned_actions`, `blocked_reasons`, `next_actions`
-- ✅ No-leak: `eval_explain_safety_no_leak` verifies 8 sentinels + workspace path fragment absent
-- ✅ Filter no-leak: `eval_explain_filter_no_leak` verifies unrelated worker/task data excluded from filtered output
+- ✅ All evals use `tempfile.TemporaryDirectory()` for isolation
+- ✅ No external API calls
+- ✅ No timing dependencies
+- ✅ Ordering assertions use index comparison (`closeout_idx < retry_idx`), not incidental ordering
+- ✅ `_setup_failed_task` helper properly cycles through `retry_durable_task` to set `retry_count`
 
 ---
 
-## 4. Missing Eval or Runtime Fix?
+## 3. Weak Assertions
 
-None identified. The 13 evals cover all scenarios listed in the task description. The 3-line runtime fix is minimal and correct.
+None identified. All assertions are substantive:
+- Negative assertions (no retry action when exhausted/blocked) paired with positive summary counts
+- Specific string matching (`"retry 2/3"`, `"max retries"`, `"active"`, `"no idle workers"`)
+- Full JSON string search for leaked IDs in filter tests
+- 5-field before/after comparison in no-mutation test
+- 5 sentinels + workspace path in safety test
+
+---
+
+## 4. Runtime Fix
+
+None needed. Eval-only changes.
 
 ---
 
 ## Checks
 
 ```text
-python3 evals/run_evals.py → 336 passed, 0 failed
+python3 evals/run_evals.py → 349 passed, 0 failed
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent → 710 OK
 git diff --check → clean
 ```
@@ -82,13 +79,14 @@ None.
 
 ### Notes
 
-- `eval_explain_not_ready_closeout` asserts reason is in a set of 4 possibilities (`waiting_for_workspace_merge_apply`, `missing_active_lease`, `worker_running`, `task_not_running`). This is slightly loose but acceptable since the exact reason depends on the not-ready worker's state, which is set up by `_setup_lifecycle_not_ready_worker`.
+- Minor typo in B_DONE.md: `_LIFECECYCLE_SENTINEL_FAILURE` (should be `_LIFECYCLE_SENTINEL_FAILURE`). The actual code uses the correct spelling.
+- `retry_filter_no_leak` asserts retry entries are excluded by `worker_id` filter because retry reasons have empty `worker_id`. This is correct behavior but worth noting: retry entries are task-level, not worker-level.
 
 ---
 
 ## Residual Risk
 
-None. The evals are deterministic (tempfile isolation, no LLM calls), the runtime fix is minimal and correct, and the output is bounded/no-leak.
+None. Evals are deterministic, offline, and cover all required scenarios with substantive assertions.
 
 ---
 
