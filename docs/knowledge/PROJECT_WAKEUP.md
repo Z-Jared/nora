@@ -75,8 +75,8 @@ Nora is a usable local alpha approaching beta:
 - Toolkits, permission categories, file/Git/shell/browser/web/RAG/log/process tools.
 - Short-term memory, long-term memory, task management, session save/load.
 - Durable task/worker runtime primitives: worker registry/heartbeat/claim/auto-dispatch, lifecycle pause/resume/cancel, checkpoints, recovery planning, recovery events, and timeline inspection.
-- Worker lifecycle planning and guarded run-once automation are in progress; the next step is turning them into a scheduler loop with durable decision events.
-- A large Python test suite; recent full run reported 1963 tests passing, and deterministic evals reported 304 passed.
+- Worker lifecycle planning, guarded run-once automation, and guarded scheduler tick v1 have landed; the next step is turning scheduler ticks into a policy-backed loop with retry/backoff and blocked-reason explanations.
+- A large Python test suite; recent full run reported 1982 tests passing, and deterministic evals reported 312 passed.
 
 Main gap versus an Agent OS / Durable Runtime:
 

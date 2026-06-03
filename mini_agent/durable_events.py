@@ -54,6 +54,7 @@ HANDOFF_ACCEPTED = "handoff_accepted"
 RECOVERY_PLANNED = "recovery_planned"
 WORKSPACE_PREPARED = "workspace_prepared"
 WORKSPACE_RELEASED = "workspace_released"
+SCHEDULER_DECISION = "scheduler_decision"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -95,6 +96,7 @@ VALID_EVENT_TYPES = {
     RECOVERY_PLANNED,
     WORKSPACE_PREPARED,
     WORKSPACE_RELEASED,
+    SCHEDULER_DECISION,
 }
 
 _DURABLE_EVENTS_TABLE = """

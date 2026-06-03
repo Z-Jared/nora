@@ -44,6 +44,7 @@ from mini_agent.durable_events import (
     FILE_EDIT_STARTED,
     RECOVERY_PLANNED,
     REVIEW_GATE_FINISHED,
+    SCHEDULER_DECISION,
     TASK_CREATED,
     TASK_STATUS_CHANGED,
     TASK_RETRIED,
@@ -3363,6 +3364,120 @@ def build_default_registry(
                 "limit": {"type": "integer", "description": "最大处理 action 数，默认 5，上限 100"},
                 "dry_run": {"type": "boolean", "description": "是否 dry-run，默认 true"},
                 "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
+    _scheduler_tick_counter = [0]
+
+    def _run_worker_lifecycle_scheduler_tick_json(limit: int = 5, dry_run: bool = True, release_workspace: bool = True, record_event: bool = True) -> str:
+        if limit is None:
+            limit = 5
+        elif isinstance(limit, bool):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        elif not isinstance(limit, int):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        limit = max(1, min(limit, 100))
+        if not isinstance(dry_run, bool):
+            return _json.dumps({"error": "dry_run 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(release_workspace, bool):
+            return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(record_event, bool):
+            return _json.dumps({"error": "record_event 必须是布尔值"}, ensure_ascii=False)
+
+        _scheduler_tick_counter[0] += 1
+        tick_id = f"tick_{_scheduler_tick_counter[0]}"
+
+        run_json = _run_worker_lifecycle_once_json(
+            limit=limit,
+            dry_run=dry_run,
+            release_workspace=release_workspace,
+        )
+        try:
+            run_result = _json.loads(run_json)
+        except Exception:
+            return _json.dumps({"error": "scheduler tick 执行失败"}, ensure_ascii=False)
+        if "error" in run_result:
+            return _json.dumps({"error": run_result["error"]}, ensure_ascii=False)
+
+        results = run_result.get("results", [])
+        blocked_count = 0
+        scheduler_results = []
+        event_actions = []
+        for result in results:
+            action_type = result.get("action", "")
+            safe_result = dict(result)
+            if action_type == "dispatch_pending_task":
+                blocked_count += 1
+                safe_result["skipped"] = True
+                safe_result["reason"] = "dispatch_blocked_in_tick"
+            scheduler_results.append(safe_result)
+            event_actions.append({
+                "action": safe_result.get("action", ""),
+                "worker_id": safe_result.get("worker_id", ""),
+                "task_id": safe_result.get("task_id", ""),
+                "reason": safe_result.get("reason", ""),
+                "skipped": bool(safe_result.get("skipped", False)),
+                "would_execute": bool(safe_result.get("would_execute", False)),
+                "finalized": bool(safe_result.get("finalized", False)),
+            })
+        skipped_count = max(0, int(run_result.get("skipped_count", 0)) - blocked_count)
+
+        decision_event_recorded = False
+        if record_event:
+            try:
+                durable_event_store.record(
+                    event_type=SCHEDULER_DECISION,
+                    summary="scheduler tick",
+                    payload={
+                        "scheduler": "worker_lifecycle",
+                        "tick_id": tick_id,
+                        "dry_run": dry_run,
+                        "record_event": record_event,
+                        "release_workspace": release_workspace,
+                        "planned_count": run_result.get("planned_count", 0),
+                        "executed_count": run_result.get("executed_count", 0),
+                        "skipped_count": skipped_count,
+                        "failed_count": run_result.get("failed_count", 0),
+                        "blocked_count": blocked_count,
+                        "action_labels": [r.get("action", "") for r in scheduler_results],
+                        "actions": event_actions,
+                    },
+                    source="scheduler",
+                    severity="info",
+                )
+                decision_event_recorded = True
+            except Exception:
+                pass
+
+        return _json.dumps({
+            "scheduler": "worker_lifecycle",
+            "tick_id": tick_id,
+            "dry_run": dry_run,
+            "record_event": record_event,
+            "planned_count": run_result.get("planned_count", 0),
+            "executed_count": run_result.get("executed_count", 0),
+            "skipped_count": skipped_count,
+            "failed_count": run_result.get("failed_count", 0),
+            "blocked_count": blocked_count,
+            "results": scheduler_results,
+            "summary": run_result.get("summary", {}),
+            "decision_event_recorded": decision_event_recorded,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "run_worker_lifecycle_scheduler_tick",
+        "执行一次 scheduler tick：dry-run 返回计划，非 dry-run 执行 ready closeout，记录 scheduler decision 事件。",
+        _run_worker_lifecycle_scheduler_tick_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最大处理 action 数，默认 5，上限 100"},
+                "dry_run": {"type": "boolean", "description": "是否 dry-run，默认 true"},
+                "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+                "record_event": {"type": "boolean", "description": "是否记录 scheduler decision 事件，默认 true"},
             },
             "required": [],
         },

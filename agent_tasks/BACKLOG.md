@@ -6,17 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-090: Deterministic eval coverage for worker lifecycle run-once
-- 分配给: Claude B
-- 目标: 为 `run_worker_lifecycle_once(limit=5, dry_run=True, release_workspace=True)` 增加 deterministic offline eval coverage，覆盖 dry-run/no-mutation、safe closeout execution、wait/dispatch skipped、limit/release validation、安全不泄漏、failed finalize accounting 和 compatibility。
-- 状态: assigned
-
-### TASK-089: Worker lifecycle scheduler tick v1
-- 分配给: Claude A
-- 目标: 新增 guarded scheduler tick 工具，在不启动后台循环/进程的前提下封装一轮 worker lifecycle scheduling；默认 dry-run，记录 bounded scheduler decision event，非 dry-run 只允许执行 ready closeout。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-090: Deterministic eval coverage for worker lifecycle run-once ✅
+- 完成者: Claude B partial；Codex PM 因 CCB provider_api_error 本地接手完成
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 312 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 623 tests OK；`python3 -m unittest discover -s tests` 1982 tests OK；`git diff --check` OK。
+- 内容: 为 `run_worker_lifecycle_once(limit=5, dry_run=True, release_workspace=True)` 增加 deterministic offline eval coverage，覆盖 dry-run/no-mutation、safe closeout execution、wait/dispatch skipped、limit/release validation、安全不泄漏、failed finalize accounting 和 compatibility。
+
+### TASK-089: Worker lifecycle scheduler tick v1 ✅
+- 完成者: Claude A partial；Codex PM 因 CCB provider_api_error 本地接手完成
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests` 61 tests OK；`python3 -m unittest tests.test_durable_workers` 456 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 623 tests OK；`python3 evals/run_evals.py` 312 passed；`python3 -m unittest discover -s tests` 1982 tests OK；`git diff --check` OK。
+- 内容: 新增 guarded `run_worker_lifecycle_scheduler_tick(limit=5, dry_run=True, release_workspace=True, record_event=True)`；默认 dry-run；复用 run-once 执行逻辑；记录 bounded `scheduler_decision` event；非 dry-run 只允许 ready closeout；dispatch 被 blocked，wait actions 被 skipped。
 
 ### TASK-088: Deterministic eval coverage for worker lifecycle planner ✅
 - 完成者: Claude B；Codex PM 修复 eval API/fixture isolation 问题

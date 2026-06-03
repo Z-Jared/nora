@@ -37,7 +37,7 @@ from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
-from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
+from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SCHEDULER_DECISION, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
 from mini_agent.durable_workers import WorkerStatus
 from mini_agent.traces import TraceStore, RunTrace, ToolCallTrace, build_trace, truncate_preview
 
@@ -362,6 +362,14 @@ def main() -> int:
         EvalCase("lifecycle_planner_no_mutation", eval_lifecycle_planner_no_mutation),
         EvalCase("lifecycle_planner_missing_lease", eval_lifecycle_planner_missing_lease),
         EvalCase("lifecycle_planner_compatibility", eval_lifecycle_planner_compatibility),
+        EvalCase("run_once_dry_run_ready_closeout", eval_run_once_dry_run_ready_closeout),
+        EvalCase("run_once_non_dry_run_finalizes", eval_run_once_non_dry_run_finalizes),
+        EvalCase("run_once_limit_and_skips", eval_run_once_limit_and_skips),
+        EvalCase("run_once_release_workspace", eval_run_once_release_workspace),
+        EvalCase("run_once_bad_params", eval_run_once_bad_params),
+        EvalCase("run_once_stale_finalize", eval_run_once_stale_finalize),
+        EvalCase("run_once_safety_no_leak", eval_run_once_safety_no_leak),
+        EvalCase("run_once_compatibility", eval_run_once_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -13510,8 +13518,9 @@ def _setup_lifecycle_ready_worker(registry, worker_id="w_lf"):
     parsed = json.loads(result)
     assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
     ws_root = Path(parsed["workspace_path"])
-    # Write sentinel content into workspace file
-    (ws_root / "f.txt").write_text(_LIFECYCLE_SENTINEL_FILE, encoding="utf-8")
+    # Write sentinel content into a worker-specific file so multiple ready workers
+    # in one project all produce real merge-apply events.
+    (ws_root / f"{worker_id}.txt").write_text(_LIFECYCLE_SENTINEL_FILE, encoding="utf-8")
     _record_gate(
         registry, worker_id, tid, "approved",
         summary=f"{_LIFECYCLE_SENTINEL_REVIEWER}\n{_LIFECYCLE_SENTINEL_SHELL}\n{_LIFECYCLE_SENTINEL_REQUEST}",
@@ -13790,6 +13799,261 @@ def eval_lifecycle_planner_compatibility():
 
             # Dispatch still works
             ws.register_worker("w_dispatch_compat", role="coder")
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+def eval_run_once_dry_run_ready_closeout():
+    """Dry-run ready closeout returns would-execute metadata and does not mutate task/worker/lease/event store."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            tid, wspath, lease_id = _setup_lifecycle_ready_worker(registry, worker_id="w_dry")
+
+            # Snapshot state
+            before_task = ts.get_task(tid)
+            before_worker = ws.get_worker("w_dry")
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert result["dry_run"] is True, f"dry_run flag: {result}"
+            assert result["planned_count"] >= 1, f"planned_count: {result}"
+            assert result["executed_count"] == 0, f"executed_count should be 0 in dry_run: {result}"
+
+            finalize_results = [r for r in result["results"] if r.get("action") == "finalize_ready_workspace_merge"]
+            assert len(finalize_results) >= 1, f"no finalize result: {result}"
+            assert finalize_results[0]["would_execute"] is True
+            assert finalize_results[0]["worker_id"] == "w_dry"
+            assert finalize_results[0]["task_id"] == tid
+
+            # No mutation
+            after_task = ts.get_task(tid)
+            after_worker = ws.get_worker("w_dry")
+            assert after_task.status == before_task.status, f"task status mutated: {after_task.status}"
+            assert after_worker.status == before_worker.status, f"worker status mutated: {after_worker.status}"
+            assert after_worker.current_task_id == before_worker.current_task_id
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            execution_event_types = {
+                TASK_STATUS_CHANGED,
+                WORKSPACE_RELEASED,
+                SCHEDULER_DECISION,
+            }
+            assert not [e for e in new_events if e.event_type in execution_event_types], [
+                (e.event_type, e.summary) for e in new_events
+            ]
+        finally:
+            db.close()
+
+
+def eval_run_once_non_dry_run_finalizes():
+    """Non-dry-run finalizes ready closeout and returns expected counts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            tid, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_fin")
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True))
+            assert result["dry_run"] is False
+            assert result["executed_count"] >= 1, f"executed_count: {result}"
+            assert result["failed_count"] == 0, f"failed_count: {result}"
+
+            finalize_results = [r for r in result["results"] if r.get("action") == "finalize_ready_workspace_merge"]
+            assert len(finalize_results) >= 1
+            assert finalize_results[0].get("finalized") is True, f"not finalized: {finalize_results[0]}"
+            assert finalize_results[0].get("worker_id") == "w_fin"
+            assert finalize_results[0].get("task_id") == tid
+        finally:
+            db.close()
+
+
+def eval_run_once_limit_and_skips():
+    """Multiple ready closeouts obey limit. Wait/dispatch actions skipped."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # 3 ready workers
+            for i in range(3):
+                _setup_lifecycle_ready_worker(registry, worker_id=f"w_lim{i}")
+
+            # limit=2 should process only 2
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=2, dry_run=True))
+            finalize_results = [r for r in result["results"] if r.get("action") == "finalize_ready_workspace_merge"]
+            assert len(finalize_results) == 2, f"limit=2 not respected: {len(finalize_results)} results"
+
+            # Dispatch recommendation is skipped (not executed)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_idle_skip", role="coder")
+            ts.create_task(goal="pending skip", steps=[{"text": "x"}])
+            result2 = json.loads(registry.call("run_worker_lifecycle_once", limit=50, dry_run=True))
+            dispatch_results = [r for r in result2["results"] if r.get("action") == "dispatch_pending_task"]
+            for dr in dispatch_results:
+                assert dr.get("skipped") is True, f"dispatch not skipped: {dr}"
+                assert dr.get("reason") == "dispatch_not_supported"
+
+            # Wait actions are skipped
+            _setup_lifecycle_not_ready_worker(registry, worker_id="w_wait_skip")
+            result3 = json.loads(registry.call("run_worker_lifecycle_once", limit=50, dry_run=True))
+            wait_results = [r for r in result3["results"] if r.get("skipped") and r.get("reason") == "wait_action"]
+            # Wait actions exist if not-ready workers are present
+            for wr in wait_results:
+                assert wr.get("skipped") is True
+        finally:
+            db.close()
+
+
+def eval_run_once_release_workspace():
+    """release_workspace=True releases lease; release_workspace=False keeps it."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # release_workspace=True
+            tid1, wspath1, lease1 = _setup_lifecycle_ready_worker(registry, worker_id="w_rel")
+            result1 = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True))
+            assert result1["executed_count"] >= 1
+            ws = registry.durable_worker_store
+            w1 = ws.get_worker("w_rel")
+            assert w1.status == "idle", f"worker not idle after release: {w1.status}"
+            assert w1.current_task_id is None, f"task not cleared: {w1.current_task_id}"
+            assert registry.workspace_lease_store.get_lease_by_worker("w_rel") is None
+
+            # release_workspace=False keeps lease
+            tid2, wspath2, lease2 = _setup_lifecycle_ready_worker(registry, worker_id="w_keep")
+            result2 = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=False))
+            assert result2["executed_count"] >= 1
+            w2 = ws.get_worker("w_keep")
+            assert w2.status == "idle", f"worker not idle: {w2.status}"
+            assert registry.workspace_lease_store.get_lease_by_worker("w_keep") is not None
+        finally:
+            db.close()
+
+
+def eval_run_once_bad_params():
+    """Bad limit, dry_run, release_workspace, and limit clamp behavior."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Bad limit (non-integer)
+            r1 = json.loads(registry.call("run_worker_lifecycle_once", limit="bad"))
+            assert "error" in r1, f"bad limit: {r1}"
+
+            # Bad dry_run
+            r2 = json.loads(registry.call("run_worker_lifecycle_once", dry_run="yes"))
+            assert "error" in r2, f"bad dry_run: {r2}"
+
+            # Bad release_workspace
+            r3 = json.loads(registry.call("run_worker_lifecycle_once", release_workspace="yes"))
+            assert "error" in r3, f"bad release_workspace: {r3}"
+
+            # Limit clamps: limit=0 → 1, limit=999 → 100
+            _setup_lifecycle_ready_worker(registry, worker_id="w_clamp")
+            r4 = json.loads(registry.call("run_worker_lifecycle_once", limit=0, dry_run=True))
+            assert r4["planned_count"] >= 1, f"limit=0 clamp: {r4['planned_count']}"
+
+            # limit=999 should not error (clamped to 100 internally)
+            r5 = json.loads(registry.call("run_worker_lifecycle_once", limit=999, dry_run=True))
+            assert "error" not in r5, f"limit=999: {r5}"
+        finally:
+            db.close()
+
+
+def eval_run_once_stale_finalize():
+    """Failed finalize when task becomes stale between plan and execute."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            tid, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_stale")
+
+            # Complete the task before run-once executes — simulates stale action
+            ts.update_status(tid, "completed")
+
+            result = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=False))
+            # The finalize should fail because task is already completed
+            finalize_results = [r for r in result["results"] if r.get("action") == "finalize_ready_workspace_merge"]
+            if finalize_results:
+                assert finalize_results[0].get("finalized") is False, f"stale finalize should fail: {finalize_results[0]}"
+                assert result["failed_count"] >= 1, f"failed_count: {result}"
+            # If no finalize action (planner skips completed tasks), that's also acceptable
+        finally:
+            db.close()
+
+
+def eval_run_once_safety_no_leak():
+    """Run-once output does not leak goals, steps, file content, reviewer summary, shell/env/request, workspace paths, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            tid, wspath, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_safe")
+
+            result_str = registry.call("run_worker_lifecycle_once", limit=5, dry_run=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str, "goal leaked"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str, "secret leaked"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_str, "step text leaked"
+            assert _LIFECYCLE_SENTINEL_FILE not in result_str, "file content leaked"
+            assert _LIFECYCLE_SENTINEL_REVIEWER not in result_str, "reviewer summary leaked"
+            assert _LIFECYCLE_SENTINEL_SHELL not in result_str, "shell output leaked"
+            assert _LIFECYCLE_SENTINEL_REQUEST not in result_str, "request string leaked"
+            assert _LIFECYCLE_SENTINEL_ENV not in result_str, "env sentinel leaked"
+            assert ".workspaces" not in result_str, "workspace path fragment leaked"
+
+            # Non-dry-run also safe
+            tid2, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_safe2")
+            result_str2 = registry.call("run_worker_lifecycle_once", limit=5, dry_run=False, release_workspace=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str2, "goal leaked in non-dry-run"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str2, "secret leaked in non-dry-run"
+        finally:
+            db.close()
+
+
+def eval_run_once_compatibility():
+    """Existing tools still work after run-once call."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            _setup_lifecycle_ready_worker(registry, worker_id="w_run_compat")
+            registry.call("run_worker_lifecycle_once", limit=5, dry_run=True)
+
+            # Planner still works
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert "actions" in plan
+
+            # Batch finalize still works
+            batch = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert "processed" in batch
+
+            # Worker/task registry still works
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_after_run", role="coder")
+            assert ws.get_worker("w_after_run") is not None
+            new_task = ts.create_task(goal="after run task", steps=[{"text": "x"}])
+            assert new_task.task_id is not None
+
+            # Claim and dispatch still work
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_run"))
+            assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
         finally:

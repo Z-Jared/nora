@@ -1,46 +1,75 @@
-# Claude B Completion Report - TASK-088
+# Claude B / Codex PM Completion Report - TASK-090
 
-Status: ready for Codex review
+Status: approved by Codex PM after local takeover
 
 ## Summary
 
-Added deterministic offline eval coverage for `plan_worker_lifecycle_actions`, with Codex PM follow-up fixes.
+Claude B started deterministic eval coverage for `run_worker_lifecycle_once`, but the CCB Claude provider failed with repeated `provider_api_error` after a timeout. Codex PM took over the preserved worker diff and completed the eval task locally.
 
-Coverage added:
-- **Ready path**: ready closeout produces `finalize_ready_workspace_merge` action with correct worker_id/task_id; idle worker + pending task produces `dispatch_pending_task` with correct counts; mixed state returns all expected action types.
-- **Guard rails**: empty state returns no actions and zero summary counts; limit clamps returned actions but does not hide ready closeout behind wait actions; 100 not-ready + 1 ready: limit=1 still finds the ready one; bad limit returns bounded error.
-- **Safety/no-leak**: goal/secret/step/file sentinels not leaked in output, error output, or action payloads; `.workspaces` path fragment not leaked.
-- **No mutation**: task status, worker status/current_task_id, lease, project root, and workspace all unchanged after planner call.
-- **Compatibility**: closeout candidate query, batch finalize, single-task finalize, worker/task registry, claim, and dispatch tools all work after planner call.
-- Codex PM follow-up: isolated the 100 not-ready + 1 old ready regression from earlier ready fixtures, and fixed event-store snapshot calls to use the current `max_results` API.
+Added deterministic offline eval coverage for:
+
+- Dry-run ready closeout metadata and no execution mutation.
+- Non-dry-run ready closeout finalization.
+- Limit handling with multiple ready closeouts.
+- Wait actions skipped.
+- Dispatch recommendations skipped.
+- `release_workspace=True` releases the lease.
+- `release_workspace=False` keeps the lease.
+- Bad `limit`, `dry_run`, and `release_workspace` validation.
+- Stale finalize / failed-count accounting.
+- Safety no-leak for goal, steps, file content, reviewer summary, shell/env/request sentinels, workspace paths, and secrets.
+- Compatibility with planner, batch finalize, worker/task registry, claim, and dispatch tools.
+
+Codex PM fixes during takeover:
+
+- Allowed approval events during dry-run because `run_worker_lifecycle_once` is intentionally confirmation-gated as `task/write`.
+- Updated the lifecycle ready-worker eval helper to use worker-specific file paths, so multiple ready workers produce real merge-apply events.
+- Split release-workspace assertions so prior ready workers do not contaminate later cases.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 230 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 230 insertions(+)
+ evals/run_evals.py | 270 +++++++++++++++++++++++++++++++-
 ```
 
-## Verification
+## Tests
 
 ```text
 python3 - <<'PY'
-from evals.run_evals import eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation
-for fn in [eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation]:
+from evals.run_evals import (
+    eval_run_once_dry_run_ready_closeout,
+    eval_run_once_non_dry_run_finalizes,
+    eval_run_once_limit_and_skips,
+    eval_run_once_release_workspace,
+    eval_run_once_bad_params,
+    eval_run_once_stale_finalize,
+    eval_run_once_safety_no_leak,
+    eval_run_once_compatibility,
+)
+for fn in [
+    eval_run_once_dry_run_ready_closeout,
+    eval_run_once_non_dry_run_finalizes,
+    eval_run_once_limit_and_skips,
+    eval_run_once_release_workspace,
+    eval_run_once_bad_params,
+    eval_run_once_stale_finalize,
+    eval_run_once_safety_no_leak,
+    eval_run_once_compatibility,
+]:
     fn()
     print(fn.__name__, "OK")
 PY
 OK
 
 python3 evals/run_evals.py
-304 passed, 0 failed
+312 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 604 tests in 16.548s
+Ran 623 tests in 31.747s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1963 tests in 126.243s
+Ran 1982 tests in 134.827s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -50,7 +79,6 @@ OK
 
 ## Notes
 
-- No push performed.
-- No runtime changes were needed for TASK-088 beyond PM review fixes in eval assertions.
-- Critical regression covered: 100 raw not-ready candidates before 1 ready candidate — the ready closeout is still recommended because the planner iterates workers (limit=500 scan), not a flat candidate list.
-- Full `python3 -m unittest discover -s tests` was rerun after final report edits and passed.
+- No push was performed by Claude B.
+- Codex PM completed the work locally because CCB delivery to Claude B failed after provider/API retries.
+- Known issue: the CCB Claude provider remained unhealthy during this handoff, so the PM automation is paused.
