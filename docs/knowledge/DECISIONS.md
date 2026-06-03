@@ -1,5 +1,22 @@
 # Nora Development Decisions
 
+## 2026-06-03: Frontier Signals Push Nora Toward Scheduler, Policy Hooks, Trace Graphs, And Pluggable Capabilities
+
+Current AI agent platform signals from Codex, Claude Code, OpenAI Agents SDK, MCP, and agent research reinforce Nora's existing Agent OS direction. The next improvement wave should convert Nora's durable primitives into a running, governed, observable runtime.
+
+Implication:
+
+- Promote worker lifecycle tools into a real scheduler loop that can periodically plan, dry-run, execute safe closeout actions, dispatch eligible work, retry with backoff, record durable events, and explain why work is blocked.
+- Add a hook and policy kernel with lifecycle points such as `pre_tool`, `post_tool`, `pre_edit`, `post_edit`, `pre_shell`, `pre_git`, `pre_plugin_call`, `post_test`, `before_handoff`, and `before_commit`.
+- Upgrade durable event records into inspectable trace graphs/spans across tasks, workers, model calls, tool calls, approvals, reviews, recovery actions, and plugin calls.
+- Build plugin manifest/runtime foundations early, before integrating many industry tools. Plugin manifests must cover auth, tool schemas, permissions, data sensitivity, confirmation rules, output bounding, and event-log behavior.
+- Build skill manifest/runtime foundations together with the context compiler, so skill packs contribute scoped terminology, workflows, templates, deliverable formats, and safety rules instead of becoming prompt dumps.
+- Add a capability router that selects skills, plugins, model policy, risk level, and expected deliverables from the user's goal and available integrations.
+- Redesign the UI as an Agent OS control surface: task queue, worker state, leases/workspaces, trace timeline, approvals, review gates, diffs, tests, recovery plans, plugin permissions, and enabled skills.
+- Expand evals from registry/tool-level cases to end-to-end durable workflows: create task, dispatch worker, write isolated workspace, review gate, dry-run merge, apply, finalize, and recover from injected failures.
+- Add a minimal model router that records why each model was selected, using cheaper models for routing/guardrails and stronger models for implementation, review, long context, or high-risk reasoning.
+- Nora's orchestration complexity is now high enough to justify comparing LangChain, LangGraph, and OpenAI Agents SDK as references, but not enough to justify migrating away from Nora's local-first durable runtime by default.
+
 ## 2026-06-01: Skill Packs And Plugin Runtime Are Part Of The Product Direction
 
 Nora should serve both personal and enterprise users across industries by combining the Agent OS / Durable Runtime with modular professional capabilities.

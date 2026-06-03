@@ -1,6 +1,6 @@
 # Nora Agent OS / Durable Runtime North Star
 
-Last updated: 2026-06-01
+Last updated: 2026-06-03
 
 ## Positioning
 
@@ -138,6 +138,34 @@ Priority 7: Plugin runtime and capability routing
 - Build a capability router that selects skill packs and plugins based on user goals, available integrations, risk level, and expected output.
 - Start with developer and productivity plugins before high-risk industry plugins.
 
+Priority 8: Scheduler and lifecycle automation
+
+- Promote worker lifecycle planning and guarded run-once tools into a scheduler loop.
+- Periodically scan pending tasks, idle workers, active leases, ready closeout candidates, stale workers, blocked tasks, and retryable failures.
+- Default to dry-run and execute only policy-approved safe actions until review gates and policy hooks are mature.
+- Record scheduler decisions as durable events, including why a task was dispatched, skipped, blocked, retried, or finalized.
+- Provide explainability for "why is this task not moving?" through structured reason labels.
+
+Priority 9: Hook and policy kernel
+
+- Add lifecycle hooks for pre-tool, post-tool, pre-edit, post-edit, pre-shell, pre-git, pre-plugin-call, post-test, before-handoff, before-commit, compact, stop, and recovery events.
+- Make hooks policy-backed, testable, and traceable instead of prompt-only instructions.
+- Support personal confirmations and enterprise policy rules through the same kernel.
+- Route high-risk actions through explicit approval and review gates before execution.
+
+Priority 10: Trace graph and Agent OS UI
+
+- Upgrade flat durable events into inspectable trace graphs/spans for tasks, workers, model calls, tool calls, plugin calls, approvals, reviews, tests, handoffs, and recovery.
+- Show task queue, worker state, workspace leases, approvals, review gates, diffs, tests, recovery plans, plugin permissions, and enabled skills in the UI.
+- Make every significant runtime decision explainable and replayable from the UI.
+
+Priority 11: End-to-end runtime evals and model routing
+
+- Add real workflow evals that cover create task, dispatch worker, write isolated workspace, review gate, dry-run merge, apply merge, finalize, and recover from injected failures.
+- Track pass rate, tool count, time, model cost, token use, edit count, test count, review findings, recovery quality, and accidental mutation count.
+- Add a minimal model router that chooses models by task type, cost, latency, context length, tool-calling quality, review quality, and risk level.
+- Record model selection reasons and outcomes into traces so routing can improve from evidence.
+
 ## Design Rules
 
 - Hidden chat memory is not durable memory.
@@ -148,6 +176,9 @@ Priority 7: Plugin runtime and capability routing
 - Industry support belongs in skill packs and plugins, not in one monolithic system prompt.
 - Skills describe domain work; plugins perform governed external actions.
 - High-risk industry actions must be permissioned, auditable, and easy to stop.
+- Scheduling must be explainable: every automated run should say what it did and why it skipped unsafe or blocked work.
+- Hooks and policies are runtime mechanisms, not optional prompt conventions.
+- Traces should be graph-shaped and UI-inspectable, not just append-only logs.
 - Safety is a runtime property, not just a prompt instruction.
 - UI should show task state, trace, approvals, diffs, tests, and recovery points, not just messages.
 

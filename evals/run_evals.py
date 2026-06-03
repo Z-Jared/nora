@@ -355,6 +355,13 @@ def main() -> int:
         EvalCase("batch_finalize_safety_no_leak", eval_batch_finalize_safety_no_leak),
         EvalCase("batch_finalize_no_mutation", eval_batch_finalize_no_mutation),
         EvalCase("batch_finalize_compatibility", eval_batch_finalize_compatibility),
+        # TASK-088: Lifecycle planner evals
+        EvalCase("lifecycle_planner_ready_path", eval_lifecycle_planner_ready_path),
+        EvalCase("lifecycle_planner_guard_rails", eval_lifecycle_planner_guard_rails),
+        EvalCase("lifecycle_planner_safety_no_leak", eval_lifecycle_planner_safety_no_leak),
+        EvalCase("lifecycle_planner_no_mutation", eval_lifecycle_planner_no_mutation),
+        EvalCase("lifecycle_planner_missing_lease", eval_lifecycle_planner_missing_lease),
+        EvalCase("lifecycle_planner_compatibility", eval_lifecycle_planner_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -13466,6 +13473,323 @@ def eval_batch_finalize_compatibility():
 
             # Dispatch still works
             ws.register_worker("w_dispatch_after", role="coder")
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+# --- TASK-088: Lifecycle planner eval sentinels ---
+
+_LIFECYCLE_SENTINEL_GOAL = "NORA_EVAL_LIFECYCLE_GOAL_SENTINEL_p1l2a3n4"
+_LIFECYCLE_SENTINEL_SECRET = "NORA_EVAL_LIFECYCLE_SECRET_sk-lifecycle-w5o6r7"
+_LIFECYCLE_SENTINEL_STEP = "NORA_EVAL_LIFECYCLE_STEP_SENTINEL_k8p9l0"
+_LIFECYCLE_SENTINEL_FILE = "NORA_EVAL_LIFECYCLE_FILE_SECRET_a1n2n3e4"
+_LIFECYCLE_SENTINEL_ENV = "NORA_EVAL_LIFECYCLE_ENV_SECRET_r5_s6h7"
+_LIFECYCLE_SENTINEL_REVIEWER = "NORA_EVAL_LIFECYCLE_REVIEWER_SUMMARY_SENTINEL_t7u8v9"
+_LIFECYCLE_SENTINEL_SHELL = "NORA_EVAL_LIFECYCLE_SHELL_OUTPUT_SENTINEL_w0x1y2"
+_LIFECYCLE_SENTINEL_REQUEST = "NORA_EVAL_LIFECYCLE_REQUEST_STRING_SENTINEL_z3a4b5"
+
+
+def _setup_lifecycle_ready_worker(registry, worker_id="w_lf"):
+    """Helper for lifecycle planner evals: register worker, create task with sentinels, assign, set running,
+    prepare workspace, write sentinel file content, record approved gate with reviewer/shell/request sentinels, apply merge.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_LIFECYCLE_SENTINEL_GOAL + " " + _LIFECYCLE_SENTINEL_SECRET + " " + _LIFECYCLE_SENTINEL_ENV,
+        steps=[{"text": _LIFECYCLE_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    ws_root = Path(parsed["workspace_path"])
+    # Write sentinel content into workspace file
+    (ws_root / "f.txt").write_text(_LIFECYCLE_SENTINEL_FILE, encoding="utf-8")
+    _record_gate(
+        registry, worker_id, tid, "approved",
+        summary=f"{_LIFECYCLE_SENTINEL_REVIEWER}\n{_LIFECYCLE_SENTINEL_SHELL}\n{_LIFECYCLE_SENTINEL_REQUEST}",
+    )
+    registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=tid)
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def _setup_lifecycle_not_ready_worker(registry, worker_id="w_lnr"):
+    """Helper: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    No gate, no apply — worker is not ready for closeout.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_LIFECYCLE_SENTINEL_GOAL + " " + _LIFECYCLE_SENTINEL_SECRET,
+        steps=[{"text": _LIFECYCLE_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def eval_lifecycle_planner_ready_path():
+    """Ready closeout produces finalize action. Idle worker + pending task produces dispatch. Mixed state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Single ready closeout
+            tid1, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_lf1")
+            result1 = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert result1["count"] >= 1
+            finalize_actions = [a for a in result1["actions"] if a["action"] == "finalize_ready_workspace_merge"]
+            assert len(finalize_actions) == 1, f"expected 1 finalize action: {result1}"
+            assert finalize_actions[0]["worker_id"] == "w_lf1"
+            assert finalize_actions[0]["task_id"] == tid1
+            assert result1["summary"]["ready_closeouts"] == 1
+
+            # Idle worker + pending task -> dispatch
+            ws.register_worker("w_idle_lf", role="coder")
+            ts.create_task(goal="pending task", steps=[{"text": "x"}])
+            result2 = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            dispatch_actions = [a for a in result2["actions"] if a["action"] == "dispatch_pending_task"]
+            assert len(dispatch_actions) == 1, f"expected 1 dispatch action: {result2}"
+            assert dispatch_actions[0]["idle_worker_count"] >= 1
+            assert dispatch_actions[0]["pending_task_count"] >= 1
+            assert result2["summary"]["idle_workers"] >= 1
+            assert result2["summary"]["pending_tasks"] >= 1
+
+            # Mixed: ready closeout + not-ready + idle + pending
+            _setup_lifecycle_not_ready_worker(registry, worker_id="w_lnr_mix")
+            ws.register_worker("w_idle_mix", role="coder")
+            ts.create_task(goal="another pending", steps=[{"text": "y"}])
+            result3 = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            actions3 = result3["actions"]
+            action_types = {a["action"] for a in actions3}
+            assert "finalize_ready_workspace_merge" in action_types
+            assert "dispatch_pending_task" in action_types
+        finally:
+            db.close()
+
+
+def eval_lifecycle_planner_guard_rails():
+    """Empty state, limit clamping, 100-candidate boundary, bad limit."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Empty state
+            result0 = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert result0["count"] == 0, f"expected 0: {result0}"
+            assert result0["actions"] == [], f"expected empty actions: {result0}"
+            assert result0["summary"]["ready_closeouts"] == 0
+            assert result0["summary"]["not_ready_closeouts"] == 0
+            assert result0["summary"]["idle_workers"] == 0
+            assert result0["summary"]["pending_tasks"] == 0
+
+            # Limit clamps returned actions but does not hide ready behind wait
+            # Setup: 1 ready + 2 not-ready, limit=1 -> only finalize returned
+            tid_ready, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_lim_ready")
+            _setup_lifecycle_not_ready_worker(registry, worker_id="w_lim_nr1")
+            _setup_lifecycle_not_ready_worker(registry, worker_id="w_lim_nr2")
+            result_lim = json.loads(registry.call("plan_worker_lifecycle_actions", limit=1))
+            assert result_lim["count"] == 1, f"expected count=1: {result_lim}"
+            assert result_lim["actions"][0]["action"] == "finalize_ready_workspace_merge"
+            assert result_lim["actions"][0]["worker_id"] == "w_lim_ready"
+            # Summary still reflects full scan
+            assert result_lim["summary"]["ready_closeouts"] == 1
+            assert result_lim["summary"]["not_ready_closeouts"] == 2
+
+            # Bad limit
+            result_bad = json.loads(registry.call("plan_worker_lifecycle_actions", limit="abc"))
+            assert "error" in result_bad, f"expected error: {result_bad}"
+        finally:
+            db.close()
+
+    # 100 not-ready + 1 older ready: ready still found in an isolated state.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid_old, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_old_ready")
+            for i in range(100):
+                _setup_lifecycle_not_ready_worker(registry, worker_id=f"w_nr100_{i:03d}")
+            result_100 = json.loads(registry.call("plan_worker_lifecycle_actions", limit=1))
+            assert result_100["count"] == 1, f"expected 1 action: {result_100}"
+            assert result_100["actions"][0]["action"] == "finalize_ready_workspace_merge"
+            assert result_100["actions"][0]["task_id"] == tid_old
+            assert result_100["summary"]["ready_closeouts"] >= 1
+        finally:
+            db.close()
+
+
+def eval_lifecycle_planner_safety_no_leak():
+    """Sentinels not leaked in output, error output, or action payloads.
+    Covers: goal, secret, step, file content, env, reviewer summary, shell output, request context."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Ready worker with sentinels in goal, file content, and gate metadata
+            tid, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_safe")
+            result = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            result_str = json.dumps(result)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_FILE not in result_str, f"file content leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_ENV not in result_str, f"env leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_REVIEWER not in result_str, f"reviewer summary leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_SHELL not in result_str, f"shell output leaked: {result_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_REQUEST not in result_str, f"request context leaked: {result_str[:200]}"
+            assert ".workspaces" not in result_str, f"workspace path leaked: {result_str[:200]}"
+
+            # Error output safe
+            result_err = json.loads(registry.call("plan_worker_lifecycle_actions", limit="bad"))
+            assert "error" in result_err
+            err_str = json.dumps(result_err)
+            assert _LIFECYCLE_SENTINEL_GOAL not in err_str, f"goal leaked in error: {err_str}"
+            assert _LIFECYCLE_SENTINEL_SECRET not in err_str, f"secret leaked in error: {err_str}"
+
+            # Dispatch action also safe (idle worker scenario)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_idle_safe", role="coder")
+            ts.create_task(goal="pending safe", steps=[{"text": "x"}])
+            result_disp = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            disp_str = json.dumps(result_disp)
+            assert _LIFECYCLE_SENTINEL_GOAL not in disp_str, f"goal leaked in dispatch: {disp_str[:200]}"
+            assert _LIFECYCLE_SENTINEL_SECRET not in disp_str, f"secret leaked in dispatch: {disp_str[:200]}"
+        finally:
+            db.close()
+
+
+def eval_lifecycle_planner_no_mutation():
+    """No mutation of task, worker, lease, event store, project root, or workspace."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            # Setup ready worker
+            tid, ws_path, lease_id = _setup_lifecycle_ready_worker(registry, worker_id="w_mut")
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+            (project_root / "project.txt").write_text("project content", encoding="utf-8")
+
+            # Snapshot task/worker/lease/event state
+            task_before = ts.get_task(tid)
+            worker_before = ws.get_worker("w_mut")
+            lease_before = registry.workspace_lease_store.get_lease_by_worker("w_mut")
+            events_before = es.list_events(max_results=500)
+            event_ids_before = {e.event_id for e in events_before}
+            event_count_before = len(events_before)
+
+            # Call planner
+            registry.call("plan_worker_lifecycle_actions")
+
+            # Task/worker/lease unchanged
+            task_after = ts.get_task(tid)
+            worker_after = ws.get_worker("w_mut")
+            lease_after = registry.workspace_lease_store.get_lease_by_worker("w_mut")
+            assert task_after.status == task_before.status, f"task mutated: {task_before.status} -> {task_after.status}"
+            assert worker_after.status == worker_before.status, f"worker mutated"
+            assert worker_after.current_task_id == worker_before.current_task_id, f"current_task_id mutated"
+            assert lease_after.lease_id == lease_before.lease_id, f"lease mutated"
+
+            # Event store unchanged — no new or modified events
+            events_after = es.list_events(max_results=500)
+            event_ids_after = {e.event_id for e in events_after}
+            assert len(events_after) == event_count_before, f"event count mutated: {event_count_before} -> {len(events_after)}"
+            assert event_ids_after == event_ids_before, f"event ids mutated: added {event_ids_after - event_ids_before}, removed {event_ids_before - event_ids_after}"
+
+            # Project root and workspace unchanged
+            assert (project_root / "project.txt").read_text(encoding="utf-8") == "project content"
+            assert ws_root.exists(), "workspace deleted"
+        finally:
+            db.close()
+
+
+def eval_lifecycle_planner_missing_lease():
+    """Missing/invalid lease produces wait_for_workspace_lease action."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # Register worker, create task, assign, set running — but no workspace lease
+            ws.register_worker("w_nolease", role="coder")
+            task = ts.create_task(goal="no lease task", steps=[{"text": "x"}])
+            tid = task.task_id
+            ts.assign_worker(tid, "w_nolease")
+            ws.update_status("w_nolease", "assigned", current_task_id=tid)
+            ts.update_status(tid, "running")
+
+            result = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            actions = result["actions"]
+            wait_lease = [a for a in actions if a["action"] == "wait_for_workspace_lease"]
+            assert len(wait_lease) == 1, f"expected 1 wait_for_workspace_lease action: {result}"
+            assert wait_lease[0]["worker_id"] == "w_nolease"
+            assert wait_lease[0]["task_id"] == tid
+        finally:
+            db.close()
+
+
+def eval_lifecycle_planner_compatibility():
+    """Existing tools still work after planner call."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Call planner
+            registry.call("plan_worker_lifecycle_actions")
+
+            # Closeout candidate query still works
+            cand = json.loads(registry.call("list_worker_workspace_merge_closeout_candidates"))
+            assert "candidates" in cand
+
+            # Batch finalize still works
+            batch = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert "processed" in batch
+
+            # Worker registry still works
+            ws = registry.durable_worker_store
+            ws.register_worker("w_compat", role="coder")
+            assert ws.get_worker("w_compat") is not None
+
+            # Task registry still works
+            ts = registry.durable_task_store
+            new_task = ts.create_task(goal="compat task", steps=[{"text": "x"}])
+            assert new_task.task_id is not None
+
+            # Claim still works
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_compat"))
+            assert "task_id" in claim or "error" in claim
+
+            # Dispatch still works
+            ws.register_worker("w_dispatch_compat", role="coder")
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
         finally:

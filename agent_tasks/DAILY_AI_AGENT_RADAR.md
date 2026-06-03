@@ -92,6 +92,39 @@ Nora should aim to beat Claude Code and Codex in focused areas before attempting
 5. Eval harness: fixed coding tasks with pass/fail, time, token, edit count, test count, and review findings.
 6. MCP/plugin layer: external tool integrations without hard-coding every tool into Nora core.
 
+## 2026-06-03 Radar Update
+
+Executive signal:
+
+- Direction change: no; this reinforces the Agent OS / Durable Runtime direction.
+- Highest-impact item: serious agent platforms are converging on traceability, hooks/guardrails, pluggable tools, isolated workers, and explicit context.
+- Nora priority affected: turn durable worker primitives into a scheduler, add a policy hook kernel, make traces graph-shaped and UI-inspectable, and establish skill/plugin manifests before broad industry integrations.
+
+Source signals:
+
+- OpenAI Agents SDK emphasizes trace/spans, handoffs, guardrails, tools, sessions, and model/provider abstraction.
+- Claude Code emphasizes hooks, subagents, tool permissions, plugins, MCP, memory files, and sandboxed execution behavior.
+- MCP continues to formalize external tool/resource/prompt integration boundaries.
+- Codex-style workflows reinforce multi-agent task execution, diff review, and controlled integration rather than chat-only interaction.
+
+Nora actions:
+
+- Build now: finish guarded worker lifecycle run-once, then promote it into a scheduler loop with dry-run defaults, safe execution, retry/backoff, durable decision events, and blocked-reason explanations.
+- Build now: add a hook/policy kernel for pre/post tool, edit, shell, git, plugin call, test, handoff, compact, commit, and recovery lifecycle points.
+- Build now: upgrade durable events into trace graphs/spans for task, worker, model, tool, plugin, approval, review, test, handoff, and recovery activity.
+- Build now: add plugin manifest/runtime v1 before connecting many real industry APIs. Cover auth, tool schemas, permissions, data sensitivity, confirmation rules, output bounding, and event-log behavior.
+- Build now: add skill manifest/runtime v1 and connect it to the context compiler so skills contribute scoped terminology, workflows, templates, deliverable formats, and safety rules.
+- Build now: add capability routing that chooses skills, plugins, model policy, risk level, and expected deliverables from the user's goal.
+- Build now: add end-to-end durable-runtime evals that exercise task creation, dispatch, isolated workspace writes, review gate, dry-run merge, apply, finalize, and injected failure recovery.
+- Watch: compare LangChain, LangGraph, and OpenAI Agents SDK as references now that orchestration complexity is rising, but do not migrate by default.
+- Avoid: broad industry plugin integrations before manifests, permission mapping, trace logging, and high-risk confirmation semantics are stable.
+
+Task proposals:
+
+- Claude A: scheduler loop v1 on top of worker lifecycle planner/run-once, default dry-run, durable decision events, and blocked reason labels.
+- Claude B: deterministic evals for scheduler loop decisions, no mutation in dry-run, safe closeout-only execution, retry/backoff, blocked explanations, and compatibility with worker lifecycle tools.
+- Codex PM/reviewer: design HookPolicyKernel v1 task pair after scheduler lands; verify all new automation remains bounded, explainable, and reversible.
+
 ## 2026-05-28 Radar Update
 
 Executive signal:

@@ -3278,6 +3278,97 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _run_worker_lifecycle_once_json(limit: int = 5, dry_run: bool = True, release_workspace: bool = True) -> str:
+        if limit is None:
+            limit = 5
+        elif isinstance(limit, bool):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        elif not isinstance(limit, int):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        limit = max(1, min(limit, 100))
+        if not isinstance(dry_run, bool):
+            return _json.dumps({"error": "dry_run 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(release_workspace, bool):
+            return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
+        plan_json = _plan_worker_lifecycle_actions_json(limit=limit)
+        try:
+            plan = _json.loads(plan_json)
+        except Exception:
+            return _json.dumps({"error": "planner 查询失败"}, ensure_ascii=False)
+        if "error" in plan:
+            return _json.dumps({"error": f"planner: {plan['error']}"}, ensure_ascii=False)
+        actions = plan.get("actions", [])
+        summary = plan.get("summary", {})
+        results = []
+        executed_count = 0
+        skipped_count = 0
+        failed_count = 0
+        for a in actions:
+            action_type = a.get("action", "")
+            if action_type == "finalize_ready_workspace_merge":
+                if dry_run:
+                    results.append({
+                        "action": action_type,
+                        "worker_id": a.get("worker_id", ""),
+                        "task_id": a.get("task_id", ""),
+                        "would_execute": True,
+                    })
+                else:
+                    wid = a.get("worker_id", "")
+                    tid = a.get("task_id", "")
+                    result_json = _finalize_worker_workspace_merge_json(wid, tid, release_workspace=release_workspace)
+                    try:
+                        result = _json.loads(result_json)
+                    except Exception:
+                        result = {"finalized": False, "reason": "internal_error", "worker_id": wid, "task_id": tid}
+                    result["action"] = action_type
+                    results.append(result)
+                    if result.get("finalized"):
+                        executed_count += 1
+                    else:
+                        failed_count += 1
+            elif action_type == "dispatch_pending_task":
+                skipped_count += 1
+                results.append({
+                    "action": action_type,
+                    "skipped": True,
+                    "reason": "dispatch_not_supported",
+                })
+            else:
+                skipped_count += 1
+                results.append({
+                    "action": action_type,
+                    "worker_id": a.get("worker_id", ""),
+                    "task_id": a.get("task_id", ""),
+                    "skipped": True,
+                    "reason": "wait_action",
+                })
+        return _json.dumps({
+            "dry_run": dry_run,
+            "planned_count": len(actions),
+            "executed_count": executed_count,
+            "skipped_count": skipped_count,
+            "failed_count": failed_count,
+            "results": results,
+            "summary": summary,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "run_worker_lifecycle_once",
+        "执行一轮 worker 生命周期：dry-run 返回计划，非 dry-run 执行 ready closeout。",
+        _run_worker_lifecycle_once_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最大处理 action 数，默认 5，上限 100"},
+                "dry_run": {"type": "boolean", "description": "是否 dry-run，默认 true"},
+                "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

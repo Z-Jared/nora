@@ -1,42 +1,46 @@
-# Claude B Completion Report - TASK-086
+# Claude B Completion Report - TASK-088
 
-Status: approved by Codex PM
+Status: ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for `finalize_ready_worker_workspace_merges`.
+Added deterministic offline eval coverage for `plan_worker_lifecycle_actions`, with Codex PM follow-up fixes.
 
 Coverage added:
-- **Ready path**: finalize one and multiple ready workers; task marked completed, worker marked idle with cleared current_task_id; correct processed/finalized_count/results fields.
-- **Guard rails**: limit counts ready candidates not raw not-ready candidates; 100 not-ready + 1 ready still found with limit=1; no candidates and no-ready-candidates paths return zero; bad limit returns bounded error; bad release_workspace returns bounded error.
-- **Safety/no-leak**: goal/secret/step/file sentinels not leaked in output, error output, or event payloads.
-- **No mutation**: project root and workspace not mutated; rejection paths don't mutate state.
-- **Compatibility**: closeout candidate query, single-task finalize, audit query, worker/task registry, claim, and dispatch tools all work after batch finalize.
-
-Codex PM review fix applied:
-- Added explicit eval assertions for idempotent repeated calls.
-- Added explicit `release_workspace=False` lease retention coverage.
-- Made the file-content sentinel part of the actual workspace file input.
+- **Ready path**: ready closeout produces `finalize_ready_workspace_merge` action with correct worker_id/task_id; idle worker + pending task produces `dispatch_pending_task` with correct counts; mixed state returns all expected action types.
+- **Guard rails**: empty state returns no actions and zero summary counts; limit clamps returned actions but does not hide ready closeout behind wait actions; 100 not-ready + 1 ready: limit=1 still finds the ready one; bad limit returns bounded error.
+- **Safety/no-leak**: goal/secret/step/file sentinels not leaked in output, error output, or action payloads; `.workspaces` path fragment not leaked.
+- **No mutation**: task status, worker status/current_task_id, lease, project root, and workspace all unchanged after planner call.
+- **Compatibility**: closeout candidate query, batch finalize, single-task finalize, worker/task registry, claim, and dispatch tools all work after planner call.
+- Codex PM follow-up: isolated the 100 not-ready + 1 old ready regression from earlier ready fixtures, and fixed event-store snapshot calls to use the current `max_results` API.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 278 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 278 insertions(+)
+ evals/run_evals.py | 230 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 230 insertions(+)
 ```
 
 ## Verification
 
 ```text
+python3 - <<'PY'
+from evals.run_evals import eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation
+for fn in [eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation]:
+    fn()
+    print(fn.__name__, "OK")
+PY
+OK
+
 python3 evals/run_evals.py
-298 passed, 0 failed
+304 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 580 tests in 17.440s
+Ran 604 tests in 16.548s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1939 tests in 126.401s
+Ran 1963 tests in 126.243s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -47,5 +51,6 @@ OK
 ## Notes
 
 - No push performed.
-- No runtime changes were needed for TASK-086.
-- Critical regression covered: 100 raw not-ready candidates before 1 ready candidate — the ready worker is still finalized because limit counts ready candidates, not raw workers scanned.
+- No runtime changes were needed for TASK-088 beyond PM review fixes in eval assertions.
+- Critical regression covered: 100 raw not-ready candidates before 1 ready candidate — the ready closeout is still recommended because the planner iterates workers (limit=500 scan), not a flat candidate list.
+- Full `python3 -m unittest discover -s tests` was rerun after final report edits and passed.

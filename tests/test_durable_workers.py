@@ -6167,5 +6167,298 @@ class WorkerLifecyclePlannerTests(unittest.TestCase):
         self.assertGreaterEqual(len(workers), 1)
 
 
+class WorkerLifecycleRunOnceTests(unittest.TestCase):
+    """Tests for run_worker_lifecycle_once (TASK-087)."""
+
+    SECRET_SENTINEL = "RUN_ONCE_SECRET_ABC"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _setup_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text(f"data_{worker_id}_{task_id}", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id=worker_id, task_id=task_id, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
+        return task_id, lease["lease_id"]
+
+    def _setup_not_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id)
+        return task_id
+
+    # --- dry_run=True ---
+
+    def test_dry_run_returns_plan_without_mutation(self):
+        tid, _ = self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=True))
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["planned_count"], 1)
+        self.assertEqual(result["executed_count"], 0)
+        self.assertEqual(result["skipped_count"], 0)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["action"], "finalize_ready_workspace_merge")
+        self.assertTrue(result["results"][0]["would_execute"])
+
+        # Task not finalized
+        task = json.loads(self.registry.call("get_durable_task", task_id=tid))
+        self.assertEqual(task["status"], "running")
+
+        # Worker not idle
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "running")
+
+    def test_dry_run_does_not_mutate_leases(self):
+        self._setup_ready_worker("w1")
+        lease_before = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+
+        self.registry.call("run_worker_lifecycle_once", dry_run=True)
+
+        lease_after = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertEqual(lease_before.lease_id, lease_after.lease_id)
+
+    # --- dry_run=False ---
+
+    def test_execute_finalizes_ready_closeout(self):
+        tid, _ = self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        self.assertFalse(result["dry_run"])
+        self.assertEqual(result["planned_count"], 1)
+        self.assertEqual(result["executed_count"], 1)
+        self.assertEqual(result["skipped_count"], 0)
+        self.assertTrue(result["results"][0]["finalized"])
+
+        # Task finalized
+        task = json.loads(self.registry.call("get_durable_task", task_id=tid))
+        self.assertEqual(task["status"], "completed")
+
+        # Worker idle
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "idle")
+
+    def test_execute_multiple_workers(self):
+        tid1, _ = self._setup_ready_worker("w1", goal="task one")
+        tid2, _ = self._setup_ready_worker("w2", goal="task two")
+        tid3, _ = self._setup_ready_worker("w3", goal="task three")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False, limit=10))
+        self.assertEqual(result["executed_count"], 3)
+        finalized_tids = {r["task_id"] for r in result["results"] if r.get("finalized")}
+        self.assertEqual(finalized_tids, {tid1, tid2, tid3})
+
+    # --- wait actions skipped ---
+
+    def test_wait_actions_skipped(self):
+        self._setup_not_ready_worker("w1")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        self.assertEqual(result["executed_count"], 0)
+        self.assertEqual(result["skipped_count"], 1)
+        self.assertEqual(result["results"][0]["action"], "wait_for_workspace_merge_apply")
+        self.assertTrue(result["results"][0]["skipped"])
+
+    # --- dispatch skipped ---
+
+    def test_dispatch_skipped(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("create_durable_task", goal="g", steps="s")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        self.assertEqual(result["executed_count"], 0)
+        self.assertEqual(result["skipped_count"], 1)
+        dispatch_results = [r for r in result["results"] if r["action"] == "dispatch_pending_task"]
+        self.assertEqual(len(dispatch_results), 1)
+        self.assertTrue(dispatch_results[0]["skipped"])
+        self.assertEqual(dispatch_results[0]["reason"], "dispatch_not_supported")
+
+    # --- empty state ---
+
+    def test_empty_state(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        self.assertEqual(result["planned_count"], 0)
+        self.assertEqual(result["executed_count"], 0)
+        self.assertEqual(result["skipped_count"], 0)
+        self.assertEqual(result["results"], [])
+
+    def test_permission_requires_confirmation(self):
+        permission = self.registry.permission_for("run_worker_lifecycle_once")
+
+        self.assertEqual(permission.category, "task")
+        self.assertEqual(permission.risk, "write")
+        self.assertTrue(permission.requires_confirmation)
+
+    # --- limit ---
+
+    def test_limit_bounds(self):
+        for i in range(5):
+            self._setup_ready_worker(f"w{i}", goal=f"task {i}")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False, limit=3))
+        self.assertEqual(result["executed_count"], 3)
+
+    def test_bad_limit_returns_error(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", limit="abc"))
+        self.assertIn("error", result)
+
+    def test_limit_zero_clamps_to_one(self):
+        for i in range(3):
+            self._setup_ready_worker(f"w{i}", goal=f"task {i}")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False, limit=0))
+        self.assertNotIn("error", result)
+        self.assertEqual(result["planned_count"], 1)
+        self.assertEqual(result["executed_count"], 1)
+
+    def test_limit_101_clamps_to_100(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=True, limit=101))
+        self.assertNotIn("error", result)
+        self.assertEqual(result["planned_count"], 0)
+
+    def test_limit_true_returns_error(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", limit=True))
+        self.assertIn("error", result)
+
+    def test_limit_float_returns_error(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", limit=1.5))
+        self.assertIn("error", result)
+
+    def test_limit_string_returns_error(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", limit="5"))
+        self.assertIn("error", result)
+
+    # --- release_workspace ---
+
+    def test_release_workspace_false(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False, release_workspace=False))
+        self.assertEqual(result["executed_count"], 1)
+        self.assertFalse(result["results"][0]["workspace_released"])
+
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNotNone(lease)
+
+    def test_release_workspace_true(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False, release_workspace=True))
+        self.assertEqual(result["executed_count"], 1)
+        self.assertTrue(result["results"][0]["workspace_released"])
+
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNone(lease)
+
+    def test_bad_release_workspace_returns_error(self):
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", release_workspace="yes"))
+        self.assertIn("error", result)
+
+    # --- idempotent ---
+
+    def test_idempotent(self):
+        self._setup_ready_worker("w1")
+
+        r1 = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        self.assertEqual(r1["executed_count"], 1)
+
+        r2 = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        self.assertEqual(r2["executed_count"], 0)
+        self.assertEqual(r2["planned_count"], 0)
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_goal_leak_execute(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_steps_leak(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps=self.SECRET_SENTINEL))
+        tid = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=tid, worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=tid)
+        self.registry.call("update_durable_task", task_id=tid, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=tid))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id="w1", task_id=tid, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=tid)
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_file_content_leak(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        tid = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=tid, worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=tid)
+        self.registry.call("update_durable_task", task_id=tid, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=tid))
+        ws = Path(lease["workspace_path"])
+        (ws / "secret.txt").write_text(self.SECRET_SENTINEL, encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id="w1", task_id=tid, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w1", task_id=tid)
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_run(self):
+        tid, _ = self._setup_ready_worker("w1")
+        self.registry.call("run_worker_lifecycle_once", dry_run=False)
+
+        # Planner still works
+        plan = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertIn("actions", plan)
+
+        # Audit still works
+        audit = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+        self.assertGreaterEqual(audit["count"], 1)
+
+        # Candidate query still works
+        candidates = json.loads(self.registry.call("list_worker_workspace_merge_closeout_candidates"))
+        self.assertIn("candidates", candidates)
+
+        # Worker tools still work
+        workers = json.loads(self.registry.call("list_workers"))
+        self.assertGreaterEqual(len(workers), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-088: Deterministic eval coverage for worker lifecycle planner ✅
+- 完成者: Claude B；Codex PM 修复 eval API/fixture isolation 问题
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 304 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 604 tests OK；`python3 -m unittest discover -s tests` 1963 tests OK；`git diff --check` OK。
+- 内容: 为 `plan_worker_lifecycle_actions(limit=20)` 增加 deterministic offline eval coverage，覆盖 empty/ready/not-ready/missing lease/dispatch recommendation/mixed/limit/100 raw-candidate 边界、安全不泄漏、no mutation 和 compatibility。
+
+### TASK-087: Guarded worker lifecycle run-once v1 ✅
+- 完成者: Claude A；Codex PM 补强 confirmation permission 和 failed-count accounting
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests` 42 tests OK；`python3 evals/run_evals.py` 304 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 604 tests OK；`python3 -m unittest discover -s tests` 1963 tests OK；`git diff --check` OK。
+- 内容: 新增 `run_worker_lifecycle_once(limit=5, dry_run=True, release_workspace=True)`；默认只 dry-run，`dry_run=False` 时仅执行 ready closeout，不 dispatch、不执行 wait actions、不做 shell/git/project/workspace writes；注册为需要确认的 task/write。
+
 ### TASK-086: Deterministic eval coverage for batch workspace merge closeout ✅
 - 完成者: Claude B；Codex PM 补强 release/idempotency/file-content eval assertions
 - Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED

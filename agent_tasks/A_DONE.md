@@ -1,62 +1,78 @@
-# Claude A Completion Report — TASK-085: Worker Lifecycle Action Planner v1
+# Claude A Completion Report — TASK-087: Guarded Worker Lifecycle Run-once v1
 
-Status: approved by Codex PM
+Status: ready for Codex review
 
 ## Summary
 
-Added `plan_worker_lifecycle_actions(limit=20)`, a read-only planning tool that recommends next worker lifecycle actions for Codex PM without executing anything.
+Added `run_worker_lifecycle_once(limit=5, dry_run=True, release_workspace=True)` and Codex PM follow-up fixes.
 
-Implementation:
-- Queries closeout candidates to identify ready-to-finalize and not-ready worker/task pairs.
-- Queries workers and tasks to identify idle workers and pending/unassigned tasks.
-- Returns deterministic action labels:
-  - `finalize_ready_workspace_merge` for ready closeout candidates.
-  - `wait_for_workspace_merge_apply` for running workers without a successful apply.
-  - `wait_for_workspace_lease` for workers with invalid/missing leases.
-  - `dispatch_pending_task` when idle workers and pending tasks coexist.
-- Returns summary counts: `ready_closeouts`, `not_ready_closeouts`, `idle_workers`, `pending_tasks`.
-- `limit` bounded 1..100; bad limit returns bounded JSON error.
-- Registered with `risk="read"` permission.
-- Does not mutate tasks, workers, leases, events, project root, or workspaces.
-
-Codex PM review fix applied:
-- Planner now scans worker/task pairs individually instead of relying on the first 100 raw closeout candidates.
-- Ready closeout actions are prioritized before wait actions, so an older ready closeout is not hidden by newer not-ready workers.
-- Added regression coverage for the 100 raw-candidate boundary.
+- Default `dry_run=True` returns planner output and would-execute metadata without mutation.
+- `dry_run=False` executes only `finalize_ready_workspace_merge` actions by reusing existing finalize logic.
+- Wait actions and dispatch recommendations are skipped; no shell/git/process/project write/workspace write/start-worker behavior.
+- Limit validation rejects bool/float/string, defaults `None` to 5, and clamps integer limits to 1..100.
+- `release_workspace` must be boolean.
+- Codex PM follow-up: registered the tool as `task/write` with confirmation required, and added `failed_count` for non-finalized finalize attempts.
 
 ## Diff
 
 ```text
- mini_agent/toolkits/registry_builder.py |  90 +++++++++++
- tests/test_durable_workers.py           | 233 ++++++++++++++++++++++++++
- 2 files changed, 323 insertions(+)
+ mini_agent/toolkits/registry_builder.py | 91 ++++++++
+ tests/test_durable_workers.py           | 293 ++++++++++++++++++++++++++
 ```
 
 ## Tests
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkerLifecyclePlannerTests
-Ran 18 tests in 2.217s
+python3 -m unittest tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests
+Ran 42 tests in 1.590s
 OK
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 580 tests in 17.440s
+Ran 604 tests in 16.548s
 OK
 
 python3 evals/run_evals.py
-298 passed, 0 failed
+304 passed, 0 failed
 
 python3 -m unittest discover -s tests
-Ran 1939 tests in 126.401s
+Ran 1963 tests in 126.243s
 OK
 Warning: failed to load plugin broken.py: bad
+
+python3 - <<'PY'
+from evals.run_evals import eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation
+for fn in [eval_lifecycle_planner_guard_rails, eval_lifecycle_planner_no_mutation]:
+    fn()
+    print(fn.__name__, "OK")
+PY
+OK
 
 git diff --check
 OK
 ```
 
+## New / Updated Tests
+
+- `test_dry_run_returns_plan_without_mutation`
+- `test_execute_finalizes_ready_closeout`
+- `test_execute_multiple_workers`
+- `test_wait_actions_skipped`
+- `test_dispatch_skipped`
+- `test_limit_zero_clamps_to_one`
+- `test_limit_101_clamps_to_100`
+- `test_limit_true_returns_error`
+- `test_limit_float_returns_error`
+- `test_limit_string_returns_error`
+- `test_permission_requires_confirmation`
+- `test_release_workspace_false`
+- `test_release_workspace_true`
+- `test_bad_release_workspace_returns_error`
+- `test_no_goal_leak`
+- `test_no_steps_leak`
+- `test_no_file_content_leak`
+
 ## Notes
 
 - No push performed.
-- Purely read-only: no auto-dispatch, no auto-finalize, no mutations.
-- Output is safe: no task goals, steps, file contents, paths, or secrets.
+- Codex PM fixed the previous eval regression before marking ready for review.
+- Full `python3 -m unittest discover -s tests` was rerun after final report edits and passed.

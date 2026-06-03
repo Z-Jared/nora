@@ -1,6 +1,6 @@
 # Nora Project Wakeup
 
-Last updated: 2026-06-01
+Last updated: 2026-06-03
 
 ## Mission
 
@@ -61,6 +61,8 @@ Do not assume this state is still current. Verify before editing.
 - Nora should support industry and professional workflows through modular skill packs plus governed plugins/connectors. Skill packs provide terminology, workflows, templates, risk boundaries, and evals. Plugins provide external system access with auth, permissions, sensitivity labels, confirmation rules, and event logging.
 - Personal Nora should optimize for a local-first professional workbench with low friction, strong memory, private data, resumable tasks, and useful deliverables.
 - Enterprise Nora should optimize for governed agent runtime needs: RBAC, SSO, audit logs, policy controls, isolated worker pools, internal connectors, approvals, cost metrics, reliability, and compliance.
+- The 2026-06-03 frontier scan pushes Nora's next runtime priorities toward scheduler automation, hook/policy kernel, graph-shaped traces, plugin manifests, skill manifests, capability routing, Agent OS dashboard, end-to-end workflow evals, and minimal model routing.
+- Nora's orchestration complexity now justifies comparing LangChain, LangGraph, and OpenAI Agents SDK as references, but the default remains Nora's custom local-first durable runtime unless a specific subsystem clearly outgrows it.
 - Every daily frontier scan should answer how Codex, Claude Code, MCP, OpenAI Agents SDK, and new research should change Nora's roadmap.
 - The project needs a persistent knowledge base because new Codex windows do not automatically inherit prior conversation context.
 
@@ -73,7 +75,8 @@ Nora is a usable local alpha approaching beta:
 - Toolkits, permission categories, file/Git/shell/browser/web/RAG/log/process tools.
 - Short-term memory, long-term memory, task management, session save/load.
 - Durable task/worker runtime primitives: worker registry/heartbeat/claim/auto-dispatch, lifecycle pause/resume/cancel, checkpoints, recovery planning, recovery events, and timeline inspection.
-- A large Python test suite; recent full run reported 1592 tests passing, and deterministic evals reported 206 passed.
+- Worker lifecycle planning and guarded run-once automation are in progress; the next step is turning them into a scheduler loop with durable decision events.
+- A large Python test suite; recent full run reported 1963 tests passing, and deterministic evals reported 304 passed.
 
 Main gap versus an Agent OS / Durable Runtime:
 
@@ -90,14 +93,15 @@ Main gap versus an Agent OS / Durable Runtime:
 
 Shift from feature accumulation to deeper agent-runtime foundations:
 
-1. Worker isolation and automatic task dispatch into real worker processes or worktrees.
-2. Sandbox and permission policy kernel for filesystem, shell, browser, network, Git, plugin, and high-risk actions.
-3. Review gates, rollback hooks, and merge workflow around worker output.
-4. Real eval harness for end-to-end coding and durable-runtime tasks, not only unit-level registry behavior.
-5. Model routing by task type, tool-calling quality, cost, latency, context length, and reliability.
-6. UI redesign for task state, traces, approvals, workers, timelines, checkpoints, recovery plans, diffs, and tests.
-7. Skill pack runtime for industry workflows.
-8. Plugin manifests, permission mapping, and capability routing.
+1. Finish worker lifecycle planner/run-once work, then promote it into a scheduler loop that can periodically plan, dry-run, safely execute closeouts, dispatch eligible work, retry with backoff, and explain blocked work.
+2. Add a hook and policy kernel for filesystem, shell, browser, network, Git, plugin, model, test, handoff, compact, commit, and high-risk actions.
+3. Upgrade durable events into graph-shaped traces/spans for task, worker, model, tool, plugin, approval, review, test, handoff, and recovery activity.
+4. Add plugin manifests and runtime foundations: auth, tool schemas, permission mapping, sensitivity labels, confirmation rules, output bounding, and event logging.
+5. Add skill manifests and context-compiler integration for industry workflows: terminology, workflows, templates, deliverable formats, required plugins, risk boundaries, and evals.
+6. Add capability routing that chooses skills, plugins, model policy, risk level, and expected deliverables from the user's goal.
+7. Redesign the UI into an Agent OS dashboard for task state, traces, approvals, workers, leases/workspaces, timelines, checkpoints, recovery plans, diffs, tests, plugin permissions, and enabled skills.
+8. Build end-to-end durable-runtime evals, not only unit-level registry behavior.
+9. Add minimal model routing by task type, tool-calling quality, cost, latency, context length, reliability, and risk level.
 
 Initial skill pack priority should stay close to Nora's strengths: software engineering, product/project management, research/consulting, spreadsheet/finance/operations analysis, and content creation. Higher-risk domains such as legal, healthcare, investment, tax, and regulated finance need stronger source tracking, disclaimers, human confirmation, and policy gates.
 
