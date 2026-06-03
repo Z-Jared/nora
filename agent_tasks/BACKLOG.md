@@ -6,25 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-081: Worker workspace merge closeout candidate query v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-080
-- 分配: Claude A
-- 目标: 新增只读 `list_worker_workspace_merge_closeout_candidates(worker_id="", task_id="", limit=20)`，为 Codex PM 返回哪些 worker/task 已 ready to finalize、哪些因 no apply / stale lease / no lease / worker mismatch / task status 等原因不能 finalize；不 mutation、不释放 lease、不调用 finalize。
-- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/audit/finalize/lease tools；TASK-080 审查记录。
-
-### TASK-082: Deterministic eval coverage for worker workspace merge finalization
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-080
-- 分配: Claude B
-- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `finalize_worker_workspace_merge` 的 successful finalize、guard rails、release false、idempotency、no-leak/no-mutation 和 compatibility 行为。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
-- 参考: `mini_agent/toolkits/registry_builder.py` 的 finalization runtime；TASK-080 审查记录。
-
 ## 已完成
+
+### TASK-082: Deterministic eval coverage for worker workspace merge finalization ✅
+- 完成者: Claude B；Codex PM 补强 stale apply event / unique file path eval fixes
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 288 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 544 tests OK；`python3 -m unittest discover -s tests` 1903 tests OK；`git diff --check` OK。
+- 内容: 新增 deterministic offline eval coverage，覆盖 `finalize_worker_workspace_merge` successful finalize、no apply、missing lease、stale apply event predating active lease、invalid `release_workspace`、`release_workspace=False`、repeated finalization、non-running task、no-leak/no-mutation，以及 failed/successful finalization 后 compatibility。
+
+### TASK-081: Worker workspace merge closeout candidate query v1 ✅
+- 完成者: Claude A；Codex PM 撤回 out-of-scope lease id / apply no-op changes，并补强 active lease created_at stale-event gate
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceApplyMergeTests tests.test_durable_workers.WorkspaceMergeFinalizeTests tests.test_durable_workers.WorkspaceMergeCloseoutCandidateTests` 76 tests OK；`python3 evals/run_evals.py` 288 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 544 tests OK；`python3 -m unittest discover -s tests` 1903 tests OK；`git diff --check` OK。
+- 内容: 新增只读 `list_worker_workspace_merge_closeout_candidates(worker_id="", task_id="", limit=20)`；返回哪些 worker/task ready to finalize、哪些因 no apply / stale apply / no lease / worker mismatch / task status / already finalized 等原因不能 finalize；候选 ready 需要 running task、active worker/current_task、active lease、同 worker/task/lease 且不早于当前 lease 创建时间的 successful apply event；不 mutation、不释放 lease、不调用 finalize。
 
 ### TASK-080: Worker workspace merge finalization v1 ✅
 - 完成者: Claude A；Codex PM 补强 active lease validation / lease_id-bound apply event / invalid release flag review fixes

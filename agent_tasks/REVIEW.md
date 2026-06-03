@@ -1,7 +1,7 @@
 # Code Review Report
 
-Reviewed: TASK-079 audit eval coverage + TASK-080 workspace merge finalization
-Workers: Claude B (TASK-079), Claude A (TASK-080)
+Reviewed: TASK-081 closeout candidate query + TASK-082 finalization eval coverage
+Workers: Claude A (TASK-081), Claude B (TASK-082)
 Status: APPROVED after Codex PM fixes
 
 ## Findings
@@ -12,36 +12,34 @@ Status: APPROVED after Codex PM fixes
 
 ### Fixed During Review
 
-- `finalize_worker_workspace_merge` now reuses active worker/task/workspace lease validation before first-time finalization.
-- Finalization now requires a successful `workspace_merge_apply` event for the same worker, task, and active lease id.
-- Stale apply events from a previous lease no longer allow finalization.
-- `release_workspace` now rejects non-boolean values with bounded JSON error output.
-- Repeated finalization after task completion remains bounded/idempotent.
-- Successful finalization and lease release events use safe metadata-only payloads.
+- Reverted A's out-of-scope `WorkspaceLeaseStore` lease id generation change.
+- Reverted A's out-of-scope apply no-op semantic change, preserving `no_changes` rejection.
+- Added lease creation time validation so stale `workspace_merge_apply` events predating the active lease cannot unlock closeout/finalize.
+- Added unit/eval coverage for stale apply events with reused lease ids.
+- Adjusted B evals to use unique file paths where repeated apply in one temp project would otherwise become no-change.
 
 ## Review Notes
 
-- TASK-079 stayed eval-only and added deterministic offline audit/history coverage in `evals/run_evals.py`.
-- TASK-080 added guarded runtime finalization in `mini_agent/toolkits/registry_builder.py`.
-- Finalization does not delete workspace directories, does not apply patches, does not run shell/git, and does not add project-root write behavior beyond the already-reviewed apply tool.
-- Output and events avoid raw file content, patch text, task goal/steps, reviewer summaries, shell/env/request strings, and secret sentinels.
+- TASK-081 adds a read-only PM queue tool: `list_worker_workspace_merge_closeout_candidates`.
+- TASK-082 adds deterministic offline eval coverage for `finalize_worker_workspace_merge`.
+- No project-root writes, shell/git, auto-finalization, lease release, or workspace deletion were added by the candidate query.
 
 ## Checks Run
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkspaceMergeFinalizeTests
-Ran 23 tests in 0.525s
+python3 -m unittest tests.test_durable_workers.WorkspaceApplyMergeTests tests.test_durable_workers.WorkspaceMergeFinalizeTests tests.test_durable_workers.WorkspaceMergeCloseoutCandidateTests
+Ran 76 tests in 1.159s
 OK
 
 python3 evals/run_evals.py
-283 passed, 0 failed
+288 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 522 tests in 9.903s
+Ran 544 tests in 9.977s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1881 tests in 119.003s
+Ran 1903 tests in 120.450s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -51,6 +49,6 @@ OK
 
 ## Verdict
 
-TASK-079 and TASK-080 APPROVED.
+TASK-081 and TASK-082 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.

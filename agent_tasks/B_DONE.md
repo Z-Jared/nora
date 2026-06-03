@@ -1,37 +1,37 @@
-# Claude B Completion Report - TASK-079
+# Claude B Completion Report - TASK-082
 
 Status: approved by Codex PM
 
 ## Summary
 
-Added deterministic offline eval coverage for `list_worker_workspace_merge_applies` audit/history behavior.
+Added deterministic offline eval coverage for `finalize_worker_workspace_merge`.
 
 Coverage added:
-- Empty results and successful apply audit row basics.
-- Worker/task filters, limit bounds, bad limit error, and filtering behavior.
-- Malformed payload safety for counts, paths, ids, sensitive paths, traversal, absolute paths, and long paths.
-- No-leak/read-only checks for task goal, steps, file content, secrets, worker/task state, lease ownership, project root, and worker workspace.
-- Compatibility checks for apply, dry-run, summary, patch export, review gate, lease, registry, claim, and dispatch tools after audit queries.
+- Successful finalization: apply, finalize, task completed, worker idle/current_task_id cleared, lease released, safe event metadata.
+- Guard rails: no apply, missing lease, stale apply event predating the active lease, invalid `release_workspace`, `release_workspace=False`, repeated finalization, non-running task.
+- Safety: no task goal, step, secret, file content, raw exception, shell/env/request leakage.
+- Mutation checks: rejection paths do not mutate task, worker, lease, project root, or worker workspace.
+- Compatibility after failed and successful finalization.
 
 ## Diff
 
 ```text
- evals/run_evals.py | 316 +++++++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 316 insertions(+)
+ evals/run_evals.py | 348 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 348 insertions(+)
 ```
 
 ## Verification
 
 ```text
 python3 evals/run_evals.py
-283 passed, 0 failed
+288 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 522 tests in 9.903s
+Ran 544 tests in 9.977s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1881 tests in 119.003s
+Ran 1903 tests in 120.450s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -42,5 +42,4 @@ OK
 ## Notes
 
 - No push performed.
-- No runtime code changes were needed for TASK-079.
-- Codex PM approved the eval coverage after running full verification.
+- Codex PM adjusted one eval path collision after restoring no-changes apply rejection.

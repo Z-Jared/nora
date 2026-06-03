@@ -2654,6 +2654,18 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _is_workspace_merge_apply_for_lease(event, lease) -> bool:
+        payload = event.payload or {}
+        if payload.get("operation") != "workspace_merge_apply":
+            return False
+        if payload.get("lease_id") != lease.lease_id:
+            return False
+        event_created_at = event.created_at or ""
+        lease_created_at = lease.created_at or ""
+        if event_created_at and lease_created_at and event_created_at < lease_created_at:
+            return False
+        return True
+
     def _list_worker_workspace_merge_applies_json(worker_id: str = "", task_id: str = "", limit: int = 20) -> str:
         try:
             limit = max(1, min(int(limit or 20), 100))
@@ -2795,11 +2807,7 @@ def build_default_registry(
             )
         except Exception:
             return _json.dumps({"error": "event 查询失败"}, ensure_ascii=False)
-        has_apply = any(
-            (e.payload or {}).get("operation") == "workspace_merge_apply"
-            and (e.payload or {}).get("lease_id") == lease.lease_id
-            for e in events
-        )
+        has_apply = any(_is_workspace_merge_apply_for_lease(e, lease) for e in events)
         if not has_apply:
             return _json.dumps({
                 "finalized": False,
@@ -2892,6 +2900,232 @@ def build_default_registry(
             "required": ["worker_id", "task_id"],
         },
         permission=ToolPermission(category="task", risk="write"),
+    )
+
+    def _list_worker_workspace_merge_closeout_candidates_json(worker_id: str = "", task_id: str = "", limit: int = 20) -> str:
+        try:
+            limit = max(1, min(int(limit or 20), 100))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        worker_id = worker_id.strip()
+        task_id = task_id.strip()
+
+        pairs: list[tuple[str, str]] = []
+        if worker_id and task_id:
+            pairs.append((worker_id, task_id))
+        elif worker_id:
+            worker = durable_worker_store.get_worker(worker_id)
+            if worker and worker.current_task_id:
+                pairs.append((worker_id, worker.current_task_id))
+        elif task_id:
+            task = durable_task_store.get_task(task_id)
+            if task and task.worker_id:
+                pairs.append((task.worker_id, task_id))
+        else:
+            workers = durable_worker_store.list_workers(limit=500)
+            for w in workers:
+                if w.current_task_id:
+                    pairs.append((w.worker_id, w.current_task_id))
+
+        def _safe_label(value, max_len: int = 120) -> str:
+            if not isinstance(value, str):
+                return ""
+            if is_sensitive_text(value):
+                return "[redacted]"
+            if len(value) > max_len:
+                return value[:max_len] + "..."
+            return value
+
+        candidates = []
+        for wid, tid in pairs:
+            if len(candidates) >= limit:
+                break
+            worker = durable_worker_store.get_worker(wid)
+            if worker is None:
+                candidates.append({
+                    "ready": False,
+                    "reason": "worker_unavailable",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": "",
+                    "worker_status": "",
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            task = durable_task_store.get_task(tid)
+            if task is None:
+                candidates.append({
+                    "ready": False,
+                    "reason": "worker_unavailable",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": "",
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            if task.worker_id != wid:
+                candidates.append({
+                    "ready": False,
+                    "reason": "worker_task_mismatch",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            if task.status == "completed":
+                candidates.append({
+                    "ready": False,
+                    "reason": "already_finalized",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            if worker.status == WorkerStatus.OFFLINE or worker.status == WorkerStatus.IDLE:
+                candidates.append({
+                    "ready": False,
+                    "reason": "worker_unavailable",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            if worker.current_task_id != tid:
+                candidates.append({
+                    "ready": False,
+                    "reason": "worker_task_mismatch",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            if task.status != "running":
+                candidates.append({
+                    "ready": False,
+                    "reason": "task_not_running",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            lease = workspace_lease_store.get_lease_by_worker(wid)
+            if lease is None or lease.task_id != tid:
+                candidates.append({
+                    "ready": False,
+                    "reason": "workspace_lease_invalid",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": "",
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            try:
+                events = registry.durable_event_store.list_events(
+                    task_id=tid,
+                    source="workspace_merge",
+                    worker_id=wid,
+                    max_results=100,
+                )
+            except Exception:
+                candidates.append({
+                    "ready": False,
+                    "reason": "no_successful_apply",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": _safe_label(lease.lease_id),
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            apply_event = None
+            for e in events:
+                if _is_workspace_merge_apply_for_lease(e, lease):
+                    apply_event = e
+                    break
+            if apply_event is None:
+                candidates.append({
+                    "ready": False,
+                    "reason": "no_successful_apply",
+                    "worker_id": _safe_label(wid),
+                    "task_id": _safe_label(tid),
+                    "lease_id": _safe_label(lease.lease_id),
+                    "task_status": task.status,
+                    "worker_status": worker.status,
+                    "workspace_released": False,
+                    "latest_apply_event_id": "",
+                    "latest_apply_created_at": "",
+                })
+                continue
+            candidates.append({
+                "ready": True,
+                "reason": "ready_to_finalize",
+                "worker_id": _safe_label(wid),
+                "task_id": _safe_label(tid),
+                "lease_id": _safe_label(lease.lease_id),
+                "task_status": task.status,
+                "worker_status": worker.status,
+                "workspace_released": False,
+                "latest_apply_event_id": _safe_label(apply_event.event_id),
+                "latest_apply_created_at": apply_event.created_at or "",
+            })
+        return _json.dumps({
+            "candidates": candidates,
+            "count": len(candidates),
+        }, ensure_ascii=False)
+
+    registry.register(
+        "list_worker_workspace_merge_closeout_candidates",
+        "列出哪些 worker/task 已 ready 可以 finalize，哪些不能。",
+        _list_worker_workspace_merge_closeout_candidates_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "按 worker_id 过滤（可选）"},
+                "task_id": {"type": "string", "description": "按 task_id 过滤（可选）"},
+                "limit": {"type": "integer", "description": "最大返回数，默认 20，上限 100"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="read"),
     )
 
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
