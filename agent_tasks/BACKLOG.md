@@ -17,8 +17,8 @@ PM 从这里读取待分配的任务。每个任务格式：
 ### TASK-083: Guarded batch closeout for ready worker workspace merges ✅
 - 完成者: Claude A；Codex PM 补强 ready-candidate limit semantics
 - Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
-- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceBatchFinalizeTests` 17 tests OK；`python3 evals/run_evals.py` 293 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 561 tests OK；`python3 -m unittest discover -s tests` 1920 tests OK；`git diff --check` OK。
-- 内容: 新增 `finalize_ready_worker_workspace_merges(limit=10, release_workspace=True)`；批量处理 closeout candidates 中 `ready_to_finalize` 的 worker/task，逐个复用单任务 finalize 逻辑；`limit` 按 ready candidates 计数，不被 not-ready candidates 截断；不写 project root、不删除 workspace、不执行 shell/git、不启动 worker。
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkspaceBatchFinalizeTests` 18 tests OK；`python3 evals/run_evals.py` 293 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 562 tests OK；`python3 -m unittest discover -s tests` 1921 tests OK；`git diff --check` OK。
+- 内容: 新增 `finalize_ready_worker_workspace_merges(limit=10, release_workspace=True)`；批量处理 closeout candidates 中 `ready_to_finalize` 的 worker/task，逐个复用单任务 finalize 逻辑；`limit` 按 ready candidates 计数，扫描 worker/task pairs，不被 not-ready candidates 或前 100 个 raw candidates 截断；不写 project root、不删除 workspace、不执行 shell/git、不启动 worker。
 
 ### TASK-082: Deterministic eval coverage for worker workspace merge finalization ✅
 - 完成者: Claude B；Codex PM 补强 stale apply event / unique file path eval fixes

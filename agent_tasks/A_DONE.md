@@ -8,6 +8,7 @@ Added `finalize_ready_worker_workspace_merges(limit=10, release_workspace=True)`
 
 Codex PM review fix applied:
 - `limit` now counts ready candidates processed, not raw candidates returned by the closeout query. This prevents earlier not-ready candidates from hiding later ready candidates.
+- Batch finalize now scans worker/task pairs individually instead of only the first 100 raw candidates, so older ready workers are not hidden by newer not-ready workers.
 
 ## Diff
 
@@ -21,18 +22,18 @@ Codex PM review fix applied:
 
 ```text
 python3 -m unittest tests.test_durable_workers.WorkspaceBatchFinalizeTests
-Ran 17 tests in 0.307s
+Ran 18 tests in 0.987s
 OK
 
 python3 evals/run_evals.py
 293 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 561 tests in 10.672s
+Ran 562 tests in 11.807s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1920 tests in 119.776s
+Ran 1921 tests in 122.559s
 OK
 Warning: failed to load plugin broken.py: bad
 

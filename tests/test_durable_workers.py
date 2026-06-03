@@ -5725,6 +5725,16 @@ class WorkspaceBatchFinalizeTests(unittest.TestCase):
         self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
         return task_id, lease["lease_id"]
 
+    def _setup_not_ready_worker(self, worker_id, goal="not ready"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id)
+        return task_id
+
     # --- happy path ---
 
     def test_batch_finalize_single_worker(self):
@@ -5812,12 +5822,7 @@ class WorkspaceBatchFinalizeTests(unittest.TestCase):
         self.assertEqual(result["finalized_count"], 3)
 
     def test_batch_limit_counts_ready_candidates_not_raw_candidates(self):
-        self.registry.call("register_worker", worker_id="w_not_ready")
-        task = json.loads(self.registry.call("create_durable_task", goal="not ready", steps="s"))
-        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id="w_not_ready")
-        self.registry.call("update_worker_status", worker_id="w_not_ready", status="running", current_task_id=task["task_id"])
-        self.registry.call("update_durable_task", task_id=task["task_id"], status="running")
-        self.registry.call("prepare_worker_workspace", worker_id="w_not_ready", task_id=task["task_id"])
+        self._setup_not_ready_worker("w_not_ready")
         ready_task_id, _ = self._setup_ready_worker("w_ready", goal="ready")
 
         result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", limit=1))
@@ -5825,6 +5830,18 @@ class WorkspaceBatchFinalizeTests(unittest.TestCase):
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["finalized_count"], 1)
         self.assertEqual(result["results"][0]["worker_id"], "w_ready")
+        self.assertEqual(result["results"][0]["task_id"], ready_task_id)
+
+    def test_batch_scans_past_first_100_raw_candidates(self):
+        ready_task_id, _ = self._setup_ready_worker("w_ready_old", goal="ready")
+        for i in range(100):
+            self._setup_not_ready_worker(f"w_not_ready_new_{i:03d}", goal=f"not ready {i}")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", limit=1))
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertEqual(result["results"][0]["worker_id"], "w_ready_old")
         self.assertEqual(result["results"][0]["task_id"], ready_task_id)
 
     def test_batch_bad_limit_returns_error(self):

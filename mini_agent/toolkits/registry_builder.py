@@ -3135,19 +3135,29 @@ def build_default_registry(
             return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
         if not isinstance(release_workspace, bool):
             return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
-        candidates_json = _list_worker_workspace_merge_closeout_candidates_json(limit=100)
-        try:
-            candidates_data = _json.loads(candidates_json)
-        except Exception:
-            return _json.dumps({"error": "候选查询失败"}, ensure_ascii=False)
-        if "error" in candidates_data:
-            return _json.dumps({"error": f"候选查询: {candidates_data['error']}"}, ensure_ascii=False)
-        ready_candidates = [
-            c for c in candidates_data.get("candidates", [])
-            if c.get("ready") and c.get("reason") == "ready_to_finalize"
-        ]
+        ready_candidates = []
+        for worker in durable_worker_store.list_workers(limit=500):
+            if len(ready_candidates) >= limit:
+                break
+            if not worker.current_task_id:
+                continue
+            candidates_json = _list_worker_workspace_merge_closeout_candidates_json(
+                worker_id=worker.worker_id,
+                task_id=worker.current_task_id,
+                limit=1,
+            )
+            try:
+                candidates_data = _json.loads(candidates_json)
+            except Exception:
+                return _json.dumps({"error": "候选查询失败"}, ensure_ascii=False)
+            if "error" in candidates_data:
+                return _json.dumps({"error": f"候选查询: {candidates_data['error']}"}, ensure_ascii=False)
+            for c in candidates_data.get("candidates", []):
+                if c.get("ready") and c.get("reason") == "ready_to_finalize":
+                    ready_candidates.append(c)
+                    break
         results = []
-        for c in ready_candidates[:limit]:
+        for c in ready_candidates:
             wid = c.get("worker_id", "")
             tid = c.get("task_id", "")
             result_json = _finalize_worker_workspace_merge_json(wid, tid, release_workspace=release_workspace)
