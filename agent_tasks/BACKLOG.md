@@ -6,6 +6,24 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-081: Worker workspace merge closeout candidate query v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-080
+- 分配: Claude A
+- 目标: 新增只读 `list_worker_workspace_merge_closeout_candidates(worker_id="", task_id="", limit=20)`，为 Codex PM 返回哪些 worker/task 已 ready to finalize、哪些因 no apply / stale lease / no lease / worker mismatch / task status 等原因不能 finalize；不 mutation、不释放 lease、不调用 finalize。
+- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 apply/audit/finalize/lease tools；TASK-080 审查记录。
+
+### TASK-082: Deterministic eval coverage for worker workspace merge finalization
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-080
+- 分配: Claude B
+- 目标: 在 `evals/run_evals.py` 中新增 deterministic offline eval，覆盖 `finalize_worker_workspace_merge` 的 successful finalize、guard rails、release false、idempotency、no-leak/no-mutation 和 compatibility 行为。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
+- 参考: `mini_agent/toolkits/registry_builder.py` 的 finalization runtime；TASK-080 审查记录。
+
 ## 已完成
 
 ### TASK-080: Worker workspace merge finalization v1 ✅
