@@ -4,14 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-096: Deterministic eval coverage for scheduler retry planning v1
-- 优先级: high
-- 预计: 1-2h
-- 依赖: TASK-095
-- 目标: 为 worker lifecycle retry planning/explainability 增加 deterministic offline eval coverage，覆盖 retryable failed task、max-retries exhausted、active-owner/invalid-owner 跳过、安全不泄漏与 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8；`mini_agent/toolkits/registry_builder.py`；`evals/run_evals.py`
-
 ### TASK-097: Guarded scheduler retry execution v1
 - 优先级: medium
 - 预计: 1-2h
@@ -21,6 +13,11 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8；`docs/knowledge/PROJECT_WAKEUP.md` near-term priority 1；`mini_agent/toolkits/registry_builder.py`
 
 ## 进行中
+
+### TASK-096: Deterministic eval coverage for scheduler retry planning v1
+- 分配给: Claude B
+- 目标: 为 worker lifecycle retry planning/explainability 增加 deterministic offline eval coverage，覆盖 retryable failed task、max-retries exhausted、active-owner/invalid-owner 跳过、安全不泄漏与 compatibility。
+- 状态: assigned
 
 ## 已完成
 

@@ -5,39 +5,45 @@ Status: assigned
 
 ## Task
 
-TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
+TASK-096: Deterministic eval coverage for scheduler retry planning v1
 
 ## Context
 
-TASK-093 has landed on `main` in commit `1b092a1`. The tool `explain_worker_lifecycle_scheduler_state(worker_id="", task_id="", limit=20)` is available in the default registry.
+TASK-095 has landed on `main` in commit `47a0455`, and TASK-094 has landed in commit `ef54490`.
+
+Current relevant tools:
+
+- `plan_worker_lifecycle_actions(limit=20)`
+- `explain_worker_lifecycle_scheduler_state(worker_id="", task_id="", limit=20)`
+
+TASK-095 added read-only retry planning/explanation for failed durable tasks. Scheduler execution does not perform retry yet; this task is eval coverage only.
 
 ## Goal
 
-Add deterministic offline eval coverage for the scheduler blocker/explanation tool in `evals/run_evals.py`.
+Add deterministic offline eval coverage in `evals/run_evals.py` for retry planning and retry explainability, without changing runtime implementation unless a failing eval exposes a real bug.
 
 ## Expected Coverage
 
-- Empty state/no action needed.
-- Ready closeout explanation.
-- Not-ready closeout/missing apply/missing lease explanation.
-- Pending task + idle worker dispatch availability and guarded block reason.
-- Pending tasks without idle workers.
-- Idle workers without pending tasks.
-- Offline worker reason.
-- `worker_id` and `task_id` filters.
-- Regression coverage for filtered output:
-  - `task_id=dtask_1` must not leak `dtask_2` or unrelated worker reasons/actions.
-  - `worker_id=w1` must not leak `w2` or unrelated task reasons/actions.
-- `limit` clamp and bad argument errors.
-- Safety/no-leak for task goal, steps, file content, reviewer summary, shell/env/request-like sentinels, workspace paths, and secrets.
-- Compatibility with planner, scheduler tick, scheduler loop, run-once, closeout candidate query, worker/task registry, claim, and dispatch tools.
+Add compact, substantive evals covering:
+
+- Failed task with retries remaining is surfaced as `retry_failed_task` / `retry_available`.
+- Failed task with `retry_count >= max_retries` is surfaced as exhausted and not recommended for retry.
+- Failed task with active RUNNING or ASSIGNED owner worker is blocked/skipped with `retry_blocked_active_worker`.
+- Failed task with no idle capacity is explained as `retry_blocked_missing_capacity`.
+- Ready closeout remains higher priority than retry in planner output.
+- Existing pending-task dispatch recommendations remain lower priority than retry.
+- `task_id` filter does not leak unrelated retry entries.
+- `worker_id` filter does not leak unrelated worker/task entries; be explicit about expected behavior for retry entries with empty worker id.
+- Safety/no-leak for task goal, steps, failure reason, shell/env/request-like sentinels, workspace paths, and secrets.
+- Compatibility after retry explain/planning calls: planner, explain, scheduler tick, scheduler loop, run-once, worker/task registry, claim, and dispatch still work.
 
 ## Requirements
 
-- Keep evals deterministic and offline: use temporary DB/workspace fixtures, no live LLM/network, no timing dependency.
-- Do not change runtime implementation unless a failing eval exposes a real TASK-093 bug; if that happens, stop and report the bug in `agent_tasks/B_DONE.md` instead of broad runtime edits.
-- Eval assertions must be substantive: assert concrete reason labels, filter exclusions, read-only/no mutation, and safety sentinels.
-- Do not duplicate every unit test mechanically; prefer compact eval scenarios that catch integration regressions and compatibility issues.
+- Keep evals deterministic and offline: temporary DB/workspace fixtures only, no live LLM/network, no timing dependency.
+- Prefer 6-10 compact eval cases rather than duplicating every unit test.
+- Assertions must be concrete: check reason/action labels, ordering, counts, filter exclusions, no mutation, and safety sentinels.
+- Do not call `retry_durable_task` inside the planning/explain tools; eval setup may use existing registry APIs to create failed/retried task states.
+- Do not change runtime unless an eval exposes a real bug; if runtime changes are needed, keep them minimal and document them in `B_DONE.md`.
 
 ## Required Checks
 
@@ -64,6 +70,5 @@ agent_tasks/notify_codex.sh B
 
 ## Notes
 
-- Last completed task: TASK-092 Deterministic eval coverage for scheduler loop v1.
-- TASK-092 has been reviewed and approved by CCB reviewer.
-- Do not commit or push.
+- Last completed B task: TASK-094 Deterministic eval coverage for scheduler blocker explanation v1.
+- TASK-097 will handle guarded scheduler retry execution later; do not implement execution in this task.
