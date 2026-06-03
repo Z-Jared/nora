@@ -6636,5 +6636,228 @@ class WorkerLifecycleSchedulerTickTests(unittest.TestCase):
             self.assertIn(field, parsed)
 
 
+class WorkerLifecycleSchedulerLoopTests(unittest.TestCase):
+    """Tests for run_worker_lifecycle_scheduler_loop (TASK-091)."""
+
+    SECRET_SENTINEL = "SCHEDULER_LOOP_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _setup_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text(f"data_{worker_id}_{task_id}", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id=worker_id, task_id=task_id, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
+        return task_id, lease["lease_id"]
+
+    def test_dry_run_loop_returns_bounded_ticks_no_mutation(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["scheduler"], "worker_lifecycle")
+        self.assertTrue(parsed["dry_run"])
+        self.assertIn("loop_id", parsed)
+        self.assertGreater(parsed["ticks_run"], 0)
+        self.assertLessEqual(parsed["ticks_run"], parsed["max_ticks"])
+        self.assertIn(parsed["stopped_reason"], ("idle", "max_ticks_reached"))
+        self.assertIn("ticks", parsed)
+        self.assertIsInstance(parsed["ticks"], list)
+        self.assertEqual(len(parsed["ticks"]), parsed["ticks_run"])
+        # Verify no mutation
+        task = json.loads(self.registry.call("get_durable_task", task_id=json.loads(self.registry.call("list_durable_tasks"))[0]["task_id"]))
+        self.assertEqual(task["status"], "running")
+
+    def test_non_dry_run_finalizes_ready_closeouts(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1)
+        parsed = json.loads(result)
+
+        self.assertFalse(parsed["dry_run"])
+        self.assertGreaterEqual(parsed["executed_count"], 1)
+
+    def test_max_ticks_clamp_low(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=0)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["max_ticks"], 1)
+
+    def test_max_ticks_clamp_high(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=99)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["max_ticks"], 10)
+
+    def test_max_ticks_bool_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=True)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_max_ticks_float_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1.5)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_max_ticks_string_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks="bad")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_limit_bool_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", limit=True)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_limit_float_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", limit=1.5)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_limit_string_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", limit="bad")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_bad_dry_run_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", dry_run="yes")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_bad_release_workspace_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", release_workspace=1)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_bad_stop_when_idle_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", stop_when_idle=1)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_bad_record_event_returns_error(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", record_event=1)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_stop_when_idle_true_stops_early_empty_state(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", stop_when_idle=True, max_ticks=10)
+        parsed = json.loads(result)
+
+        self.assertLessEqual(parsed["ticks_run"], 2)
+        self.assertEqual(parsed["stopped_reason"], "idle")
+
+    def test_stop_when_idle_false_runs_all_ticks(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", stop_when_idle=False, max_ticks=3)
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["ticks_run"], 3)
+        self.assertEqual(parsed["stopped_reason"], "max_ticks_reached")
+
+    def test_dispatch_wait_actions_blocked(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("create_durable_task", goal="g", steps="s")
+
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1)
+        parsed = json.loads(result)
+
+        tick = parsed["ticks"][0]
+        self.assertGreater(tick["blocked_count"], 0)
+
+    def test_loop_event_recorded_when_true(self):
+        self._setup_ready_worker("w1")
+        self.registry.call("run_worker_lifecycle_scheduler_loop", record_event=True, max_ticks=1)
+
+        events = self.registry.durable_event_store.list_events()
+        loop_events = [e for e in events if e.event_type == SCHEDULER_DECISION and e.summary == "scheduler loop"]
+        self.assertGreater(len(loop_events), 0)
+        event = loop_events[0]
+        self.assertEqual(event.source, "scheduler")
+        self.assertEqual(event.severity, "info")
+        self.assertIn("loop_id", event.payload)
+        self.assertEqual(event.payload["scheduler"], "worker_lifecycle")
+
+    def test_no_loop_event_when_false(self):
+        self._setup_ready_worker("w1")
+        self.registry.call("run_worker_lifecycle_scheduler_loop", record_event=False, max_ticks=1)
+
+        events = self.registry.durable_event_store.list_events()
+        loop_events = [e for e in events if e.event_type == SCHEDULER_DECISION and e.summary == "scheduler loop"]
+        self.assertEqual(len(loop_events), 0)
+
+    def test_permission_requires_confirmation(self):
+        reg = build_default_registry(db=self.db, workspace_root=self.root, confirm_action=lambda _: False)
+        result = reg.call("run_worker_lifecycle_scheduler_loop")
+        self.assertIn("取消", result)
+
+    def test_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop")
+        self.assertNotIn(self.SECRET_SENTINEL, result)
+
+    def test_no_steps_leak(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop")
+        parsed = json.loads(result)
+        for tick in parsed.get("ticks", []):
+            self.assertNotIn("step", json.dumps(tick))
+
+    def test_no_file_content_leak(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop")
+        self.assertNotIn("data_w1_", result)
+
+    def test_event_payload_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+        self.registry.call("run_worker_lifecycle_scheduler_loop", record_event=True, max_ticks=1)
+
+        events = self.registry.durable_event_store.list_events()
+        loop_events = [e for e in events if e.event_type == SCHEDULER_DECISION and e.summary == "scheduler loop"]
+        self.assertGreater(len(loop_events), 0)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(loop_events[0].payload))
+
+    def test_output_has_required_fields(self):
+        result = self.registry.call("run_worker_lifecycle_scheduler_loop")
+        parsed = json.loads(result)
+        for field in ["scheduler", "loop_id", "dry_run", "max_ticks", "ticks_run",
+                       "stopped_reason", "planned_count", "executed_count", "skipped_count",
+                       "failed_count", "blocked_count", "ticks", "summary"]:
+            self.assertIn(field, parsed)
+
+    def test_compatibility_with_scheduler_tick(self):
+        self._setup_ready_worker("w1")
+        tick_result = json.loads(self.registry.call("run_worker_lifecycle_scheduler_tick"))
+        loop_result = json.loads(self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1))
+        self.assertIn("tick_id", tick_result)
+        self.assertIn("loop_id", loop_result)
+
+    def test_compatibility_with_run_once(self):
+        self._setup_ready_worker("w1")
+        once_result = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        loop_result = json.loads(self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1))
+        self.assertIn("planned_count", once_result)
+        self.assertIn("planned_count", loop_result)
+
+    def test_compatibility_with_planner(self):
+        self._setup_ready_worker("w1")
+        plan_result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertIn("actions", plan_result)
+        self.assertIn("summary", plan_result)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,12 +11,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 目标: 为 scheduler loop v1 增加 deterministic offline eval coverage，覆盖 dry-run no mutation、bounded max_ticks、stop_when_idle、safe closeout-only execution、dispatch/wait blocked reasons、event safety、bad args 和 compatibility。
 - 状态: assigned
 
-### TASK-091: Worker lifecycle scheduler loop v1
-- 分配给: Claude A
-- 目标: 在 `run_worker_lifecycle_scheduler_tick` 之上新增 guarded scheduler loop 工具；默认 dry-run，不启动后台进程，按 max_ticks 执行有限轮 tick，记录 bounded loop summary 和 blocked reason labels。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-091: Worker lifecycle scheduler loop v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests` 61 tests OK；`python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests` 28 tests OK；`python3 -m unittest tests.test_durable_workers` 484 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 651 tests OK；`python3 evals/run_evals.py` 312 passed；`python3 -m unittest discover -s tests` 2010 tests OK；`git diff --check` OK。
+- 内容: 新增 guarded `run_worker_lifecycle_scheduler_loop(max_ticks=3, limit=5, dry_run=True, release_workspace=True, stop_when_idle=True, record_event=True)`；默认 dry-run；复用 scheduler tick 执行有限轮 tick；`max_ticks`/`limit` bounded，支持 idle early-stop；记录 bounded `scheduler_decision` loop event；输出和事件仅含 safe metadata。
 
 ### TASK-090: Deterministic eval coverage for worker lifecycle run-once ✅
 - 完成者: Claude B partial；Codex PM 因 CCB provider_api_error 本地接手完成

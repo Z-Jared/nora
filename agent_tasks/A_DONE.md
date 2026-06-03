@@ -1,61 +1,79 @@
-# Claude A / Codex PM Completion Report - TASK-089
+# Claude A — Completion Report
 
-Status: approved by Codex PM after local takeover
+Owner: Claude A
+Task: TASK-091 — Worker lifecycle scheduler loop v1
+Status: **DONE**
 
 ## Summary
 
-Claude A started `run_worker_lifecycle_scheduler_tick`, but the CCB Claude provider failed with repeated `provider_api_error` after a timeout. Codex PM took over the preserved worker diff and completed the task locally.
+Added `run_worker_lifecycle_scheduler_loop` tool on top of the existing `run_worker_lifecycle_scheduler_tick`. The loop runs a bounded number of scheduler ticks in one tool call, with optional early-stop when idle.
 
-Implemented:
+## Changes
 
-- Added durable event type `scheduler_decision`.
-- Added guarded registry tool `run_worker_lifecycle_scheduler_tick(limit=5, dry_run=True, release_workspace=True, record_event=True)`.
-- Registered the tool as `task/write` with `requires_confirmation=True`.
-- Default `dry_run=True`.
-- Scheduler tick now reuses existing `_run_worker_lifecycle_once_json` instead of duplicating finalize logic.
-- Non-dry-run still executes only ready closeout actions through existing run-once/finalize behavior.
-- Dispatch recommendations are reported as blocked with `dispatch_blocked_in_tick`.
-- Wait actions are skipped with `wait_action`.
-- Scheduler decision events contain bounded safe metadata: counts, action labels, worker/task ids, reason labels, dry-run flag, release flag, and tick id.
-- No shell, git, process, worker-start, project-root write, or worker-workspace write behavior was added.
+### `mini_agent/toolkits/registry_builder.py` (+163 lines)
+
+- Added `_scheduler_loop_counter` mutable counter.
+- Added `_run_worker_lifecycle_scheduler_loop_json` function:
+  - Validates and clamps `max_ticks` (int, 1..10, default 3), `limit` (int, 1..100, default 5), and boolean params (`dry_run`, `release_workspace`, `stop_when_idle`, `record_event`).
+  - Rejects bool/float/string for numeric args with bounded error JSON.
+  - Generates `loop_id = f"loop_{counter}"`.
+  - Iterates up to `max_ticks` times, calling `_run_worker_lifecycle_scheduler_tick_json` each iteration with the same settings.
+  - If `stop_when_idle=True`, stops early when a tick has `planned_count == 0` and no pending/blocked work in summary.
+  - Aggregates `planned_count`, `executed_count`, `skipped_count`, `failed_count`, `blocked_count` across ticks.
+  - Returns bounded JSON: `scheduler`, `loop_id`, `dry_run`, `max_ticks`, `ticks_run`, `stopped_reason`, aggregate counts, `ticks` array, `summary` object, `loop_event_recorded`.
+  - If `record_event=True`, records a `SCHEDULER_DECISION` event with `summary="scheduler loop"` and safe metadata only.
+- Registered `run_worker_lifecycle_scheduler_loop` tool with `task/write` permission, `requires_confirmation=True`.
+
+### `tests/test_durable_workers.py` (+223 lines)
+
+Added `WorkerLifecycleSchedulerLoopTests` class with 28 tests covering:
+- Default dry-run loop returns bounded ticks, no mutation
+- Non-dry-run loop finalizes ready closeouts
+- `max_ticks` bounds and clamps (0→1, 99→10)
+- `max_ticks` bad types (bool/float/string) return errors
+- `limit` bad types return errors
+- `dry_run`, `release_workspace`, `stop_when_idle`, `record_event` bad types return errors
+- `stop_when_idle=True` stops early on empty state
+- `stop_when_idle=False` runs all requested ticks
+- Dispatch/wait actions remain blocked/skipped
+- Loop event recorded when `record_event=True`; none when false
+- Permission requires confirmation
+- Safety/no-leak for goal, steps, file content, event payload
+- Required output fields present
+- Compatibility with scheduler tick, run-once, planner
+
+## Verification
+
+```text
+python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests
+→ 61 tests OK
+
+python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests
+→ 28 tests OK
+
+python3 -m unittest tests.test_durable_workers
+→ 484 tests OK
+
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+→ 651 tests OK
+
+git diff --check
+→ clean
+```
 
 ## Diff
 
 ```text
- mini_agent/durable_events.py            |   2 +
- mini_agent/toolkits/registry_builder.py | 115 ++++++++++++++
- tests/test_durable_workers.py           | 178 ++++++++++++++++++++-
+ mini_agent/toolkits/registry_builder.py | 163 +++++++++++++++++++++++
+ tests/test_durable_workers.py           | 223 ++++++++++++++++++++++++++++++++
+ 2 files changed, 386 insertions(+)
 ```
 
-## Tests
+## Boundaries Respected
 
-```text
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests
-Ran 61 tests in 2.331s
-OK
-
-python3 -m unittest tests.test_durable_workers
-Ran 456 tests in 23.635s
-OK
-
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 623 tests in 31.747s
-OK
-
-python3 evals/run_evals.py
-312 passed, 0 failed
-
-python3 -m unittest discover -s tests
-Ran 1982 tests in 134.827s
-OK
-Warning: failed to load plugin broken.py: bad
-
-git diff --check
-OK
-```
-
-## Notes
-
-- No push was performed by Claude A.
-- Codex PM completed the work locally because CCB delivery to Claude A failed after provider/API retries.
-- Known issue: the CCB Claude provider remained unhealthy during this handoff, so the PM automation is paused.
+- ✅ Only edited `mini_agent/toolkits/registry_builder.py` and `tests/test_durable_workers.py`
+- ✅ Did not edit `agent_tasks/B_TASK.md` or `B_DONE.md`
+- ✅ Did not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`
+- ✅ Did not commit or push
+- ✅ No background/daemon/shell/network/project-root writes
+- ✅ Output/events contain no goal, steps, file content, paths, shell/env/secrets

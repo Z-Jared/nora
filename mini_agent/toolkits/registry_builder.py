@@ -3484,6 +3484,169 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
     )
 
+    _scheduler_loop_counter = [0]
+
+    def _run_worker_lifecycle_scheduler_loop_json(max_ticks: int = 3, limit: int = 5, dry_run: bool = True, release_workspace: bool = True, stop_when_idle: bool = True, record_event: bool = True) -> str:
+        if max_ticks is None:
+            max_ticks = 3
+        elif isinstance(max_ticks, bool):
+            return _json.dumps({"error": "max_ticks 必须是整数"}, ensure_ascii=False)
+        elif not isinstance(max_ticks, int):
+            return _json.dumps({"error": "max_ticks 必须是整数"}, ensure_ascii=False)
+        max_ticks = max(1, min(max_ticks, 10))
+        if limit is None:
+            limit = 5
+        elif isinstance(limit, bool):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        elif not isinstance(limit, int):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        limit = max(1, min(limit, 100))
+        if not isinstance(dry_run, bool):
+            return _json.dumps({"error": "dry_run 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(release_workspace, bool):
+            return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(stop_when_idle, bool):
+            return _json.dumps({"error": "stop_when_idle 必须是布尔值"}, ensure_ascii=False)
+        if not isinstance(record_event, bool):
+            return _json.dumps({"error": "record_event 必须是布尔值"}, ensure_ascii=False)
+
+        _scheduler_loop_counter[0] += 1
+        loop_id = f"loop_{_scheduler_loop_counter[0]}"
+
+        ticks = []
+        total_planned = 0
+        total_executed = 0
+        total_skipped = 0
+        total_failed = 0
+        total_blocked = 0
+        stopped_reason = "max_ticks_reached"
+
+        for i in range(max_ticks):
+            tick_json = _run_worker_lifecycle_scheduler_tick_json(
+                limit=limit,
+                dry_run=dry_run,
+                release_workspace=release_workspace,
+                record_event=record_event,
+            )
+            try:
+                tick_result = _json.loads(tick_json)
+            except Exception:
+                ticks.append({"tick_index": i, "error": "tick 执行失败"})
+                stopped_reason = "tick_error"
+                break
+            if "error" in tick_result:
+                ticks.append({"tick_index": i, "error": tick_result["error"]})
+                stopped_reason = "tick_error"
+                break
+
+            tick_summary = {
+                "tick_index": i,
+                "tick_id": tick_result.get("tick_id", ""),
+                "planned_count": tick_result.get("planned_count", 0),
+                "executed_count": tick_result.get("executed_count", 0),
+                "skipped_count": tick_result.get("skipped_count", 0),
+                "failed_count": tick_result.get("failed_count", 0),
+                "blocked_count": tick_result.get("blocked_count", 0),
+            }
+            ticks.append(tick_summary)
+
+            total_planned += tick_result.get("planned_count", 0)
+            total_executed += tick_result.get("executed_count", 0)
+            total_skipped += tick_result.get("skipped_count", 0)
+            total_failed += tick_result.get("failed_count", 0)
+            total_blocked += tick_result.get("blocked_count", 0)
+
+            if stop_when_idle:
+                tick_planned = tick_result.get("planned_count", 0)
+                summary = tick_result.get("summary", {})
+                has_pending = any([
+                    summary.get("ready_closeouts", 0) > 0,
+                    summary.get("not_ready_closeouts", 0) > 0,
+                    summary.get("idle_workers", 0) > 0,
+                    summary.get("pending_tasks", 0) > 0,
+                ])
+                if tick_planned == 0 and not has_pending:
+                    stopped_reason = "idle"
+                    break
+
+        loop_event_recorded = False
+        if record_event:
+            try:
+                durable_event_store.record(
+                    event_type=SCHEDULER_DECISION,
+                    summary="scheduler loop",
+                    payload={
+                        "scheduler": "worker_lifecycle",
+                        "loop_id": loop_id,
+                        "dry_run": dry_run,
+                        "max_ticks": max_ticks,
+                        "ticks_run": len(ticks),
+                        "stopped_reason": stopped_reason,
+                        "planned_count": total_planned,
+                        "executed_count": total_executed,
+                        "skipped_count": total_skipped,
+                        "failed_count": total_failed,
+                        "blocked_count": total_blocked,
+                        "tick_ids": [t.get("tick_id", "") for t in ticks],
+                        "release_workspace": release_workspace,
+                        "stop_when_idle": stop_when_idle,
+                        "record_event": record_event,
+                    },
+                    source="scheduler",
+                    severity="info",
+                )
+                loop_event_recorded = True
+            except Exception:
+                pass
+
+        return _json.dumps({
+            "scheduler": "worker_lifecycle",
+            "loop_id": loop_id,
+            "dry_run": dry_run,
+            "max_ticks": max_ticks,
+            "ticks_run": len(ticks),
+            "stopped_reason": stopped_reason,
+            "planned_count": total_planned,
+            "executed_count": total_executed,
+            "skipped_count": total_skipped,
+            "failed_count": total_failed,
+            "blocked_count": total_blocked,
+            "ticks": ticks,
+            "summary": {
+                "loop_id": loop_id,
+                "ticks_run": len(ticks),
+                "max_ticks": max_ticks,
+                "stopped_reason": stopped_reason,
+                "total_planned": total_planned,
+                "total_executed": total_executed,
+                "total_skipped": total_skipped,
+                "total_failed": total_failed,
+                "total_blocked": total_blocked,
+                "dry_run": dry_run,
+                "loop_event_recorded": loop_event_recorded,
+            },
+            "loop_event_recorded": loop_event_recorded,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "run_worker_lifecycle_scheduler_loop",
+        "执行有限次 scheduler loop：运行最多 max_ticks 次 scheduler tick，支持 stop_when_idle 提前停止。",
+        _run_worker_lifecycle_scheduler_loop_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_ticks": {"type": "integer", "description": "最大 tick 次数，默认 3，上限 10"},
+                "limit": {"type": "integer", "description": "每个 tick 最大处理 action 数，默认 5，上限 100"},
+                "dry_run": {"type": "boolean", "description": "是否 dry-run，默认 true"},
+                "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+                "stop_when_idle": {"type": "boolean", "description": "空闲时提前停止，默认 true"},
+                "record_event": {"type": "boolean", "description": "是否记录 scheduler decision 事件，默认 true"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:
