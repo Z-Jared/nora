@@ -4,15 +4,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-099: Scheduler retry decision event metadata v1
-- 优先级: medium
-- 预计: 1-2h
-- 依赖: TASK-098
-- 目标: 扩展 scheduler decision durable event metadata，让 retry executed/skipped/failed/finalized decisions 可审计、可解释，并保持输出 bounded/no-leak。
-- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8 / Priority 1；`mini_agent/toolkits/registry_builder.py`
-
 ## 进行中
+
+### TASK-099: Scheduler retry decision event metadata v1
+- 分配给: Claude A
+- 目标: 扩展 scheduler decision durable event metadata，让 retry executed/skipped/failed/finalized decisions 可审计、可解释，并保持输出 bounded/no-leak。
+- 状态: assigned
 
 ## 已完成
 
