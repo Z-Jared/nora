@@ -6859,5 +6859,455 @@ class WorkerLifecycleSchedulerLoopTests(unittest.TestCase):
         self.assertIn("summary", plan_result)
 
 
+class WorkerLifecycleExplainStateTests(unittest.TestCase):
+    """Tests for explain_worker_lifecycle_scheduler_state (TASK-093)."""
+
+    SECRET_SENTINEL = "EXPLAIN_STATE_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _setup_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text(f"data_{worker_id}_{task_id}", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id=worker_id, task_id=task_id, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
+        return task_id, lease["lease_id"]
+
+    def test_empty_state_returns_no_action_needed(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        self.assertEqual(parsed["scheduler"], "worker_lifecycle")
+        self.assertIn("blocked_reasons", parsed)
+        reasons = [r["reason"] for r in parsed["blocked_reasons"]]
+        self.assertIn("no_action_needed", reasons)
+        self.assertEqual(parsed["summary"]["total_workers"], 0)
+        self.assertEqual(parsed["summary"]["total_tasks"], 0)
+
+    def test_ready_closeout_explains_finalize(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r for r in parsed["blocked_reasons"] if r["reason"] == "ready_closeout"]
+        self.assertGreater(len(reasons), 0)
+        nexts = [a for a in parsed["next_actions"] if a["action"] == "finalize_ready_workspace_merge"]
+        self.assertGreater(len(nexts), 0)
+
+    def test_not_ready_closeout_explains_waiting(self):
+        self.registry.call("register_worker", worker_id="w1")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task["task_id"])
+        self.registry.call("update_durable_task", task_id=task["task_id"], status="running")
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"])
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r["reason"] for r in parsed["blocked_reasons"]]
+        # Should have either waiting_for_workspace_merge_apply or worker_running
+        self.assertTrue(any(r in reasons for r in [
+            "waiting_for_workspace_merge_apply", "worker_running", "missing_active_lease",
+        ]))
+
+    def test_pending_task_idle_worker_dispatch_available(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("create_durable_task", goal="g", steps="s")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r["reason"] for r in parsed["blocked_reasons"]]
+        self.assertIn("dispatch_available", reasons)
+        details = [r["detail"] for r in parsed["blocked_reasons"] if r["reason"] == "dispatch_available"]
+        self.assertIn("dispatch_blocked_in_scheduler", details)
+
+    def test_pending_task_no_idle_workers(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running")
+        self.registry.call("create_durable_task", goal="g", steps="s")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r for r in parsed["blocked_reasons"] if r["reason"] == "pending_task_unassigned"]
+        self.assertGreater(len(reasons), 0)
+        details = [r["detail"] for r in reasons]
+        self.assertIn("no_idle_workers", details)
+
+    def test_idle_worker_no_pending_tasks(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r["reason"] for r in parsed["blocked_reasons"]]
+        self.assertIn("no_pending_tasks", reasons)
+
+    def test_offline_worker_reports_worker_offline(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="offline")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+
+        reasons = [r for r in parsed["blocked_reasons"] if r["reason"] == "worker_offline"]
+        self.assertGreater(len(reasons), 0)
+        self.assertIn("no unsafe action", reasons[0]["detail"])
+
+    def test_worker_id_filter(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("update_worker_status", worker_id="w2", status="idle")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1")
+        parsed = json.loads(result)
+
+        self.assertEqual(len(parsed["workers"]), 1)
+        self.assertEqual(parsed["workers"][0]["worker_id"], "w1")
+
+    def test_task_id_filter(self):
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        tid = task["task_id"]
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=tid)
+        parsed = json.loads(result)
+
+        self.assertEqual(len(parsed["tasks"]), 1)
+        self.assertEqual(parsed["tasks"][0]["task_id"], tid)
+
+    def test_limit_clamp_low(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", limit=0)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["limit"], 1)
+
+    def test_limit_clamp_high(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", limit=999)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["limit"], 100)
+
+    def test_limit_bool_returns_error(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", limit=True)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_limit_float_returns_error(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", limit=1.5)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_limit_string_returns_error(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", limit="bad")
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_worker_id_non_string_returns_error(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id=123)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_task_id_non_string_returns_error(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=True)
+        parsed = json.loads(result)
+        self.assertIn("error", parsed)
+
+    def test_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn(self.SECRET_SENTINEL, result)
+
+    def test_no_steps_leak(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("step_text_secret", result.lower())
+
+    def test_no_file_content_leak(self):
+        self._setup_ready_worker("w1")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("data_w1_", result)
+
+    def test_permission_read_only_no_confirmation(self):
+        reg = build_default_registry(db=self.db, workspace_root=self.root, confirm_action=lambda _: False)
+        result = reg.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+        # Should NOT be cancelled - it's read-only, no confirmation needed
+        self.assertNotIn("取消", result)
+        self.assertIn("scheduler", parsed)
+
+    def test_output_has_required_fields(self):
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        parsed = json.loads(result)
+        for field in ["scheduler", "filters", "limit", "summary", "workers",
+                       "tasks", "closeout_candidates", "planned_actions",
+                       "blocked_reasons", "next_actions"]:
+            self.assertIn(field, parsed)
+
+    def test_compatibility_with_planner(self):
+        self._setup_ready_worker("w1")
+        plan = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("actions", plan)
+        self.assertIn("planned_actions", explain)
+
+    def test_compatibility_with_scheduler_tick(self):
+        self._setup_ready_worker("w1")
+        tick = json.loads(self.registry.call("run_worker_lifecycle_scheduler_tick"))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("tick_id", tick)
+        self.assertIn("blocked_reasons", explain)
+
+    def test_compatibility_with_scheduler_loop(self):
+        self._setup_ready_worker("w1")
+        loop = json.loads(self.registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("loop_id", loop)
+        self.assertIn("blocked_reasons", explain)
+
+    def test_compatibility_with_run_once(self):
+        self._setup_ready_worker("w1")
+        once = json.loads(self.registry.call("run_worker_lifecycle_once"))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("planned_count", once)
+        self.assertIn("planned_actions", explain)
+
+    def test_compatibility_with_closeout_candidates(self):
+        self._setup_ready_worker("w1")
+        cands = json.loads(self.registry.call("list_worker_workspace_merge_closeout_candidates"))
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        self.assertIn("candidates", cands)
+        self.assertIn("closeout_candidates", explain)
+
+    def test_dry_run_no_mutation(self):
+        self._setup_ready_worker("w1")
+        before_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self.registry.call("explain_worker_lifecycle_scheduler_state")
+        after_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(before_tasks, after_tasks)
+
+    def test_planned_actions_filtered_by_worker_id(self):
+        # Create two idle workers and two pending tasks
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("update_worker_status", worker_id="w2", status="idle")
+        self.registry.call("create_durable_task", goal="g1", steps="s1")
+        self.registry.call("create_durable_task", goal="g2", steps="s2")
+
+        # Explain filtered to w1 - should not include w2 actions
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1")
+        parsed = json.loads(result)
+
+        for action in parsed["planned_actions"]:
+            if action.get("worker_id"):
+                self.assertEqual(action["worker_id"], "w1")
+        for reason in parsed["blocked_reasons"]:
+            if reason.get("worker_id"):
+                self.assertEqual(reason["worker_id"], "w1")
+
+    def test_planned_actions_filtered_by_task_id(self):
+        # Create two tasks
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        t1_id = t1["task_id"]
+        t2_id = t2["task_id"]
+
+        # Explain filtered to t1
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=t1_id)
+        parsed = json.loads(result)
+
+        # tasks list should only contain t1
+        self.assertEqual(len(parsed["tasks"]), 1)
+        self.assertEqual(parsed["tasks"][0]["task_id"], t1_id)
+        # blocked_reasons should not reference t2
+        for reason in parsed["blocked_reasons"]:
+            if reason.get("task_id"):
+                self.assertNotEqual(reason["task_id"], t2_id)
+
+    def test_no_reviewer_leak(self):
+        """reviewer summary content must not leak."""
+        # Use reviewer name as sentinel
+        self.registry.call("register_worker", worker_id="w_reviewer")
+        task = json.loads(self.registry.call("create_durable_task", goal="task", steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_reviewer")
+        self.registry.call("update_worker_status", worker_id="w_reviewer", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w_reviewer", task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id="w_reviewer", task_id=task_id, decision="approved", reviewer="REVIEWER_SECRET_XYZ")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w_reviewer", task_id=task_id)
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("REVIEWER_SECRET_XYZ", result)
+
+    def test_no_shell_env_leak(self):
+        """Shell/env/request strings must not leak."""
+        self._setup_ready_worker("w1", goal="SHELL_SECRET_XYZ")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("SHELL_SECRET_XYZ", result)
+
+    def test_no_workspace_path_leak(self):
+        """Workspace paths must not leak in explain output."""
+        self._setup_ready_worker("w1")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        # Should not contain workspace path fragments
+        self.assertNotIn("/tmp/", result)
+        self.assertNotIn("workspace_path", result)
+
+    def test_no_secret_sentinel_leak(self):
+        """Generic secret-like sentinel must not leak."""
+        self._setup_ready_worker("w1", goal="SECRET_SENTINEL_999")
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state")
+        self.assertNotIn("SECRET_SENTINEL_999", result)
+
+    def test_task_filter_excludes_unrelated_workers_and_empty_dispatch(self):
+        """task_id filter must not return unrelated workers or empty-task dispatch actions."""
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("update_worker_status", worker_id="w2", status="idle")
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        t1_id = t1["task_id"]
+        t2_id = t2["task_id"]
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=t1_id)
+        parsed = json.loads(result)
+
+        # planned_actions must not contain empty-task dispatch or t2 actions
+        for action in parsed["planned_actions"]:
+            self.assertNotEqual(action.get("action"), "dispatch_pending_task",
+                                "dispatch_pending_task with empty task_id should be filtered out")
+            if action.get("task_id"):
+                self.assertEqual(action["task_id"], t1_id)
+
+        # blocked_reasons must not contain t2 or empty-task worker dispatch reasons
+        for reason in parsed["blocked_reasons"]:
+            if reason.get("task_id"):
+                self.assertEqual(reason["task_id"], t1_id)
+            # No worker-level dispatch_available with empty task_id
+            if reason.get("reason") == "dispatch_available":
+                self.fail("dispatch_available with empty task_id should be filtered when task_id is set")
+
+        # Should still have t1's pending_task_unassigned
+        t1_reasons = [r for r in parsed["blocked_reasons"] if r.get("task_id") == t1_id]
+        self.assertGreater(len(t1_reasons), 0)
+
+    def test_worker_filter_excludes_unrelated_tasks_and_empty_worker_actions(self):
+        """worker_id filter must not return unrelated tasks or empty-worker actions."""
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        self.registry.call("update_worker_status", worker_id="w2", status="idle")
+        self.registry.call("create_durable_task", goal="g1", steps="s1")
+        self.registry.call("create_durable_task", goal="g2", steps="s2")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1")
+        parsed = json.loads(result)
+
+        # workers list should only contain w1
+        self.assertEqual(len(parsed["workers"]), 1)
+        self.assertEqual(parsed["workers"][0]["worker_id"], "w1")
+
+        # blocked_reasons must not contain w2 or empty-worker reasons
+        for reason in parsed["blocked_reasons"]:
+            if reason.get("worker_id"):
+                self.assertEqual(reason["worker_id"], "w1")
+            if reason.get("reason") == "pending_task_unassigned":
+                self.fail("pending_task_unassigned with empty worker_id should be filtered when worker_id is set")
+
+        # next_actions must not reference w2
+        for action in parsed["next_actions"]:
+            if action.get("worker_id"):
+                self.assertEqual(action["worker_id"], "w1")
+
+    def test_task_filter_excludes_other_running_task(self):
+        """task_id filter must not leak running dtask_2/w2 into blocked_reasons/next_actions/planned_actions."""
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        t1_id, t2_id = t1["task_id"], t2["task_id"]
+        self.registry.call("assign_durable_task", task_id=t2_id, worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w2", status="running", current_task_id=t2_id)
+        self.registry.call("update_durable_task", task_id=t2_id, status="running")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", task_id=t1_id)
+        parsed = json.loads(result)
+
+        # blocked_reasons must not contain dtask_2 or w2
+        for reason in parsed["blocked_reasons"]:
+            self.assertNotEqual(reason.get("task_id"), t2_id)
+            self.assertNotEqual(reason.get("worker_id"), "w2")
+        # next_actions must not contain dtask_2 or w2
+        for action in parsed["next_actions"]:
+            self.assertNotEqual(action.get("task_id"), t2_id)
+            self.assertNotEqual(action.get("worker_id"), "w2")
+        # planned_actions must not contain dtask_2 or w2
+        for action in parsed["planned_actions"]:
+            self.assertNotEqual(action.get("task_id"), t2_id)
+            self.assertNotEqual(action.get("worker_id"), "w2")
+        # Must still contain dtask_1's pending_task_unassigned
+        t1_reasons = [r for r in parsed["blocked_reasons"] if r.get("task_id") == t1_id]
+        self.assertGreater(len(t1_reasons), 0)
+
+    def test_worker_filter_excludes_other_running_worker(self):
+        """worker_id filter must not leak w2/dtask_2 into blocked_reasons/next_actions/planned_actions."""
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w1", status="idle")
+        t1 = json.loads(self.registry.call("create_durable_task", goal="g1", steps="s1"))
+        t2 = json.loads(self.registry.call("create_durable_task", goal="g2", steps="s2"))
+        t1_id, t2_id = t1["task_id"], t2["task_id"]
+        self.registry.call("assign_durable_task", task_id=t1_id, worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=t1_id)
+        self.registry.call("update_durable_task", task_id=t1_id, status="running")
+        self.registry.call("assign_durable_task", task_id=t2_id, worker_id="w2")
+        self.registry.call("update_worker_status", worker_id="w2", status="running", current_task_id=t2_id)
+        self.registry.call("update_durable_task", task_id=t2_id, status="running")
+
+        result = self.registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w1")
+        parsed = json.loads(result)
+
+        # blocked_reasons must not contain w2 or dtask_2
+        for reason in parsed["blocked_reasons"]:
+            self.assertNotEqual(reason.get("worker_id"), "w2")
+            self.assertNotEqual(reason.get("task_id"), t2_id)
+        # next_actions must not contain w2 or dtask_2
+        for action in parsed["next_actions"]:
+            self.assertNotEqual(action.get("worker_id"), "w2")
+            self.assertNotEqual(action.get("task_id"), t2_id)
+        # planned_actions must not contain w2 or dtask_2
+        for action in parsed["planned_actions"]:
+            self.assertNotEqual(action.get("worker_id"), "w2")
+            self.assertNotEqual(action.get("task_id"), t2_id)
+        # Must still contain w1's reason
+        w1_reasons = [r for r in parsed["blocked_reasons"] if r.get("worker_id") == "w1"]
+        self.assertGreater(len(w1_reasons), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

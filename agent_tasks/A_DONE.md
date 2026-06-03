@@ -1,79 +1,48 @@
 # Claude A — Completion Report
 
 Owner: Claude A
-Task: TASK-091 — Worker lifecycle scheduler loop v1
-Status: **DONE**
+Task: TASK-093 — Worker lifecycle scheduler blocker explanation v1
+Status: **DONE** (PM round 3 filter equality fix)
 
 ## Summary
 
-Added `run_worker_lifecycle_scheduler_loop` tool on top of the existing `run_worker_lifecycle_scheduler_tick`. The loop runs a bounded number of scheduler ticks in one tool call, with optional early-stop when idle.
+Added `explain_worker_lifecycle_scheduler_state` read-only tool that answers "why is worker lifecycle work not moving, and what would the scheduler do next?"
 
 ## Changes
 
-### `mini_agent/toolkits/registry_builder.py` (+163 lines)
+### `mini_agent/toolkits/registry_builder.py` (+290 lines)
 
-- Added `_scheduler_loop_counter` mutable counter.
-- Added `_run_worker_lifecycle_scheduler_loop_json` function:
-  - Validates and clamps `max_ticks` (int, 1..10, default 3), `limit` (int, 1..100, default 5), and boolean params (`dry_run`, `release_workspace`, `stop_when_idle`, `record_event`).
-  - Rejects bool/float/string for numeric args with bounded error JSON.
-  - Generates `loop_id = f"loop_{counter}"`.
-  - Iterates up to `max_ticks` times, calling `_run_worker_lifecycle_scheduler_tick_json` each iteration with the same settings.
-  - If `stop_when_idle=True`, stops early when a tick has `planned_count == 0` and no pending/blocked work in summary.
-  - Aggregates `planned_count`, `executed_count`, `skipped_count`, `failed_count`, `blocked_count` across ticks.
-  - Returns bounded JSON: `scheduler`, `loop_id`, `dry_run`, `max_ticks`, `ticks_run`, `stopped_reason`, aggregate counts, `ticks` array, `summary` object, `loop_event_recorded`.
-  - If `record_event=True`, records a `SCHEDULER_DECISION` event with `summary="scheduler loop"` and safe metadata only.
-- Registered `run_worker_lifecycle_scheduler_loop` tool with `task/write` permission, `requires_confirmation=True`.
+- `_explain_worker_lifecycle_scheduler_state_json(worker_id="", task_id="", limit=20)`.
+- `task/read` permission, `requires_confirmation=False`.
+- Reuses `list_workers`, `list_tasks`, closeout candidates, planner helpers.
+- No state mutation.
 
-### `tests/test_durable_workers.py` (+223 lines)
+**PM round 1:** `planned_actions` filtered by `worker_id`/`task_id`.
 
-Added `WorkerLifecycleSchedulerLoopTests` class with 28 tests covering:
-- Default dry-run loop returns bounded ticks, no mutation
-- Non-dry-run loop finalizes ready closeouts
-- `max_ticks` bounds and clamps (0→1, 99→10)
-- `max_ticks` bad types (bool/float/string) return errors
-- `limit` bad types return errors
-- `dry_run`, `release_workspace`, `stop_when_idle`, `record_event` bad types return errors
-- `stop_when_idle=True` stops early on empty state
-- `stop_when_idle=False` runs all requested ticks
-- Dispatch/wait actions remain blocked/skipped
-- Loop event recorded when `record_event=True`; none when false
-- Permission requires confirmation
-- Safety/no-leak for goal, steps, file content, event payload
-- Required output fields present
-- Compatibility with scheduler tick, run-once, planner
+**PM round 2:** `planned_actions` skip empty-field when filter set; post-filter `blocked_reasons`/`next_actions` remove empty-field entries.
+
+**PM round 3 (this round):** Post-filter changed from truthy check to equality check:
+- `task_id` filter: keep only entries where `task_id == requested_task_id` (or `no_action_needed`).
+- `worker_id` filter: keep only entries where `worker_id == requested_worker_id` (or `no_action_needed`).
+- This prevents `dtask_2`/`w2` leaking when filtering by `task_id=dtask_1`.
+
+### `tests/test_durable_workers.py` (+345 lines)
+
+Added `WorkerLifecycleExplainStateTests` class with 37 tests including:
+- **Round 3 tests:** `test_task_filter_excludes_other_running_task`, `test_worker_filter_excludes_other_running_worker` — two workers + two tasks, one running, assert filtered output excludes non-matching task/worker in `blocked_reasons`, `next_actions`, `planned_actions`.
 
 ## Verification
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecyclePlannerTests
-→ 61 tests OK
-
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests
-→ 28 tests OK
-
-python3 -m unittest tests.test_durable_workers
-→ 484 tests OK
-
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-→ 651 tests OK
-
-git diff --check
-→ clean
+WorkerLifecycleExplainStateTests → 37 OK
+Scheduler-related (102) → OK
+test_durable_workers (521) → OK
+broader suite (688) → OK
+git diff --check → clean
 ```
 
-## Diff
+## Boundaries
 
-```text
- mini_agent/toolkits/registry_builder.py | 163 +++++++++++++++++++++++
- tests/test_durable_workers.py           | 223 ++++++++++++++++++++++++++++++++
- 2 files changed, 386 insertions(+)
-```
-
-## Boundaries Respected
-
-- ✅ Only edited `mini_agent/toolkits/registry_builder.py` and `tests/test_durable_workers.py`
-- ✅ Did not edit `agent_tasks/B_TASK.md` or `B_DONE.md`
-- ✅ Did not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`
-- ✅ Did not commit or push
-- ✅ No background/daemon/shell/network/project-root writes
-- ✅ Output/events contain no goal, steps, file content, paths, shell/env/secrets
+- ✅ Only edited registry_builder.py and test_durable_workers.py
+- ✅ No B_TASK/B_DONE, CODEX_TERMINAL_HANDOFF.md, designs/
+- ✅ No commit/push

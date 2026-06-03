@@ -1,163 +1,145 @@
 # CCB Code Review Report
 
-Reviewed: TASK-092 Deterministic eval coverage for scheduler loop v1
-Worker: Claude B
+Reviewed: TASK-093 Worker lifecycle scheduler blocker explanation v1
+Worker: Claude A
 Status: **APPROVED**
 
 ---
 
 ## Review Scope
 
-### 1. Deterministic and Offline
+### 1. Filter Semantics (worker_id/task_id)
 
-**Verdict: ✅ DETERMINISTIC**
+**Verdict: ✅ CORRECT**
 
-All 11 eval cases are deterministic and offline:
+**Post-filter logic (registry_builder.py):**
+```python
+if task_id:
+    blocked_reasons = [r for r in blocked_reasons if r.get("task_id") == task_id or r.get("reason") == "no_action_needed"]
+    next_actions = [a for a in next_actions if a.get("task_id") == task_id]
+if worker_id:
+    blocked_reasons = [r for r in blocked_reasons if r.get("worker_id") == worker_id or r.get("reason") == "no_action_needed"]
+    next_actions = [a for a in next_actions if a.get("worker_id") == worker_id]
+```
 
-- ✅ Uses `tempfile.TemporaryDirectory()` for isolation
-- ✅ Uses `build_default_registry` with `confirm_action=lambda _: True`
-- ✅ No live LLM calls
-- ✅ No interactive terminal prompts
-- ✅ No external state dependencies
-- ✅ No network calls
-- ✅ No timing dependencies
-- ✅ Reproducible — same results every run
+**Filter behavior:**
+- ✅ Equality check (`==`) used, not truthy check (PM Round 3 fix)
+- ✅ `task_id` filter: keeps only entries where `task_id == requested_task_id` (or `no_action_needed`)
+- ✅ `worker_id` filter: keeps only entries where `worker_id == requested_worker_id` (or `no_action_needed`)
+- ✅ `planned_actions` filtered during generation: skips actions that don't match requested worker_id/task_id
+- ✅ Empty-field entries skipped when filter set (PM Round 2 fix)
 
-### 2. Eval Coverage Completeness
+**Verified by Round 3 tests:**
+- ✅ `test_task_filter_excludes_other_running_task`: Two workers + two tasks, filter by dtask_1 → dtask_2/w2 excluded from blocked_reasons/next_actions/planned_actions
+- ✅ `test_worker_filter_excludes_other_running_worker`: Two workers + two running tasks, filter by w1 → w2/dtask_2 excluded
 
-**Verdict: ✅ COMPREHENSIVE**
+### 2. Read-Only Verification
 
-11 eval cases covering all key scheduler loop scenarios:
+**Verdict: ✅ READ-ONLY**
 
-1. **`eval_loop_dry_run_no_mutation`** — Default dry-run loop does not mutate task/worker/lease/project root/workspace
-2. **`eval_loop_max_ticks_and_limit`** — Bounded `max_ticks` (0→1, 999→10) and `limit` (0→1, 999→100) clamping
-3. **`eval_loop_stop_when_idle_true`** — `stop_when_idle=True` stops early on empty state
-4. **`eval_loop_stop_when_idle_false`** — `stop_when_idle=False` runs the requested bounded tick count
-5. **`eval_loop_non_dry_run_closeout`** — Non-dry-run finalizes ready closeouts, does not dispatch pending tasks
-6. **`eval_loop_dispatch_wait_blocked`** — Dispatch blocked with `reason=dispatch_blocked_in_tick`, wait skipped with `reason=wait_action`
-7. **`eval_loop_record_event_true`** — Loop scheduler event is recorded with safe bounded metadata
-8. **`eval_loop_record_event_false`** — `record_event=False` avoids loop event recording
-9. **`eval_loop_bad_params`** — Bad `max_ticks`, `limit`, `dry_run`, `release_workspace`, `stop_when_idle`, `record_event` return bounded errors; valid clamps verified
-10. **`eval_loop_safety_no_leak`** — Output does not leak goal, steps, file content, reviewer summary, shell/env/request sentinels, workspace paths, or secrets
-11. **`eval_loop_compatibility`** — Existing tools (scheduler tick, run-once, planner, batch finalize, single-task finalize, closeout candidate query, worker/task registry, claim, dispatch) still work after loop call
+**Implementation analysis:**
+- ✅ Calls `durable_worker_store.list_workers()` — read-only
+- ✅ Calls `durable_task_store.list_tasks()` — read-only
+- ✅ Calls `_list_worker_workspace_merge_closeout_candidates_json()` — read-only
+- ✅ Calls `_plan_worker_lifecycle_actions_json()` — read-only
+- ✅ No `create`, `update`, `delete`, `record`, `upsert` calls on any store
+- ✅ Registered with `category="task"`, `risk="read"`, `requires_confirmation=False`
 
-### 3. PM-Identified Weak Assertion Fixes
+**Verified by tests:**
+- ✅ `test_dry_run_no_mutation`: Compares task list before/after, no changes
+- ✅ `test_permission_read_only_no_confirmation`: Verifies `requires_confirmation=False`
 
-**Verdict: ✅ FIXED**
-
-**`eval_loop_non_dry_run_closeout` (lines from diff):**
-- ✅ Rewrote to verify that when ready closeout + idle worker + pending task coexist:
-  - `dry_run=False` finalizes closeout
-  - Pending task remains `pending`/unassigned
-  - Idle worker stays untasked
-  - Dispatch action has `skipped=True, reason=dispatch_blocked_in_tick` in tick event payload
-
-**`eval_loop_dispatch_wait_blocked` (lines from diff):**
-- ✅ Rewrote to assert concrete reason labels from tick event payload `actions` array:
-  - Dispatch action has `reason=dispatch_blocked_in_tick`, `skipped=True`
-  - Wait action has `reason=wait_action`, `skipped=True`
-
-### 4. Safety and No-Leak
+### 3. Bounded/Safe Output
 
 **Verdict: ✅ SAFE**
 
-**Sentinel values used:**
-- `_LIFECYCLE_SENTINEL_GOAL`
-- `_LIFECYCLE_SENTINEL_SECRET`
-- `_LIFECYCLE_SENTINEL_STEP`
-- `_LIFECYCLE_SENTINEL_FILE`
-- `_LIFECYCLE_SENTINEL_REVIEWER`
-- `_LIFECYCLE_SENTINEL_SHELL`
-- `_LIFECYCLE_SENTINEL_REQUEST`
-- `_LIFECYCLE_SENTINEL_ENV`
+**Output fields:**
+- ✅ `scheduler`, `filters`, `limit`, `summary` — safe metadata
+- ✅ `workers` — worker_id, status, current_task_id only
+- ✅ `tasks` — task_id, status, worker_id only
+- ✅ `closeout_candidates` — worker_id, task_id, ready, reason, task_status, worker_status, lease_id
+- ✅ `planned_actions` — action, worker_id, task_id only
+- ✅ `blocked_reasons` — worker_id, task_id, reason, detail
+- ✅ `next_actions` — action, worker_id, task_id, reason
 
-**Safety assertions in `eval_loop_safety_no_leak`:**
-- ✅ Goal text absent from output (sentinel)
-- ✅ Secret text absent from output (sentinel)
-- ✅ Step text absent from output (sentinel)
-- ✅ File content absent from output (sentinel)
-- ✅ Reviewer summary absent from output (sentinel)
-- ✅ Shell output absent from output (sentinel)
-- ✅ Request string absent from output (sentinel)
-- ✅ Env sentinel absent from output (sentinel)
-- ✅ Workspace path fragment (`.workspaces`) absent from output
-- ✅ Verified for both dry-run and non-dry-run
-
-### 5. Regression Prevention Quality
-
-**Verdict: ✅ STRONG**
-
-Evals prevent key TASK-091 regressions:
-
-**Loop behavior:**
-- ✅ Dry-run does not mutate state
-- ✅ Non-dry-run finalizes closeouts but does not dispatch pending tasks
-- ✅ `stop_when_idle=True` stops early on empty state
-- ✅ `stop_when_idle=False` runs all requested ticks
-- ✅ `max_ticks` and `limit` clamped correctly
-
-**Event recording:**
-- ✅ `record_event=True` records SCHEDULER_DECISION event with safe metadata
-- ✅ `record_event=False` avoids event recording
-- ✅ Event payload contains scheduler, loop_id, dry_run, max_ticks, ticks_run, stopped_reason
-
-**Dispatch/wait blocking:**
-- ✅ Dispatch actions blocked with `reason=dispatch_blocked_in_tick`
-- ✅ Wait actions skipped with `reason=wait_action`
-- ✅ Verified via tick event payload `actions` array
+**Safety assertions in tests:**
+- ✅ `test_no_goal_leak`: Sentinel goal absent from output
+- ✅ `test_no_steps_leak`: Step text absent from output
+- ✅ `test_no_file_content_leak`: File content absent from output
+- ✅ `test_no_reviewer_leak`: Reviewer summary absent from output
+- ✅ `test_no_shell_env_leak`: Shell/env/request sentinels absent from output
+- ✅ `test_no_workspace_path_leak`: Workspace path fragment absent from output
+- ✅ `test_no_secret_sentinel_leak`: Secret sentinel absent from output
 
 **Parameter validation:**
-- ✅ Bad max_ticks (string, bool) returns error
-- ✅ Bad limit (string, bool) returns error
-- ✅ Bad dry_run, release_workspace, stop_when_idle, record_event returns error
-- ✅ Valid clamps (0→1, 999→10) work correctly
+- ✅ `worker_id` must be string (non-string returns error)
+- ✅ `task_id` must be string (non-string returns error)
+- ✅ `limit` must be int (bool/float/string returns error), clamped 1..100
+
+### 4. Test Coverage Quality
+
+**Verdict: ✅ COMPREHENSIVE**
+
+`WorkerLifecycleExplainStateTests` class (37 tests):
+
+**State explanation:**
+1. `test_empty_state_returns_no_action_needed` — empty system returns no_action_needed
+2. `test_ready_closeout_explains_finalize` — ready closeout explains finalize action
+3. `test_not_ready_closeout_explains_waiting` — not-ready closeout explains waiting
+4. `test_pending_task_idle_worker_dispatch_available` — pending task + idle worker = dispatch available
+5. `test_pending_task_no_idle_workers` — pending task but no idle workers
+6. `test_idle_worker_no_pending_tasks` — idle worker but no pending tasks
+7. `test_offline_worker_reports_worker_offline` — offline worker reports offline
+
+**Filters:**
+8. `test_worker_id_filter` — worker_id filter works
+9. `test_task_id_filter` — task_id filter works
+10. `test_planned_actions_filtered_by_worker_id` — planned_actions filtered by worker_id
+11. `test_planned_actions_filtered_by_task_id` — planned_actions filtered by task_id
+12. `test_task_filter_excludes_unrelated_workers_and_empty_dispatch` — PM Round 2 fix
+13. `test_worker_filter_excludes_unrelated_tasks_and_empty_worker_actions` — PM Round 2 fix
+14. `test_task_filter_excludes_other_running_task` — PM Round 3 fix
+15. `test_worker_filter_excludes_other_running_worker` — PM Round 3 fix
+
+**Parameter validation:**
+16. `test_limit_clamp_low` — limit=0 → 1
+17. `test_limit_clamp_high` — limit=999 → 100
+18. `test_limit_bool_returns_error` — bool rejected
+19. `test_limit_float_returns_error` — float rejected
+20. `test_limit_string_returns_error` — string rejected
+21. `test_worker_id_non_string_returns_error` — non-string rejected
+22. `test_task_id_non_string_returns_error` — non-string rejected
+
+**Safety/no-leak:**
+23. `test_no_goal_leak` — sentinel goal absent
+24. `test_no_steps_leak` — step text absent
+25. `test_no_file_content_leak` — file content absent
+26. `test_no_reviewer_leak` — reviewer summary absent
+27. `test_no_shell_env_leak` — shell/env/request absent
+28. `test_no_workspace_path_leak` — workspace path absent
+29. `test_no_secret_sentinel_leak` — secret sentinel absent
+
+**Permission/mutation:**
+30. `test_permission_read_only_no_confirmation` — read-only, no confirmation
+31. `test_dry_run_no_mutation` — no task state mutation
+
+**Output structure:**
+32. `test_output_has_required_fields` — all required fields present
 
 **Compatibility:**
-- ✅ Scheduler tick still works after loop
-- ✅ Run-once still works after loop
-- ✅ Planner still works after loop
-- ✅ Batch finalize still works after loop
-- ✅ Single-task finalize still works after loop
-- ✅ Closeout candidate query still works after loop
-- ✅ Worker/task registry still works after loop
-- ✅ Claim and dispatch still work after loop
+33. `test_compatibility_with_planner` — works alongside planner
+34. `test_compatibility_with_scheduler_tick` — works alongside scheduler tick
+35. `test_compatibility_with_scheduler_loop` — works alongside scheduler loop
+36. `test_compatibility_with_run_once` — works alongside run-once
+37. `test_compatibility_with_closeout_candidates` — works alongside closeout candidates
 
-### 6. Assertion Quality
+### 5. Compatibility with Existing Tools
 
-**Verdict: ✅ SUBSTANTIVE**
+**Verdict: ✅ COMPATIBLE**
 
-**Positive assertions verify specific values:**
-- ✅ `dry_run=False`, `executed_count >= 1`, `failed_count == 0`
-- ✅ Pending task status `pending`, worker_id `None` or empty
-- ✅ Idle worker current_task_id `None` or empty
-- ✅ Dispatch action `skipped=True`, `reason=dispatch_blocked_in_tick`
-- ✅ Wait action `skipped=True`, `reason=wait_action`
-- ✅ `max_ticks >= 1`, `max_ticks <= 10`
-- ✅ Event payload fields: scheduler, loop_id, dry_run, max_ticks, ticks_run, stopped_reason
-
-**Negative assertions verify safety:**
-- ✅ 8 sentinels absent from output
-- ✅ Workspace path fragment absent from output
-- ✅ No goal, steps, file content, secrets leaked
-
-**No empty or misleading assertions:**
-- ✅ All assertions check specific conditions
-- ✅ No assertions that always pass
-- ✅ No misleading comments
-
-### 7. No Runtime Changes by Claude B
-
-**Verdict: ✅ CLEAN**
-
-From `B_DONE.md`:
-- ✅ "No runtime implementation changes required"
-- ✅ "No push was performed by Claude B"
-
-**Diff verification:**
-- ✅ Only `evals/run_evals.py` modified (410 lines added)
-- ✅ `agent_tasks/B_DONE.md` and `agent_tasks/PM_INBOX.md` are task status files, not runtime code
-- ✅ No changes to runtime code (registry_builder.py, durable_workers.py)
-- ✅ No eval depends on incorrect TASK-091 behavior
+- ✅ Reuses `list_workers`, `list_tasks`, closeout candidates, planner helpers
+- ✅ No conflicts with planner, tick, loop, run-once, closeout candidate tools
+- ✅ Verified by 5 compatibility tests
 
 ---
 
@@ -165,32 +147,26 @@ From `B_DONE.md`:
 
 **None identified.**
 
-All critical scheduler loop behaviors are covered:
-- ✅ Dry-run and non-dry-run modes
-- ✅ max_ticks and limit bounds
-- ✅ stop_when_idle early stop
-- ✅ Event recording (on/off)
-- ✅ Parameter validation (bad types, clamping)
-- ✅ Safety (no leakage of goals, steps, file content, secrets)
-- ✅ Compatibility (9 existing tools verified)
-- ✅ Dispatch/wait blocking with reason labels (PM fix applied)
+All critical explain-state behaviors are covered:
+- ✅ Filter semantics (equality check, Round 3 fixes)
+- ✅ Read-only verification
+- ✅ Bounded/safe output (7 safety tests)
+- ✅ Parameter validation (7 tests)
+- ✅ State explanation (7 scenarios)
+- ✅ Compatibility (5 tools)
 
 ---
 
 ## Checks Run
 
 ```text
-python3 evals/run_evals.py
-323 passed, 0 failed
-
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 651 tests — OK
-
-python3 -m unittest discover -s tests
-Ran 2010 tests — OK (only existing warning: failed to load plugin broken.py: bad)
-
-git diff --check
-OK
+WorkerLifecycleExplainStateTests → 37 OK
+Scheduler-related (102) → OK
+test_durable_workers (521) → OK
+broader suite (688) → OK
+python3 evals/run_evals.py → 323 passed, 0 failed
+python3 -m unittest discover -s tests → 2047 OK
+git diff --check → clean
 ```
 
 ---
@@ -203,7 +179,7 @@ OK
 
 ### Suggestions
 
-**None** — eval coverage is comprehensive and well-structured.
+**None** — code quality is high, no technical debt introduced.
 
 ---
 
@@ -211,6 +187,6 @@ OK
 
 **APPROVE and merge.**
 
-TASK-092 provides strong deterministic eval coverage for TASK-091 scheduler loop. All critical regression scenarios are covered: dry-run/non-dry-run modes, max_ticks/limit bounds, stop_when_idle, event recording, parameter validation, safety (no leakage), and compatibility (9 existing tools). PM-identified weak assertions have been properly fixed with concrete reason label verification from tick event payload. No runtime changes by Claude B.
+TASK-093 provides a read-only scheduler blocker explanation tool with correct filter semantics (equality check after PM Round 3 fix), bounded safe output, comprehensive test coverage (37 tests), and compatibility with 5 existing tools. No blockers, no technical debt, no known risks.
 
 **Next Action**: PM can proceed with git commit and push.

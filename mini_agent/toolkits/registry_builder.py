@@ -3647,6 +3647,298 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write", requires_confirmation=True),
     )
 
+    def _explain_worker_lifecycle_scheduler_state_json(worker_id: str = "", task_id: str = "", limit: int = 20) -> str:
+        if not isinstance(worker_id, str):
+            return _json.dumps({"error": "worker_id 必须是字符串"}, ensure_ascii=False)
+        if not isinstance(task_id, str):
+            return _json.dumps({"error": "task_id 必须是字符串"}, ensure_ascii=False)
+        if limit is None:
+            limit = 20
+        elif isinstance(limit, bool):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        elif not isinstance(limit, int):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        limit = max(1, min(limit, 100))
+
+        worker_id = worker_id.strip()
+        task_id = task_id.strip()
+
+        try:
+            all_workers = durable_worker_store.list_workers(limit=500)
+            all_tasks = durable_task_store.list_tasks(limit=500)
+        except Exception:
+            all_workers, all_tasks = [], []
+
+        # Apply filters
+        if worker_id:
+            filtered_workers = [w for w in all_workers if w.worker_id == worker_id]
+        else:
+            filtered_workers = list(all_workers)
+        if task_id:
+            filtered_tasks = [t for t in all_tasks if t.task_id == task_id]
+        else:
+            filtered_tasks = list(all_tasks)
+
+        # Sort by worker_id / task_id for determinism
+        filtered_workers.sort(key=lambda w: w.worker_id)
+        filtered_tasks.sort(key=lambda t: t.task_id)
+
+        workers_out = []
+        for w in filtered_workers[:limit]:
+            workers_out.append({
+                "worker_id": w.worker_id,
+                "status": w.status if isinstance(w.status, str) else w.status.value,
+                "current_task_id": w.current_task_id or "",
+            })
+
+        tasks_out = []
+        for t in filtered_tasks[:limit]:
+            tasks_out.append({
+                "task_id": t.task_id,
+                "status": t.status,
+                "worker_id": t.worker_id or "",
+            })
+
+        # Closeout candidates
+        closeout_candidates = []
+        try:
+            cand_json = _list_worker_workspace_merge_closeout_candidates_json(
+                worker_id=worker_id, task_id=task_id, limit=limit,
+            )
+            cand_data = _json.loads(cand_json)
+            for c in cand_data.get("candidates", []):
+                closeout_candidates.append({
+                    "worker_id": c.get("worker_id", ""),
+                    "task_id": c.get("task_id", ""),
+                    "ready": bool(c.get("ready", False)),
+                    "reason": c.get("reason", ""),
+                    "task_status": c.get("task_status", ""),
+                    "worker_status": c.get("worker_status", ""),
+                    "lease_id": c.get("lease_id", ""),
+                })
+        except Exception:
+            pass
+
+        # Planned actions (reuse planner, apply filters)
+        planned_actions = []
+        try:
+            plan_json = _plan_worker_lifecycle_actions_json(limit=limit)
+            plan_data = _json.loads(plan_json)
+            for a in plan_data.get("actions", []):
+                a_worker_id = a.get("worker_id", "")
+                a_task_id = a.get("task_id", "")
+                # Apply filters: skip actions that don't match requested worker_id/task_id
+                if worker_id and (not a_worker_id or a_worker_id != worker_id):
+                    continue
+                if task_id and (not a_task_id or a_task_id != task_id):
+                    continue
+                planned_actions.append({
+                    "action": a.get("action", ""),
+                    "worker_id": a_worker_id,
+                    "task_id": a_task_id,
+                })
+        except Exception:
+            pass
+
+        # Build blocked_reasons and next_actions from state analysis
+        blocked_reasons = []
+        next_actions = []
+
+        # Index workers by id for quick lookup
+        worker_map = {w.worker_id: w for w in all_workers}
+        task_map = {t.task_id: t for t in all_tasks}
+
+        # Analyze each worker-task pair
+        analyzed_pairs = set()
+        for w in filtered_workers:
+            wid = w.worker_id
+            tid = w.current_task_id or ""
+            if not tid:
+                # Idle worker without task
+                if w.status == WorkerStatus.IDLE:
+                    pending_unassigned = [t for t in all_tasks if t.status == "pending" and not t.worker_id]
+                    if pending_unassigned:
+                        blocked_reasons.append({
+                            "worker_id": wid, "task_id": "",
+                            "reason": "dispatch_available",
+                            "detail": "dispatch_blocked_in_scheduler",
+                        })
+                        next_actions.append({
+                            "action": "dispatch_pending_task",
+                            "worker_id": wid,
+                            "task_id": "",
+                            "reason": "dispatch_available_but_blocked",
+                        })
+                    else:
+                        blocked_reasons.append({
+                            "worker_id": wid, "task_id": "",
+                            "reason": "no_pending_tasks",
+                            "detail": "idle worker with no pending tasks to dispatch",
+                        })
+                elif w.status == WorkerStatus.OFFLINE:
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": "",
+                        "reason": "worker_offline",
+                        "detail": "no unsafe action",
+                    })
+                continue
+
+            analyzed_pairs.add((wid, tid))
+            task = task_map.get(tid)
+
+            # Check closeout candidates for this pair
+            pair_candidates = [c for c in closeout_candidates if c.get("worker_id") == wid and c.get("task_id") == tid]
+            if pair_candidates:
+                c = pair_candidates[0]
+                if c.get("ready") and c.get("reason") == "ready_to_finalize":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "ready_closeout",
+                        "detail": "workspace merge ready to finalize",
+                    })
+                    next_actions.append({
+                        "action": "finalize_ready_workspace_merge",
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "ready_closeout",
+                    })
+                elif c.get("reason") == "no_successful_apply":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "waiting_for_workspace_merge_apply",
+                        "detail": "workspace merge not yet applied",
+                    })
+                elif c.get("reason") == "workspace_lease_invalid":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "missing_active_lease",
+                        "detail": "workspace lease is invalid or missing",
+                    })
+                elif c.get("reason") == "already_finalized":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "already_finalized",
+                        "detail": "workspace merge already finalized",
+                    })
+                elif c.get("reason") == "task_not_running":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "task_not_running",
+                        "detail": "task is not in running state",
+                    })
+                elif c.get("reason") == "worker_task_mismatch":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "task_worker_mismatch",
+                        "detail": "worker and task are not paired",
+                    })
+            else:
+                # No closeout candidate - check basic state
+                if w.status == WorkerStatus.OFFLINE:
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "worker_offline",
+                        "detail": "no unsafe action",
+                    })
+                elif task and task.status != "running":
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "task_not_running",
+                        "detail": f"task status is {task.status}",
+                    })
+                elif task and task.worker_id != wid:
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "task_worker_mismatch",
+                        "detail": "worker and task are not paired",
+                    })
+                elif w.status == WorkerStatus.RUNNING:
+                    blocked_reasons.append({
+                        "worker_id": wid, "task_id": tid,
+                        "reason": "worker_running",
+                        "detail": "worker is actively running, no closeout candidate yet",
+                    })
+
+        # For tasks without workers (pending unassigned)
+        for t in filtered_tasks:
+            if t.status == "pending" and not t.worker_id:
+                idle_workers = [w for w in all_workers if w.status == WorkerStatus.IDLE and not w.current_task_id]
+                if idle_workers:
+                    blocked_reasons.append({
+                        "worker_id": "", "task_id": t.task_id,
+                        "reason": "pending_task_unassigned",
+                        "detail": "dispatch_available_but_blocked",
+                    })
+                else:
+                    blocked_reasons.append({
+                        "worker_id": "", "task_id": t.task_id,
+                        "reason": "pending_task_unassigned",
+                        "detail": "no_idle_workers",
+                    })
+
+        # If nothing found at all
+        if not filtered_workers and not filtered_tasks:
+            blocked_reasons.append({
+                "worker_id": "", "task_id": "",
+                "reason": "no_action_needed",
+                "detail": "no workers or tasks in system",
+            })
+
+        # Post-filter: when a specific filter is active, only keep entries
+        # that match the requested filter value (or global no_action_needed).
+        if task_id:
+            blocked_reasons = [r for r in blocked_reasons if r.get("task_id") == task_id or r.get("reason") == "no_action_needed"]
+            next_actions = [a for a in next_actions if a.get("task_id") == task_id]
+        if worker_id:
+            blocked_reasons = [r for r in blocked_reasons if r.get("worker_id") == worker_id or r.get("reason") == "no_action_needed"]
+            next_actions = [a for a in next_actions if a.get("worker_id") == worker_id]
+
+        # Summary
+        idle_count = sum(1 for w in all_workers if w.status == WorkerStatus.IDLE)
+        running_count = sum(1 for w in all_workers if w.status == WorkerStatus.RUNNING)
+        offline_count = sum(1 for w in all_workers if w.status == WorkerStatus.OFFLINE)
+        pending_count = sum(1 for t in all_tasks if t.status == "pending" and not t.worker_id)
+        summary = {
+            "total_workers": len(all_workers),
+            "total_tasks": len(all_tasks),
+            "idle_workers": idle_count,
+            "running_workers": running_count,
+            "offline_workers": offline_count,
+            "pending_unassigned_tasks": pending_count,
+            "ready_closeouts": sum(1 for c in closeout_candidates if c.get("ready")),
+            "not_ready_closeouts": sum(1 for c in closeout_candidates if not c.get("ready")),
+            "blocked_reason_count": len(blocked_reasons),
+            "next_action_count": len(next_actions),
+        }
+
+        return _json.dumps({
+            "scheduler": "worker_lifecycle",
+            "filters": {"worker_id": worker_id, "task_id": task_id},
+            "limit": limit,
+            "summary": summary,
+            "workers": workers_out,
+            "tasks": tasks_out,
+            "closeout_candidates": closeout_candidates,
+            "planned_actions": planned_actions,
+            "blocked_reasons": blocked_reasons,
+            "next_actions": next_actions,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "explain_worker_lifecycle_scheduler_state",
+        "解释 worker lifecycle scheduler 当前状态：为什么工作没有推进，下一步应该做什么。只读，不修改任何状态。",
+        _explain_worker_lifecycle_scheduler_state_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "worker_id": {"type": "string", "description": "按 worker_id 过滤，默认空（不过滤）"},
+                "task_id": {"type": "string", "description": "按 task_id 过滤，默认空（不过滤）"},
+                "limit": {"type": "integer", "description": "最大返回条数，默认 20，上限 100"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

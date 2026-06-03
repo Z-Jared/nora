@@ -7,18 +7,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 ### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-093
+- 依赖: 无（TASK-093 已完成）
 - 目标: 为 scheduler blocker/explanation 工具增加 deterministic offline eval coverage，覆盖 pending/idle、not-ready closeout、missing lease、offline worker、already finalized、limit/bad params、安全不泄漏和 compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`。
 
 ## 进行中
 
-### TASK-093: Worker lifecycle scheduler blocker explanation v1
-- 分配给: Claude A
-- 目标: 新增只读 scheduler explain/blocker 工具，复用现有 planner/closeout candidate state，输出 bounded reason labels，解释 pending tasks、idle workers、running workers、workspace leases、ready/not-ready closeouts 和 scheduler 下一步为什么会执行/跳过/阻塞。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-093: Worker lifecycle scheduler blocker explanation v1 ✅
+- 完成者: Claude A；按 PM 三轮初审反馈修正 filter semantics
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleExplainStateTests` 37 tests OK；`python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecyclePlannerTests tests.test_durable_workers.WorkerLifecycleExplainStateTests` 102 tests OK；`python3 -m unittest tests.test_durable_workers` 521 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 688 tests OK；`python3 evals/run_evals.py` 323 passed；`python3 -m unittest discover -s tests` 2047 tests OK；`git diff --check` OK。
+- 内容: 新增只读 `explain_worker_lifecycle_scheduler_state(worker_id="", task_id="", limit=20)`；复用 worker/task store、closeout candidates 和 planner state，输出 bounded scheduler explain metadata，包括 workers、tasks、closeout candidates、planned actions、blocked reasons 和 next actions；支持 worker/task filter 和 limit validation；解释 ready closeout、waiting/missing apply/lease、offline/running/idle workers、pending unassigned tasks、dispatch available but blocked、no pending/no idle/no action 等 reason labels；输出不泄漏 task goal/steps/file content/reviewer/shell/env/request/workspace paths/secrets，不 mutation。
 
 ### TASK-092: Deterministic eval coverage for scheduler loop v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补强 weak assertions
