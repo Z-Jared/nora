@@ -3713,6 +3713,9 @@ def build_default_registry(
             filtered_tasks = [t for t in all_tasks if t.worker_id == worker_id]
         else:
             filtered_tasks = list(all_tasks)
+        # When task_id filter is set, also filter workers to those assigned to that task
+        if task_id:
+            filtered_workers = [w for w in filtered_workers if w.current_task_id == task_id]
 
         # Sort by worker_id / task_id for determinism
         filtered_workers.sort(key=lambda w: w.worker_id)

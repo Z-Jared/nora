@@ -22,12 +22,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1
-- 分配给: Claude B
-- 目标: 为 scheduler blocker/explanation 工具增加 deterministic offline eval coverage，覆盖 pending/idle、not-ready closeout、missing lease、offline worker、already finalized、limit/bad params、安全不泄漏和 compatibility。
-- 状态: waiting for rerun after TASK-095 integrated runtime fixes
-
 ## 已完成
+
+### TASK-094: Deterministic eval coverage for scheduler blocker explanation v1 ✅
+- 完成者: Claude B；包含 PM 初审发现后的 3 行 task filter runtime fix
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 336 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 710 tests OK；`git diff --check` OK。
+- 内容: 为 `explain_worker_lifecycle_scheduler_state` 增加 13 个 deterministic offline eval，覆盖 empty state、ready closeout、not-ready closeout、pending+idle dispatch availability、pending/no idle、idle/no pending、offline worker、worker/task filters、filtered no-leak、limit/bad args、安全 no-leak 和 compatibility；补充 `task_id` filter 时 top-level `workers` 只返回 `current_task_id` 匹配该 task 的 worker，避免泄漏 unrelated worker id。
 
 ### TASK-095: Retryable failed-task planning for worker lifecycle scheduler v1 ✅
 - 完成者: Claude A；包含 TASK-093 两个 blocker 修复

@@ -382,6 +382,20 @@ def main() -> int:
         EvalCase("loop_bad_params", eval_loop_bad_params),
         EvalCase("loop_safety_no_leak", eval_loop_safety_no_leak),
         EvalCase("loop_compatibility", eval_loop_compatibility),
+        # TASK-094: Scheduler blocker explanation evals
+        EvalCase("explain_empty_state", eval_explain_empty_state),
+        EvalCase("explain_ready_closeout", eval_explain_ready_closeout),
+        EvalCase("explain_not_ready_closeout", eval_explain_not_ready_closeout),
+        EvalCase("explain_dispatch_available", eval_explain_dispatch_available),
+        EvalCase("explain_pending_no_idle_workers", eval_explain_pending_no_idle_workers),
+        EvalCase("explain_idle_no_pending", eval_explain_idle_no_pending),
+        EvalCase("explain_offline_worker", eval_explain_offline_worker),
+        EvalCase("explain_worker_filter", eval_explain_worker_filter),
+        EvalCase("explain_task_filter", eval_explain_task_filter),
+        EvalCase("explain_filter_no_leak", eval_explain_filter_no_leak),
+        EvalCase("explain_limit_clamp_and_bad_args", eval_explain_limit_clamp_and_bad_args),
+        EvalCase("explain_safety_no_leak", eval_explain_safety_no_leak),
+        EvalCase("explain_compatibility", eval_explain_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -14463,6 +14477,318 @@ def eval_loop_compatibility():
 
             # Claim and dispatch still work
             claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_loop"))
+            assert "task_id" in claim or "error" in claim
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+def eval_explain_empty_state():
+    """Empty state returns no_action_needed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            assert result["summary"]["total_workers"] == 0
+            assert result["summary"]["total_tasks"] == 0
+            reasons = result["blocked_reasons"]
+            assert len(reasons) == 1
+            assert reasons[0]["reason"] == "no_action_needed"
+            assert reasons[0]["detail"] == "no workers or tasks in system"
+        finally:
+            db.close()
+
+
+def eval_explain_ready_closeout():
+    """Ready closeout explanation with concrete reason and next action."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_explain_ready")
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            ready_reasons = [r for r in reasons if r["reason"] == "ready_closeout"]
+            assert len(ready_reasons) >= 1, f"no ready_closeout reason: {reasons}"
+            assert ready_reasons[0]["worker_id"] == "w_explain_ready"
+            assert ready_reasons[0]["task_id"] == tid
+            assert "finalize" in ready_reasons[0]["detail"].lower()
+            # Next action
+            next_actions = result["next_actions"]
+            finalize_actions = [a for a in next_actions if a["action"] == "finalize_ready_workspace_merge"]
+            assert len(finalize_actions) >= 1, f"no finalize action: {next_actions}"
+            assert finalize_actions[0]["worker_id"] == "w_explain_ready"
+            assert finalize_actions[0]["task_id"] == tid
+        finally:
+            db.close()
+
+
+def eval_explain_not_ready_closeout():
+    """Not-ready closeout: missing apply or missing lease."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, _, _ = _setup_lifecycle_not_ready_worker(registry, worker_id="w_explain_nr")
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            # Not-ready worker should have a blocked reason (waiting_for_workspace_merge_apply or similar)
+            nr_reasons = [r for r in reasons if r["worker_id"] == "w_explain_nr"]
+            assert len(nr_reasons) >= 1, f"no reason for not-ready worker: {reasons}"
+            assert nr_reasons[0]["reason"] in ("waiting_for_workspace_merge_apply", "missing_active_lease", "worker_running", "task_not_running"), nr_reasons[0]
+        finally:
+            db.close()
+
+
+def eval_explain_dispatch_available():
+    """Pending task + idle worker: dispatch_available with blocked reason."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_idle_dispatch", role="coder")
+            ts.create_task(goal="pending dispatch task", steps=[{"text": "x"}])
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            dispatch_reasons = [r for r in reasons if r["reason"] == "dispatch_available"]
+            assert len(dispatch_reasons) >= 1, f"no dispatch_available: {reasons}"
+            assert dispatch_reasons[0]["worker_id"] == "w_idle_dispatch"
+            assert dispatch_reasons[0]["detail"] == "dispatch_blocked_in_scheduler"
+            # Next action
+            next_actions = result["next_actions"]
+            dispatch_actions = [a for a in next_actions if a["action"] == "dispatch_pending_task"]
+            assert len(dispatch_actions) >= 1, f"no dispatch action: {next_actions}"
+            assert dispatch_actions[0]["reason"] == "dispatch_available_but_blocked"
+        finally:
+            db.close()
+
+
+def eval_explain_pending_no_idle_workers():
+    """Pending tasks without idle workers: no_idle_workers detail."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_busy", role="coder")
+            tid = ts.create_task(goal="busy task", steps=[{"text": "x"}]).task_id
+            ts.assign_worker(tid, "w_busy")
+            ws.update_status("w_busy", "assigned", current_task_id=tid)
+            ts.update_status(tid, "running")
+            # Now create a pending task with no idle workers
+            ts.create_task(goal="pending no idle", steps=[{"text": "y"}])
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            pending_reasons = [r for r in reasons if r["reason"] == "pending_task_unassigned"]
+            assert len(pending_reasons) >= 1, f"no pending_task_unassigned: {reasons}"
+            assert any(r["detail"] == "no_idle_workers" for r in pending_reasons), f"expected no_idle_workers: {pending_reasons}"
+        finally:
+            db.close()
+
+
+def eval_explain_idle_no_pending():
+    """Idle workers without pending tasks: no_pending_tasks reason."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ws.register_worker("w_lonely_idle", role="coder")
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            idle_reasons = [r for r in reasons if r["worker_id"] == "w_lonely_idle"]
+            assert len(idle_reasons) >= 1, f"no reason for idle worker: {reasons}"
+            assert idle_reasons[0]["reason"] == "no_pending_tasks"
+        finally:
+            db.close()
+
+
+def eval_explain_offline_worker():
+    """Offline worker reason."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_offline", role="coder")
+            tid = ts.create_task(goal="offline task", steps=[{"text": "x"}]).task_id
+            ts.assign_worker(tid, "w_offline")
+            ws.update_status("w_offline", "assigned", current_task_id=tid)
+            ts.update_status(tid, "running")
+            # Set worker offline
+            ws.update_status("w_offline", "offline", current_task_id=tid)
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            reasons = result["blocked_reasons"]
+            offline_reasons = [r for r in reasons if r["worker_id"] == "w_offline" and r["reason"] == "worker_offline"]
+            assert len(offline_reasons) >= 1, f"no worker_offline reason: {reasons}"
+            assert offline_reasons[0]["detail"] in ("no unsafe action", "worker is offline, no unsafe action")
+        finally:
+            db.close()
+
+
+def eval_explain_worker_filter():
+    """worker_id filter returns only matching entries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            # Setup two workers
+            _setup_lifecycle_ready_worker(registry, worker_id="w_filt_a")
+            ws.register_worker("w_filt_b", role="coder")
+            ts.create_task(goal="task b", steps=[{"text": "x"}])
+            # Filter by w_filt_a
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w_filt_a"))
+            reasons = result["blocked_reasons"]
+            for r in reasons:
+                if r["reason"] != "no_action_needed":
+                    assert r["worker_id"] == "w_filt_a", f"leaked other worker: {r}"
+            # workers output should only contain w_filt_a
+            assert all(w["worker_id"] == "w_filt_a" for w in result["workers"]), result["workers"]
+        finally:
+            db.close()
+
+
+def eval_explain_task_filter():
+    """task_id filter returns only matching entries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            tid_a, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_tfilt_a")
+            ws.register_worker("w_tfilt_b", role="coder")
+            tid_b = ts.create_task(goal="task b", steps=[{"text": "x"}]).task_id
+            # Filter by tid_a
+            result = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", task_id=tid_a))
+            reasons = result["blocked_reasons"]
+            for r in reasons:
+                if r["reason"] != "no_action_needed":
+                    assert r["task_id"] == tid_a, f"leaked other task: {r}"
+            assert all(t["task_id"] == tid_a for t in result["tasks"]), result["tasks"]
+        finally:
+            db.close()
+
+
+def eval_explain_filter_no_leak():
+    """Filtered output must not leak unrelated worker/task data."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            # Two ready workers
+            tid1, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_leak1")
+            tid2, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_leak2")
+            # Filter by w_leak1: must not see w_leak2
+            r1 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", worker_id="w_leak1"))
+            r1_str = json.dumps(r1)
+            assert "w_leak2" not in r1_str, f"w_leak2 leaked in w_leak1 filter: {r1_str[:300]}"
+            # Filter by tid2: must not see tid1
+            r2 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", task_id=tid2))
+            r2_str = json.dumps(r2)
+            assert tid1 not in r2_str, f"{tid1} leaked in {tid2} filter: {r2_str[:300]}"
+        finally:
+            db.close()
+
+
+def eval_explain_limit_clamp_and_bad_args():
+    """Limit clamp and bad argument errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            # Bad worker_id (non-string)
+            r1 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", worker_id=123))
+            assert "error" in r1, f"bad worker_id: {r1}"
+            # Bad task_id (non-string)
+            r2 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", task_id=True))
+            assert "error" in r2, f"bad task_id: {r2}"
+            # Bad limit (bool)
+            r3 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", limit=True))
+            assert "error" in r3, f"bool limit: {r3}"
+            # Bad limit (string)
+            r4 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", limit="bad"))
+            assert "error" in r4, f"string limit: {r4}"
+            # limit=0 clamps to 1
+            r5 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", limit=0))
+            assert "error" not in r5 and r5["limit"] >= 1, f"limit=0: {r5}"
+            # limit=999 clamps to 100
+            r6 = json.loads(registry.call("explain_worker_lifecycle_scheduler_state", limit=999))
+            assert "error" not in r6 and r6["limit"] <= 100, f"limit=999: {r6}"
+        finally:
+            db.close()
+
+
+def eval_explain_safety_no_leak():
+    """Explain output does not leak goals, steps, file content, reviewer summary, shell/env/request, workspace paths, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            _setup_lifecycle_ready_worker(registry, worker_id="w_explain_safe")
+            result_str = registry.call("explain_worker_lifecycle_scheduler_state")
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str, "goal leaked"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str, "secret leaked"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_str, "step text leaked"
+            assert _LIFECYCLE_SENTINEL_FILE not in result_str, "file content leaked"
+            assert _LIFECYCLE_SENTINEL_REVIEWER not in result_str, "reviewer summary leaked"
+            assert _LIFECYCLE_SENTINEL_SHELL not in result_str, "shell output leaked"
+            assert _LIFECYCLE_SENTINEL_REQUEST not in result_str, "request string leaked"
+            assert _LIFECYCLE_SENTINEL_ENV not in result_str, "env sentinel leaked"
+            assert ".workspaces" not in result_str, "workspace path fragment leaked"
+        finally:
+            db.close()
+
+
+def eval_explain_compatibility():
+    """Existing tools still work after explain call."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            _setup_lifecycle_ready_worker(registry, worker_id="w_explain_compat")
+            registry.call("explain_worker_lifecycle_scheduler_state")
+
+            # Planner still works
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert "actions" in plan
+
+            # Scheduler tick still works
+            tick = json.loads(registry.call("run_worker_lifecycle_scheduler_tick", limit=5, dry_run=True))
+            assert "tick_id" in tick
+
+            # Scheduler loop still works
+            loop = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, dry_run=True))
+            assert "loop_id" in loop
+
+            # Run-once still works
+            once = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert "planned_count" in once
+
+            # Closeout candidate query still works
+            closeout = json.loads(registry.call("list_worker_workspace_merge_closeout_candidates"))
+            assert "candidates" in closeout or "error" in closeout
+
+            # Worker/task registry still works
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_after_explain", role="coder")
+            assert ws.get_worker("w_after_explain") is not None
+            new_task = ts.create_task(goal="after explain task", steps=[{"text": "x"}])
+            assert new_task.task_id is not None
+
+            # Claim and dispatch still work
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_explain"))
             assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
