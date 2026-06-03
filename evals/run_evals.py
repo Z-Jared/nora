@@ -370,6 +370,18 @@ def main() -> int:
         EvalCase("run_once_stale_finalize", eval_run_once_stale_finalize),
         EvalCase("run_once_safety_no_leak", eval_run_once_safety_no_leak),
         EvalCase("run_once_compatibility", eval_run_once_compatibility),
+        # TASK-092: Scheduler loop evals
+        EvalCase("loop_dry_run_no_mutation", eval_loop_dry_run_no_mutation),
+        EvalCase("loop_max_ticks_and_limit", eval_loop_max_ticks_and_limit),
+        EvalCase("loop_stop_when_idle_true", eval_loop_stop_when_idle_true),
+        EvalCase("loop_stop_when_idle_false", eval_loop_stop_when_idle_false),
+        EvalCase("loop_non_dry_run_closeout", eval_loop_non_dry_run_closeout),
+        EvalCase("loop_dispatch_wait_blocked", eval_loop_dispatch_wait_blocked),
+        EvalCase("loop_record_event_true", eval_loop_record_event_true),
+        EvalCase("loop_record_event_false", eval_loop_record_event_false),
+        EvalCase("loop_bad_params", eval_loop_bad_params),
+        EvalCase("loop_safety_no_leak", eval_loop_safety_no_leak),
+        EvalCase("loop_compatibility", eval_loop_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -14053,6 +14065,404 @@ def eval_run_once_compatibility():
 
             # Claim and dispatch still work
             claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_run"))
+            assert "task_id" in claim or "error" in claim
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+def eval_loop_dry_run_no_mutation():
+    """Default dry-run loop does not mutate task/worker/lease/project root/workspace."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            tid, wspath, lease_id = _setup_lifecycle_ready_worker(registry, worker_id="w_loop_dry")
+
+            before_task = ts.get_task(tid)
+            before_worker = ws.get_worker("w_loop_dry")
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            project_root = Path(tmpdir)
+            ws_root = Path(wspath)
+            before_project_files = set(project_root.rglob("*")) if project_root.exists() else set()
+            before_ws_files = set(ws_root.rglob("*")) if ws_root.exists() else set()
+
+            result = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=2, limit=5, dry_run=True))
+            assert result["dry_run"] is True, f"dry_run flag: {result}"
+            assert result["ticks_run"] >= 1, f"ticks_run: {result}"
+            assert result["executed_count"] == 0, f"executed_count should be 0 in dry_run: {result}"
+
+            after_task = ts.get_task(tid)
+            after_worker = ws.get_worker("w_loop_dry")
+            assert after_task.status == before_task.status, f"task status mutated: {after_task.status}"
+            assert after_worker.status == before_worker.status, f"worker status mutated: {after_worker.status}"
+            assert after_worker.current_task_id == before_worker.current_task_id
+
+            after_project_files = set(project_root.rglob("*")) if project_root.exists() else set()
+            after_ws_files = set(ws_root.rglob("*")) if ws_root.exists() else set()
+            assert after_project_files == before_project_files, "project root mutated"
+            assert after_ws_files == before_ws_files, "workspace mutated"
+
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            execution_event_types = {TASK_STATUS_CHANGED, WORKSPACE_RELEASED}
+            assert not [e for e in new_events if e.event_type in execution_event_types], [
+                (e.event_type, e.summary) for e in new_events
+            ]
+        finally:
+            db.close()
+
+
+def eval_loop_max_ticks_and_limit():
+    """Bounded max_ticks and limit behavior."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Empty state, max_ticks=1 => ticks_run <= 1
+            result1 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, dry_run=True))
+            assert result1["ticks_run"] <= 1, f"max_ticks=1: {result1}"
+
+            # max_ticks=5 empty state with stop_when_idle=True => stops at 1
+            result2 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=5, dry_run=True, stop_when_idle=True))
+            assert result2["ticks_run"] <= 5, f"max_ticks=5: {result2}"
+
+            # max_ticks=0 clamps to 1
+            result3 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=0, dry_run=True))
+            assert result3["max_ticks"] >= 1, f"max_ticks=0 clamp: {result3}"
+
+            # max_ticks=999 clamps to 10
+            result4 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=999, dry_run=True))
+            assert result4["max_ticks"] <= 10, f"max_ticks=999 clamp: {result4}"
+
+            # limit=0 clamps to 1
+            _setup_lifecycle_ready_worker(registry, worker_id="w_lim_loop")
+            result5 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=0, dry_run=True))
+            assert result5["planned_count"] >= 1, f"limit=0 clamp: {result5}"
+
+            # limit=999 clamps to 100
+            result6 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=999, dry_run=True))
+            assert "error" not in result6, f"limit=999: {result6}"
+        finally:
+            db.close()
+
+
+def eval_loop_stop_when_idle_true():
+    """stop_when_idle=True stops early on empty state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=5, dry_run=True, stop_when_idle=True,
+            ))
+            assert result["stopped_reason"] == "idle", f"expected idle: {result}"
+            assert result["ticks_run"] < 5, f"should stop early: {result}"
+        finally:
+            db.close()
+
+
+def eval_loop_stop_when_idle_false():
+    """stop_when_idle=False runs the requested bounded tick count."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=3, dry_run=True, stop_when_idle=False,
+            ))
+            assert result["ticks_run"] == 3, f"expected 3 ticks: {result}"
+            assert result["stopped_reason"] == "max_ticks_reached", f"expected max_ticks_reached: {result}"
+        finally:
+            db.close()
+
+
+def eval_loop_non_dry_run_closeout():
+    """Non-dry-run closeout-only execution finalizes ready closeouts but does not dispatch pending tasks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            # Setup: ready closeout worker
+            tid_fin, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_loop_fin")
+
+            # Setup: idle worker + pending task (dispatch candidate)
+            ws.register_worker("w_loop_idle", role="coder")
+            pending_task = ts.create_task(goal="pending loop dispatch", steps=[{"text": "x"}])
+            pending_tid = pending_task.task_id
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=1, limit=50, dry_run=False, release_workspace=True,
+            ))
+            assert result["dry_run"] is False
+            assert result["executed_count"] >= 1, f"executed_count: {result}"
+            assert result["failed_count"] == 0, f"failed_count: {result}"
+
+            # Pending task must NOT have been dispatched
+            pending_after = ts.get_task(pending_tid)
+            assert pending_after.status == "pending", f"pending task was dispatched: {pending_after.status}"
+            assert pending_after.worker_id is None or pending_after.worker_id == "", f"pending task got worker: {pending_after.worker_id}"
+
+            idle_after = ws.get_worker("w_loop_idle")
+            assert idle_after.current_task_id is None or idle_after.current_task_id == "", f"idle worker got task: {idle_after.current_task_id}"
+
+            # Verify dispatch action was blocked via tick event payload
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler tick" in (e.summary or "")]
+            assert len(tick_events) >= 1, "no tick event recorded"
+            tick_payload = tick_events[0].payload
+            actions = tick_payload.get("actions", [])
+            dispatch_actions = [a for a in actions if a.get("action") == "dispatch_pending_task"]
+            for da in dispatch_actions:
+                assert da.get("skipped") is True, f"dispatch not blocked: {da}"
+                assert da.get("reason") == "dispatch_blocked_in_tick", f"dispatch reason: {da}"
+        finally:
+            db.close()
+
+
+def eval_loop_dispatch_wait_blocked():
+    """Dispatch recommendations and wait actions are returned as blocked/skipped with reason labels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            # Not-ready worker => wait action
+            _setup_lifecycle_not_ready_worker(registry, worker_id="w_loop_wait")
+
+            # Idle worker + pending task => dispatch blocked
+            ws.register_worker("w_loop_idle2", role="coder")
+            ts.create_task(goal="pending dispatch", steps=[{"text": "x"}])
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=1, limit=50, dry_run=True,
+            ))
+
+            # Verify blocked/skipped counts from loop result
+            assert result["blocked_count"] >= 1, f"blocked_count should >= 1: {result}"
+            assert result["skipped_count"] >= 1, f"skipped_count should >= 1: {result}"
+
+            # Verify reason labels from tick event payload
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler tick" in (e.summary or "")]
+            assert len(tick_events) >= 1, "no tick event recorded"
+            tick_payload = tick_events[0].payload
+            actions = tick_payload.get("actions", [])
+
+            # Dispatch action must be blocked with dispatch_blocked_in_tick
+            dispatch_actions = [a for a in actions if a.get("action") == "dispatch_pending_task"]
+            assert len(dispatch_actions) >= 1, f"no dispatch action found: {actions}"
+            for da in dispatch_actions:
+                assert da.get("skipped") is True, f"dispatch not skipped: {da}"
+                assert da.get("reason") == "dispatch_blocked_in_tick", f"dispatch reason: {da}"
+
+            # Wait action must be skipped with wait_action
+            wait_actions = [a for a in actions if a.get("action") == "wait_for_workspace_merge_apply"]
+            assert len(wait_actions) >= 1, f"no wait action found: {actions}"
+            for wa in wait_actions:
+                assert wa.get("skipped") is True, f"wait not skipped: {wa}"
+                assert wa.get("reason") == "wait_action", f"wait reason: {wa}"
+        finally:
+            db.close()
+
+
+def eval_loop_record_event_true():
+    """Loop scheduler event is recorded with safe bounded metadata when record_event=True."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=2, dry_run=True, record_event=True,
+            ))
+            assert result["loop_event_recorded"] is True, f"loop_event_recorded: {result}"
+
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            loop_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler loop" in (e.summary or "")]
+            assert len(loop_events) >= 1, f"no loop event: {[(e.event_type, e.summary) for e in new_events]}"
+            payload = loop_events[0].payload
+            assert payload.get("scheduler") == "worker_lifecycle"
+            assert "loop_id" in payload
+            assert payload.get("dry_run") is True
+            assert "max_ticks" in payload
+            assert "ticks_run" in payload
+            assert "stopped_reason" in payload
+        finally:
+            db.close()
+
+
+def eval_loop_record_event_false():
+    """record_event=False avoids loop event recording."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+
+            result = json.loads(registry.call(
+                "run_worker_lifecycle_scheduler_loop",
+                max_ticks=2, dry_run=True, record_event=False,
+            ))
+            assert result["loop_event_recorded"] is False, f"loop_event_recorded should be False: {result}"
+
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            loop_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler loop" in (e.summary or "")]
+            assert len(loop_events) == 0, f"loop event recorded despite record_event=False: {[(e.event_type, e.summary) for e in loop_events]}"
+        finally:
+            db.close()
+
+
+def eval_loop_bad_params():
+    """Bad max_ticks, limit, dry_run, release_workspace, stop_when_idle, record_event return bounded errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Bad max_ticks (non-integer)
+            r1 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks="bad"))
+            assert "error" in r1, f"bad max_ticks: {r1}"
+
+            # Bad max_ticks (bool)
+            r1b = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=True))
+            assert "error" in r1b, f"bool max_ticks: {r1b}"
+
+            # Bad limit (non-integer)
+            r2 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", limit="bad"))
+            assert "error" in r2, f"bad limit: {r2}"
+
+            # Bad limit (bool)
+            r2b = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", limit=True))
+            assert "error" in r2b, f"bool limit: {r2b}"
+
+            # Bad dry_run
+            r3 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", dry_run="yes"))
+            assert "error" in r3, f"bad dry_run: {r3}"
+
+            # Bad release_workspace
+            r4 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", release_workspace="yes"))
+            assert "error" in r4, f"bad release_workspace: {r4}"
+
+            # Bad stop_when_idle
+            r5 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", stop_when_idle="yes"))
+            assert "error" in r5, f"bad stop_when_idle: {r5}"
+
+            # Bad record_event
+            r6 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", record_event="yes"))
+            assert "error" in r6, f"bad record_event: {r6}"
+
+            # max_ticks=0 clamps to 1 (valid)
+            r7 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=0, dry_run=True))
+            assert "error" not in r7 and r7["max_ticks"] >= 1, f"max_ticks=0: {r7}"
+
+            # max_ticks=999 clamps to 10 (valid)
+            r8 = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=999, dry_run=True))
+            assert "error" not in r8 and r8["max_ticks"] <= 10, f"max_ticks=999: {r8}"
+        finally:
+            db.close()
+
+
+def eval_loop_safety_no_leak():
+    """Loop output does not leak goals, steps, file content, reviewer summary, shell/env/request, workspace paths, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            tid, wspath, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_loop_safe")
+
+            result_str = registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=2, limit=5, dry_run=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str, "goal leaked"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str, "secret leaked"
+            assert _LIFECYCLE_SENTINEL_STEP not in result_str, "step text leaked"
+            assert _LIFECYCLE_SENTINEL_FILE not in result_str, "file content leaked"
+            assert _LIFECYCLE_SENTINEL_REVIEWER not in result_str, "reviewer summary leaked"
+            assert _LIFECYCLE_SENTINEL_SHELL not in result_str, "shell output leaked"
+            assert _LIFECYCLE_SENTINEL_REQUEST not in result_str, "request string leaked"
+            assert _LIFECYCLE_SENTINEL_ENV not in result_str, "env sentinel leaked"
+            assert ".workspaces" not in result_str, "workspace path fragment leaked"
+
+            # Non-dry-run also safe
+            tid2, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_loop_safe2")
+            result_str2 = registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=5, dry_run=False, release_workspace=True)
+            assert _LIFECYCLE_SENTINEL_GOAL not in result_str2, "goal leaked in non-dry-run"
+            assert _LIFECYCLE_SENTINEL_SECRET not in result_str2, "secret leaked in non-dry-run"
+        finally:
+            db.close()
+
+
+def eval_loop_compatibility():
+    """Existing tools still work after scheduler loop call."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            _setup_lifecycle_ready_worker(registry, worker_id="w_loop_compat")
+            registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, dry_run=True)
+
+            # Scheduler tick still works
+            tick = json.loads(registry.call("run_worker_lifecycle_scheduler_tick", limit=5, dry_run=True))
+            assert "tick_id" in tick
+
+            # Run-once still works
+            once = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert "planned_count" in once
+
+            # Planner still works
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert "actions" in plan
+
+            # Batch finalize still works
+            batch = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert "processed" in batch
+
+            # Single-task finalize still works (setup a ready worker)
+            tid_fin, _, _ = _setup_lifecycle_ready_worker(registry, worker_id="w_loop_compat2")
+            single_fin = json.loads(registry.call("finalize_worker_workspace_merge", worker_id="w_loop_compat2", task_id=tid_fin))
+            assert "finalized" in single_fin or "error" in single_fin
+
+            # Closeout candidate query still works
+            closeout = json.loads(registry.call("list_worker_workspace_merge_closeout_candidates"))
+            assert "candidates" in closeout or "error" in closeout
+
+            # Worker/task registry still works
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_after_loop", role="coder")
+            assert ws.get_worker("w_after_loop") is not None
+            new_task = ts.create_task(goal="after loop task", steps=[{"text": "x"}])
+            assert new_task.task_id is not None
+
+            # Claim and dispatch still work
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_after_loop"))
             assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch

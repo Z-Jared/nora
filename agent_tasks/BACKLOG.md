@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-092: Deterministic eval coverage for scheduler loop v1
-- 分配给: Claude B
-- 目标: 为 scheduler loop v1 增加 deterministic offline eval coverage，覆盖 dry-run no mutation、bounded max_ticks、stop_when_idle、safe closeout-only execution、dispatch/wait blocked reasons、event safety、bad args 和 compatibility。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-092: Deterministic eval coverage for scheduler loop v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补强 weak assertions
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 323 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 651 tests OK；`python3 -m unittest discover -s tests` 2010 tests OK；`git diff --check` OK。
+- 内容: 为 `run_worker_lifecycle_scheduler_loop` 增加 11 个 deterministic offline eval，覆盖 dry-run no mutation、max_ticks/limit bounds、stop_when_idle true/false、non-dry-run closeout-only 且不 dispatch pending task、dispatch/wait reason labels、record_event true/false、bad params、安全不泄漏和兼容性。
 
 ### TASK-091: Worker lifecycle scheduler loop v1 ✅
 - 完成者: Claude A
