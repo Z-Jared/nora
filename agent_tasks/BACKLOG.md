@@ -6,6 +6,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-090: Deterministic eval coverage for worker lifecycle run-once
+- 分配给: Claude B
+- 目标: 为 `run_worker_lifecycle_once(limit=5, dry_run=True, release_workspace=True)` 增加 deterministic offline eval coverage，覆盖 dry-run/no-mutation、safe closeout execution、wait/dispatch skipped、limit/release validation、安全不泄漏、failed finalize accounting 和 compatibility。
+- 状态: assigned
+
+### TASK-089: Worker lifecycle scheduler tick v1
+- 分配给: Claude A
+- 目标: 新增 guarded scheduler tick 工具，在不启动后台循环/进程的前提下封装一轮 worker lifecycle scheduling；默认 dry-run，记录 bounded scheduler decision event，非 dry-run 只允许执行 ready closeout。
+- 状态: assigned
+
 ## 已完成
 
 ### TASK-088: Deterministic eval coverage for worker lifecycle planner ✅
