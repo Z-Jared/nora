@@ -1,47 +1,65 @@
 # Claude A — Completion Report
 
 Owner: Claude A
-Task: TASK-095 — Retryable failed-task planning for worker lifecycle scheduler v1
-Status: **DONE** (includes TASK-093 blocker fixes)
+Task: TASK-097 — Guarded scheduler retry execution v1
+Status: **DONE** (PM fixes applied)
 
 ## Summary
 
-Extended `plan_worker_lifecycle_actions` and `explain_worker_lifecycle_scheduler_state` to detect and surface retryable failed tasks. Also fixed two TASK-093 blockers exposed by TASK-094 eval.
+Extended guarded worker lifecycle execution so scheduler run-once/tick/loop can execute safe retry actions for failed durable tasks when `dry_run=False`.
 
 ## Changes
 
-### `mini_agent/toolkits/registry_builder.py` (+~70 lines)
+### `mini_agent/toolkits/registry_builder.py` (+~90 lines)
 
-**Blocker fix 1: `worker_unavailable` closeout candidate mapping**
-- Added `worker_unavailable` reason handling in closeout candidate processing → maps to `worker_offline` with detail `no unsafe action`.
+**`run_worker_lifecycle_once` — `retry_failed_task` execution:**
+- `dry_run=True`: reports `would_execute=True`, no mutation.
+- `dry_run=False`: re-checks guards at execution time:
+  1. Task exists and status is still `failed`.
+  2. `retry_count < max_retries`.
+  3. No active ASSIGNED/RUNNING worker attached.
+  4. **PM fix:** Idle capacity exists (`status==IDLE` and `current_task_id` empty). If no idle capacity → `retry_blocked_missing_capacity`.
+  5. All guards pass → calls `durable_task_store.retry_durable_task()`.
+  6. Any failure → safe `retry_execution_error` outcome.
 
-**Blocker fix 2: `worker_id` filter on top-level `tasks`**
-- When `worker_id` filter is set, `filtered_tasks` now only includes tasks where `task.worker_id == worker_id`.
-- `task_id` filter takes precedence; `worker_id` task filter is applied only when `task_id` is not set.
+**Tick/Loop wrappers:** No changes needed — retry flows through `_run_worker_lifecycle_once_json` → tick → loop automatically.
 
-**Retry planning (TASK-095):**
-- Planner: detects failed tasks with `retry_count < max_retries` and no active worker; adds `retry_failed_task` actions after closeouts before dispatch; adds summary fields `retryable_tasks`, `retry_exhausted`, `retry_blocked_active_worker`.
-- Explain: adds blocked_reasons for `retry_available`, `retry_exhausted`, `retry_blocked_active_worker`, `retry_blocked_missing_capacity`, `retry_not_needed`; adds `retry_failed_task` next_actions.
+### `tests/test_durable_workers.py` (+~200 lines)
 
-### `tests/test_durable_workers.py` (+~290 lines)
+**`RetryExecutionTests`** (16 tests):
+- `test_dry_run_does_not_mutate_failed_task` — dry_run sees retryable, no mutation.
+- `test_non_dry_run_retries_failed_task` — executes retry, task becomes pending.
+- `test_tick_can_execute_retry` — tick wrapper executes retry.
+- `test_loop_can_execute_retry` — loop wrapper executes retry.
+- `test_exhausted_retry_skipped` — exhausted retries not mutated.
+- `test_active_worker_retry_skipped` — **PM fix:** covers both ASSIGNED and RUNNING via subTest.
+- `test_no_idle_capacity_skips_retry` — **PM fix:** no idle workers → `retry_blocked_missing_capacity`, no mutation.
+- `test_stale_state_guard` — **PM fix:** mock intercepts execution-time `get_task` to return cancelled; proves guard catches stale state.
+- `test_closeout_ahead_of_retry` — ordering preserved.
+- `test_no_goal_leak` — goal not in output.
+- `test_no_failure_reason_leak` — failure_reason not in output.
+- `test_no_steps_leak` — **PM fix:** steps not in output.
+- `test_no_workspace_path_leak` — **PM fix:** workspace path not in output.
+- `test_no_shell_env_secret_leak` — **PM fix:** shell/env secret not in output.
+- `test_compatibility_with_planner` — planner still sees retryable tasks.
+- `test_compatibility_with_explain` — explain still sees retry_available.
 
-**`RetryableTaskPlannerTests`** (7 tests): retry available, exhausted, active worker blocked, closeout priority, summary fields, no leak, no mutation.
+## PM Fixes
 
-**`RetryableTaskExplainTests`** (11 tests): retry surfaced, exhausted, active worker, missing capacity, filter no leak, retry_not_needed, no leak, no mutation, compatibility.
-
-**`BlockerFixTests`** (4 tests):
-- `test_offline_assigned_worker_returns_worker_offline` — offline worker with task → `worker_offline` in blocked_reasons.
-- `test_offline_assigned_worker_no_mutation` — no state change.
-- `test_worker_filter_excludes_other_worker_tasks_from_top_level` — `worker_id` filter excludes other worker's tasks from top-level `tasks`.
-- `test_worker_filter_excludes_other_worker_tasks_from_planned_actions` — `worker_id` filter excludes other worker's planned actions.
+1. **Idle capacity guard:** Added `retry_blocked_missing_capacity` check before calling `retry_durable_task`. Consistent with explain semantics.
+2. **ASSIGNED+RUNNING coverage:** `test_active_worker_retry_skipped` now uses `subTest` for both statuses.
+3. **Stale state guard:** Uses mock to return cancelled at execution-time `get_task` check, proving the guard works.
+4. **Safety no-leak:** Added steps, workspace path, shell/env/secret sentinel tests.
 
 ## Verification
 
 ```text
-Planner+Explain+Retry+Blocker (77) → OK
-test_durable_workers (543) → OK
-broader suite (710) → OK
-git diff →check → clean
+WorkerLifecycleRunOnceTests + SchedulerTickTests + SchedulerLoopTests → 71 OK
+RetryExecutionTests → 16 OK
+test_durable_workers (559) → OK
+broader suite (726) → OK
+evals → 349 passed, 0 failed
+git diff --check → clean
 ```
 
 ## Boundaries
@@ -49,4 +67,6 @@ git diff →check → clean
 - ✅ Only edited registry_builder.py and test_durable_workers.py
 - ✅ No B_TASK/B_DONE, CODEX_TERMINAL_HANDOFF.md, designs/
 - ✅ No commit/push
-- ✅ Read-only planner/explain, no mutation
+- ✅ Dry-run remains read-only, no mutation
+- ✅ Retry execution uses existing `retry_durable_task` primitive
+- ✅ Bounded safe metadata only, no goal/steps/failure_reason/workspace path leak

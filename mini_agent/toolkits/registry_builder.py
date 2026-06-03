@@ -3368,6 +3368,104 @@ def build_default_registry(
                     "skipped": True,
                     "reason": "dispatch_not_supported",
                 })
+            elif action_type == "retry_failed_task":
+                tid = a.get("task_id", "")
+                reason = a.get("reason", "")
+                if reason != "retry_available":
+                    skipped_count += 1
+                    results.append({
+                        "action": action_type,
+                        "task_id": tid,
+                        "skipped": True,
+                        "reason": reason or "retry_not_available",
+                    })
+                elif dry_run:
+                    results.append({
+                        "action": action_type,
+                        "task_id": tid,
+                        "retry_count": a.get("retry_count", 0),
+                        "max_retries": a.get("max_retries", 0),
+                        "would_execute": True,
+                    })
+                else:
+                    # Re-check guards at execution time
+                    task = durable_task_store.get_task(tid)
+                    if task is None:
+                        failed_count += 1
+                        results.append({
+                            "action": action_type,
+                            "task_id": tid,
+                            "executed": False,
+                            "reason": "task_not_found",
+                        })
+                    elif task.status != "failed":
+                        skipped_count += 1
+                        results.append({
+                            "action": action_type,
+                            "task_id": tid,
+                            "skipped": True,
+                            "reason": "task_not_failed",
+                        })
+                    elif task.retry_count >= task.max_retries:
+                        skipped_count += 1
+                        results.append({
+                            "action": action_type,
+                            "task_id": tid,
+                            "skipped": True,
+                            "reason": "retry_exhausted",
+                        })
+                    else:
+                        # Check no active worker
+                        has_active_worker = False
+                        try:
+                            check_workers = durable_worker_store.list_workers(limit=500)
+                        except Exception:
+                            check_workers = []
+                        for w in check_workers:
+                            if w.current_task_id == tid and w.status in (WorkerStatus.RUNNING, WorkerStatus.ASSIGNED):
+                                has_active_worker = True
+                                break
+                        if has_active_worker:
+                            skipped_count += 1
+                            results.append({
+                                "action": action_type,
+                                "task_id": tid,
+                                "skipped": True,
+                                "reason": "retry_blocked_active_worker",
+                            })
+                        else:
+                            # Check idle capacity
+                            has_idle_capacity = any(
+                                w.status == WorkerStatus.IDLE and not w.current_task_id
+                                for w in check_workers
+                            )
+                            if not has_idle_capacity:
+                                skipped_count += 1
+                                results.append({
+                                    "action": action_type,
+                                    "task_id": tid,
+                                    "skipped": True,
+                                    "reason": "retry_blocked_missing_capacity",
+                                })
+                            else:
+                                try:
+                                    retried_task = durable_task_store.retry_durable_task(tid)
+                                    executed_count += 1
+                                    results.append({
+                                        "action": action_type,
+                                        "task_id": tid,
+                                        "executed": True,
+                                        "retry_count": retried_task.retry_count,
+                                        "max_retries": retried_task.max_retries,
+                                    })
+                                except Exception as e:
+                                    failed_count += 1
+                                    results.append({
+                                        "action": action_type,
+                                        "task_id": tid,
+                                        "executed": False,
+                                        "reason": "retry_execution_error",
+                                    })
             else:
                 skipped_count += 1
                 results.append({

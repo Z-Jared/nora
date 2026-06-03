@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-097: Guarded scheduler retry execution v1
-- 分配给: Claude A
-- 目标: 在 `run_worker_lifecycle_once` / `run_worker_lifecycle_scheduler_tick` / `run_worker_lifecycle_scheduler_loop` 中纳入 retryable failed task 规划，并在 `dry_run=False` 时仅对安全可重试任务执行 bounded retry。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-097: Guarded scheduler retry execution v1 ✅
+- 完成者: Claude A；按 PM 初审反馈补强 idle capacity execution guard、ASSIGNED/RUNNING owner、stale execution-time guard 和 safety no-leak 测试
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests` 71 tests OK；`python3 -m unittest tests.test_durable_workers` 559 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 726 tests OK；`python3 evals/run_evals.py` 349 passed；`git diff --check` OK。
+- 内容: 扩展 guarded worker lifecycle execution，让 `run_worker_lifecycle_once` / scheduler tick / scheduler loop 在 `dry_run=False` 时可以执行 planner 输出的 `retry_failed_task` + `retry_available`；执行前重新校验 task still failed、retry_count 未耗尽、无 active ASSIGNED/RUNNING owner、存在 idle capacity；失败或 stale state 返回 bounded safe skipped/failed outcome；保持 `dry_run=True` read-only、dispatch 不执行、closeout > retry > dispatch ordering；输出不泄漏 goal/steps/failure_reason/workspace/shell/env/request/secrets。
 
 ### TASK-096: Deterministic eval coverage for scheduler retry planning v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补强 RUNNING owner、failure_reason sentinel、read-only/no-mutation 和 filter no-leak 断言

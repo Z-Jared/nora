@@ -1,95 +1,75 @@
-# CCB Code Review Report
+# TASK-097 — Guarded scheduler retry execution v1
 
-Reviewed: TASK-096 — Deterministic eval coverage for scheduler retry planning v1
-Worker: Claude B
-Status: **APPROVED**
+**Status: APPROVED**
 
----
+## Review Summary
 
-## 1. Coverage of TASK-096 Requirements
-
-All 13 evals cover the required scenarios with substantive assertions:
-
-| # | Eval | Key Assertions |
-|---|------|---------------|
-| 1 | `retry_planner_available` | `retry_failed_task` action present with `task_id==tid`, `reason=="retry_available"`, `retry_count==0`, `max_retries==3` |
-| 2 | `retry_planner_exhausted` | No retry action for exhausted task; `summary.retry_exhausted >= 1` |
-| 3 | `retry_planner_blocked_active_worker` | Both ASSIGNED and RUNNING owner cases: no retry action, `summary.retry_blocked_active_worker >= 1` |
-| 4 | `retry_explain_available` | `retry_available` reason with `"retry 2/3"` in detail; `retry_failed_task` next action present |
-| 5 | `retry_explain_exhausted` | `retry_exhausted` reason with `"max retries"` in detail |
-| 6 | `retry_explain_blocked_active_worker` | Both ASSIGNED and RUNNING: `retry_blocked_active_worker` reason with correct `worker_id` and `"active"` in detail |
-| 7 | `retry_explain_missing_capacity` | `retry_blocked_missing_capacity` reason with `"no idle workers"` in detail |
-| 8 | `retry_priority_vs_closeout` | `closeout_idx < retry_idx` (index comparison) |
-| 9 | `retry_priority_vs_dispatch` | `retry_idx < dispatch_idx` (index comparison) |
-| 10 | `retry_filter_no_leak` | `task_id` filter: tid2/w_f2 absent from full JSON; `worker_id` filter: retry entries (empty worker_id) excluded, tid2/w_f2 absent |
-| 11 | `retry_read_only_no_mutation` | 5 fields (status, retry_count, worker_id, worker status, current_task_id) unchanged after planner AND explain |
-| 12 | `retry_safety_no_leak` | 5 sentinels (goal, secret, step, failure_reason) + workspace path absent from planner AND explain output |
-| 13 | `retry_compatibility` | Planner, explain, tick, loop, run-once, registry, claim, dispatch all still work |
-
-**PM fixes verified:**
-- ✅ RUNNING owner explicitly tested (items 3, 6)
-- ✅ `_LIFECYCLE_SENTINEL_FAILURE` sentinel added and asserted absent (item 12)
-- ✅ `eval_retry_read_only_no_mutation` covers both planner and explain (item 11)
-- ✅ Filter assertions strengthened with tid2/w_f2 exclusion (item 10)
+The implementation correctly extends `run_worker_lifecycle_once` to execute `retry_failed_task` actions with comprehensive guards. All five guard checks are present and in correct order. Dry-run remains read-only. Output is bounded with no sensitive data leakage.
 
 ---
 
-## 2. Deterministic/Offline
+## 1. Retry Execution Scope
 
-- ✅ All evals use `tempfile.TemporaryDirectory()` for isolation
-- ✅ No external API calls
-- ✅ No timing dependencies
-- ✅ Ordering assertions use index comparison (`closeout_idx < retry_idx`), not incidental ordering
-- ✅ `_setup_failed_task` helper properly cycles through `retry_durable_task` to set `retry_count`
+✅ `retry_failed_task` + `retry_available` only.
 
----
+Lines 139-146: `reason != "retry_available"` → skip. Only `retry_available` proceeds to dry_run or execution path.
 
-## 3. Weak Assertions
+## 2. Execution-Time Guards
 
-None identified. All assertions are substantive:
-- Negative assertions (no retry action when exhausted/blocked) paired with positive summary counts
-- Specific string matching (`"retry 2/3"`, `"max retries"`, `"active"`, `"no idle workers"`)
-- Full JSON string search for leaked IDs in filter tests
-- 5-field before/after comparison in no-mutation test
-- 5 sentinels + workspace path in safety test
+All five guards present in correct order:
 
----
+| Guard | Skip Reason | Line |
+|-------|------------|------|
+| Task exists | `task_not_found` | 158-165 |
+| Status still `failed` | `task_not_failed` | 166-173 |
+| `retry_count < max_retries` | `retry_exhausted` | 174-181 |
+| No active ASSIGNED/RUNNING worker | `retry_blocked_active_worker` | 183-200 |
+| Idle capacity exists | `retry_blocked_missing_capacity` | 202-214 |
+| All pass | `retry_durable_task()` | 216-225 |
 
-## 4. Runtime Fix
+Exception handling wraps `retry_durable_task()` → `retry_execution_error` on failure.
 
-None needed. Eval-only changes.
+## 3. Dry-Run / Dispatch / Ordering
 
----
+- **Dry-run**: Lines 147-154 return `would_execute=True`, no mutation. ✅
+- **Dispatch not executed**: Only `retry_failed_task` action type is handled in this block; dispatch/closeout handled elsewhere. ✅
+- **Ordering**: Planner produces closeout > retry > dispatch; `run_worker_lifecycle_once` iterates in order. `test_closeout_ahead_of_retry` verifies with `actions.index()`. ✅
 
-## Checks
+## 4. Output Bounded / No Leak
 
-```text
-python3 evals/run_evals.py → 349 passed, 0 failed
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent → 710 OK
-git diff --check → clean
-```
+Result fields are all safe: `task_id`, `retry_count`, `max_retries`, `would_execute`, `executed`, `skipped`, `reason`. No goal, steps, failure_reason, workspace path, shell/env/request/secrets.
+
+Five dedicated leak tests:
+- `test_no_goal_leak` — sentinel goal absent
+- `test_no_failure_reason_leak` — "failure_reason" absent
+- `test_no_steps_leak` — sentinel steps absent
+- `test_no_workspace_path_leak` — "/tmp/" and "workspace_path" absent
+- `test_no_shell_env_secret_leak` — sentinel absent
+
+## 5. Test Quality
+
+16 tests, all substantive. No vacuous passes. Key strengths:
+- `test_stale_state_guard` uses mock to simulate state change between planning and execution — proves guard works
+- `test_active_worker_retry_skipped` uses `subTest` for RUNNING/ASSIGNED
+- `test_non_dry_run_retries_failed_task` verifies task becomes `pending` with `retry_count==1`
 
 ---
 
 ## Findings
 
-### Must Fix
+### Minor (Non-blocking)
 
-None.
-
-### Notes
-
-- Minor typo in B_DONE.md: `_LIFECECYCLE_SENTINEL_FAILURE` (should be `_LIFECYCLE_SENTINEL_FAILURE`). The actual code uses the correct spelling.
-- `retry_filter_no_leak` asserts retry entries are excluded by `worker_id` filter because retry reasons have empty `worker_id`. This is correct behavior but worth noting: retry entries are task-level, not worker-level.
+**`test_active_worker_retry_skipped` calls `self.setUp()` inside loop without prior `tearDown()`** (line 342): First iteration's tmpdir/db are not explicitly closed before second iteration creates new ones. `TemporaryDirectory.__del__` will clean up on GC, but explicit `self.tearDown()` before `self.setUp()` in the loop would be cleaner. Does not affect test correctness or CI stability.
 
 ---
 
-## Residual Risk
+## Checks
 
-None. Evals are deterministic, offline, and cover all required scenarios with substantive assertions.
-
----
-
-## Recommendation
-
-**APPROVE and merge.**
+- `retry_failed_task` only executes when `reason == "retry_available"` ✅
+- All 5 guards checked at execution time ✅
+- Dry-run read-only ✅
+- Dispatch not executed ✅
+- closeout > retry > dispatch ordering ✅
+- Output bounded, no sensitive leak ✅
+- No weak/vacuous assertions ✅
+- No runtime fix needed ✅

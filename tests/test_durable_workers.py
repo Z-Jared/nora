@@ -1,5 +1,6 @@
 """Tests for durable worker registry (TASK-030)."""
 
+import copy
 import json
 import shutil
 import tempfile
@@ -7654,6 +7655,219 @@ class BlockerFixTests(unittest.TestCase):
                 self.assertEqual(a["worker_id"], "w1")
             if a.get("task_id"):
                 self.assertEqual(a["task_id"], t1["task_id"])
+
+
+class RetryExecutionTests(unittest.TestCase):
+    """Tests for guarded scheduler retry execution (TASK-097)."""
+
+    SECRET_SENTINEL = "RETRY_EXEC_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_failed_task(self, goal="g", steps="s"):
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps=steps))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="wf")
+        self.registry.call("update_worker_status", worker_id="wf", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        self.registry.call("update_worker_status", worker_id="wf", status="idle")
+        return task_id
+
+    def test_dry_run_does_not_mutate_failed_task(self):
+        task_id = self._create_failed_task()
+        before = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=True))
+        after = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+
+        self.assertTrue(result["dry_run"])
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_results), 0)
+        self.assertTrue(retry_results[0]["would_execute"])
+        self.assertEqual(before["status"], after["status"])
+        self.assertEqual(before["retry_count"], after["retry_count"])
+
+    def test_non_dry_run_retries_failed_task(self):
+        task_id = self._create_failed_task()
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+
+        self.assertFalse(result["dry_run"])
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_results), 0)
+        self.assertTrue(retry_results[0]["executed"])
+        self.assertEqual(retry_results[0]["retry_count"], 1)
+        # Task should be pending now
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+        self.assertEqual(task["retry_count"], 1)
+
+    def test_tick_can_execute_retry(self):
+        task_id = self._create_failed_task()
+        result = json.loads(self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False))
+
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_results), 0)
+        self.assertTrue(retry_results[0]["executed"])
+
+    def test_loop_can_execute_retry(self):
+        task_id = self._create_failed_task()
+        result = json.loads(self.registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1))
+
+        self.assertGreater(result["ticks_run"], 0)
+        # Retry should have been executed in one of the ticks
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "pending")
+
+    def test_exhausted_retry_skipped(self):
+        task_id = self._create_failed_task()
+        for _ in range(3):
+            self.registry.call("retry_durable_task", task_id=task_id)
+            self.registry.call("update_durable_task", task_id=task_id, status="running")
+            self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        # Should be skipped, not executed
+        for r in retry_results:
+            self.assertTrue(r.get("skipped", False) or r.get("reason") == "retry_exhausted")
+            self.assertFalse(r.get("executed", False))
+
+    def test_active_worker_retry_skipped(self):
+        # Test both RUNNING and ASSIGNED statuses
+        for status in ("running", "assigned"):
+            with self.subTest(status=status):
+                self.setUp()  # fresh state
+                self.registry.call("register_worker", worker_id="w_active")
+                task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+                task_id = task["task_id"]
+                self.registry.call("assign_durable_task", task_id=task_id, worker_id="w_active")
+                self.registry.call("update_worker_status", worker_id="w_active", status=status, current_task_id=task_id)
+                self.registry.call("update_durable_task", task_id=task_id, status="running")
+                self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+
+                result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+                retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+                for r in retry_results:
+                    self.assertTrue(r.get("skipped", False))
+                    self.assertEqual(r.get("reason"), "retry_blocked_active_worker")
+
+    def test_no_idle_capacity_skips_retry(self):
+        """No idle workers → retry skipped with retry_blocked_missing_capacity."""
+        task_id = self._create_failed_task()
+        # Make the only idle worker busy
+        self.registry.call("update_worker_status", worker_id="wf", status="running")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        for r in retry_results:
+            self.assertTrue(r.get("skipped", False))
+            self.assertEqual(r.get("reason"), "retry_blocked_missing_capacity")
+        # Task must not be mutated
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["retry_count"], 0)
+
+    def test_stale_state_guard(self):
+        """Execution-time re-check catches state change between planning and execution."""
+        task_id = self._create_failed_task()
+        original_task = self.registry.durable_task_store.get_task(task_id)
+        guard_checked = [False]
+        original_get = self.registry.durable_task_store.get_task
+
+        def mock_get(tid):
+            if tid == task_id and guard_checked[0]:
+                # After the first guard check, return cancelled (stale)
+                stale = copy.copy(original_task)
+                stale.status = "cancelled"
+                return stale
+            result = original_get(tid)
+            if tid == task_id and result and result.status == "failed":
+                guard_checked[0] = True
+            return result
+
+        with patch.object(self.registry.durable_task_store, 'get_task', side_effect=mock_get):
+            result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+
+        retry_results = [r for r in result["results"] if r.get("action") == "retry_failed_task"]
+        for r in retry_results:
+            self.assertFalse(r.get("executed", False))
+            # Either skipped or failed with safe reason
+            self.assertTrue(r.get("skipped", False) or r.get("reason") == "retry_execution_error")
+            self.assertIn(r.get("reason"), ["task_not_failed", "retry_execution_error"])
+
+    def test_closeout_ahead_of_retry(self):
+        """Ready closeout should execute before retry."""
+        # Set up closeout
+        self.registry.call("register_worker", worker_id="w_close")
+        task_c = json.loads(self.registry.call("create_durable_task", goal="closeout_task", steps="s"))
+        self.registry.call("assign_durable_task", task_id=task_c["task_id"], worker_id="w_close")
+        self.registry.call("update_worker_status", worker_id="w_close", status="running", current_task_id=task_c["task_id"])
+        self.registry.call("update_durable_task", task_id=task_c["task_id"], status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id="w_close", task_id=task_c["task_id"]))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text("data", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id="w_close", task_id=task_c["task_id"], decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id="w_close", task_id=task_c["task_id"])
+
+        # Also create failed task
+        self._create_failed_task(goal="retry_task")
+
+        result = json.loads(self.registry.call("run_worker_lifecycle_once", dry_run=False))
+        actions = [r.get("action") for r in result["results"]]
+        closeout_idx = actions.index("finalize_ready_workspace_merge") if "finalize_ready_workspace_merge" in actions else None
+        retry_idx = actions.index("retry_failed_task") if "retry_failed_task" in actions else None
+        self.assertIsNotNone(closeout_idx)
+        self.assertIsNotNone(retry_idx)
+        self.assertLess(closeout_idx, retry_idx)
+
+    def test_no_goal_leak(self):
+        self._create_failed_task(goal=self.SECRET_SENTINEL)
+        result = self.registry.call("run_worker_lifecycle_once", dry_run=False)
+        self.assertNotIn(self.SECRET_SENTINEL, result)
+
+    def test_no_failure_reason_leak(self):
+        self._create_failed_task()
+        result = self.registry.call("run_worker_lifecycle_once", dry_run=False)
+        self.assertNotIn("failure_reason", result)
+
+    def test_no_steps_leak(self):
+        self._create_failed_task(steps="SECRET_STEPS_XYZ")
+        result = self.registry.call("run_worker_lifecycle_once", dry_run=False)
+        self.assertNotIn("SECRET_STEPS_XYZ", result)
+
+    def test_no_workspace_path_leak(self):
+        self._create_failed_task()
+        result = self.registry.call("run_worker_lifecycle_once", dry_run=False)
+        self.assertNotIn("/tmp/", result)
+        self.assertNotIn("workspace_path", result)
+
+    def test_no_shell_env_secret_leak(self):
+        self._create_failed_task(goal="SHELL_ENV_SECRET_123")
+        result = self.registry.call("run_worker_lifecycle_once", dry_run=False)
+        self.assertNotIn("SHELL_ENV_SECRET_123", result)
+
+    def test_compatibility_with_planner(self):
+        self._create_failed_task()
+        plan = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertIn("retryable_tasks", plan["summary"])
+        self.assertGreater(plan["summary"]["retryable_tasks"], 0)
+
+    def test_compatibility_with_explain(self):
+        self._create_failed_task()
+        explain = json.loads(self.registry.call("explain_worker_lifecycle_scheduler_state"))
+        retry_reasons = [r for r in explain["blocked_reasons"] if r.get("reason") == "retry_available"]
+        self.assertGreater(len(retry_reasons), 0)
 
 
 if __name__ == "__main__":
