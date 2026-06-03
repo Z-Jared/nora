@@ -3188,6 +3188,96 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="write"),
     )
 
+    def _plan_worker_lifecycle_actions_json(limit: int = 20) -> str:
+        try:
+            limit = max(1, min(int(limit or 20), 100))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        actions = []
+        summary = {
+            "ready_closeouts": 0,
+            "not_ready_closeouts": 0,
+            "idle_workers": 0,
+            "pending_tasks": 0,
+        }
+        try:
+            workers = durable_worker_store.list_workers(limit=500)
+            tasks = durable_task_store.list_tasks(limit=500)
+        except Exception:
+            workers, tasks = [], []
+        ready_actions = []
+        wait_actions = []
+        for worker in workers:
+            if not worker.current_task_id:
+                continue
+            try:
+                candidates_json = _list_worker_workspace_merge_closeout_candidates_json(
+                    worker_id=worker.worker_id,
+                    task_id=worker.current_task_id,
+                    limit=1,
+                )
+                candidates_data = _json.loads(candidates_json)
+            except Exception:
+                continue
+            for c in candidates_data.get("candidates", []):
+                if c.get("ready") and c.get("reason") == "ready_to_finalize":
+                    summary["ready_closeouts"] += 1
+                    ready_actions.append({
+                        "action": "finalize_ready_workspace_merge",
+                        "worker_id": c.get("worker_id", ""),
+                        "task_id": c.get("task_id", ""),
+                        "lease_id": c.get("lease_id", ""),
+                    })
+                else:
+                    summary["not_ready_closeouts"] += 1
+                    reason = c.get("reason", "")
+                    if reason == "no_successful_apply":
+                        wait_actions.append({
+                            "action": "wait_for_workspace_merge_apply",
+                            "worker_id": c.get("worker_id", ""),
+                            "task_id": c.get("task_id", ""),
+                        })
+                    elif reason == "workspace_lease_invalid":
+                        wait_actions.append({
+                            "action": "wait_for_workspace_lease",
+                            "worker_id": c.get("worker_id", ""),
+                            "task_id": c.get("task_id", ""),
+                        })
+                break
+        for action in ready_actions + wait_actions:
+            if len(actions) >= limit:
+                break
+            actions.append(action)
+        idle_workers = [w for w in workers if w.status == WorkerStatus.IDLE]
+        pending_tasks = [t for t in tasks if t.status == "pending" and not t.worker_id]
+        summary["idle_workers"] = len(idle_workers)
+        summary["pending_tasks"] = len(pending_tasks)
+        if idle_workers and pending_tasks and len(actions) < limit:
+            actions.append({
+                "action": "dispatch_pending_task",
+                "idle_worker_count": len(idle_workers),
+                "pending_task_count": len(pending_tasks),
+            })
+        return _json.dumps({
+            "actions": actions[:limit],
+            "count": min(len(actions), limit),
+            "summary": summary,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "plan_worker_lifecycle_actions",
+        "为 PM 推荐下一步 worker 生命周期操作。只读，不自动执行。",
+        _plan_worker_lifecycle_actions_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最大返回 action 数，默认 20，上限 100"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="read"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

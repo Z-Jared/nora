@@ -5934,5 +5934,238 @@ class WorkspaceBatchFinalizeTests(unittest.TestCase):
         self.assertEqual(w["worker_id"], "w_new")
 
 
+class WorkerLifecyclePlannerTests(unittest.TestCase):
+    """Tests for plan_worker_lifecycle_actions (TASK-085)."""
+
+    SECRET_SENTINEL = "PLANNER_SECRET_ABC"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _setup_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text(f"data_{worker_id}_{task_id}", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id=worker_id, task_id=task_id, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
+        return task_id, lease["lease_id"]
+
+    def _setup_not_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id)
+        return task_id
+
+    # --- ready closeout ---
+
+    def test_ready_closeout_produces_finalize_action(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["summary"]["ready_closeouts"], 1)
+        a = result["actions"][0]
+        self.assertEqual(a["action"], "finalize_ready_workspace_merge")
+        self.assertEqual(a["worker_id"], "w1")
+
+    # --- not-ready closeout ---
+
+    def test_not_ready_produces_wait_action(self):
+        self._setup_not_ready_worker("w1")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertGreaterEqual(result["count"], 1)
+        self.assertEqual(result["summary"]["not_ready_closeouts"], 1)
+        wait_actions = [a for a in result["actions"] if a["action"] == "wait_for_workspace_merge_apply"]
+        self.assertEqual(len(wait_actions), 1)
+        self.assertEqual(wait_actions[0]["worker_id"], "w1")
+
+    # --- dispatch recommendation ---
+
+    def test_idle_worker_and_pending_task_produces_dispatch(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("create_durable_task", goal="g", steps="s")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        dispatch_actions = [a for a in result["actions"] if a["action"] == "dispatch_pending_task"]
+        self.assertEqual(len(dispatch_actions), 1)
+        self.assertEqual(dispatch_actions[0]["idle_worker_count"], 1)
+        self.assertEqual(dispatch_actions[0]["pending_task_count"], 1)
+        self.assertEqual(result["summary"]["idle_workers"], 1)
+        self.assertEqual(result["summary"]["pending_tasks"], 1)
+
+    def test_no_dispatch_when_no_idle_workers(self):
+        # Worker is running, not idle
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        dispatch_actions = [a for a in result["actions"] if a["action"] == "dispatch_pending_task"]
+        self.assertEqual(len(dispatch_actions), 0)
+
+    def test_no_dispatch_when_no_pending_tasks(self):
+        self.registry.call("register_worker", worker_id="w1")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        dispatch_actions = [a for a in result["actions"] if a["action"] == "dispatch_pending_task"]
+        self.assertEqual(len(dispatch_actions), 0)
+
+    # --- mixed scenarios ---
+
+    def test_multiple_actions(self):
+        # Ready closeout + idle worker + pending task
+        self._setup_ready_worker("w1", goal="task one")
+        self.registry.call("register_worker", worker_id="w2")
+        self.registry.call("create_durable_task", goal="task two", steps="s")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertGreaterEqual(result["count"], 2)
+        action_types = {a["action"] for a in result["actions"]}
+        self.assertIn("finalize_ready_workspace_merge", action_types)
+        self.assertIn("dispatch_pending_task", action_types)
+
+    # --- empty state ---
+
+    def test_empty_state(self):
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["summary"]["ready_closeouts"], 0)
+        self.assertEqual(result["summary"]["idle_workers"], 0)
+        self.assertEqual(result["summary"]["pending_tasks"], 0)
+
+    # --- limit ---
+
+    def test_limit_bounds(self):
+        for i in range(5):
+            self._setup_ready_worker(f"w{i}", goal=f"task {i}")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions", limit=3))
+        # Actions include finalize actions + possibly dispatch
+        finalize_actions = [a for a in result["actions"] if a["action"] == "finalize_ready_workspace_merge"]
+        self.assertEqual(len(finalize_actions), 3)
+
+    def test_ready_closeout_not_hidden_by_first_100_raw_candidates(self):
+        ready_task_id, _ = self._setup_ready_worker("w_ready_old", goal="ready")
+        for i in range(100):
+            self._setup_not_ready_worker(f"w_not_ready_new_{i:03d}", goal=f"not ready {i}")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions", limit=1))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["summary"]["ready_closeouts"], 1)
+        self.assertEqual(result["summary"]["not_ready_closeouts"], 100)
+        self.assertEqual(result["actions"][0]["action"], "finalize_ready_workspace_merge")
+        self.assertEqual(result["actions"][0]["worker_id"], "w_ready_old")
+        self.assertEqual(result["actions"][0]["task_id"], ready_task_id)
+
+    def test_bad_limit_returns_error(self):
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions", limit="abc"))
+        self.assertIn("error", result)
+
+    # --- read-only ---
+
+    def test_does_not_mutate_tasks(self):
+        self._setup_ready_worker("w1")
+        task_before = json.loads(self.registry.call("get_durable_task", task_id="dtask_1"))
+
+        self.registry.call("plan_worker_lifecycle_actions")
+
+        task_after = json.loads(self.registry.call("get_durable_task", task_id="dtask_1"))
+        self.assertEqual(task_before["status"], task_after["status"])
+
+    def test_does_not_mutate_workers(self):
+        self._setup_ready_worker("w1")
+        worker_before = json.loads(self.registry.call("get_worker", worker_id="w1"))
+
+        self.registry.call("plan_worker_lifecycle_actions")
+
+        worker_after = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker_before["status"], worker_after["status"])
+        self.assertEqual(worker_before["current_task_id"], worker_after["current_task_id"])
+
+    def test_does_not_mutate_leases(self):
+        self._setup_ready_worker("w1")
+        lease_before = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+
+        self.registry.call("plan_worker_lifecycle_actions")
+
+        lease_after = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertEqual(lease_before.lease_id, lease_after.lease_id)
+
+    def test_does_not_mutate_project_root(self):
+        self._setup_ready_worker("w1")
+        before = sorted(p.name for p in self.root.iterdir())
+
+        self.registry.call("plan_worker_lifecycle_actions")
+
+        after = sorted(p.name for p in self.root.iterdir())
+        self.assertEqual(before, after)
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_goal_leak_in_dispatch(self):
+        self.registry.call("register_worker", worker_id="w1")
+        self.registry.call("create_durable_task", goal=self.SECRET_SENTINEL, steps="s")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    def test_no_workspace_path_leak(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("plan_worker_lifecycle_actions"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(".workspaces", raw)
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_planner(self):
+        tid, _ = self._setup_ready_worker("w1")
+        self.registry.call("plan_worker_lifecycle_actions")
+
+        # Finalize still works
+        fin = json.loads(self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=tid))
+        self.assertTrue(fin["finalized"])
+
+        # Audit still works
+        audit = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+        self.assertGreaterEqual(audit["count"], 1)
+
+        # Candidate query still works
+        candidates = json.loads(self.registry.call("list_worker_workspace_merge_closeout_candidates"))
+        self.assertIn("candidates", candidates)
+
+        # Worker tools still work
+        workers = json.loads(self.registry.call("list_workers"))
+        self.assertGreaterEqual(len(workers), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

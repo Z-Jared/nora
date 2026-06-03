@@ -8,6 +8,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 已完成
 
+### TASK-086: Deterministic eval coverage for batch workspace merge closeout ✅
+- 完成者: Claude B；Codex PM 补强 release/idempotency/file-content eval assertions
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 298 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 580 tests OK；`python3 -m unittest discover -s tests` 1939 tests OK；`git diff --check` OK。
+- 内容: 为 `finalize_ready_worker_workspace_merges(limit=10, release_workspace=True)` 增加 deterministic offline eval coverage，覆盖多 ready finalize、ready-limit semantics、100 raw-candidate 边界、release true/false、idempotency、bad args、安全不泄漏、expected-only mutation 和 compatibility。
+
+### TASK-085: Worker lifecycle action planner v1 ✅
+- 完成者: Claude A；Codex PM 补强 ready-action priority / raw-candidate scan regression
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecyclePlannerTests` 18 tests OK；`python3 evals/run_evals.py` 298 passed；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 580 tests OK；`python3 -m unittest discover -s tests` 1939 tests OK；`git diff --check` OK。
+- 内容: 新增只读 `plan_worker_lifecycle_actions(limit=20)`，为 Codex PM 返回下一步 worker lifecycle 建议，包括 ready closeout、等待 merge apply/lease、pending task + idle worker 的 dispatch 推荐；只规划，不执行；扫描 worker/task pairs 并优先返回 ready closeout action。
+
 ### TASK-084: Deterministic eval coverage for worker workspace merge closeout candidates ✅
 - 完成者: Claude B
 - Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED

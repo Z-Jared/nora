@@ -1,8 +1,8 @@
 # Code Review Report
 
-Reviewed: TASK-083 guarded batch closeout + TASK-084 candidate query eval coverage
-Workers: Claude A (TASK-083), Claude B (TASK-084)
-Status: APPROVED after Codex PM fix
+Reviewed: TASK-085 worker lifecycle action planner + TASK-086 batch closeout eval coverage
+Workers: Claude A (TASK-085), Claude B (TASK-086)
+Status: APPROVED after Codex PM fixes
 
 ## Findings
 
@@ -12,34 +12,32 @@ Status: APPROVED after Codex PM fix
 
 ### Fixed During Review
 
-- Batch finalize originally passed `limit` directly into the candidate query, so not-ready candidates could consume the limit and hide later ready candidates.
-- PM changed batch finalize to query up to 100 candidates, then process up to `limit` ready candidates.
-- PM added a regression test for not-ready candidates preceding ready candidates.
-- Follow-up PM review found that ready candidates older than 100 newer not-ready candidates were still hidden.
-- PM changed batch finalize to scan worker/task pairs individually and added a regression test for the 100 raw-candidate boundary.
+- `plan_worker_lifecycle_actions` originally depended on the first 100 raw closeout candidates. PM changed it to scan worker/task pairs individually and prioritize ready closeout actions before wait actions.
+- PM added regression coverage for an older ready closeout hidden behind 100 newer not-ready workers.
+- Batch closeout evals claimed release/idempotency/file-content coverage but were incomplete. PM added explicit assertions for repeated calls, `release_workspace=False`, and real file-content sentinel input.
 
 ## Review Notes
 
-- TASK-083 adds `finalize_ready_worker_workspace_merges(limit=10, release_workspace=True)`.
-- TASK-084 adds deterministic eval coverage for `list_worker_workspace_merge_closeout_candidates`.
-- Batch finalization reuses the single-task finalization path and does not write project root, delete workspaces, run shell/git, or start workers.
+- TASK-085 adds read-only `plan_worker_lifecycle_actions(limit=20)`.
+- TASK-086 adds deterministic offline eval coverage for `finalize_ready_worker_workspace_merges`.
+- Planner does not dispatch, finalize, merge, write workspaces/project root, run shell, or run git.
 
 ## Checks Run
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkspaceBatchFinalizeTests
-Ran 18 tests in 0.987s
+python3 -m unittest tests.test_durable_workers.WorkerLifecyclePlannerTests
+Ran 18 tests in 2.217s
 OK
 
 python3 evals/run_evals.py
-293 passed, 0 failed
+298 passed, 0 failed
 
 python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
-Ran 562 tests in 11.807s
+Ran 580 tests in 17.440s
 OK
 
 python3 -m unittest discover -s tests
-Ran 1921 tests in 122.559s
+Ran 1939 tests in 126.401s
 OK
 Warning: failed to load plugin broken.py: bad
 
@@ -49,6 +47,6 @@ OK
 
 ## Verdict
 
-TASK-083 and TASK-084 APPROVED.
+TASK-085 and TASK-086 APPROVED.
 
 Ready for Codex PM commit. No push performed yet.

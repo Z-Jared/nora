@@ -349,6 +349,12 @@ def main() -> int:
         EvalCase("closeout_candidate_safety_no_leak", eval_closeout_candidate_safety_no_leak),
         EvalCase("closeout_candidate_no_mutation", eval_closeout_candidate_no_mutation),
         EvalCase("closeout_candidate_compatibility", eval_closeout_candidate_compatibility),
+        # TASK-086: Batch finalize evals
+        EvalCase("batch_finalize_ready_path", eval_batch_finalize_ready_path),
+        EvalCase("batch_finalize_guard_rails", eval_batch_finalize_guard_rails),
+        EvalCase("batch_finalize_safety_no_leak", eval_batch_finalize_safety_no_leak),
+        EvalCase("batch_finalize_no_mutation", eval_batch_finalize_no_mutation),
+        EvalCase("batch_finalize_compatibility", eval_batch_finalize_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -13188,6 +13194,278 @@ def eval_closeout_candidate_compatibility():
             assert claim.get("task_id") == claim_task.task_id
             ws.register_worker("w_clo_dispatch", role="coder")
             ts.create_task(goal="dispatch after query", steps=[{"text": "x"}])
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+# --- TASK-086: Batch finalize merge eval sentinels ---
+
+_BATCH_FINALIZE_SENTINEL_GOAL = "NORA_EVAL_BATCH_FINALIZE_GOAL_SENTINEL_b1a2t3c4"
+_BATCH_FINALIZE_SENTINEL_SECRET = "NORA_EVAL_BATCH_FINALIZE_SECRET_sk-batch-f5i6n7"
+_BATCH_FINALIZE_SENTINEL_STEP = "NORA_EVAL_BATCH_FINALIZE_STEP_SENTINEL_d8s9h0"
+_BATCH_FINALIZE_SENTINEL_FILE = "NORA_EVAL_BATCH_FINALIZE_FILE_SECRET_c1l2o3s4"
+_BATCH_FINALIZE_SENTINEL_ENV = "NORA_EVAL_BATCH_FINALIZE_ENV_SECRET_e5a6r7"
+
+
+def _setup_batch_finalize_worker(registry, worker_id="w_bf"):
+    """Helper for batch finalize evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_BATCH_FINALIZE_SENTINEL_GOAL + " " + _BATCH_FINALIZE_SENTINEL_SECRET + " " + _BATCH_FINALIZE_SENTINEL_ENV,
+        steps=[{"text": _BATCH_FINALIZE_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def _setup_batch_ready_worker(registry, worker_id="w_bf", file_content=None):
+    """Helper: setup worker, create files, record approved gate, apply merge.
+    Returns (task_id, workspace_path, lease_id)."""
+    tid, ws_path, lease_id = _setup_batch_finalize_worker(registry, worker_id=worker_id)
+    ws_root = Path(ws_path)
+    content = file_content if file_content is not None else f"data_{worker_id}_{tid}"
+    (ws_root / "f.txt").write_text(content, encoding="utf-8")
+    _record_gate(registry, worker_id, tid, "approved")
+    registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=tid)
+    return tid, ws_path, lease_id
+
+
+def eval_batch_finalize_ready_path():
+    """Happy path: finalize one and multiple ready workers. Correct fields in output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Single ready worker
+            tid1, _, lease_id1 = _setup_batch_ready_worker(registry, worker_id="w_bf1")
+            result1 = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert result1["processed"] == 1, f"expected processed=1: {result1}"
+            assert result1["finalized_count"] == 1, f"expected finalized_count=1: {result1}"
+            assert result1["results"][0]["finalized"] is True
+            assert result1["results"][0]["worker_id"] == "w_bf1"
+            assert result1["results"][0]["task_id"] == tid1
+
+            # Multiple ready workers
+            tid2, _, _ = _setup_batch_ready_worker(registry, worker_id="w_bf2")
+            tid3, _, _ = _setup_batch_ready_worker(registry, worker_id="w_bf3")
+            result2 = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert result2["processed"] == 2, f"expected processed=2: {result2}"
+            assert result2["finalized_count"] == 2, f"expected finalized_count=2: {result2}"
+            worker_ids = {r["worker_id"] for r in result2["results"]}
+            assert "w_bf2" in worker_ids and "w_bf3" in worker_ids
+
+            # Task marked completed, worker marked idle
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            for tid in [tid2, tid3]:
+                assert ts.get_task(tid).status == "completed", f"task {tid} not completed"
+            for wid in ["w_bf2", "w_bf3"]:
+                w = ws.get_worker(wid)
+                assert w.status == "idle", f"worker {wid} not idle"
+                assert w.current_task_id is None, f"worker {wid} still has current_task_id"
+
+            # Repeated call is idempotent once all ready workers are finalized
+            repeat = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert repeat["processed"] == 0, f"expected repeat processed=0: {repeat}"
+            assert repeat["finalized_count"] == 0, f"expected repeat finalized_count=0: {repeat}"
+
+            # release_workspace=False keeps the lease
+            tid_keep, _, _ = _setup_batch_ready_worker(registry, worker_id="w_bf_keep")
+            keep = json.loads(registry.call("finalize_ready_worker_workspace_merges", release_workspace=False))
+            assert keep["processed"] == 1, f"expected keep processed=1: {keep}"
+            assert keep["results"][0]["workspace_released"] is False, f"expected lease kept: {keep}"
+            assert registry.workspace_lease_store.get_lease_by_worker("w_bf_keep") is not None
+
+            # release_workspace=True releases the lease
+            tid_release, _, _ = _setup_batch_ready_worker(registry, worker_id="w_bf_release")
+            released = json.loads(registry.call("finalize_ready_worker_workspace_merges", release_workspace=True))
+            assert released["processed"] == 1, f"expected release processed=1: {released}"
+            assert released["results"][0]["workspace_released"] is True, f"expected lease released: {released}"
+            assert registry.workspace_lease_store.get_lease_by_worker("w_bf_release") is None
+        finally:
+            db.close()
+
+
+def eval_batch_finalize_guard_rails():
+    """Limit counts ready candidates not raw. 100 not-ready + 1 ready still found.
+    No candidates / no ready candidates return zero. Bad limit and bad release_workspace return errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # No candidates at all
+            result0 = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert result0["processed"] == 0, f"expected 0 processed: {result0}"
+            assert result0["finalized_count"] == 0, f"expected 0 finalized: {result0}"
+
+            # No ready candidates (only not-ready)
+            _setup_batch_finalize_worker(registry, worker_id="w_not_ready")
+            result_nr = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            assert result_nr["processed"] == 0, f"expected 0 processed with no ready: {result_nr}"
+
+            # Limit counts ready candidates not raw not-ready
+            _setup_batch_finalize_worker(registry, worker_id="w_nr2")
+            tid_ready, _, _ = _setup_batch_ready_worker(registry, worker_id="w_ready_limit")
+            result_lim = json.loads(registry.call("finalize_ready_worker_workspace_merges", limit=1))
+            assert result_lim["processed"] == 1, f"expected 1 processed: {result_lim}"
+            assert result_lim["finalized_count"] == 1
+            assert result_lim["results"][0]["worker_id"] == "w_ready_limit"
+
+            # 100 not-ready + 1 ready: ready is still found
+            tid_old, _, _ = _setup_batch_ready_worker(registry, worker_id="w_ready_old")
+            for i in range(100):
+                _setup_batch_finalize_worker(registry, worker_id=f"w_nr100_{i:03d}")
+            result_100 = json.loads(registry.call("finalize_ready_worker_workspace_merges", limit=1))
+            assert result_100["processed"] == 1, f"expected 1 processed: {result_100}"
+            assert result_100["finalized_count"] == 1
+            assert result_100["results"][0]["worker_id"] == "w_ready_old"
+            assert result_100["results"][0]["task_id"] == tid_old
+
+            # Bad limit returns error
+            result_bad = json.loads(registry.call("finalize_ready_worker_workspace_merges", limit="abc"))
+            assert "error" in result_bad, f"expected error for bad limit: {result_bad}"
+
+            # Bad release_workspace returns error
+            result_bad_rel = json.loads(registry.call("finalize_ready_worker_workspace_merges", release_workspace="yes"))
+            assert "error" in result_bad_rel, f"expected error for bad release_workspace: {result_bad_rel}"
+        finally:
+            db.close()
+
+
+def eval_batch_finalize_safety_no_leak():
+    """Sentinels not leaked in output, error output, or event payloads."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_batch_ready_worker(
+                registry,
+                worker_id="w_bf_safe",
+                file_content=_BATCH_FINALIZE_SENTINEL_FILE,
+            )
+
+            result = json.loads(registry.call("finalize_ready_worker_workspace_merges"))
+            result_str = json.dumps(result)
+            assert _BATCH_FINALIZE_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _BATCH_FINALIZE_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _BATCH_FINALIZE_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+            assert _BATCH_FINALIZE_SENTINEL_FILE not in result_str, f"file content leaked: {result_str[:200]}"
+            assert _BATCH_FINALIZE_SENTINEL_ENV not in result_str, f"env leaked: {result_str[:200]}"
+
+            # Error output also safe
+            result_err = json.loads(registry.call("finalize_ready_worker_workspace_merges", limit="bad"))
+            assert "error" in result_err
+            err_str = json.dumps(result_err)
+            assert _BATCH_FINALIZE_SENTINEL_GOAL not in err_str, f"goal leaked in error: {err_str}"
+            assert _BATCH_FINALIZE_SENTINEL_SECRET not in err_str, f"secret leaked in error: {err_str}"
+            assert _BATCH_FINALIZE_SENTINEL_ENV not in err_str, f"env leaked in error: {err_str}"
+
+            # Event payload safe
+            events = registry.durable_event_store.list_events(task_id=tid, event_type="task_status_changed", max_results=10)
+            finalize_events = [e for e in events if e.payload.get("operation") == "workspace_merge_finalize"]
+            assert len(finalize_events) >= 1, f"expected finalize event: {[e.payload for e in events]}"
+            for ev in finalize_events:
+                payload_str = json.dumps(ev.payload)
+                assert _BATCH_FINALIZE_SENTINEL_GOAL not in payload_str, f"goal leaked in event: {payload_str}"
+                assert _BATCH_FINALIZE_SENTINEL_SECRET not in payload_str, f"secret leaked in event: {payload_str}"
+                assert _BATCH_FINALIZE_SENTINEL_STEP not in payload_str, f"step leaked in event: {payload_str}"
+                assert _BATCH_FINALIZE_SENTINEL_FILE not in payload_str, f"file leaked in event: {payload_str}"
+                assert _BATCH_FINALIZE_SENTINEL_ENV not in payload_str, f"env leaked in event: {payload_str}"
+        finally:
+            db.close()
+
+
+def eval_batch_finalize_no_mutation():
+    """Batch finalize does not mutate project root or workspace. Rejection paths don't mutate state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_batch_ready_worker(registry, worker_id="w_bf_mut")
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+            (project_root / "project_file.txt").write_text("project content", encoding="utf-8")
+
+            # Snapshot
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            task_before = ts.get_task(tid)
+            worker_before = ws.get_worker("w_bf_mut")
+
+            # Finalize
+            registry.call("finalize_ready_worker_workspace_merges")
+
+            # Project root not mutated
+            assert project_root.exists(), "project root deleted"
+            assert (project_root / "project_file.txt").exists(), "project file deleted"
+            assert (project_root / "project_file.txt").read_text(encoding="utf-8") == "project content"
+
+            # Workspace dir still exists (lease released but dir not deleted)
+            assert ws_root.exists(), "workspace deleted"
+
+            # Rejection path: bad limit doesn't mutate
+            _setup_batch_finalize_worker(registry, worker_id="w_bf_mut2")
+            task_before2 = ts.get_task("dtask_2") if ts.get_task("dtask_2") else None
+            registry.call("finalize_ready_worker_workspace_merges", limit="bad")
+            # State unchanged (no finalize happened)
+            assert (project_root / "project_file.txt").read_text(encoding="utf-8") == "project content"
+        finally:
+            db.close()
+
+
+def eval_batch_finalize_compatibility():
+    """Existing tools still work after batch finalize."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id = _setup_batch_ready_worker(registry, worker_id="w_bf_compat")
+
+            # Batch finalize
+            registry.call("finalize_ready_worker_workspace_merges")
+
+            # Closeout candidate query still works
+            cand = json.loads(registry.call("list_worker_workspace_merge_closeout_candidates"))
+            assert "candidates" in cand
+
+            # Single-task finalize still works (for a new worker)
+            tid2, _, _ = _setup_batch_ready_worker(registry, worker_id="w_bf_compat2")
+            fin = json.loads(registry.call("finalize_worker_workspace_merge", worker_id="w_bf_compat2", task_id=tid2))
+            assert fin["finalized"] is True
+
+            # Audit query still works
+            audit = json.loads(registry.call("list_worker_workspace_merge_applies", worker_id="w_bf_compat", task_id=tid))
+            assert "applies" in audit
+
+            # Worker registry still works
+            ws = registry.durable_worker_store
+            ws.register_worker("w_new_after_batch", role="coder")
+            assert ws.get_worker("w_new_after_batch") is not None
+
+            # Task registry still works
+            ts = registry.durable_task_store
+            new_task = ts.create_task(goal="post-batch", steps=[{"text": "x"}])
+            assert new_task.task_id is not None
+
+            # Claim still works
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_new_after_batch"))
+            assert "task_id" in claim or "error" in claim
+
+            # Dispatch still works
+            ws.register_worker("w_dispatch_after", role="coder")
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
         finally:
