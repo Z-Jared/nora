@@ -343,6 +343,12 @@ def main() -> int:
         EvalCase("finalize_merge_safety_no_leak", eval_finalize_merge_safety_no_leak),
         EvalCase("finalize_merge_no_unintended_mutation", eval_finalize_merge_no_unintended_mutation),
         EvalCase("finalize_merge_compatibility", eval_finalize_merge_compatibility),
+        # TASK-084: Closeout candidate evals
+        EvalCase("closeout_candidate_ready_path", eval_closeout_candidate_ready_path),
+        EvalCase("closeout_candidate_guard_rails", eval_closeout_candidate_guard_rails),
+        EvalCase("closeout_candidate_safety_no_leak", eval_closeout_candidate_safety_no_leak),
+        EvalCase("closeout_candidate_no_mutation", eval_closeout_candidate_no_mutation),
+        EvalCase("closeout_candidate_compatibility", eval_closeout_candidate_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -12827,6 +12833,363 @@ def eval_finalize_merge_compatibility():
             # Tools still work after failed finalize
             claim2 = json.loads(registry.call("claim_durable_task", worker_id="w_fin_claim"))
             assert "task_id" in claim2 or "error" not in claim2 or "claimed" in claim2
+        finally:
+            db.close()
+
+
+# --- TASK-084: Closeout candidate eval sentinels ---
+
+_CLOSEOUT_SENTINEL_GOAL = "NORA_EVAL_CLOSEOUT_GOAL_SENTINEL_c1l2o3s4"
+_CLOSEOUT_SENTINEL_SECRET = "NORA_EVAL_CLOSEOUT_SECRET_sk-closeout-e5o6u7t8"
+_CLOSEOUT_SENTINEL_STEP = "NORA_EVAL_CLOSEOUT_STEP_SENTINEL_c9a1n2d3"
+_CLOSEOUT_SENTINEL_FILE = "NORA_EVAL_CLOSEOUT_FILE_SECRET_d4i5d6a7"
+_CLOSEOUT_SENTINEL_ENV = "NORA_EVAL_CLOSEOUT_ENV_SECRET_e8s9t0"
+
+
+def _setup_closeout_candidate_worker(registry, worker_id="w_clo"):
+    """Helper for closeout candidate evals: register worker, create task with sentinels, assign, set running, prepare workspace lease.
+    Returns (task_id, workspace_path, lease_id)."""
+    ws = registry.durable_worker_store
+    ts = registry.durable_task_store
+    ws.register_worker(worker_id, role="coder")
+    task = ts.create_task(
+        goal=_CLOSEOUT_SENTINEL_GOAL + " " + _CLOSEOUT_SENTINEL_SECRET,
+        steps=[{"text": _CLOSEOUT_SENTINEL_STEP}],
+    )
+    tid = task.task_id
+    ts.assign_worker(tid, worker_id)
+    ws.update_status(worker_id, "assigned", current_task_id=tid)
+    ts.update_status(tid, "running")
+    result = registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=tid)
+    parsed = json.loads(result)
+    assert "lease_id" in parsed, f"setup: prepare_workspace failed: {parsed}"
+    return tid, parsed["workspace_path"], parsed["lease_id"]
+
+
+def _setup_and_apply_closeout(registry, worker_id="w_clo", files=None):
+    """Helper: setup worker, create files, record approved gate, apply merge.
+    Returns (task_id, workspace_path, lease_id, apply_result)."""
+    tid, ws_path, lease_id = _setup_closeout_candidate_worker(registry, worker_id=worker_id)
+    ws_root = Path(ws_path)
+    if files:
+        for name, content in files.items():
+            (ws_root / name).write_text(content, encoding="utf-8")
+    _record_gate(registry, worker_id, tid, "approved")
+    result = json.loads(registry.call(
+        "apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=tid,
+    ))
+    assert result["applied"] is True, f"setup apply failed: {result}"
+    return tid, ws_path, lease_id, result
+
+
+def eval_closeout_candidate_ready_path():
+    """Ready candidate after apply: ready=True, reason=ready_to_finalize, correct field values."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id, _ = _setup_and_apply_closeout(
+                registry, files={"hello.txt": "hello world"},
+            )
+
+            result = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_clo", task_id=tid,
+            ))
+            assert result["count"] == 1, f"expected 1 candidate: {result}"
+            cand = result["candidates"][0]
+            assert cand["ready"] is True, f"expected ready=True: {cand}"
+            assert cand["reason"] == "ready_to_finalize", f"reason: {cand}"
+            assert cand["worker_id"] == "w_clo"
+            assert cand["task_id"] == tid
+            assert cand["lease_id"] == lease_id
+            assert cand["task_status"] == "running"
+            assert cand["worker_status"] == "assigned"
+            assert cand.get("workspace_released") is False
+            assert cand.get("latest_apply_event_id") is not None
+            assert cand.get("latest_apply_created_at") is not None
+        finally:
+            db.close()
+
+
+def eval_closeout_candidate_guard_rails():
+    """Not ready: no apply, already finalized, offline/idle worker, task not running, no lease, stale apply. Filters and limits."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+
+            # No apply yet -> no_successful_apply
+            tid, ws_path, lease_id = _setup_closeout_candidate_worker(registry, worker_id="w_g1")
+            r1 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g1", task_id=tid,
+            ))
+            assert r1["count"] == 1, f"expected 1 candidate: {r1}"
+            assert r1["candidates"][0]["ready"] is False
+            assert r1["candidates"][0]["reason"] == "no_successful_apply"
+
+            # Already finalized -> returns candidate with already_finalized reason
+            tid2, ws_path2, lease_id2, _ = _setup_and_apply_closeout(registry, worker_id="w_g2", files={"g2.txt": "g2"})
+            registry.call("finalize_worker_workspace_merge", worker_id="w_g2", task_id=tid2)
+            r2 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g2", task_id=tid2,
+            ))
+            assert r2["count"] == 1, f"expected 1 candidate: {r2}"
+            assert r2["candidates"][0]["ready"] is False
+            assert r2["candidates"][0]["reason"] == "already_finalized"
+
+            # Offline worker -> worker_unavailable
+            tid3, ws_path3, lease_id3, _ = _setup_and_apply_closeout(registry, worker_id="w_g3", files={"g3.txt": "g3"})
+            ws.update_status("w_g3", "offline")
+            r3 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g3", task_id=tid3,
+            ))
+            assert r3["count"] == 1
+            assert r3["candidates"][0]["ready"] is False
+            assert r3["candidates"][0]["reason"] == "worker_unavailable"
+
+            # Idle worker -> returns candidate with worker_unavailable reason
+            tid4, ws_path4, lease_id4, _ = _setup_and_apply_closeout(registry, worker_id="w_g4", files={"g4.txt": "g4"})
+            ws.update_status("w_g4", "idle")
+            r4 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g4", task_id=tid4,
+            ))
+            assert r4["count"] == 1
+            assert r4["candidates"][0]["ready"] is False
+            assert r4["candidates"][0]["reason"] == "worker_unavailable"
+
+            # Task not running -> task_not_running
+            ws.register_worker("w_g5", role="coder")
+            pending_task = ts.create_task(goal="pending", steps=[{"text": "x"}])
+            ts.assign_worker(pending_task.task_id, "w_g5")
+            ws.update_status("w_g5", "assigned", current_task_id=pending_task.task_id)
+            # Don't set to running
+            r5 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g5", task_id=pending_task.task_id,
+            ))
+            assert r5["count"] == 1
+            assert r5["candidates"][0]["ready"] is False
+            assert r5["candidates"][0]["reason"] == "task_not_running"
+
+            # No lease -> workspace_lease_invalid
+            ws.register_worker("w_g6", role="coder")
+            no_lease_task = ts.create_task(goal="no lease", steps=[{"text": "x"}])
+            ts.assign_worker(no_lease_task.task_id, "w_g6")
+            ws.update_status("w_g6", "assigned", current_task_id=no_lease_task.task_id)
+            ts.update_status(no_lease_task.task_id, "running")
+            r6 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g6", task_id=no_lease_task.task_id,
+            ))
+            assert r6["count"] == 1
+            assert r6["candidates"][0]["ready"] is False
+            assert r6["candidates"][0]["reason"] == "workspace_lease_invalid"
+
+            # Stale apply from old lease -> no_successful_apply
+            tid7, ws_path7, lease_id7, _ = _setup_and_apply_closeout(registry, worker_id="w_g7", files={"g7.txt": "g7"})
+            # Release lease and prepare new one
+            registry.workspace_lease_store.release_lease(lease_id7)
+            new_lease = json.loads(registry.call("prepare_worker_workspace", worker_id="w_g7", task_id=tid7))
+            r7 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_g7", task_id=tid7,
+            ))
+            assert r7["count"] == 1
+            assert r7["candidates"][0]["ready"] is False
+            assert r7["candidates"][0]["reason"] == "no_successful_apply"
+
+            # No candidates when no workers
+            r8 = json.loads(registry.call("list_worker_workspace_merge_closeout_candidates"))
+            # Could be 0 or more depending on other tests, but at least check structure
+            assert "candidates" in r8
+            assert "count" in r8
+
+            # Filter by worker_id only
+            r9 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates", worker_id="w_g1",
+            ))
+            assert r9["count"] >= 1
+
+            # Filter by task_id only
+            r10 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates", task_id=tid,
+            ))
+            assert r10["count"] >= 1
+
+            # Limit bounds
+            r11 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates", limit=1,
+            ))
+            assert r11["count"] <= 1
+
+            # Bad limit returns error
+            r12 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates", limit="abc",
+            ))
+            assert "error" in r12
+        finally:
+            db.close()
+
+
+def eval_closeout_candidate_safety_no_leak():
+    """Output does not leak sentinels. Error outputs bounded."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id, _ = _setup_and_apply_closeout(
+                registry, files={"secret.txt": _CLOSEOUT_SENTINEL_FILE},
+            )
+
+            # Successful query with sentinels
+            result = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_clo", task_id=tid,
+            ))
+            result_str = json.dumps(result)
+            assert _CLOSEOUT_SENTINEL_GOAL not in result_str, f"goal leaked: {result_str[:200]}"
+            assert _CLOSEOUT_SENTINEL_SECRET not in result_str, f"secret leaked: {result_str[:200]}"
+            assert _CLOSEOUT_SENTINEL_STEP not in result_str, f"step leaked: {result_str[:200]}"
+            assert _CLOSEOUT_SENTINEL_FILE not in result_str, f"file content leaked: {result_str[:200]}"
+
+            # Not-ready output also safe
+            ws = registry.durable_worker_store
+            ws.register_worker("w_safe2", role="coder")
+            tid2 = registry.durable_task_store.create_task(
+                goal=_CLOSEOUT_SENTINEL_GOAL, steps=[{"text": _CLOSEOUT_SENTINEL_STEP}],
+            ).task_id
+            registry.durable_task_store.assign_worker(tid2, "w_safe2")
+            ws.update_status("w_safe2", "assigned", current_task_id=tid2)
+            registry.durable_task_store.update_status(tid2, "running")
+            registry.call("prepare_worker_workspace", worker_id="w_safe2", task_id=tid2)
+
+            r2 = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates",
+                worker_id="w_safe2", task_id=tid2,
+            ))
+            r2_str = json.dumps(r2)
+            assert _CLOSEOUT_SENTINEL_GOAL not in r2_str, f"goal leaked in not-ready: {r2_str[:200]}"
+            assert _CLOSEOUT_SENTINEL_SECRET not in r2_str, f"secret leaked in not-ready: {r2_str[:200]}"
+
+            # Error output bounded
+            bad = json.loads(registry.call(
+                "list_worker_workspace_merge_closeout_candidates", limit="bad",
+            ))
+            assert "error" in bad
+            bad_str = json.dumps(bad)
+            assert _CLOSEOUT_SENTINEL_GOAL not in bad_str, f"goal leaked in error: {bad_str}"
+            assert _CLOSEOUT_SENTINEL_SECRET not in bad_str, f"secret leaked in error: {bad_str}"
+        finally:
+            db.close()
+
+
+def eval_closeout_candidate_no_mutation():
+    """Query is read-only: task/worker/lease state unchanged, project root and workspace not mutated."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id, _ = _setup_and_apply_closeout(
+                registry, files={"hello.txt": "hello"},
+            )
+            ws_root = Path(ws_path)
+            project_root = Path(tmpdir)
+            (project_root / "project_file.txt").write_text("project", encoding="utf-8")
+
+            # Snapshot
+            task_before = registry.durable_task_store.get_task(tid)
+            worker_before = registry.durable_worker_store.get_worker("w_clo")
+            lease_before = registry.workspace_lease_store.get_lease_by_worker("w_clo")
+
+            # Query
+            registry.call("list_worker_workspace_merge_closeout_candidates", worker_id="w_clo", task_id=tid)
+
+            # State unchanged
+            task_after = registry.durable_task_store.get_task(tid)
+            worker_after = registry.durable_worker_store.get_worker("w_clo")
+            lease_after = registry.workspace_lease_store.get_lease_by_worker("w_clo")
+            assert task_after.status == task_before.status, f"task mutated: {task_before.status} -> {task_after.status}"
+            assert worker_after.status == worker_before.status, f"worker mutated"
+            assert worker_after.current_task_id == worker_before.current_task_id, f"current_task_id mutated"
+            assert lease_after is not None, "lease disappeared"
+
+            # Project root not mutated
+            assert project_root.exists(), "project root deleted"
+            assert (project_root / "project_file.txt").read_text(encoding="utf-8") == "project", "project file mutated"
+
+            # Workspace not mutated
+            assert ws_root.exists(), "workspace deleted"
+            assert (ws_root / "hello.txt").read_text(encoding="utf-8") == "hello", "workspace file mutated"
+
+            # Rejection path also read-only
+            ws = registry.durable_worker_store
+            ws.register_worker("w_noop", role="coder")
+            noop_task = registry.durable_task_store.create_task(goal="noop", steps=[{"text": "x"}])
+            registry.durable_task_store.assign_worker(noop_task.task_id, "w_noop")
+            ws.update_status("w_noop", "assigned", current_task_id=noop_task.task_id)
+            registry.durable_task_store.update_status(noop_task.task_id, "running")
+            registry.call("prepare_worker_workspace", worker_id="w_noop", task_id=noop_task.task_id)
+
+            task_before2 = registry.durable_task_store.get_task(noop_task.task_id)
+            worker_before2 = ws.get_worker("w_noop")
+            registry.call("list_worker_workspace_merge_closeout_candidates", worker_id="w_noop", task_id=noop_task.task_id)
+            task_after2 = registry.durable_task_store.get_task(noop_task.task_id)
+            worker_after2 = ws.get_worker("w_noop")
+            assert task_after2.status == task_before2.status, f"task mutated on rejection"
+            assert worker_after2.status == worker_before2.status, f"worker mutated on rejection"
+        finally:
+            db.close()
+
+
+def eval_closeout_candidate_compatibility():
+    """Existing tools still work after calling closeout candidate query."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            tid, ws_path, lease_id, _ = _setup_and_apply_closeout(
+                registry, files={"f.txt": "content"},
+            )
+
+            # Call the query
+            registry.call("list_worker_workspace_merge_closeout_candidates", worker_id="w_clo", task_id=tid)
+
+            # Finalize still works
+            finalize = json.loads(registry.call(
+                "finalize_worker_workspace_merge", worker_id="w_clo", task_id=tid,
+            ))
+            assert finalize["finalized"] is True
+
+            # Audit tool still works
+            audit = json.loads(registry.call("list_worker_workspace_merge_applies", worker_id="w_clo", task_id=tid))
+            assert audit["count"] >= 1
+
+            # Worker registry still works
+            worker = json.loads(registry.call("get_worker", worker_id="w_clo"))
+            assert worker["worker_id"] == "w_clo"
+
+            # Task registry still works
+            task = json.loads(registry.call("get_durable_task", task_id=tid))
+            assert task["task_id"] == tid
+
+            # Claim/dispatch still work
+            ws = registry.durable_worker_store
+            ts = registry.durable_task_store
+            ws.register_worker("w_clo_claim", role="coder")
+            claim_task = ts.create_task(goal="claim after query", steps=[{"text": "x"}])
+            claim = json.loads(registry.call("claim_durable_task", worker_id="w_clo_claim"))
+            assert claim.get("task_id") == claim_task.task_id
+            ws.register_worker("w_clo_dispatch", role="coder")
+            ts.create_task(goal="dispatch after query", steps=[{"text": "x"}])
+            dispatch = json.loads(registry.call("dispatch_durable_tasks"))
+            assert "dispatched" in dispatch
         finally:
             db.close()
 

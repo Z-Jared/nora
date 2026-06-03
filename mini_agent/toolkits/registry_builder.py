@@ -3128,6 +3128,56 @@ def build_default_registry(
         permission=ToolPermission(category="task", risk="read"),
     )
 
+    def _finalize_ready_worker_workspace_merges_json(limit: int = 10, release_workspace: bool = True) -> str:
+        try:
+            limit = max(1, min(int(limit or 10), 100))
+        except (ValueError, TypeError):
+            return _json.dumps({"error": "limit 必须是整数"}, ensure_ascii=False)
+        if not isinstance(release_workspace, bool):
+            return _json.dumps({"error": "release_workspace 必须是布尔值"}, ensure_ascii=False)
+        candidates_json = _list_worker_workspace_merge_closeout_candidates_json(limit=100)
+        try:
+            candidates_data = _json.loads(candidates_json)
+        except Exception:
+            return _json.dumps({"error": "候选查询失败"}, ensure_ascii=False)
+        if "error" in candidates_data:
+            return _json.dumps({"error": f"候选查询: {candidates_data['error']}"}, ensure_ascii=False)
+        ready_candidates = [
+            c for c in candidates_data.get("candidates", [])
+            if c.get("ready") and c.get("reason") == "ready_to_finalize"
+        ]
+        results = []
+        for c in ready_candidates[:limit]:
+            wid = c.get("worker_id", "")
+            tid = c.get("task_id", "")
+            result_json = _finalize_worker_workspace_merge_json(wid, tid, release_workspace=release_workspace)
+            try:
+                result = _json.loads(result_json)
+            except Exception:
+                result = {"finalized": False, "reason": "internal_error", "worker_id": wid, "task_id": tid}
+            results.append(result)
+        finalized_count = sum(1 for r in results if r.get("finalized"))
+        return _json.dumps({
+            "processed": len(results),
+            "finalized_count": finalized_count,
+            "results": results,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "finalize_ready_worker_workspace_merges",
+        "批量 finalize 所有 ready 的 worker/task。逐个调用单任务 finalize 逻辑。",
+        _finalize_ready_worker_workspace_merges_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "最大处理数，默认 10，上限 100"},
+                "release_workspace": {"type": "boolean", "description": "是否释放 workspace lease，默认 true"},
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="task", risk="write"),
+    )
+
     def _pause_durable_task_json(task_id: str, reason: str = "") -> str:
         existing = durable_task_store.get_task(task_id)
         if existing is None:

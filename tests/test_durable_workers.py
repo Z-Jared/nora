@@ -5694,5 +5694,228 @@ class WorkspaceMergeCloseoutCandidateTests(unittest.TestCase):
         self.assertGreaterEqual(len(workers), 1)
 
 
+class WorkspaceBatchFinalizeTests(unittest.TestCase):
+    """Tests for finalize_ready_worker_workspace_merges (TASK-083)."""
+
+    SECRET_SENTINEL = "BATCH_FINALIZE_SECRET_789"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _setup_ready_worker(self, worker_id, goal="task"):
+        self.registry.call("register_worker", worker_id=worker_id)
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps="step"))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id=worker_id)
+        self.registry.call("update_worker_status", worker_id=worker_id, status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        lease = json.loads(self.registry.call("prepare_worker_workspace", worker_id=worker_id, task_id=task_id))
+        ws = Path(lease["workspace_path"])
+        (ws / "f.txt").write_text(f"data_{worker_id}_{task_id}", encoding="utf-8")
+        self.registry.call("record_worker_workspace_review_gate", worker_id=worker_id, task_id=task_id, decision="approved")
+        self.registry.call("apply_reviewed_worker_workspace_merge", worker_id=worker_id, task_id=task_id)
+        return task_id, lease["lease_id"]
+
+    # --- happy path ---
+
+    def test_batch_finalize_single_worker(self):
+        task_id, lease_id = self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertTrue(result["results"][0]["finalized"])
+        self.assertEqual(result["results"][0]["worker_id"], "w1")
+        self.assertEqual(result["results"][0]["task_id"], task_id)
+
+    def test_batch_finalize_multiple_workers(self):
+        tid1, _ = self._setup_ready_worker("w1", goal="task one")
+        tid2, _ = self._setup_ready_worker("w2", goal="task two")
+        tid3, _ = self._setup_ready_worker("w3", goal="task three")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(result["processed"], 3)
+        self.assertEqual(result["finalized_count"], 3)
+        finalized_tids = {r["task_id"] for r in result["results"]}
+        self.assertEqual(finalized_tids, {tid1, tid2, tid3})
+
+    def test_batch_finalize_task_marked_completed(self):
+        task_id, _ = self._setup_ready_worker("w1")
+        self.registry.call("finalize_ready_worker_workspace_merges")
+
+        task = json.loads(self.registry.call("get_durable_task", task_id=task_id))
+        self.assertEqual(task["status"], "completed")
+
+    def test_batch_finalize_worker_marked_idle(self):
+        self._setup_ready_worker("w1")
+        self.registry.call("finalize_ready_worker_workspace_merges")
+
+        worker = json.loads(self.registry.call("get_worker", worker_id="w1"))
+        self.assertEqual(worker["status"], "idle")
+        self.assertIsNone(worker.get("current_task_id"))
+
+    # --- no candidates ---
+
+    def test_batch_no_candidates(self):
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(result["processed"], 0)
+        self.assertEqual(result["finalized_count"], 0)
+        self.assertEqual(result["results"], [])
+
+    def test_batch_no_ready_candidates(self):
+        # Worker exists but no apply
+        self.registry.call("register_worker", worker_id="w1")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id="w1")
+        self.registry.call("update_worker_status", worker_id="w1", status="running", current_task_id=task["task_id"])
+        self.registry.call("update_durable_task", task_id=task["task_id"], status="running")
+        self.registry.call("prepare_worker_workspace", worker_id="w1", task_id=task["task_id"])
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(result["processed"], 0)
+        self.assertEqual(result["finalized_count"], 0)
+
+    # --- partial success ---
+
+    def test_batch_partial_success(self):
+        # w1 is ready
+        tid1, _ = self._setup_ready_worker("w1", goal="task one")
+        # w2 is ready
+        tid2, _ = self._setup_ready_worker("w2", goal="task two")
+        # Finalize w1 manually first — batch should skip or handle it
+        self.registry.call("finalize_worker_workspace_merge", worker_id="w1", task_id=tid1)
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        # w1 is already finalized (idle, no current_task_id) so not a candidate
+        # w2 is still ready
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertEqual(result["results"][0]["worker_id"], "w2")
+
+    # --- limit ---
+
+    def test_batch_limit(self):
+        for i in range(5):
+            self._setup_ready_worker(f"w{i}", goal=f"task {i}")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", limit=3))
+        self.assertEqual(result["processed"], 3)
+        self.assertEqual(result["finalized_count"], 3)
+
+    def test_batch_limit_counts_ready_candidates_not_raw_candidates(self):
+        self.registry.call("register_worker", worker_id="w_not_ready")
+        task = json.loads(self.registry.call("create_durable_task", goal="not ready", steps="s"))
+        self.registry.call("assign_durable_task", task_id=task["task_id"], worker_id="w_not_ready")
+        self.registry.call("update_worker_status", worker_id="w_not_ready", status="running", current_task_id=task["task_id"])
+        self.registry.call("update_durable_task", task_id=task["task_id"], status="running")
+        self.registry.call("prepare_worker_workspace", worker_id="w_not_ready", task_id=task["task_id"])
+        ready_task_id, _ = self._setup_ready_worker("w_ready", goal="ready")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", limit=1))
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertEqual(result["results"][0]["worker_id"], "w_ready")
+        self.assertEqual(result["results"][0]["task_id"], ready_task_id)
+
+    def test_batch_bad_limit_returns_error(self):
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", limit="abc"))
+        self.assertIn("error", result)
+
+    # --- release_workspace ---
+
+    def test_batch_release_workspace_false(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", release_workspace=False))
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertFalse(result["results"][0]["workspace_released"])
+
+        # Lease still exists
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNotNone(lease)
+
+    def test_batch_release_workspace_true(self):
+        self._setup_ready_worker("w1")
+
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges", release_workspace=True))
+        self.assertEqual(result["finalized_count"], 1)
+        self.assertTrue(result["results"][0]["workspace_released"])
+
+        # Lease released
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        self.assertIsNone(lease)
+
+    # --- idempotency ---
+
+    def test_batch_idempotent(self):
+        self._setup_ready_worker("w1")
+
+        r1 = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(r1["finalized_count"], 1)
+
+        r2 = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        self.assertEqual(r2["processed"], 0)
+        self.assertEqual(r2["finalized_count"], 0)
+
+    # --- read-only (batch itself doesn't touch project root) ---
+
+    def test_does_not_mutate_project_root(self):
+        self._setup_ready_worker("w1")
+        before = sorted(p.name for p in self.root.iterdir())
+        self.registry.call("finalize_ready_worker_workspace_merges")
+        after = sorted(p.name for p in self.root.iterdir())
+        self.assertEqual(before, after)
+
+    def test_does_not_mutate_workspace(self):
+        tid, lease_id = self._setup_ready_worker("w1")
+        lease = self.registry.workspace_lease_store.get_lease_by_worker("w1")
+        ws = Path(lease.workspace_path)
+        before = sorted(p.name for p in ws.rglob("*") if p.is_file())
+        self.registry.call("finalize_ready_worker_workspace_merges")
+        after = sorted(p.name for p in ws.rglob("*") if p.is_file())
+        self.assertEqual(before, after)
+
+    # --- safety ---
+
+    def test_no_goal_leak(self):
+        self._setup_ready_worker("w1", goal=self.SECRET_SENTINEL)
+        result = json.loads(self.registry.call("finalize_ready_worker_workspace_merges"))
+        raw = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(self.SECRET_SENTINEL, raw)
+
+    # --- compatibility ---
+
+    def test_existing_tools_still_work_after_batch(self):
+        tid, _ = self._setup_ready_worker("w1")
+        self.registry.call("finalize_ready_worker_workspace_merges")
+
+        # Audit still works
+        audit = json.loads(self.registry.call("list_worker_workspace_merge_applies"))
+        self.assertGreaterEqual(audit["count"], 1)
+
+        # Candidate query still works
+        candidates = json.loads(self.registry.call("list_worker_workspace_merge_closeout_candidates"))
+        self.assertIn("candidates", candidates)
+
+        # Worker tools still work
+        workers = json.loads(self.registry.call("list_workers"))
+        self.assertGreaterEqual(len(workers), 1)
+
+        # Register new worker still works
+        self.registry.call("register_worker", worker_id="w_new")
+        w = json.loads(self.registry.call("get_worker", worker_id="w_new"))
+        self.assertEqual(w["worker_id"], "w_new")
+
+
 if __name__ == "__main__":
     unittest.main()
