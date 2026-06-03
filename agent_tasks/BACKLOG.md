@@ -4,15 +4,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-097: Guarded scheduler retry execution v1
-- 优先级: medium
-- 预计: 1-2h
-- 依赖: TASK-095
-- 目标: 在 `run_worker_lifecycle_once` / `run_worker_lifecycle_scheduler_tick` / `run_worker_lifecycle_scheduler_loop` 中纳入 retryable failed task 规划，并在 `dry_run=False` 时仅对安全可重试任务执行 bounded retry。
-- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleRunOnceTests tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests`；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 8；`docs/knowledge/PROJECT_WAKEUP.md` near-term priority 1；`mini_agent/toolkits/registry_builder.py`
-
 ## 进行中
+
+### TASK-097: Guarded scheduler retry execution v1
+- 分配给: Claude A
+- 目标: 在 `run_worker_lifecycle_once` / `run_worker_lifecycle_scheduler_tick` / `run_worker_lifecycle_scheduler_loop` 中纳入 retryable failed task 规划，并在 `dry_run=False` 时仅对安全可重试任务执行 bounded retry。
+- 状态: assigned
 
 ## 已完成
 
