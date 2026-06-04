@@ -3,6 +3,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+CCB_BIN="${CCB_BIN:-/Users/mac/.local/bin/ccb}"
+
+echo "== timestamp =="
+date -u +"%Y-%m-%dT%H:%M:%SZ"
+
+echo
+echo "== CCB queue =="
+if [[ -x "$CCB_BIN" ]]; then
+  "$CCB_BIN" queue --detail all
+else
+  echo "ccb binary not found at $CCB_BIN"
+fi
+
+echo
+echo "== CCB inbox (pm) =="
+if [[ -x "$CCB_BIN" ]]; then
+  "$CCB_BIN" pend --inbox --detail pm
+else
+  echo "ccb binary not found at $CCB_BIN"
+fi
+
 echo "== git status =="
 git status --short --branch
 
