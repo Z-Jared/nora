@@ -43,6 +43,7 @@ from mini_agent.mcp_server import (
     is_tool_allowed,
     registry_to_mcp_tools,
 )
+from mini_agent.plugins import inspect_manifest_json, inspect_manifest
 from mini_agent.registry import ToolRegistry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SCHEDULER_DECISION, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
@@ -496,6 +497,20 @@ def main() -> int:
         EvalCase("mcp_safe_json_errors_no_leak", eval_mcp_safe_json_errors_no_leak),
         EvalCase("mcp_bounded_output_truncation", eval_mcp_bounded_output_truncation),
         EvalCase("mcp_memory_tool_compatibility", eval_mcp_memory_tool_compatibility),
+        # Plugin manifest inspection evals (TASK-114)
+        EvalCase("plugin_manifest_tool_permission", eval_plugin_manifest_tool_permission),
+        EvalCase("plugin_manifest_valid_productivity", eval_plugin_manifest_valid_productivity),
+        EvalCase("plugin_manifest_malformed_json", eval_plugin_manifest_malformed_json),
+        EvalCase("plugin_manifest_non_object", eval_plugin_manifest_non_object),
+        EvalCase("plugin_manifest_malformed_tools", eval_plugin_manifest_malformed_tools),
+        EvalCase("plugin_manifest_duplicate_tool_names", eval_plugin_manifest_duplicate_tool_names),
+        EvalCase("plugin_manifest_high_risk_no_confirm", eval_plugin_manifest_high_risk_no_confirm),
+        EvalCase("plugin_manifest_high_risk_with_confirm", eval_plugin_manifest_high_risk_with_confirm),
+        EvalCase("plugin_manifest_unknown_enums", eval_plugin_manifest_unknown_enums),
+        EvalCase("plugin_manifest_secret_redaction", eval_plugin_manifest_secret_redaction),
+        EvalCase("plugin_manifest_read_only_no_mutation", eval_plugin_manifest_read_only_no_mutation),
+        EvalCase("plugin_manifest_no_plugin_execution", eval_plugin_manifest_no_plugin_execution),
+        EvalCase("plugin_manifest_compatibility", eval_plugin_manifest_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -17845,6 +17860,324 @@ class FakeCLIRegistry:
 
     def to_openai_tools(self):
         return [{"function": {"name": "fake"}}]
+
+
+# --- Plugin manifest inspection evals (TASK-114) ---
+
+_PLUGIN_MANIFEST_SENTINEL = "NORA_EVAL_PLUGIN_SENTINEL_x9y8z7"
+
+
+def eval_plugin_manifest_tool_permission():
+    """inspect_plugin_manifest is registered with ToolPermission(category="local", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "inspect_plugin_manifest" in perms, "inspect_plugin_manifest not in permissions list"
+            # Verify it's local/read via the registry
+            tool_perm = registry._tools.get("inspect_plugin_manifest")
+            assert tool_perm is not None, "inspect_plugin_manifest not registered"
+            assert tool_perm.permission.category == "local", f"expected local, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_plugin_manifest_valid_productivity():
+    """Valid developer/productivity manifest returns bounded safe metadata."""
+    manifest = {
+        "name": "nora-productivity",
+        "version": "0.1.0",
+        "description": "Productivity tools for Nora",
+        "auth": "none",
+        "domains": ["document", "calendar"],
+        "capabilities": ["read", "summarize"],
+        "tools": [
+            {
+                "name": "read_doc",
+                "description": "Read a document",
+                "permission_category": "file",
+                "risk": "read",
+                "requires_confirmation": False,
+                "data_sensitivity": "low",
+                "event_log": "metadata_only",
+            },
+            {
+                "name": "summarize_doc",
+                "description": "Summarize a document",
+                "permission_category": "model",
+                "risk": "read",
+                "requires_confirmation": False,
+                "data_sensitivity": "low",
+                "event_log": "metadata_only",
+            },
+        ],
+    }
+    result = inspect_manifest(manifest)
+    assert result["valid"] is True, f"expected valid, got errors: {result.get('errors')}"
+    assert result["errors"] == [], f"unexpected errors: {result['errors']}"
+    m = result["manifest"]
+    assert m["name"] == "nora-productivity"
+    assert m["version"] == "0.1.0"
+    assert m["auth"] == "none"
+    assert len(m["tools"]) == 2
+    assert m["tools"][0]["name"] == "read_doc"
+    assert m["tools"][0]["permission_category"] == "file"
+    assert m["tools"][0]["risk"] == "read"
+    # Check bounded: JSON serializable
+    json.dumps(result)
+
+
+def eval_plugin_manifest_malformed_json():
+    """Malformed JSON returns safe bounded error, never raises."""
+    result = inspect_manifest_json("{not valid json!!!")
+    assert result["valid"] is False
+    assert len(result["errors"]) > 0
+    assert "invalid JSON" in result["errors"][0]
+    assert "manifest" not in result
+
+
+def eval_plugin_manifest_non_object():
+    """Non-object JSON returns safe bounded error."""
+    result = inspect_manifest_json('"just a string"')
+    assert result["valid"] is False
+    assert len(result["errors"]) > 0
+    assert "manifest must be a JSON object" in result["errors"][0]
+
+
+def eval_plugin_manifest_malformed_tools():
+    """Malformed tool entries return bounded errors without crashing."""
+    manifest = {
+        "name": "bad-tools",
+        "version": "1.0.0",
+        "tools": [
+            "not an object",
+            42,
+            {"name": "good_tool", "risk": "read"},
+            {"name": "", "risk": "read"},  # empty name
+        ],
+    }
+    result = inspect_manifest(manifest)
+    assert result["valid"] is False
+    assert any("must be an object" in e for e in result["errors"]), f"expected 'must be an object' error: {result['errors']}"
+    assert any("missing or empty name" in e for e in result["errors"]), f"expected missing name error: {result['errors']}"
+    # The valid tool should still be parsed
+    if result.get("manifest"):
+        names = [t["name"] for t in result["manifest"]["tools"]]
+        assert "good_tool" in names
+
+
+def eval_plugin_manifest_duplicate_tool_names():
+    """Duplicate tool names are rejected."""
+    manifest = {
+        "name": "dup-tools",
+        "version": "1.0.0",
+        "tools": [
+            {"name": "my_tool", "risk": "read"},
+            {"name": "my_tool", "risk": "write", "requires_confirmation": True},
+        ],
+    }
+    result = inspect_manifest(manifest)
+    assert result["valid"] is False
+    assert any("duplicate tool name" in e for e in result["errors"]), f"expected duplicate error: {result['errors']}"
+
+
+def eval_plugin_manifest_high_risk_no_confirm():
+    """High-risk/destructive/external-send without confirmation is rejected."""
+    for risk_val in ("destructive", "external_send", "high"):
+        manifest = {
+            "name": "risky",
+            "version": "1.0.0",
+            "tools": [
+                {"name": f"tool_{risk_val}", "risk": risk_val, "requires_confirmation": False},
+            ],
+        }
+        result = inspect_manifest(manifest)
+        assert result["valid"] is False, f"expected invalid for risk={risk_val} without confirmation"
+        assert any("must require confirmation" in e for e in result["errors"]), f"expected confirmation error for {risk_val}: {result['errors']}"
+
+
+def eval_plugin_manifest_high_risk_with_confirm():
+    """High-risk/destructive/external-send with confirmation is accepted."""
+    for risk_val in ("destructive", "external_send", "high"):
+        manifest = {
+            "name": "risky-ok",
+            "version": "1.0.0",
+            "tools": [
+                {"name": f"tool_{risk_val}", "risk": risk_val, "requires_confirmation": True},
+            ],
+        }
+        result = inspect_manifest(manifest)
+        assert result["valid"] is True, f"expected valid for risk={risk_val} with confirmation, got: {result.get('errors')}"
+        m = result["manifest"]
+        assert m["tools"][0]["requires_confirmation"] is True
+
+
+def eval_plugin_manifest_unknown_enums():
+    """Unknown enum values for auth, permission_category, risk, data_sensitivity, event_log are normalized safely."""
+    manifest = {
+        "name": "unknown-enums",
+        "version": "1.0.0",
+        "auth": "custom_auth_xyz",
+        "tools": [
+            {
+                "name": "tool1",
+                "permission_category": "unknown_cat_xyz",
+                "risk": "unknown_risk_xyz",
+                "data_sensitivity": "unknown_sens_xyz",
+                "event_log": "unknown_log_xyz",
+            },
+        ],
+    }
+    result = inspect_manifest(manifest)
+    assert result["valid"] is True, f"unexpected errors: {result.get('errors')}"
+    m = result["manifest"]
+    assert m["auth"] == "unknown", f"auth not normalized: {m['auth']}"
+    assert m["tools"][0]["permission_category"] == "unknown", f"permission_category not normalized: {m['tools'][0]['permission_category']}"
+    assert m["tools"][0]["risk"] == "unknown", f"risk not normalized: {m['tools'][0]['risk']}"
+    assert m["tools"][0]["data_sensitivity"] == "unknown", f"data_sensitivity not normalized: {m['tools'][0]['data_sensitivity']}"
+    assert m["tools"][0]["event_log"] == "unknown", f"event_log not normalized: {m['tools'][0]['event_log']}"
+    # Warnings should mention unknown values
+    assert any("unknown" in w for w in result["warnings"]), f"expected unknown warnings: {result['warnings']}"
+    # Raw unknown values should NOT appear in output
+    output_str = json.dumps(result)
+    assert "custom_auth_xyz" not in output_str, "raw auth value leaked"
+    assert "unknown_cat_xyz" not in output_str, "raw permission_category value leaked"
+    assert "unknown_risk_xyz" not in output_str, "raw risk value leaked"
+    assert "unknown_sens_xyz" not in output_str, "raw data_sensitivity value leaked"
+    assert "unknown_log_xyz" not in output_str, "raw event_log value leaked"
+
+
+def eval_plugin_manifest_secret_redaction():
+    """Secret-like values in auth/tools/domains/capabilities are not leaked."""
+    manifest = {
+        "name": "secret-plugin",
+        "version": "1.0.0",
+        "auth": "api_key",
+        "domains": ["sk-secret-token-abc123", "normal-domain.com"],
+        "capabilities": ["api_key_reader", "normal_cap"],
+        "tools": [
+            {
+                "name": "sk-super-secret-tool-key",
+                "description": "A tool with secret name",
+                "risk": "read",
+            },
+        ],
+    }
+    result = inspect_manifest(manifest)
+    output_str = json.dumps(result)
+    # Secret-like tool name should be redacted
+    assert "sk-super-secret-tool-key" not in output_str, "secret tool name leaked"
+    # Secret-like domain should be omitted
+    assert "sk-secret-token-abc123" not in output_str, "secret domain leaked"
+    # Normal values should be present
+    assert "normal-domain.com" in output_str, "normal domain missing"
+    assert "normal_cap" in output_str, "normal capability missing"
+    assert "secret-plugin" in output_str, "plugin name missing"
+
+
+def eval_plugin_manifest_read_only_no_mutation():
+    """Inspection is read-only: no durable task/worker/event mutation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            # Snapshot state
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            # Call inspect
+            manifest = {"name": "test", "version": "1.0.0", "tools": [{"name": "t1", "risk": "read"}]}
+            result = registry.call("inspect_plugin_manifest", manifest_json=json.dumps(manifest))
+            parsed = json.loads(result)
+            assert parsed["valid"] is True
+
+            # Verify no mutation
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_plugin_manifest_no_plugin_execution():
+    """Inspection does not execute plugin code or register plugin tools."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        marker = Path(tmpdir) / "PLUGIN_EXECUTED_MARKER.txt"
+        plugins_dir = Path(tmpdir) / "plugins"
+        plugins_dir.mkdir()
+        # Write a plugin that would create a marker file and register a tool
+        plugin_code = f'''
+from pathlib import Path
+MARKER = Path("{marker}")
+def register(registry):
+    MARKER.write_text("executed")
+    registry.register("side_effect_tool", "Should never appear", lambda: "bad")
+'''
+        (plugins_dir / "side_effect_plugin.py").write_text(plugin_code)
+
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            tools_before = [t["function"]["name"] for t in registry.to_openai_tools()]
+
+            # Inspect a manifest referencing the same plugin name
+            manifest = {
+                "name": "side_effect_plugin",
+                "version": "1.0.0",
+                "tools": [{"name": "side_effect_tool", "risk": "read"}],
+            }
+            result = registry.call("inspect_plugin_manifest", manifest_json=json.dumps(manifest))
+            parsed = json.loads(result)
+            assert parsed["valid"] is True
+
+            # Marker file must NOT exist — plugin code was not executed
+            assert not marker.exists(), f"marker file created — plugin was executed: {marker}"
+
+            # side_effect_tool must NOT be registered
+            tools_after = [t["function"]["name"] for t in registry.to_openai_tools()]
+            assert "side_effect_tool" not in tools_after, "plugin tool was registered by inspection"
+            assert len(tools_after) == len(tools_before), f"tool count changed: {len(tools_before)} -> {len(tools_after)}"
+        finally:
+            db.close()
+
+
+def eval_plugin_manifest_compatibility():
+    """Existing MCP evals and list_tool_permissions still work after plugin manifest inspection."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Call inspect first
+            manifest = {"name": "compat-test", "version": "1.0.0"}
+            registry.call("inspect_plugin_manifest", manifest_json=json.dumps(manifest))
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "list_tool_permissions" in perms
+            assert "inspect_plugin_manifest" in perms
+
+            # MCP tools still work
+            tools = registry_to_mcp_tools(registry)
+            assert len(tools) > 0
+            calc = next((t for t in tools if t["name"] == "calculate"), None)
+            assert calc is not None, "calculate missing from MCP tools"
+
+            # call_mcp_tool still works
+            result = call_mcp_tool(registry, "calculate", {"expression": "2+3"})
+            assert "5" in str(result), f"unexpected calculate result: {result}"
+        finally:
+            db.close()
 
 
 def _fake_input(values):

@@ -14,16 +14,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-114: Deterministic eval coverage for plugin manifest inspection v1
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-113 ✅
-- 分配: Claude B
-- 目标: 为 TASK-113 的 plugin manifest 解析/校验/inspection 工具增加 deterministic offline eval coverage。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`evals/run_evals.py` 现有 MCP safe surface eval；`mini_agent/plugins.py`。
+暂无
 
 ## 已完成
+
+### TASK-114: Deterministic eval coverage for plugin manifest inspection v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补强 worker store no-mutation 和 no-plugin-execution eval
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 436 passed；`python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent` 225 tests OK；`git diff --check` OK。
+- 内容: 为 `inspect_plugin_manifest` 增加 13 个 deterministic offline eval，覆盖 local/read permission、有效 manifest bounded metadata、malformed JSON / non-object / malformed tools safe errors、duplicate tools、高风险 confirmation 边界、unknown enum normalization no-leak、secret-like redaction、durable task/worker/event read-only no-mutation、plugin inspection 不执行插件代码且不注册工具，以及 MCP/list_tool_permissions compatibility；无 runtime 变更、无网络/模型依赖。
 
 ### TASK-113: Plugin manifest schema and inspection v1 ✅
 - 完成者: Claude A；按 PM 初审反馈补强 unknown enum / secret-like manifest value no-leak
