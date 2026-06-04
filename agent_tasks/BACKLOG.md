@@ -6,6 +6,11 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1
+- 分配给: Claude B
+- 目标: 为 TASK-099 scheduler retry decision event metadata 增加 deterministic offline eval 覆盖，证明 tick/loop retry event payload 可审计、bounded/no-leak，并保持兼容。
+- 状态: assigned
+
 ## 已完成
 
 ### TASK-099: Scheduler retry decision event metadata v1 ✅
