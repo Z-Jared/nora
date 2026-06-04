@@ -22,16 +22,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-113: Plugin manifest schema and inspection v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 无
-- 分配: Claude A
-- 目标: 在现有 `mini_agent/plugins.py` 基础上增加插件 manifest v1 的解析、校验和安全只读 inspection 工具，为后续 plugin runtime/capability routing 建立治理元数据。
-- 验证: `python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`docs/knowledge/DECISIONS.md` 2026-06-03 plugin manifest 决策；`mini_agent/mcp_server.py` 的 safe metadata / no-leak 风格。
+无。
 
 ## 已完成
+
+### TASK-113: Plugin manifest schema and inspection v1 ✅
+- 完成者: Claude A；按 PM 初审反馈补强 unknown enum / secret-like manifest value no-leak
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent` 225 tests OK；`python3 evals/run_evals.py` 423 passed；`git diff --check` OK；PM sentinel no-leak probe OK。
+- 内容: 在 `mini_agent/plugins.py` 增加 plugin manifest v1 的 dataclass 模型、JSON/dict parser、validation result、safe inspection 输出和 no-leak normalization；新增 registry read-only 工具 `inspect_plugin_manifest`，权限为 `ToolPermission(category="local", risk="read")`；覆盖必填 identity、tools list、duplicate tools、high-risk confirmation、unknown enum warning、description bounds、domains/capabilities、secret-like redaction、loader compatibility 和 deterministic safe output。
 
 ### TASK-112: Deterministic eval coverage for MCP adapter safe tool surface v1 ✅
 - 完成者: Claude B；Codex PM 集成时补充 inspection-surface eval

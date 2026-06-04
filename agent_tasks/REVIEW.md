@@ -1,55 +1,39 @@
-# CCB Review — TASK-111/TASK-112: MCP adapter permission-aware safe surface
+# CCB Review — TASK-113: Plugin manifest schema and inspection v1
 
 **Status: APPROVED**
 
-## Findings
+## Summary
 
-No blocking findings remain.
+Clean implementation of manifest v1 schema parsing, validation, and safe inspection. No blocking issues.
 
-PM review found one implementation gap before approval: `registry_to_mcp_tools(...)` correctly returned only exposed MCP tools, but the TASK-111 inspection requirement also needed safe metadata for hidden/blocked tools with `exposed=false`. PM fixed this by adding `inspect_mcp_tool_surface(...)` and matching unit/eval coverage.
+## Key Findings
 
-## Scope Reviewed
+**Read-only**: `inspect_plugin_manifest` registered with `ToolPermission(category="local", risk="read")`. Handler only parses JSON input via `inspect_manifest_json()` — no plugin code execution, no external calls, no persistence.
 
-- `mini_agent/mcp_server.py`
-- `tests/test_mcp_server.py`
-- `evals/run_evals.py`
-- `docs/knowledge/MCP_INTEGRATION.md`
-- `agent_tasks/A_DONE.md`
-- `agent_tasks/B_DONE.md`
-- `agent_tasks/PM_INBOX.md`
-- `agent_tasks/BACKLOG.md`
+**Security hardening** (PM fix applied):
+- Unknown enum values (auth, permission_category, risk, data_sensitivity, event_log) normalized to `"unknown"` — raw values never echoed in warnings/errors/manifest output
+- Secret-like tool names redacted to `<redacted>` via `_is_secret_like()` pattern matching (`sk-`, `secret`, `token`, `api_key`, `password`, `credential`, `bearer`, `auth`, `key-`)
+- `domains`/`capabilities` list items filtered for secret-like values
+- Warning messages use safe positional labels (e.g., `tools[0] (t): unknown risk`)
 
-## Review Notes
+**Manifest validation**:
+- Rejects: not-dict, missing name/version, non-list tools, duplicate tool names, high-risk/external-send/destructive without `requires_confirmation=True`
+- Warns: unknown enum values (normalized, not rejected)
+- Description truncation: manifest 500 chars, tool 300 chars
 
-TASK-111 hardens the MCP adapter without changing Nora's default safe MCP exposure:
+**Test coverage**: 52 tests across 10 test classes:
+- Valid parsing (minimal, full, domains/capabilities, truncation, multiple tools)
+- Error cases (6 tests)
+- Warnings with raw value no-leak (5 tests)
+- JSON parsing (valid, malformed, non-string)
+- Safe dict output (deterministic, no secrets)
+- Inspection tool (valid, invalid, JSON, no raw secrets)
+- Tool defaults and description truncation
+- `load_plugins` preserved (nonexistent dir, simple plugin, broken plugin warning)
+- Constants validation (6 tests)
+- Sentinel no-leak (9 tests covering all enum/list fields + combined)
+- Unknown value normalization (5 tests)
 
-- default allowlist continues to expose calculate and memory tools
-- custom allowlists are still filtered by the MCP permission guard
-- confirmation-required tools are blocked at the MCP boundary
-- execute/interact/delete/destructive/external-send/high risk tools are blocked by default
-- non-memory write tools such as `register_worker` are blocked by default
-- trusted local deployments can opt in with `allow_unsafe_tools=True`
-- blocked calls return bounded JSON errors without raw arguments or secret payloads
-- `validate_allowlist(...)` audits custom allowlists
-- `inspect_mcp_tool_surface(...)` provides safe full-surface metadata for PM/client inspection
+## Residual Risk
 
-TASK-112 adds deterministic offline eval coverage for the safe tool surface, including default/custom allowlist boundaries, unsafe custom allowlist guardrails, safe JSON errors/no-leak, bounded output, memory compatibility, and the new inspection surface.
-
-Selective integration note: both CCB worktrees were stale relative to current `main`, so PM integrated only the TASK-111/TASK-112 relevant files and avoided reintroducing stale TASK-109/TASK-110 changes.
-
-## Verification
-
-```text
-python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
-Ran 182 tests in 7.844s — OK
-
-python3 evals/run_evals.py
-423 passed, 0 failed
-
-git diff --check
-clean
-```
-
-## Decision
-
-Approved for local integration. TASK-111 and TASK-112 satisfy the MCP/plugin runtime hardening slice and are ready to commit.
+None. Implementation is additive, well-tested, and security-hardened.

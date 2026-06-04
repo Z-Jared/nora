@@ -4664,6 +4664,31 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Plugin manifest inspection (TASK-113) ---
+
+    from mini_agent.plugins import inspect_manifest_json
+
+    def _inspect_plugin_manifest_handler(manifest_json: str = "{}") -> str:
+        result = inspect_manifest_json(manifest_json)
+        return _json.dumps(result, ensure_ascii=False, indent=2)
+
+    registry.register(
+        "inspect_plugin_manifest",
+        "校验并展示插件 manifest v1 的安全元数据。只读，不执行插件动作。",
+        _inspect_plugin_manifest_handler,
+        parameters={
+            "type": "object",
+            "properties": {
+                "manifest_json": {
+                    "type": "string",
+                    "description": "插件 manifest JSON 文本",
+                },
+            },
+            "required": ["manifest_json"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     # --- Runtime policy hook evaluator (TASK-101) ---
 
     _POLICY_VERSION = "v1"

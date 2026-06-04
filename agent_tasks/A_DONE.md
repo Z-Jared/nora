@@ -4,40 +4,60 @@ Status: ready for Codex review
 
 ## Summary
 
-TASK-111: MCP adapter permission-aware tool surface hardening v1.
-
-Hardened the MCP adapter with permission metadata exposure, custom-allowlist validation, and MCP boundary blocking for unsafe tools.
+TASK-113: Plugin manifest schema and inspection v1 — implemented, security fix applied.
 
 ## Changes
 
-- `mini_agent/mcp_server.py`
-  - Added permission metadata to MCP tool listings: `category`, `risk`, `requires_confirmation`, and `exposed`.
-  - Added `inspect_mcp_tool_surface(...)` for full safe MCP surface inspection, including hidden/blocked tools.
-  - Added `validate_allowlist(...)` for auditing custom MCP allowlists.
-  - Added MCP permission guard for unsafe tools.
-  - Added explicit `allow_unsafe_tools=True` opt-in for trusted local deployments.
-  - Preserved optional `mcp` dependency behavior and output truncation.
-- `tests/test_mcp_server.py`
-  - Added coverage for permission metadata, unsafe custom allowlist filtering, confirmation-required blocking, non-memory write blocking, and explicit unsafe opt-in.
-- `docs/knowledge/MCP_INTEGRATION.md`
-  - Documented permission metadata, custom allowlist guardrails, and unsafe opt-in.
+### `mini_agent/plugins.py` (extended)
+- Added manifest v1 constants: `VALID_AUTH_METHODS`, `VALID_PERMISSION_CATEGORIES`, `VALID_RISKS`, `VALID_DATA_SENSITIVITY`, `VALID_EVENT_LOG_MODES`, `HIGH_RISK_RISKS`
+- Added data models: `PluginToolMeta`, `PluginManifest`, `ManifestValidationResult`
+- Added parser/validator: `parse_manifest(dict)`, `parse_manifest_json(str)`
+- Validation rejects: missing identity fields, non-list tools, duplicate tool names, high-risk/external-send/destructive tools without confirmation
+- Validation warns: unknown auth methods, unknown permission categories/risks/data_sensitivity/event_log modes
+- Added safe inspection: `inspect_manifest(dict)`, `inspect_manifest_json(str)`, `manifest_to_safe_dict(PluginManifest)`
+- Output is deterministic, bounded, safe — no raw secrets/tokens/env values echoed
+- Preserved existing `load_plugins(...)` behavior and broken plugin warning
 
-## Tests
+### Security fix (PM review)
+- Unknown enum values (auth, permission_category, risk, data_sensitivity, event_log) are normalized to `"unknown"` in output, raw values never echoed in warnings/errors/manifest
+- Warning messages use safe positional labels (e.g., `tools[0] (t): unknown risk`) without echoing raw unknown values
+- Secret-like tool names are redacted to `<redacted>` in warnings and manifest output
+- `_is_secret_like()` detects `sk-`, `secret`, `token`, `api_key`, `password`, `credential`, `bearer`, `auth`, `key-` patterns
+- Domains/capabilities list items are filtered for secret-like values
+- Removed unused `field` import
+
+### `mini_agent/toolkits/registry_builder.py` (extended)
+- Registered `inspect_plugin_manifest` tool with `ToolPermission(category="local", risk="read")`
+- Handler accepts `manifest_json` string, returns safe bounded JSON metadata + validation errors
+
+### `tests/test_plugins.py` (new, 52 tests)
+- Valid manifest parsing (minimal, full, domains/capabilities, description truncation, multiple tools)
+- Error cases (not dict, missing name/version, non-list tools, duplicate tool names, high-risk without/with confirmation)
+- Warnings (unknown auth, permission_category, risk, data_sensitivity, event_log) — raw values not echoed
+- JSON parsing (valid, malformed, non-string)
+- Safe dict output (no secrets, deterministic)
+- Inspection tool (valid, invalid, JSON, no raw secrets)
+- Tool defaults and description truncation
+- load_plugins preserved (nonexistent dir, simple plugin, broken plugin warning)
+- Constants validation
+- Sentinel no-leak tests (auth, permission_category, risk, data_sensitivity, event_log, domains, capabilities, tool name in warnings, combined)
+- Unknown values normalized to "unknown"
+
+## Verification
 
 ```text
-python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
-Ran 182 tests in 7.844s — OK
+python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent
+→ 225 tests OK
 
 python3 evals/run_evals.py
-423 passed, 0 failed
+→ 423 passed, 0 failed
 
 git diff --check
-clean
+→ (clean)
 ```
 
 ## Notes
 
-- No push performed.
-- No edits to B files, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
-- PM review fix strengthened the worker implementation so unsafe non-memory write tools, such as `register_worker`, are blocked by default and require explicit `allow_unsafe_tools=True`.
-- PM review fix also added `inspect_mcp_tool_surface(...)`, because `registry_to_mcp_tools(...)` should only return exposed MCP tools while PM/client inspection needs safe metadata for hidden and blocked tools too.
+- No commit or push performed.
+- No edits to B_TASK, B_DONE, CODEX_TERMINAL_HANDOFF.md, or designs/.
+- Worktree is clean — no conflicts with existing uncommitted work.
