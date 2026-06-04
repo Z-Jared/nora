@@ -5,41 +5,58 @@ Status: assigned
 
 ## Task
 
-TASK-114: Deterministic eval coverage for plugin manifest inspection v1.
+TASK-116: Skill manifest schema and inspection v1.
 
-TASK-113 has landed on `main`. Add deterministic offline eval coverage for the plugin manifest parser / validator / inspection surface.
+Implement a minimal read-only skill manifest schema / parser / inspection surface. This is the skill-pack counterpart to plugin manifests: it should let Nora inspect declared skill-pack metadata for domains, capabilities, workflows, deliverables, required plugins, risk boundaries, and eval hooks without loading or executing skill content.
 
 ## Scope
 
 - Work in `.ccb/workspaces/claude-b`.
-- Extend `evals/run_evals.py` with focused deterministic evals for the TASK-113 plugin manifest surface.
-- Use the existing eval style near the MCP safe surface evals as a reference.
-- Keep evals offline and deterministic: no network, no browser, no model calls, no real auth, no plugin execution.
-- Do not change runtime behavior unless an eval exposes a genuine TASK-113 bug; if so, make the smallest fix and document it in `agent_tasks/B_DONE.md`.
+- Prefer a small new module such as `mini_agent/skills.py` if no equivalent module exists.
+- Register a read-only registry tool named `inspect_skill_manifest` with `ToolPermission(category="local", risk="read")`.
+- Keep the parser independent from plugin loading and runtime execution.
+- Keep output deterministic, bounded, and safe.
+- Do not edit `designs/` or `CODEX_TERMINAL_HANDOFF.md`.
 
-## Required Coverage
+## Manifest Fields
 
-Add eval cases covering at least:
+Support a v1 JSON/dict manifest with at least:
 
-- `inspect_plugin_manifest` tool is registered with exact `ToolPermission(category="local", risk="read")`.
-- Valid developer/productivity manifest returns bounded safe metadata.
-- Malformed JSON / non-object / malformed tools return safe bounded errors.
-- Duplicate tool names and high-risk/destructive/external-send without confirmation are rejected.
-- High-risk/destructive/external-send with confirmation is accepted.
-- Unknown enum values for auth, permission_category, risk, data_sensitivity, and event_log are normalized safely and do not echo raw values.
-- Secret-like values in auth/tools/domains/capabilities/warnings are not leaked.
-- Inspection is read-only: no durable task/worker/event mutation and no plugin code execution.
-- Compatibility: existing MCP evals and `list_tool_permissions` still work.
+- `name` (required, non-empty string)
+- `version` (required, non-empty string)
+- `description` (optional, bounded)
+- `domains` (optional list of strings)
+- `capabilities` (optional list of strings)
+- `workflows` (optional list of strings)
+- `deliverables` (optional list of strings)
+- `required_plugins` (optional list of strings)
+- `risk_boundaries` (optional list of strings)
+- `evals` (optional list of strings)
+
+Unknown additional fields may be ignored or reported as warnings, but raw sensitive values must not leak.
+
+## Requirements
+
+- Provide parser/inspection helpers for dict and JSON string input, similar in spirit to `mini_agent/plugins.py`.
+- Validate required fields and list field types.
+- Normalize or omit malformed optional entries safely.
+- Redact or omit secret-like values in names, lists, warnings, and errors.
+- Bound long descriptions/list items and cap list lengths to keep output small.
+- `inspect_skill_manifest` must be read-only: no durable task/worker/event mutation.
+- Do not load files, import skill modules, execute hooks, call external services, or invoke plugin code.
+- Preserve existing plugin manifest and MCP behavior.
 
 ## Verification
 
 Run these before writing `agent_tasks/B_DONE.md`:
 
 ```bash
+python3 -m unittest tests.test_mini_agent
 python3 evals/run_evals.py
-python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent
 git diff --check
 ```
+
+Add focused unit tests for the new skill manifest parser/inspection surface. If you add tests, include the exact test command in `agent_tasks/B_DONE.md`.
 
 ## Completion
 
@@ -53,5 +70,6 @@ Do not commit or push.
 
 ## Notes
 
+- Claude A is working independently on TASK-115 capability router scaffold. If you both touch `mini_agent/toolkits/registry_builder.py`, keep your edit tightly scoped and document it.
 - Do not edit `agent_tasks/A_TASK.md`, `agent_tasks/A_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
 - If task scope conflicts with uncommitted work, stop and write the conflict in `agent_tasks/B_DONE.md`.

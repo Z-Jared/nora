@@ -4,17 +4,27 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+暂无
+
+## 进行中
+
 ### TASK-115: Capability router scaffold v1
 - 优先级: medium
 - 预计: 1-2 小时
-- 依赖: TASK-113/TASK-114
+- 依赖: TASK-113/TASK-114 ✅
+- 分配: Claude A
 - 目标: 增加最小只读 capability routing scaffold，根据用户目标和已声明 plugin manifest metadata 返回候选能力、风险级别、所需确认和预期交付物，不执行插件动作。
 - 验证: `python3 -m unittest tests.test_plugins tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`docs/knowledge/DECISIONS.md` 2026-06-03 capability router 决策。
 
-## 进行中
-
-暂无
+### TASK-116: Skill manifest schema and inspection v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: 无
+- 分配: Claude B
+- 目标: 增加最小只读 skill manifest schema / parser / inspection surface，为后续行业 skill packs 提供可检查、可治理的 manifest 元数据，不加载或执行 skill 内容。
+- 验证: `python3 -m unittest tests.test_mini_agent`；如新增测试则运行对应测试文件；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`docs/knowledge/DECISIONS.md` 2026-06-03 skill manifests 决策。
 
 ## 已完成
 
