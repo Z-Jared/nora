@@ -5,42 +5,38 @@ Status: completed
 
 ## Task
 
-TASK-098: Deterministic eval coverage for guarded scheduler retry execution v1
+TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1
 
 ## Summary
 
-Added 9 eval cases in `evals/run_evals.py` covering guarded scheduler retry execution:
+Added 6 deterministic offline eval cases in `evals/run_evals.py` covering TASK-099 scheduler retry decision event metadata:
 
-1. **retry_exec_dry_run_once** — `run_worker_lifecycle_once(dry_run=True)` returns retry would-execute metadata and does not mutate failed task state (retry_count, status).
+1. **tick_retry_executed_event_metadata**: Tick with retry executed records safe retry action metadata in scheduler_decision event. Verifies aggregate counts (`retry_executed >= 1`, `retry_skipped`, `retry_failed`) and per-action fields (`executed=True`, `task_id`, `retry_count=1`, `max_retries=3`).
 
-2. **retry_exec_non_dry_run_once** — `run_worker_lifecycle_once(dry_run=False)` retries a safe retryable failed task, moving it to `pending` and incrementing `retry_count` from 0 to 1.
+2. **tick_retry_skipped_event_metadata**: Tick with retry skipped for missing capacity records safe skip reason. Verifies `retry_skipped >= 1` in payload and per-action `reason="retry_blocked_missing_capacity"`. Confirms no task mutation.
 
-3. **retry_exec_tick_and_loop** — Scheduler tick and scheduler loop wrappers execute the retry path when `dry_run=False`, verifying task state mutation through both wrappers.
+3. **loop_retry_event_metadata**: Loop with retry executed records aggregate and per-tick retry metadata. Verifies aggregate counts and per-tick counts in `ticks[]`. Confirms raw `results` not persisted in event payload.
 
-4. **retry_exec_active_owner_blocks** — Active owner worker (both ASSIGNED and RUNNING states) blocks retry execution. Planner does not produce retry action; summary reports `retry_blocked_active_worker >= 1`; task status and retry_count unchanged.
+4. **retry_event_record_false**: Tick and loop with `record_event=False` produce no scheduler decision events.
 
-5. **retry_exec_stale_guard** — Stale execution-time guard: planner sees retry action (task is failed), but `get_task` returns changed state (completed) at execution time. Execution skips with `task_not_failed` reason; task NOT retried.
+5. **retry_event_safety_no_leak**: Event payloads do not leak task goal, steps, failure_reason, shell/env/request, workspace paths, or secrets. Uses sentinels and verifies none appear in serialized event payloads.
 
-6. **retry_exec_no_capacity_skips** — No idle capacity (worker set offline) causes retry to skip with `retry_blocked_missing_capacity` reason; task status and retry_count remain unchanged.
+6. **retry_event_compatibility**: Scheduler tick/loop/run-once/planner/explain remain callable after retry event metadata checks.
 
-7. **retry_exec_priority_closeout_before_retry** — Ready closeout (`finalize_ready_workspace_merge`) appears before retry (`retry_failed_task`) in execution results; dispatch actions remain skipped.
+## Changes
 
-8. **retry_exec_safety_no_leak** — Both dry-run and non-dry-run outputs do not leak goal, secret, step, failure reason, env, request, or workspace path sentinels.
+- `evals/run_evals.py`: Added 6 eval functions + registered in cases list. No runtime changes needed.
 
-9. **retry_exec_compatibility** — After retry execution, planner, explain, scheduler tick, scheduler loop, run-once, worker/task registry, claim, and dispatch all still work.
-
-## Runtime Changes
-
-None. All evals pass against existing TASK-097 runtime.
-
-## Evidence
+## Tests
 
 ```
-python3 evals/run_evals.py — 358 passed, 0 failed
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent — 726 tests, OK
-git diff --check — clean
+python3 evals/run_evals.py: 364 passed, 0 failed
+python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests: 58 tests, OK
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent: 737 tests, OK
+git diff --check: clean
 ```
 
-## Diff
+## Notes
 
-Only `evals/run_evals.py` modified (no runtime changes).
+- TASK-099 runtime implementation already handles retry event metadata correctly; this task only adds eval coverage.
+- No runtime bugs found; no runtime changes made.

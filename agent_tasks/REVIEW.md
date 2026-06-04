@@ -1,64 +1,73 @@
-# TASK-099 Review — Scheduler retry decision event metadata v1
+# TASK-100 Review — Deterministic eval coverage for scheduler retry decision event metadata v1
 
 **Status: APPROVED**
 
 ## Review Summary
 
-All 5 review criteria satisfied. Implementation is minimal, bounded, and well-tested. No issues found.
+All 6 eval cases are present, assertions are concrete and specific, eval-only with no runtime changes, no test pollution or resource leaks, and safety no-leak coverage is comprehensive.
 
 ## Detailed Review
 
-### 1. Tick `SCHEDULER_DECISION` event records retry action metadata with bounded safe fields ✅
+### 1. Coverage of B_TASK requirements ✅
 
-- Per-action entries include `executed` (bool), `retry_count` (int), `max_retries` (int) — lines 3553-3556 of diff
-- Aggregate counts `retry_executed`, `retry_skipped`, `retry_failed` added to tick event payload — lines 3561-3563
-- Action entries built from `safe_result` which is pre-sanitized; only safe fields extracted (action, task_id, worker_id, reason, skipped, would_execute, finalized, executed, retry_count, max_retries)
-- No raw `results` persisted in event
+| Requirement | Eval | Status |
+|---|---|---|
+| Tick retry executed event metadata | `eval_tick_retry_executed_event_metadata` | ✅ |
+| Tick retry skipped metadata | `eval_tick_retry_skipped_event_metadata` | ✅ |
+| Loop retry metadata (aggregate + per-tick + no raw results) | `eval_loop_retry_event_metadata` | ✅ |
+| `record_event=False` | `eval_retry_event_record_false` | ✅ |
+| Safety/no-leak | `eval_retry_event_safety_no_leak` | ✅ |
+| Compatibility | `eval_retry_event_compatibility` | ✅ |
 
-### 2. Loop `SCHEDULER_DECISION` event records equivalent retry metadata ✅
+### 2. Assertion specificity ✅
 
-- Per-tick summaries in `ticks[]` include `retry_executed`, `retry_skipped`, `retry_failed` — lines 3695-3693
-- Aggregate counts added to loop event payload — lines 3741-3713
-- `ticks` array included in loop event payload for per-tick auditability — line 3715
-- No raw `results` persisted; only bounded summaries
+All evals go beyond checking event existence:
 
-### 3. `record_event=False` produces no scheduler decision event ✅
+- **tick_retry_executed_event_metadata**: Verifies `retry_executed >= 1`, `retry_skipped`, `retry_failed` in aggregate; per-action `executed=True`, `task_id` match, `retry_count=1`, `max_retries=3`
+- **tick_retry_skipped_event_metadata**: Verifies `retry_skipped >= 1`, per-action `reason="retry_blocked_missing_capacity"`, post-call task status/retry_count unchanged
+- **loop_retry_event_metadata**: Verifies aggregate `retry_executed >= 1`, `retry_skipped`, `retry_failed`; per-tick `retry_executed`, `retry_skipped`, `retry_failed` in `ticks[0]`; `results` not in payload
+- **retry_event_record_false**: Verifies `len(tick_events) == 0` and `len(loop_events) == 0` after `record_event=False`
+- **retry_event_safety_no_leak**: Checks 6 sentinels (goal, secret, step, env/failure_reason, request, workspace path) absent from serialized payload for both tick and loop events; also checks `results` not in payload
+- **retry_event_compatibility**: Verifies tick, loop, run-once, planner, explain all return expected keys after retry event recording
 
-- `test_tick_record_event_false_no_event` verifies zero events when disabled
-- `test_loop_record_event_false_no_event` verifies zero events when disabled
-- No code changes to `record_event=False` path; existing behavior preserved
+### 3. Eval-only, no runtime changes ✅
 
-### 4. Payload avoids leaking sensitive data ✅
+Diff only touches:
+- `evals/run_evals.py` (6 new eval functions + registration)
+- `agent_tasks/B_DONE.md` (completion report)
+- `agent_tasks/PM_INBOX.md` (notification)
 
-- `test_event_no_goal_leak` — goal sentinel not in payload
-- `test_event_no_steps_leak` — steps sentinel not in payload
-- `test_event_no_failure_reason_leak` — "failure_reason" not in payload
-- `test_event_no_workspace_path_leak` — "/tmp/" and "workspace_path" not in payload
-- `test_event_no_secret_leak` — shell/env secret sentinel not in payload
-- `test_event_fields_are_safe_types` — all action values are str/int/float/bool/None
+No changes to `mini_agent/` or `tests/`.
 
-### 5. New API output fields are additive and compatible ✅
+### 4. No test pollution, state reuse, resource leaks, or flaky ordering ✅
 
-- `retry_executed`, `retry_skipped`, `retry_failed` added to tick API return JSON (lines 3604-3607)
-- Same counts added to loop API return JSON (lines 3769-3725) and loop summary (lines 3783-3735)
-- Existing fields unchanged; all 47 scheduler tick/loop tests pass
-- All 358 evals pass; all 737 broader tests pass
+- Each eval uses `tempfile.TemporaryDirectory()` with `try/finally: db.close()`
+- Each eval uses unique worker IDs (`w_tick_retry_exec`, `w_tick_retry_skip`, `w_loop_retry_meta`, `w_tick_no_event`, `w_loop_no_event`, `w_retry_event_safe`, `w_retry_event_safe2`, `w_retry_event_compat`)
+- Uses `before_event_ids` snapshot pattern to isolate new events from setup events
+- No ordering-dependent assertions on event sequence (uses filtering by event_type and summary)
 
-## Test Coverage
+### 5. Safety no-leak coverage ✅
 
-11 tests in `SchedulerRetryEventMetadataTests`:
-- Tick retry executed metadata (per-action + aggregate)
-- Tick retry skipped metadata (reason)
-- Tick record_event=False
-- Loop retry executed metadata (aggregate + per-tick)
-- Loop record_event=False
-- Safety no-leak (goal, steps, failure_reason, workspace path, secrets)
-- Safe type enforcement
+`eval_retry_event_safety_no_leak` checks against:
+- `_LIFECYCLE_SENTINEL_GOAL` — task goal
+- `_LIFECYCLE_SENTINEL_SECRET` — secret
+- `_LIFECYCLE_SENTINEL_STEP` — task steps
+- `_LIFECYCLE_SENTINEL_ENV` — failure_reason / env
+- `_LIFECYCLE_SENTINEL_REQUEST` — request string
+- `".workspaces"` — workspace path
+- `"results"` — raw results not persisted
 
-## PM Fix Verification
+Covers both tick events and loop events. Sentinels passed as `goal`, `steps`, and `failure_reason` during task setup.
 
-Loop event payload now includes aggregate retry counts and per-tick retry counts in `ticks[]`. No raw `results` persisted. Fix is correct and complete.
+## PM Verification
 
-## Risks
+```
+python3 evals/run_evals.py: 364 passed, 0 failed
+python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests: 58 tests, OK
+python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent: 737 tests, OK
+git diff --check: clean
+```
 
-None identified. Change is additive, bounded, and backwards-compatible.
+## Findings
+
+None. All requirements met, assertions are concrete, no runtime changes, no leaks.

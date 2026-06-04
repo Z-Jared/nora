@@ -419,6 +419,12 @@ def main() -> int:
         EvalCase("retry_exec_priority_closeout_before_retry", eval_retry_exec_priority_closeout_before_retry),
         EvalCase("retry_exec_safety_no_leak", eval_retry_exec_safety_no_leak),
         EvalCase("retry_exec_compatibility", eval_retry_exec_compatibility),
+        EvalCase("tick_retry_executed_event_metadata", eval_tick_retry_executed_event_metadata),
+        EvalCase("tick_retry_skipped_event_metadata", eval_tick_retry_skipped_event_metadata),
+        EvalCase("loop_retry_event_metadata", eval_loop_retry_event_metadata),
+        EvalCase("retry_event_record_false", eval_retry_event_record_false),
+        EvalCase("retry_event_safety_no_leak", eval_retry_event_safety_no_leak),
+        EvalCase("retry_event_compatibility", eval_retry_event_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -15480,6 +15486,240 @@ def eval_retry_exec_compatibility():
             assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+def eval_tick_retry_executed_event_metadata():
+    """Tick with retry executed records safe retry action metadata in scheduler_decision event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            tid, _ = _setup_failed_task(registry, worker_id="w_tick_retry_exec", retry_count=0, max_retries=3)
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler tick" in (e.summary or "")]
+            assert len(tick_events) >= 1, f"no tick scheduler_decision event: {[(e.event_type, e.summary) for e in new_events]}"
+
+            payload = tick_events[0].payload
+            # Aggregate retry counts
+            assert payload.get("retry_executed", 0) >= 1, f"retry_executed: {payload}"
+            assert "retry_skipped" in payload, f"missing retry_skipped: {payload}"
+            assert "retry_failed" in payload, f"missing retry_failed: {payload}"
+
+            # Per-action metadata
+            retry_actions = [a for a in payload.get("actions", []) if a.get("action") == "retry_failed_task"]
+            assert len(retry_actions) >= 1, f"no retry_failed_task action in payload: {payload.get('actions', [])}"
+            ra = retry_actions[0]
+            assert ra.get("executed") is True, f"retry not executed: {ra}"
+            assert ra.get("task_id") == tid, f"task_id mismatch: {ra}"
+            assert ra.get("retry_count") == 1, f"retry_count: {ra}"
+            assert ra.get("max_retries") == 3, f"max_retries: {ra}"
+        finally:
+            db.close()
+
+
+def eval_tick_retry_skipped_event_metadata():
+    """Tick with retry skipped for missing capacity records safe skip reason in event payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+            # Create failed task with worker idle so planner sees it as retryable,
+            # then set worker offline so execution sees no idle capacity
+            tid, wid = _setup_failed_task(registry, worker_id="w_tick_retry_skip", retry_count=0, max_retries=3, set_worker_idle=True)
+            ws.update_status(wid, "offline", current_task_id="")
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler tick" in (e.summary or "")]
+            assert len(tick_events) >= 1, f"no tick scheduler_decision event"
+
+            payload = tick_events[0].payload
+            assert payload.get("retry_skipped", 0) >= 1, f"missing retry_skipped: {payload}"
+
+            retry_actions = [a for a in payload.get("actions", []) if a.get("action") == "retry_failed_task"]
+            assert len(retry_actions) >= 1, f"no retry_failed_task action: {payload.get('actions', [])}"
+            ra = retry_actions[0]
+            assert ra.get("skipped") is True, f"retry not skipped: {ra}"
+            assert ra.get("reason") == "retry_blocked_missing_capacity", f"wrong reason: {ra}"
+
+            # No task mutation
+            after_task = registry.durable_task_store.get_task(tid)
+            assert after_task.status == "failed", f"task mutated: {after_task.status}"
+            assert after_task.retry_count == 0, f"retry_count mutated: {after_task.retry_count}"
+        finally:
+            db.close()
+
+
+def eval_loop_retry_event_metadata():
+    """Loop with retry executed records aggregate and per-tick retry metadata in scheduler_decision event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            tid, _ = _setup_failed_task(registry, worker_id="w_loop_retry_meta", retry_count=0, max_retries=3)
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1, record_event=True)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+
+            loop_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler loop" in (e.summary or "")]
+            assert len(loop_events) >= 1, f"no loop scheduler_decision event: {[(e.event_type, e.summary) for e in new_events]}"
+
+            payload = loop_events[0].payload
+            # Aggregate retry counts
+            assert payload.get("retry_executed", 0) >= 1, f"retry_executed: {payload}"
+            assert "retry_skipped" in payload, f"missing retry_skipped: {payload}"
+            assert "retry_failed" in payload, f"missing retry_failed: {payload}"
+
+            # Per-tick retry metadata in ticks[]
+            assert "ticks" in payload, f"missing ticks: {payload}"
+            assert len(payload["ticks"]) >= 1, f"empty ticks: {payload['ticks']}"
+            tick = payload["ticks"][0]
+            assert "retry_executed" in tick, f"tick missing retry_executed: {tick}"
+            assert "retry_skipped" in tick, f"tick missing retry_skipped: {tick}"
+            assert "retry_failed" in tick, f"tick missing retry_failed: {tick}"
+
+            # Must not persist raw results
+            assert "results" not in payload, f"raw results leaked: {list(payload.keys())}"
+        finally:
+            db.close()
+
+
+def eval_retry_event_record_false():
+    """Tick and loop with record_event=False produce no scheduler decision events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            # Tick with record_event=False
+            _setup_failed_task(registry, worker_id="w_tick_no_event", retry_count=0, max_retries=3)
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=False)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION]
+            assert len(tick_events) == 0, f"tick recorded event despite record_event=False: {tick_events}"
+
+            # Loop with record_event=False
+            _setup_failed_task(registry, worker_id="w_loop_no_event", retry_count=0, max_retries=3)
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1, record_event=False)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            loop_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION]
+            assert len(loop_events) == 0, f"loop recorded event despite record_event=False: {loop_events}"
+        finally:
+            db.close()
+
+
+def eval_retry_event_safety_no_leak():
+    """Event payloads do not leak task goal, steps, failure_reason, shell/env/request, workspace paths, or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            # Use sentinels as goal, steps, failure_reason
+            tid, _ = _setup_failed_task(
+                registry, worker_id="w_retry_event_safe", retry_count=0, max_retries=3,
+                goal=_LIFECYCLE_SENTINEL_GOAL + " " + _LIFECYCLE_SENTINEL_SECRET,
+                steps=[{"text": _LIFECYCLE_SENTINEL_STEP}],
+                failure_reason=_LIFECYCLE_SENTINEL_ENV,
+            )
+
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            tick_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION]
+            assert len(tick_events) >= 1, "no tick event"
+
+            for e in tick_events:
+                payload_str = json.dumps(e.payload)
+                assert _LIFECYCLE_SENTINEL_GOAL not in payload_str, f"goal leaked in tick event"
+                assert _LIFECYCLE_SENTINEL_SECRET not in payload_str, f"secret leaked in tick event"
+                assert _LIFECYCLE_SENTINEL_STEP not in payload_str, f"step leaked in tick event"
+                assert _LIFECYCLE_SENTINEL_ENV not in payload_str, f"env/failure_reason leaked in tick event"
+                assert _LIFECYCLE_SENTINEL_REQUEST not in payload_str, f"request leaked in tick event"
+                assert ".workspaces" not in payload_str, f"workspace path leaked in tick event"
+                assert "results" not in e.payload, f"raw results leaked in tick event"
+
+            # Loop event safety
+            _setup_failed_task(
+                registry, worker_id="w_retry_event_safe2", retry_count=0, max_retries=3,
+                goal=_LIFECYCLE_SENTINEL_GOAL + " " + _LIFECYCLE_SENTINEL_SECRET,
+                steps=[{"text": _LIFECYCLE_SENTINEL_STEP}],
+                failure_reason=_LIFECYCLE_SENTINEL_ENV,
+            )
+            before_event_ids = {e.event_id for e in es.list_events(max_results=500)}
+            registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1, record_event=True)
+            new_events = [e for e in es.list_events(max_results=500) if e.event_id not in before_event_ids]
+            loop_events = [e for e in new_events if e.event_type == SCHEDULER_DECISION and "scheduler loop" in (e.summary or "")]
+            assert len(loop_events) >= 1, "no loop event"
+
+            for e in loop_events:
+                payload_str = json.dumps(e.payload)
+                assert _LIFECYCLE_SENTINEL_GOAL not in payload_str, f"goal leaked in loop event"
+                assert _LIFECYCLE_SENTINEL_SECRET not in payload_str, f"secret leaked in loop event"
+                assert _LIFECYCLE_SENTINEL_STEP not in payload_str, f"step leaked in loop event"
+                assert _LIFECYCLE_SENTINEL_ENV not in payload_str, f"env/failure_reason leaked in loop event"
+                assert _LIFECYCLE_SENTINEL_REQUEST not in payload_str, f"request leaked in loop event"
+                assert ".workspaces" not in payload_str, f"workspace path leaked in loop event"
+                assert "results" not in e.payload, f"raw results leaked in loop event"
+        finally:
+            db.close()
+
+
+def eval_retry_event_compatibility():
+    """Scheduler tick/loop/run-once/planner/explain remain callable after retry event metadata checks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            tid, _ = _setup_failed_task(registry, worker_id="w_retry_event_compat", retry_count=0, max_retries=3)
+
+            # Run tick with event recording
+            registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+            # Scheduler tick still works
+            tick = json.loads(registry.call("run_worker_lifecycle_scheduler_tick", limit=5, dry_run=True))
+            assert "planned_count" in tick
+
+            # Scheduler loop still works
+            loop = json.loads(registry.call("run_worker_lifecycle_scheduler_loop", max_ticks=1, limit=5, dry_run=True))
+            assert "planned_count" in loop
+
+            # Run-once still works
+            once = json.loads(registry.call("run_worker_lifecycle_once", limit=5, dry_run=True))
+            assert "planned_count" in once
+
+            # Planner still works
+            plan = json.loads(registry.call("plan_worker_lifecycle_actions"))
+            assert "actions" in plan
+
+            # Explain still works
+            explain = json.loads(registry.call("explain_worker_lifecycle_scheduler_state"))
+            assert "tasks" in explain
+
+            # Worker/task registry still works
+            ws = registry.durable_worker_store
+            ws.register_worker("w_after_retry_event", role="coder")
+            assert ws.get_worker("w_after_retry_event") is not None
+            new_task = ts.create_task(goal="compat test task", steps=[{"text": "step1"}])
+            assert ts.get_task(new_task.task_id) is not None
         finally:
             db.close()
 

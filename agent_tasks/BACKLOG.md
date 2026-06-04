@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1
-- 分配给: Claude B
-- 目标: 为 TASK-099 scheduler retry decision event metadata 增加 deterministic offline eval 覆盖，证明 tick/loop retry event payload 可审计、bounded/no-leak，并保持兼容。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1 ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 364 passed；`python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests` 58 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 737 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-099 scheduler retry decision event metadata 增加 6 个 deterministic offline eval，覆盖 tick retry executed event metadata、tick retry skipped missing-capacity metadata、loop retry aggregate/per-tick metadata、`record_event=False` no-event、安全 no-leak 和 compatibility；无 runtime 变更。
 
 ### TASK-099: Scheduler retry decision event metadata v1 ✅
 - 完成者: Claude A；按 PM 初审反馈补齐 loop event retry aggregate / per-tick metadata
