@@ -4,11 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-无。
+### TASK-114: Deterministic eval coverage for plugin manifest inspection v1
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-113
+- 目标: 为 TASK-113 的 plugin manifest 解析/校验/inspection 工具增加 deterministic offline eval coverage。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`evals/run_evals.py` 现有 MCP safe surface eval；`mini_agent/plugins.py`。
+
+### TASK-115: Capability router scaffold v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-113/TASK-114
+- 目标: 增加最小只读 capability routing scaffold，根据用户目标和已声明 plugin manifest metadata 返回候选能力、风险级别、所需确认和预期交付物，不执行插件动作。
+- 验证: `python3 -m unittest tests.test_plugins tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`docs/knowledge/DECISIONS.md` 2026-06-03 capability router 决策。
 
 ## 进行中
 
-无。
+### TASK-113: Plugin manifest schema and inspection v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: 无
+- 分配: Claude A
+- 目标: 在现有 `mini_agent/plugins.py` 基础上增加插件 manifest v1 的解析、校验和安全只读 inspection 工具，为后续 plugin runtime/capability routing 建立治理元数据。
+- 验证: `python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`docs/knowledge/DECISIONS.md` 2026-06-03 plugin manifest 决策；`mini_agent/mcp_server.py` 的 safe metadata / no-leak 风格。
 
 ## 已完成
 
