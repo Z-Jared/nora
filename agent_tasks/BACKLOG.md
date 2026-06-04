@@ -4,15 +4,17 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+## 进行中
+
 ### TASK-106: Deterministic eval coverage for runtime policy hook event query v1
+- 分配给: Claude B
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-105 ✅
 - 目标: 为 runtime policy hook event query/listing 能力增加 deterministic offline eval coverage，验证过滤、排序、bounded output、no-leak、read-only/no-mutation 和 compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema + Priority 9 hook/policy kernel。
-
-## 进行中
+- 状态: assigned
 
 ## 已完成
 
