@@ -4,49 +4,68 @@ Status: ready for Codex review
 
 ## Summary
 
-Implemented `summarize_runtime_policy_hook_evaluations(...)` registry tool (TASK-107). This read-only tool provides an aggregate summary of recent `policy_hook_evaluation` durable events, answering "how many allow/confirm/block decisions happened recently, by hook/category/risk, and which recent safe event IDs contributed?"
+Implemented `describe_runtime_policy_hook_rules` read-only registry tool (TASK-109), with catalog metadata corrected to match `_evaluate_policy_hook_core` actual priority order.
 
-### Implementation
+## Implementation Details
 
-**`mini_agent/toolkits/registry_builder.py`** — Added `_summarize_runtime_policy_hook_evaluations_json()` function and registered it as `summarize_runtime_policy_hook_evaluations`:
-
-- Queries `policy_hook_evaluation` events from the durable event store
-- Supports bounded filters: `hook`, `decision`, `category`, `risk`, `task_id`, `worker_id`, `session_id`, `limit`
-- `limit` clamped to [1, 100], defaults to 20
-- Invalid/unsafe non-empty filters return bounded empty summary with `errors` list (consistent with `list_runtime_policy_hook_evaluations` pattern)
-- Returns bounded JSON with: `total`, `filters`, `decisions` (allow/confirm/block counts), `hooks`, `categories`, `risks`, `requires_confirmation_count`, `blocked_count`, `recent_event_ids`, `policy_versions`
-- Read-only: no event creation, no task/worker mutation
+**Registry tool** (`mini_agent/toolkits/registry_builder.py`):
+- Added `_describe_runtime_policy_hook_rules_json()` function
+- Returns static catalog with no parameters (fully read-only)
 - Registered with `ToolPermission(category="local", risk="read")`
 
-**`tests/test_durable_workers.py`** — Added `SummarizeRuntimePolicyHookEvaluationsTests` class with 28 tests:
+**Rules catalog (priority-corrected):**
+- `rule_deny_destructive_external` — blocks destructive/external_send across all hooks (highest priority)
+- `rule_high_risk_confirm` — confirms high risk across all hooks (catches high before specific hook rules)
+- `rule_pre_shell_write` — confirms write only (high caught by rule_high_risk_confirm first)
+- `rule_pre_git_write` — confirms write only (high caught by rule_high_risk_confirm first)
+- `rule_before_commit_write` — confirms write only (high/destructive caught by higher-priority rules first)
+- `rule_pre_tool_write` — confirms write
+- `rule_pre_tool_read` — allows read
+- `rule_read_allow` — allows read across all hooks
+- `rule_write_confirm` — confirms generic write
+- `rule_default_allow` — allows unknown risk fallback
 
-- Basic summary: empty returns zeros, decision counts, hook counts, category counts, risk counts, policy versions, recent event IDs
-- Filters: hook, decision, category, risk, task_id, worker_id, session_id
-- Invalid/unsafe filters: invalid hook/decision/category/risk/task_id/worker_id/session_id all return empty with errors
-- Limit: bounded, clamped to max, invalid defaults, zero clamps to one
-- No-leak: raw reason and action sentinels not in output
-- Read-only: no event creation, no task/worker mutation
-- Compatibility: evaluate, record, list, list_tool_permissions, confirm_action all still work
+## Tests
+
+**New test class** (`tests/test_durable_workers.py`):
+- `DescribeRuntimePolicyHookRulesTests` with 34 tests covering:
+  - Output shape (policy_version, hooks, categories, risks, decisions, rules list)
+  - All 10 known rules with correct properties
+  - All rules have required fields and unique IDs
+  - No-leak: no raw actions, reasons, paths, env vars, shell commands, request headers
+  - Evaluator alignment: catalog rules match actual evaluator `matched_rules` for key scenarios
+  - Read-only: no event creation, no task mutation
+  - Compatibility: all existing tools still work
 
 ## Diff
 
 ```text
- mini_agent/toolkits/registry_builder.py | 135 ++++++++++++++++++++++++++++++++
- tests/test_durable_workers.py           | 198 ++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 333 insertions(+)
+ agent_tasks/A_DONE.md                   |  79 +++++----
+ agent_tasks/PM_INBOX.md                 |   5 +
+ mini_agent/toolkits/registry_builder.py | 124 ++++++++++++++
+ tests/test_durable_workers.py           | 288 ++++++++++++++++++++++++++++++++
+ 4 files changed, 468 insertions(+), 28 deletions(-)
 ```
 
-## Tests
+## Test Results
 
 ```text
-python3 -m unittest tests.test_durable_workers                     — 701 tests, OK
-python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent — 311 tests, OK
-python3 evals/run_evals.py                                         — 395 passed, 0 failed
-git diff --check                                                   — clean
+python3 -m unittest tests.test_durable_workers
+Ran 737 tests in 12.235s — OK
+
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
+Ran 311 tests in 8.091s — OK
+
+python3 evals/run_evals.py
+406 passed, 0 failed
+
+git diff --check
+(clean)
 ```
 
-## Notes
+## PM Review Fix (v2)
 
-- No push performed.
-- No conflicts with other workers.
-- Existing evaluator, recorder, and listing tools remain unchanged and functional.
+Fixed catalog metadata to match `_evaluate_policy_hook_core` actual priority order:
+- `rule_pre_shell_write`, `rule_pre_git_write`, `rule_before_commit_write`: removed "high" and "destructive" from `risks` since those are caught by higher-priority rules first
+- Added evaluator alignment tests verifying catalog matches actual `matched_rules` for key scenarios
+- Enhanced no-leak tests with path/env/shell/request sentinel checks

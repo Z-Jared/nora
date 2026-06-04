@@ -2,14 +2,16 @@
 
 Codex is the project manager, reviewer, and committer for this repository. Claude Code windows are implementation workers.
 
+Task publication is centralized: only the dedicated Codex PM thread may publish or assign tasks to workers. Other Codex or automation threads may propose candidate tasks, review inputs, or roadmap adjustments, but they must not directly update worker task files or send worker assignments unless they are operating as the PM thread.
+
 ## Roles
 
-- Codex PM: plans, assigns, reviews, runs checks, commits, and pushes after approval.
+- Codex PM thread: plans, publishes tasks, assigns workers, reviews, runs checks, commits, and pushes after approval.
 - Codex Reviewer: performs read-only code review and writes `agent_tasks/REVIEW.md`.
 - Claude A: implementation worker for `agent_tasks/A_TASK.md`.
 - Claude B: implementation worker for `agent_tasks/B_TASK.md`.
 
-Codex PM/Reviewer windows do not identify as A/B workers. Claude Code worker windows must identify as either:
+Codex PM/Reviewer windows do not identify as A/B workers. A Codex window that is not the dedicated PM thread must not publish tasks or assign Claude workers. Claude Code worker windows must identify as either:
 
 - Claude A
 - Claude B
@@ -22,7 +24,7 @@ Then follow only the matching task file:
 ## Task Flow
 
 0. Read `docs/knowledge/PROJECT_WAKEUP.md`, `docs/knowledge/DECISIONS.md`, and `docs/knowledge/CHAT_INDEX.md` so you inherit the project context from prior windows.
-1. Codex PM reads `agent_tasks/PM_LOOP.md` and `agent_tasks/BACKLOG.md`.
+1. The Codex PM thread reads `agent_tasks/PM_LOOP.md` and `agent_tasks/BACKLOG.md`.
 2. Claude workers read their assigned task file.
 3. Inspect the current git worktree before editing.
 4. Implement only the assigned scope.
@@ -33,12 +35,13 @@ Then follow only the matching task file:
 7. Notify Codex PM:
    - Claude A runs `agent_tasks/notify_codex.sh A`
    - Claude B runs `agent_tasks/notify_codex.sh B`
-8. Codex PM runs initial checks, sends approved candidates to Codex Reviewer, then decides integration.
+8. The Codex PM thread runs initial checks, sends approved candidates to Codex Reviewer, then decides integration.
 9. Workers do not push or commit unless Codex explicitly asks.
 
 ## Boundaries
 
 - Do not edit the other worker's task or done file.
+- Do not publish tasks, edit worker task files, or send worker assignments unless you are the dedicated Codex PM thread.
 - Do not edit `CODEX_TERMINAL_HANDOFF.md`.
 - Do not edit `designs/` unless explicitly assigned.
 - Avoid broad refactors while another worker is active.

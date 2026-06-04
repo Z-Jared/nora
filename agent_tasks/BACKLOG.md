@@ -14,17 +14,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-109: Runtime policy hook rule catalog v1
-- 分配给: Claude A
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-108 ✅
-- 目标: 增加只读 registry tool，用 safe bounded JSON 描述 runtime policy hook kernel 的 policy version、支持的 hooks/categories/risks/decisions 和决策规则目录，让 policy kernel 可检查、可测试、可被 UI/trace 使用。
-- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel、Priority 10 Trace graph and Agent OS UI。
-- 状态: assigned
+无。
 
 ## 已完成
+
+### TASK-109: Runtime policy hook rule catalog v1 ✅
+- 完成者: Claude A
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 737 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`python3 evals/run_evals.py` 406 passed；`git diff --check` OK。
+- 内容: 新增只读 `describe_runtime_policy_hook_rules(...)` registry tool，返回 runtime policy hook kernel 的 `policy_version`、支持的 hooks/categories/risks/decisions 和 10 条 stable rule catalog；规则目录与 `_evaluate_policy_hook_core` 优先级对齐，覆盖 destructive/external-send block、high-risk confirm、hook-specific write/read、generic read/write、default allow；输出仅含 safe bounded metadata，不泄漏 raw action/reason、shell/path/env/request/secret/task/event payload；注册权限为 `ToolPermission(category="local", risk="read")`，不创建 durable event，不 mutation tasks/workers。
 
 ### TASK-108: Deterministic eval coverage for runtime policy hook summary v1 ✅
 - 完成者: Claude B

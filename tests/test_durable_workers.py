@@ -9072,5 +9072,293 @@ class SummarizeRuntimePolicyHookEvaluationsTests(unittest.TestCase):
         self.assertEqual(result["decision"], "confirm")
 
 
+class DescribeRuntimePolicyHookRulesTests(unittest.TestCase):
+    """Tests for describe_runtime_policy_hook_rules (TASK-109)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _describe(self):
+        return json.loads(self.registry.call("describe_runtime_policy_hook_rules"))
+
+    # --- Output shape ---
+
+    def test_returns_policy_version(self):
+        result = self._describe()
+        self.assertEqual(result["policy_version"], "v1")
+
+    def test_returns_sorted_hooks(self):
+        result = self._describe()
+        expected_hooks = sorted({
+            "pre_tool", "post_tool", "pre_edit", "post_edit",
+            "pre_shell", "pre_git", "pre_plugin_call",
+            "post_test", "before_handoff", "before_commit",
+        })
+        self.assertEqual(result["hooks"], expected_hooks)
+
+    def test_returns_sorted_categories(self):
+        result = self._describe()
+        expected_categories = sorted({
+            "task", "shell", "git", "file", "network",
+            "plugin", "model", "test", "local", "unknown",
+        })
+        self.assertEqual(result["categories"], expected_categories)
+
+    def test_returns_sorted_risks(self):
+        result = self._describe()
+        expected_risks = sorted({
+            "read", "write", "destructive", "external_send", "high", "unknown",
+        })
+        self.assertEqual(result["risks"], expected_risks)
+
+    def test_returns_sorted_decisions(self):
+        result = self._describe()
+        self.assertEqual(result["decisions"], sorted({"allow", "confirm", "block"}))
+
+    def test_rules_is_list(self):
+        result = self._describe()
+        self.assertIsInstance(result["rules"], list)
+        self.assertGreater(len(result["rules"]), 0)
+
+    # --- Known rules ---
+
+    def test_rule_deny_destructive_external(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_deny_destructive_external")
+        self.assertEqual(rule["decision"], "block")
+        self.assertIn("destructive", rule["risks"])
+        self.assertIn("external_send", rule["risks"])
+        self.assertTrue(rule["blocked"])
+        self.assertFalse(rule["requires_confirmation"])
+        self.assertEqual(rule["reason_label"], "high_risk_blocked")
+
+    def test_rule_high_risk_confirm(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_high_risk_confirm")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertIn("high", rule["risks"])
+        self.assertTrue(rule["requires_confirmation"])
+        self.assertFalse(rule["blocked"])
+
+    def test_rule_pre_shell_write(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_pre_shell_write")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertEqual(rule["hooks"], ["pre_shell"])
+        self.assertEqual(rule["risks"], ["write"])
+        self.assertNotIn("high", rule["risks"])  # high is caught by rule_high_risk_confirm first
+        self.assertNotIn("destructive", rule["risks"])  # destructive is caught by rule_deny_destructive_external first
+
+    def test_rule_pre_git_write(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_pre_git_write")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertEqual(rule["hooks"], ["pre_git"])
+        self.assertEqual(rule["risks"], ["write"])
+        self.assertNotIn("high", rule["risks"])
+        self.assertNotIn("destructive", rule["risks"])
+
+    def test_rule_before_commit_write(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_before_commit_write")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertEqual(rule["hooks"], ["before_commit"])
+        self.assertEqual(rule["risks"], ["write"])
+        self.assertNotIn("high", rule["risks"])
+        self.assertNotIn("destructive", rule["risks"])
+
+    def test_rule_pre_tool_write(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_pre_tool_write")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertEqual(rule["hooks"], ["pre_tool"])
+        self.assertEqual(rule["risks"], ["write"])
+
+    def test_rule_pre_tool_read(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_pre_tool_read")
+        self.assertEqual(rule["decision"], "allow")
+        self.assertEqual(rule["hooks"], ["pre_tool"])
+        self.assertEqual(rule["risks"], ["read"])
+        self.assertFalse(rule["requires_confirmation"])
+        self.assertFalse(rule["blocked"])
+
+    def test_rule_read_allow(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_read_allow")
+        self.assertEqual(rule["decision"], "allow")
+        self.assertIn("read", rule["risks"])
+
+    def test_rule_write_confirm(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_write_confirm")
+        self.assertEqual(rule["decision"], "confirm")
+        self.assertIn("write", rule["risks"])
+        self.assertTrue(rule["requires_confirmation"])
+
+    def test_rule_default_allow(self):
+        result = self._describe()
+        rule = next(r for r in result["rules"] if r["rule_id"] == "rule_default_allow")
+        self.assertEqual(rule["decision"], "allow")
+        self.assertIn("unknown", rule["risks"])
+        self.assertFalse(rule["requires_confirmation"])
+
+    def test_all_rules_have_required_fields(self):
+        result = self._describe()
+        required_fields = {"rule_id", "decision", "hooks", "risks", "reason_label",
+                           "requires_confirmation", "blocked", "description"}
+        for rule in result["rules"]:
+            self.assertTrue(required_fields.issubset(rule.keys()),
+                            f"Rule {rule.get('rule_id')} missing fields: {required_fields - rule.keys()}")
+
+    def test_all_rule_ids_unique(self):
+        result = self._describe()
+        rule_ids = [r["rule_id"] for r in result["rules"]]
+        self.assertEqual(len(rule_ids), len(set(rule_ids)))
+
+    # --- No-leak / read-only ---
+
+    def test_no_raw_action_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        # Should not contain any raw action strings
+        self.assertNotIn("SECRET", output)
+        self.assertNotIn("rm -rf", output)
+
+    def test_no_raw_reason_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        # reason_label values should be safe labels, not raw reasons
+        for rule in result["rules"]:
+            label = rule["reason_label"]
+            if label:
+                self.assertNotIn(" ", label)  # labels are snake_case, no spaces
+
+    def test_no_path_leak_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        self.assertNotIn("/tmp/", output)
+        self.assertNotIn("/home/", output)
+        self.assertNotIn("\\Users\\", output)
+
+    def test_no_env_leak_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        self.assertNotIn("DATABASE_URL", output)
+        self.assertNotIn("API_KEY", output)
+        self.assertNotIn("SECRET_TOKEN", output)
+
+    def test_no_shell_leak_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        self.assertNotIn("rm -rf", output)
+        self.assertNotIn("curl ", output)
+        self.assertNotIn("wget ", output)
+
+    def test_no_request_leak_in_output(self):
+        result = self._describe()
+        output = json.dumps(result)
+        self.assertNotIn("Authorization:", output)
+        self.assertNotIn("Bearer ", output)
+
+    # --- Evaluator alignment ---
+
+    def test_catalog_aligns_with_evaluator_pre_shell_high(self):
+        """pre_shell + high should use rule_high_risk_confirm, not rule_pre_shell_write."""
+        evaluator_result = json.loads(self.registry.call(
+            "evaluate_runtime_policy_hook", hook="pre_shell", risk="high"))
+        self.assertIn("rule_high_risk_confirm", evaluator_result["matched_rules"])
+        self.assertNotIn("rule_pre_shell_write", evaluator_result["matched_rules"])
+        # Verify catalog does not claim high for rule_pre_shell_write
+        catalog = self._describe()
+        rule = next(r for r in catalog["rules"] if r["rule_id"] == "rule_pre_shell_write")
+        self.assertNotIn("high", rule["risks"])
+
+    def test_catalog_aligns_with_evaluator_before_commit_destructive(self):
+        """before_commit + destructive should use rule_deny_destructive_external."""
+        evaluator_result = json.loads(self.registry.call(
+            "evaluate_runtime_policy_hook", hook="before_commit", risk="destructive"))
+        self.assertIn("rule_deny_destructive_external", evaluator_result["matched_rules"])
+        self.assertNotIn("rule_before_commit_write", evaluator_result["matched_rules"])
+        catalog = self._describe()
+        rule = next(r for r in catalog["rules"] if r["rule_id"] == "rule_before_commit_write")
+        self.assertNotIn("destructive", rule["risks"])
+
+    def test_catalog_aligns_with_evaluator_pre_git_write(self):
+        """pre_git + write should use rule_pre_git_write."""
+        evaluator_result = json.loads(self.registry.call(
+            "evaluate_runtime_policy_hook", hook="pre_git", risk="write"))
+        self.assertIn("rule_pre_git_write", evaluator_result["matched_rules"])
+        catalog = self._describe()
+        rule = next(r for r in catalog["rules"] if r["rule_id"] == "rule_pre_git_write")
+        self.assertIn("write", rule["risks"])
+
+    def test_catalog_aligns_with_evaluator_pre_tool_write(self):
+        """pre_tool + write should use rule_pre_tool_write."""
+        evaluator_result = json.loads(self.registry.call(
+            "evaluate_runtime_policy_hook", hook="pre_tool", risk="write"))
+        self.assertIn("rule_pre_tool_write", evaluator_result["matched_rules"])
+        catalog = self._describe()
+        rule = next(r for r in catalog["rules"] if r["rule_id"] == "rule_pre_tool_write")
+        self.assertIn("write", rule["risks"])
+
+    def test_catalog_aligns_with_evaluator_pre_git_high(self):
+        """pre_git + high should use rule_high_risk_confirm, not rule_pre_git_write."""
+        evaluator_result = json.loads(self.registry.call(
+            "evaluate_runtime_policy_hook", hook="pre_git", risk="high"))
+        self.assertIn("rule_high_risk_confirm", evaluator_result["matched_rules"])
+        self.assertNotIn("rule_pre_git_write", evaluator_result["matched_rules"])
+
+    def test_read_only_no_event_creation(self):
+        """Describing rules should not create any durable events."""
+        store = self.registry.durable_event_store
+        before_count = len(store.list_events(event_type="policy_hook_evaluation"))
+        self._describe()
+        after_count = len(store.list_events(event_type="policy_hook_evaluation"))
+        self.assertEqual(before_count, after_count)
+
+    def test_read_only_no_task_mutation(self):
+        """Describing rules should not create or modify durable tasks."""
+        tasks_before = json.loads(self.registry.call("list_durable_tasks"))
+        self._describe()
+        tasks_after = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(tasks_before, tasks_after)
+
+    # --- Compatibility ---
+
+    def test_evaluate_still_works(self):
+        result = json.loads(self.registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read"))
+        self.assertEqual(result["decision"], "allow")
+
+    def test_record_still_works(self):
+        result = json.loads(self.registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", risk="read"))
+        self.assertIn("event_id", result)
+
+    def test_list_still_works(self):
+        self.registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", risk="read")
+        result = json.loads(self.registry.call("list_runtime_policy_hook_evaluations"))
+        self.assertEqual(result["count"], 1)
+
+    def test_summarize_still_works(self):
+        self.registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", risk="read")
+        result = json.loads(self.registry.call("summarize_runtime_policy_hook_evaluations"))
+        self.assertEqual(result["total"], 1)
+
+    def test_list_tool_permissions_includes_new_tool(self):
+        result = self.registry.call("list_tool_permissions")
+        self.assertIn("describe_runtime_policy_hook_rules", result)
+        # Should be read-only
+        self.assertIn("read", result.split("describe_runtime_policy_hook_rules")[-1].split("\n")[0])
+
+
 if __name__ == "__main__":
     unittest.main()

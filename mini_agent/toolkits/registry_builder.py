@@ -5340,4 +5340,128 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- describe_runtime_policy_hook_rules (TASK-109) ---
+
+    def _describe_runtime_policy_hook_rules_json() -> str:
+        """Return a safe bounded JSON catalog of the runtime policy hook rules."""
+        rules = [
+            {
+                "rule_id": "rule_deny_destructive_external",
+                "decision": "block",
+                "hooks": sorted(_VALID_HOOKS),
+                "risks": ["destructive", "external_send"],
+                "reason_label": "high_risk_blocked",
+                "requires_confirmation": False,
+                "blocked": True,
+                "description": "Block destructive or external-send operations across all hooks.",
+            },
+            {
+                "rule_id": "rule_high_risk_confirm",
+                "decision": "confirm",
+                "hooks": sorted(_VALID_HOOKS),
+                "risks": ["high"],
+                "reason_label": "high_risk_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for high-risk operations across all hooks.",
+            },
+            {
+                "rule_id": "rule_pre_shell_write",
+                "decision": "confirm",
+                "hooks": ["pre_shell"],
+                "risks": ["write"],
+                "reason_label": "pre_shell_write_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for write pre_shell operations. (high risk is caught by rule_high_risk_confirm first)",
+            },
+            {
+                "rule_id": "rule_pre_git_write",
+                "decision": "confirm",
+                "hooks": ["pre_git"],
+                "risks": ["write"],
+                "reason_label": "pre_git_write_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for write pre_git operations. (high risk is caught by rule_high_risk_confirm first)",
+            },
+            {
+                "rule_id": "rule_before_commit_write",
+                "decision": "confirm",
+                "hooks": ["before_commit"],
+                "risks": ["write"],
+                "reason_label": "before_commit_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for write before_commit operations. (high/destructive are caught by higher-priority rules first)",
+            },
+            {
+                "rule_id": "rule_pre_tool_write",
+                "decision": "confirm",
+                "hooks": ["pre_tool"],
+                "risks": ["write"],
+                "reason_label": "pre_tool_write_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for write pre_tool operations.",
+            },
+            {
+                "rule_id": "rule_pre_tool_read",
+                "decision": "allow",
+                "hooks": ["pre_tool"],
+                "risks": ["read"],
+                "reason_label": "",
+                "requires_confirmation": False,
+                "blocked": False,
+                "description": "Allow read pre_tool operations.",
+            },
+            {
+                "rule_id": "rule_read_allow",
+                "decision": "allow",
+                "hooks": sorted(_VALID_HOOKS),
+                "risks": ["read"],
+                "reason_label": "",
+                "requires_confirmation": False,
+                "blocked": False,
+                "description": "Allow read operations across all hooks.",
+            },
+            {
+                "rule_id": "rule_write_confirm",
+                "decision": "confirm",
+                "hooks": sorted(_VALID_HOOKS),
+                "risks": ["write"],
+                "reason_label": "write_confirm",
+                "requires_confirmation": True,
+                "blocked": False,
+                "description": "Require confirmation for generic write operations.",
+            },
+            {
+                "rule_id": "rule_default_allow",
+                "decision": "allow",
+                "hooks": sorted(_VALID_HOOKS),
+                "risks": ["unknown"],
+                "reason_label": "",
+                "requires_confirmation": False,
+                "blocked": False,
+                "description": "Allow operations with unknown risk as default fallback.",
+            },
+        ]
+
+        return _json.dumps({
+            "policy_version": _POLICY_VERSION,
+            "hooks": sorted(_VALID_HOOKS),
+            "categories": sorted(_VALID_CATEGORIES),
+            "risks": sorted(_VALID_RISKS),
+            "decisions": sorted(_VALID_POLICY_DECISIONS),
+            "rules": rules,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "describe_runtime_policy_hook_rules",
+        "返回 runtime policy hook 规则的安全有界目录。只读，不修改任何状态。",
+        _describe_runtime_policy_hook_rules_json,
+        parameters={"type": "object", "properties": {}},
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     return registry

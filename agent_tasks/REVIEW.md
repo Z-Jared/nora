@@ -1,31 +1,49 @@
-# CCB Review — TASK-108: Deterministic eval coverage for runtime policy hook summary v1
+# CCB Review — TASK-109: Runtime policy hook rule catalog v1
 
 **Status: APPROVED**
 
-## Coverage Assessment
-
-11 eval cases covering all required areas:
-
-| Area | Eval | Coverage |
-|------|------|----------|
-| Aggregate counts | `eval_policy_hook_summary_counts` | decisions, hooks, categories, risks, requires_confirmation_count, blocked_count, policy_versions, recent_event_ids |
-| Hook filter | `eval_policy_hook_summary_filter_hook` | pre_shell filter narrows to 1 event |
-| Decision filter | `eval_policy_hook_summary_filter_decision` | allow and confirm filters |
-| Category/risk | `eval_policy_hook_summary_filter_category_risk` | file category and read risk |
-| Linkage filters | `eval_policy_hook_summary_filter_linkage` | task_id, worker_id, session_id |
-| Limit bounds | `eval_policy_hook_summary_limit` | default=20, explicit=2, clamp max=100, clamp min=1 |
-| Invalid filters | `eval_policy_hook_summary_invalid_filters` | invalid hook/decision/category/risk → empty + errors |
-| Unsafe linkage | `eval_policy_hook_summary_unsafe_linkage` | path traversal, secret-like, shell metachar → empty + errors |
-| No-leak | `eval_policy_hook_summary_no_leak` | secret action, shell cmd, env string, raw reason absent from output |
-| Read-only | `eval_policy_hook_summary_read_only_no_mutation` | no event/task/worker mutation, worker status preserved |
-| Compatibility | `eval_policy_hook_summary_compatibility` | tool registered; evaluate/record/list/summary all still work |
-
 ## Findings
 
-No blocking issues. All evals use temporary directories with local NoraDB (deterministic/offline). No runtime code changes. Coverage is comprehensive and follows established patterns from TASK-105/106.
+No blocking findings.
 
-## Notes
+## Scope Reviewed
 
-- `_record_policy_hook_events` helper reused from TASK-106 — appropriate.
-- 406 evals passing, 701+311 unit tests clean.
-- No workspace path explicit check in no-leak eval, but actions are sanitized at record time (TASK-013), so this is acceptable.
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_durable_workers.py`
+- `agent_tasks/A_DONE.md`
+- `agent_tasks/PM_INBOX.md`
+
+## Review Notes
+
+TASK-109 is now present in the current repository state.
+
+The new `describe_runtime_policy_hook_rules` registry tool returns a bounded JSON catalog with:
+
+- `policy_version`
+- sorted supported `hooks`, `categories`, `risks`, and `decisions`
+- 10 stable rule entries matching the current `_evaluate_policy_hook_core` rule IDs
+- safe metadata only: rule ID, decision, hooks, risks, reason label, confirmation/block flags, and descriptions
+
+The tool is registered as read-only with `ToolPermission(category="local", risk="read")`. The implementation does not read durable event payloads, task goals, raw actions, raw reasons, request strings, env values, shell commands, or file paths.
+
+The catalog correctly describes evaluator priority: destructive/external-send risk blocks first, high risk confirms before hook-specific write rules, then hook-specific write/read rules, generic read/write, and default allow.
+
+## Verification
+
+```text
+python3 -m unittest tests.test_durable_workers
+Ran 737 tests in 12.235s — OK
+
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
+Ran 311 tests in 8.091s — OK
+
+python3 evals/run_evals.py
+406 passed, 0 failed
+
+git diff --check
+clean
+```
+
+## Decision
+
+Approved for local integration. TASK-109 satisfies the assigned requirements and unblocks TASK-110 deterministic eval coverage for the rule catalog.
