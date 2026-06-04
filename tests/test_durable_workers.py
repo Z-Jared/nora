@@ -8526,5 +8526,259 @@ class RuntimePolicyHookRecordingTests(unittest.TestCase):
         self.assertEqual(parsed["decision"], "confirm")
 
 
+class ListRuntimePolicyHookEvaluationsTests(unittest.TestCase):
+    """Tests for list_runtime_policy_hook_evaluations (TASK-105)."""
+
+    SECRET_SENTINEL = "LIST_POLICY_SECRET_XYZ"
+    SHELL_SENTINEL = "rm -rf /important"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _record(self, **kwargs):
+        return json.loads(self.registry.call("record_runtime_policy_hook_evaluation", **kwargs))
+
+    def _list(self, **kwargs):
+        return json.loads(self.registry.call("list_runtime_policy_hook_evaluations", **kwargs))
+
+    # --- Basic listing ---
+
+    def test_empty_list_returns_empty(self):
+        result = self._list()
+        self.assertEqual(result["events"], [])
+        self.assertEqual(result["count"], 0)
+
+    def test_lists_recorded_events(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="pre_shell", risk="write")
+        result = self._list()
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(len(result["events"]), 2)
+
+    def test_events_contain_safe_metadata(self):
+        self._record(hook="pre_tool", risk="read", action="file_read", task_id="t1", worker_id="w1")
+        result = self._list()
+        event = result["events"][0]
+        for key in ["event_id", "created_at", "task_id", "worker_id", "session_id",
+                     "hook", "decision", "requires_confirmation", "blocked",
+                     "reason_label", "policy_version", "matched_rules",
+                     "category", "risk", "action", "action_label", "action_present"]:
+            self.assertIn(key, event)
+        self.assertEqual(event["hook"], "pre_tool")
+        self.assertEqual(event["decision"], "allow")
+        self.assertEqual(event["task_id"], "t1")
+        self.assertEqual(event["worker_id"], "w1")
+        self.assertEqual(event["action"], "file_read")
+
+    # --- Hook filter ---
+
+    def test_hook_filter(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="pre_shell", risk="write")
+        result = self._list(hook="pre_tool")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["hook"], "pre_tool")
+
+    def test_hook_filter_post_tool(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="post_tool", risk="read")
+        result = self._list(hook="post_tool")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["hook"], "post_tool")
+
+    def test_hook_filter_pre_edit(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="pre_edit", risk="write")
+        result = self._list(hook="pre_edit")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["hook"], "pre_edit")
+
+    def test_hook_filter_post_edit(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="post_edit", risk="read")
+        result = self._list(hook="post_edit")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["hook"], "post_edit")
+
+    def test_hook_filter_pre_plugin_call(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="pre_plugin_call", risk="write")
+        result = self._list(hook="pre_plugin_call")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["hook"], "pre_plugin_call")
+
+    def test_invalid_hook_filter_returns_empty(self):
+        self._record(hook="pre_tool", risk="read")
+        result = self._list(hook="INVALID_HOOK_XYZ")
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["events"], [])
+        self.assertIn("errors", result)
+        self.assertIn("invalid_hook", result["errors"])
+        self.assertNotIn("INVALID_HOOK_XYZ", json.dumps(result))
+
+    def test_unsafe_hook_filter_returns_empty(self):
+        self._record(hook="pre_tool", risk="read")
+        result = self._list(hook=self.SECRET_SENTINEL)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+        self.assertEqual(result["count"], 0)
+        self.assertIn("errors", result)
+
+    # --- Decision filter ---
+
+    def test_decision_filter(self):
+        self._record(hook="pre_tool", risk="read")
+        self._record(hook="pre_tool", risk="write")
+        result = self._list(decision="confirm")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["decision"], "confirm")
+
+    def test_invalid_decision_filter_returns_empty(self):
+        self._record(hook="pre_tool", risk="read")
+        result = self._list(decision="INVALID_DECISION")
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["events"], [])
+        self.assertIn("errors", result)
+        self.assertIn("invalid_decision", result["errors"])
+        self.assertNotIn("INVALID_DECISION", json.dumps(result))
+
+    # --- task_id filter ---
+
+    def test_task_id_filter(self):
+        self._record(hook="pre_tool", risk="read", task_id="t1")
+        self._record(hook="pre_tool", risk="read", task_id="t2")
+        result = self._list(task_id="t1")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["task_id"], "t1")
+
+    def test_unsafe_task_id_returns_empty(self):
+        self._record(hook="pre_tool", risk="read", task_id="t1")
+        result = self._list(task_id=self.SECRET_SENTINEL)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+        self.assertEqual(result["count"], 0)
+        self.assertIn("errors", result)
+        self.assertIn("invalid_task_id", result["errors"])
+
+    # --- worker_id filter ---
+
+    def test_worker_id_filter(self):
+        self._record(hook="pre_tool", risk="read", worker_id="w1")
+        self._record(hook="pre_tool", risk="read", worker_id="w2")
+        result = self._list(worker_id="w1")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["worker_id"], "w1")
+
+    # --- session_id filter ---
+
+    def test_session_id_filter(self):
+        self._record(hook="pre_tool", risk="read", session_id="s1")
+        self._record(hook="pre_tool", risk="read", session_id="s2")
+        result = self._list(session_id="s1")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["session_id"], "s1")
+
+    # --- limit ---
+
+    def test_limit_bounded(self):
+        for i in range(5):
+            self._record(hook="pre_tool", risk="read")
+        result = self._list(limit=3)
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(result["filters"]["limit"], 3)
+
+    def test_limit_clamped_to_max(self):
+        for i in range(3):
+            self._record(hook="pre_tool", risk="read")
+        result = self._list(limit=999)
+        self.assertEqual(result["filters"]["limit"], 100)
+
+    def test_limit_invalid_defaults(self):
+        self._record(hook="pre_tool", risk="read")
+        result = self._list(limit="invalid")
+        self.assertEqual(result["filters"]["limit"], 20)
+
+    def test_limit_zero_clamps_to_one(self):
+        self._record(hook="pre_tool", risk="read")
+        result = self._list(limit=0)
+        self.assertEqual(result["filters"]["limit"], 1)
+        self.assertEqual(result["count"], 1)
+
+    # --- No-leak ---
+
+    def test_raw_reason_not_in_output(self):
+        self._record(hook="pre_tool", risk="read", reason=self.SECRET_SENTINEL)
+        result = self._list()
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(result))
+
+    def test_raw_action_redacted(self):
+        self._record(hook="pre_tool", risk="read", action=self.SHELL_SENTINEL)
+        result = self._list()
+        self.assertNotIn(self.SHELL_SENTINEL, json.dumps(result))
+
+    def test_unsupported_hook_not_in_recorded_payload(self):
+        """Recorder rejects unsupported hooks, so they never appear in listings."""
+        result_before = self._list()
+        count_before = result_before["count"]
+        self.registry.call("evaluate_runtime_policy_hook", hook="INVALID_HOOK_XYZ")
+        result_after = self._list()
+        self.assertEqual(result_after["count"], count_before)
+
+    # --- Read-only ---
+
+    def test_list_does_not_create_events(self):
+        self._record(hook="pre_tool", risk="read")
+        before = len(self._get_policy_events())
+        self._list()
+        after = len(self._get_policy_events())
+        self.assertEqual(before, after)
+
+    def _get_policy_events(self):
+        return self.event_store.list_events(event_type="policy_hook_evaluation")
+
+    def test_list_does_not_mutate_tasks(self):
+        self._record(hook="pre_tool", risk="read")
+        tasks_before = json.loads(self.registry.call("list_durable_tasks"))
+        self._list()
+        tasks_after = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(tasks_before, tasks_after)
+
+    def test_list_does_not_mutate_workers(self):
+        self.registry.call("register_worker", worker_id="wf")
+        workers_before = json.loads(self.registry.call("list_workers"))
+        self._list()
+        workers_after = json.loads(self.registry.call("list_workers"))
+        self.assertEqual(workers_before, workers_after)
+
+    # --- Compatibility ---
+
+    def test_evaluate_still_works(self):
+        result = json.loads(self.registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read"))
+        self.assertEqual(result["decision"], "allow")
+
+    def test_record_still_works(self):
+        result = self._record(hook="pre_tool", risk="read")
+        self.assertIn("event_id", result)
+
+    def test_list_tool_permissions_includes_new_tool(self):
+        result = self.registry.call("list_tool_permissions")
+        self.assertIn("list_runtime_policy_hook_evaluations", result)
+        # Should be read-only
+        self.assertIn("read", result.split("list_runtime_policy_hook_evaluations")[-1].split("\n")[0])
+
+    def test_confirm_action_still_works(self):
+        reg = build_default_registry(db=self.db, workspace_root=self.root, confirm_action=lambda _: False)
+        result = json.loads(reg.call("record_runtime_policy_hook_evaluation", hook="pre_tool", risk="write"))
+        self.assertEqual(result["decision"], "confirm")
+
+
 if __name__ == "__main__":
     unittest.main()

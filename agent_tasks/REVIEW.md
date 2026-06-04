@@ -1,23 +1,27 @@
-# TASK-104 Review — Deterministic eval coverage for runtime policy hook event recording v1
+# TASK-105 Review — Runtime policy hook event query v1
 
 **Status: APPROVED**
 
 ## Findings
 
-No blocking issues found.
+No blocking issues.
 
-**Coverage completeness**: All 10 required areas are covered — event creation, bounded metadata fields, event_id queryability, reason/action no-leak, unsupported hook handling, linkage sanitization, read-only evaluator boundary, task/worker no-mutation, and compatibility. Each eval goes beyond existence checks to verify specific field values and side effects.
+**Implementation quality:**
+- Read-only tool (`risk="read"`) — correct
+- Uses `_VALID_HOOKS` from evaluator scope (10 hooks) — PM fix verified
+- Invalid/unsafe non-empty filters return `{events: [], count: 0, errors: [...]}` — PM fix verified, no silent degradation to all-events
+- `_sanitize_linkage_id` reused for task_id/worker_id/session_id filters
+- Output summaries are bounded safe metadata only — no raw reason/action/secrets
+- Limit clamping: `max(1, min(int(limit), 100))`, defaults to 20 on invalid input
 
-**PM fix verified**: No `list_events()[-1]` ordering assumptions remain. Event lookups use either `get_event(event_id)` (action redaction, linkage sanitize evals) or filtered `list_events()` by event_type with count=1 assertions (creates_event, event_fields, reason_no_leak evals). Both patterns are ordering-safe.
+**Test coverage (29 tests):**
+- Basic listing, metadata field completeness
+- All 10 hook filters individually tested (including 4 previously missing: post_tool, pre_edit, post_edit, pre_plugin_call)
+- Invalid/unsafe filter rejection (hook, decision, task_id) with sentinel no-leak
+- Decision, task_id, worker_id, session_id filters
+- Limit: bounded, clamped to max, invalid default, zero clamp
+- No-leak: raw reason, raw action redaction
+- Read-only: no event creation, no task/worker mutation
+- Compatibility: evaluate/record still work, permissions listing includes new tool
 
-**Deterministic/offline**: All evals use isolated `tempfile.TemporaryDirectory()` + local `NoraDB`. No external calls, no shared state.
-
-**No runtime changes**: Only `evals/run_evals.py` and `agent_tasks/B_DONE.md` modified. No runtime behavior changes.
-
-**No weak assertions**: Assertions verify concrete values (e.g., `payload["decision"] == "confirm"`, `r["action"] == ""`, `r["action_label"] == "redacted"`), not just field presence. Sentinel strings are checked for absence in both tool output JSON and event payload JSON.
-
-## Notes
-
-- Eval count: 373 → 383 (10 new evals).
-- `eval_policy_hook_record_unsupported_no_event` uses before/after event list comparison to detect spurious event creation — a solid pattern for negative testing.
-- `eval_policy_hook_record_event_fields` cross-validates output fields against event payload fields, catching serialization mismatches.
+**Residual risk:** None identified. Implementation is clean and well-tested.

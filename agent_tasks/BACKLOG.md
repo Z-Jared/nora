@@ -7,24 +7,20 @@ PM 从这里读取待分配的任务。每个任务格式：
 ### TASK-106: Deterministic eval coverage for runtime policy hook event query v1
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-105
+- 依赖: TASK-105 ✅
 - 目标: 为 runtime policy hook event query/listing 能力增加 deterministic offline eval coverage，验证过滤、排序、bounded output、no-leak、read-only/no-mutation 和 compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema + Priority 9 hook/policy kernel。
 
 ## 进行中
 
-### TASK-105: Runtime policy hook event query v1
-- 分配给: Claude A
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-103/TASK-104 ✅
-- 目标: 新增只读 runtime policy hook event query/listing 工具，让 PM/UI 能检查最近 policy hook evaluation events 的 safe bounded metadata，并支持按 hook、decision、task_id、worker_id、session_id 和 limit 过滤。
-- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema + Priority 9 hook/policy kernel。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-105: Runtime policy hook event query v1 ✅
+- 完成者: Claude A；按 PM 初审反馈修复完整 hook 过滤和 invalid/unsafe filter 退化为 all-events 的风险
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 665 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`python3 evals/run_evals.py` 383 passed；`git diff --check` OK。
+- 内容: 新增只读 `list_runtime_policy_hook_evaluations(...)` registry tool，查询 `policy_hook_evaluation` durable events 的 safe bounded metadata；支持 `hook`、`decision`、`task_id`、`worker_id`、`session_id` 和 `limit` 过滤；hook 过滤复用完整 `_VALID_HOOKS`；无效/不安全非空 filter 返回 bounded empty result + safe errors，不回显 raw sentinel 且不返回无关事件；输出仅包含 event id、created_at、safe linkage、hook/decision/reason_label/policy_version/matched_rules/category/risk/action safe metadata；不 mutation durable events/tasks/workers。
 
 ### TASK-104: Deterministic eval coverage for runtime policy hook event recording v1 ✅
 - 完成者: Claude B；按 PM 初审反馈修复 event lookup ordering assumption

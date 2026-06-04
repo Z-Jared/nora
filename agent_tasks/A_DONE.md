@@ -1,58 +1,48 @@
-# TASK-103 Completion Report
+# TASK-105 Completion Report (PM Review Fix)
 
-**Task:** Runtime policy hook evaluation event recording v1
-**Status:** DONE (PM review fix applied)
-**Agent:** Claude A
-**Date:** 2026-06-04
+## Task
+Runtime policy hook event query v1
 
-## Changes Made
+## Summary
+Added read-only `list_runtime_policy_hook_evaluations(...)` registry tool for querying `policy_hook_evaluation` durable events with safe bounded metadata.
 
-### `mini_agent/durable_events.py`
-- Added `POLICY_HOOK_EVALUATION = "policy_hook_evaluation"` event type constant
-- Added to `VALID_EVENT_TYPES` set
+## PM Review Fixes
+
+### 1. Expanded hook set
+- **Before:** `_VALID_POLICY_HOOKS` was a subset (`pre_tool`, `pre_shell`, `pre_git`, `before_commit`, `post_test`, `before_handoff`)
+- **After:** Uses `_VALID_HOOKS` from TASK-101/TASK-103: `pre_tool`, `post_tool`, `pre_edit`, `post_edit`, `pre_shell`, `pre_git`, `pre_plugin_call`, `post_test`, `before_handoff`, `before_commit`
+
+### 2. Invalid/unsafe filters reject instead of degrade
+- **Before:** Invalid `hook`/`decision` filter silently cleared to `""`, returning all events
+- **After:** Non-empty invalid/unsafe filters return bounded empty result with `errors` list; raw sentinel values never leak into output
+- Applies to: `hook`, `decision`, `task_id`, `worker_id`, `session_id`
+
+### 3. New regression tests
+- `test_hook_filter_post_tool`, `test_hook_filter_pre_edit`, `test_hook_filter_post_edit`, `test_hook_filter_pre_plugin_call` — all previously missing hooks now tested
+- `test_invalid_hook_filter_returns_empty` — invalid hook returns 0 events + `errors`
+- `test_unsafe_hook_filter_returns_empty` — secret sentinel returns 0 events + `errors`
+- `test_invalid_decision_filter_returns_empty` — invalid decision returns 0 events + `errors`
+- `test_unsafe_task_id_returns_empty` — secret task_id returns 0 events + `errors`
+
+## Changes
 
 ### `mini_agent/toolkits/registry_builder.py`
-- Imported `POLICY_HOOK_EVALUATION` from `durable_events`
-- Extracted evaluation logic from `_evaluate_runtime_policy_hook_json` into reusable `_evaluate_policy_hook_core()` helper
-- Refactored `_evaluate_runtime_policy_hook_json` to use the helper (read-only behavior unchanged)
-- Added `_sanitize_linkage_id()` helper: validates linkage IDs (task_id, worker_id, session_id) against path separators, shell metachar, secret-like tokens, all-caps tokens, length >80; returns None for unsafe values
-- Added `record_runtime_policy_hook_evaluation` registry tool:
-  - Accepts same inputs as evaluator: `hook`, `action`, `category`, `risk`, `reason`
-  - Plus optional linkage fields: `task_id`, `worker_id`, `session_id`
-  - Calls `_evaluate_policy_hook_core` for decision logic (no duplication)
-  - Sanitizes all linkage IDs via `_sanitize_linkage_id()` before writing to event
-  - Records exactly one `POLICY_HOOK_EVALUATION` durable event on supported hooks
-  - Returns bounded JSON with event id, decision metadata, sanitized action, matched rules
-  - Unsupported hooks return bounded error, no event created
-  - Raw reason/secret/path/shell/env never stored or returned
-  - Permission: `risk="write"` (writes durable events, consistent with other mutation tools)
-
-### PM Review Fix (2026-06-04)
-- **Problem:** `task_id`, `worker_id`, `session_id` were stored raw in events, leaking secret sentinels
-- **Fix:** Added `_sanitize_linkage_id()` sanitizer; applied to all three linkage fields before event storage
-- **Permission:** Changed from `risk="read"` to `risk="write"` since tool mutates durable events
-- **Tests added:** 6 new tests for unsafe linkage sentinels (secret, path, shell, long values)
+- Removed `_VALID_POLICY_HOOKS`, now uses `_VALID_HOOKS` from evaluator scope
+- Invalid/unsafe non-empty filters return `{events: [], count: 0, errors: [...]}` instead of degrading to all-events query
 
 ### `tests/test_durable_workers.py`
-- Added `RuntimePolicyHookRecordingTests` class with 31 tests:
-  - Successful recording creates exactly one event
-  - Event id is queryable via `get_event`
-  - Event payload includes decision fields and matched rules
-  - Raw reason sentinel not in output or event payload
-  - Secret-like, shell, env, path actions redacted in output and event
-  - Safe action preserved
-  - Unsupported hook returns error, no event, no raw leak
-  - Safe task/worker/session linkage preserved
-  - Unsafe linkage sentinels (SECRET_XYZ, path, shell, long) sanitized to None
-  - `evaluate_runtime_policy_hook` remains read-only (no events)
-  - No task/worker mutation from recording
-  - Registry permissions (write) and confirm_action compatibility
+- 5 existing tests updated to match new rejection behavior
+- 4 new tests added for missing hooks and rejection semantics
+- Total: 29 tests in `ListRuntimePolicyHookEvaluationsTests`
 
 ## Verification
-
 ```
-python3 -m unittest tests.test_durable_workers        → 635 passed
+python3 -m unittest tests.test_durable_workers          → 665 passed
 python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent → 311 passed
-python3 evals/run_evals.py                            → 373 passed
-git diff --check                                      → clean
+python3 evals/run_evals.py                              → 383 passed, 0 failed
+git diff --check                                        → clean
 ```
+
+## Files Modified
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_durable_workers.py`

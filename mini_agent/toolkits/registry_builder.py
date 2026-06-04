@@ -4966,4 +4966,164 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="write"),
     )
 
+    # --- list_runtime_policy_hook_evaluations (TASK-105) ---
+
+    _VALID_POLICY_DECISIONS = {"allow", "confirm", "block"}
+
+    def _list_runtime_policy_hook_evaluations_json(
+        hook: str = "",
+        decision: str = "",
+        task_id: str = "",
+        worker_id: str = "",
+        session_id: str = "",
+        limit: int = 20,
+    ) -> str:
+        # Validate and clamp limit
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (ValueError, TypeError):
+            limit = 20
+
+        # Normalize and validate filters — reject invalid/unsafe non-empty filters
+        # with bounded empty result instead of silently returning all events
+        errors = []
+
+        hook_filter = hook.strip() if isinstance(hook, str) else ""
+        if hook_filter:
+            if hook_filter not in _VALID_HOOKS:
+                errors.append(f"invalid_hook")
+
+        decision_filter = decision.strip() if isinstance(decision, str) else ""
+        if decision_filter:
+            if decision_filter not in _VALID_POLICY_DECISIONS:
+                errors.append(f"invalid_decision")
+
+        task_id_raw = task_id if isinstance(task_id, str) else ""
+        task_id_filter = _sanitize_linkage_id(task_id_raw) if task_id_raw.strip() else ""
+        if task_id_raw.strip() and not task_id_filter:
+            errors.append("invalid_task_id")
+
+        worker_id_raw = worker_id if isinstance(worker_id, str) else ""
+        worker_id_filter = _sanitize_linkage_id(worker_id_raw) if worker_id_raw.strip() else ""
+        if worker_id_raw.strip() and not worker_id_filter:
+            errors.append("invalid_worker_id")
+
+        session_id_raw = session_id if isinstance(session_id, str) else ""
+        session_id_filter = _sanitize_linkage_id(session_id_raw) if session_id_raw.strip() else ""
+        if session_id_raw.strip() and not session_id_filter:
+            errors.append("invalid_session_id")
+
+        if errors:
+            return _json.dumps({
+                "events": [],
+                "count": 0,
+                "filters": {
+                    "hook": hook_filter if hook_filter in _VALID_HOOKS else "",
+                    "decision": decision_filter if decision_filter in _VALID_POLICY_DECISIONS else "",
+                    "task_id": task_id_filter,
+                    "worker_id": worker_id_filter,
+                    "session_id": session_id_filter,
+                    "limit": limit,
+                },
+                "errors": errors,
+            }, ensure_ascii=False)
+
+        # Query events
+        events = durable_event_store.list_events(
+            event_type=POLICY_HOOK_EVALUATION,
+            max_results=500,
+        )
+
+        # Apply filters
+        filtered = []
+        for event in events:
+            payload = event.payload or {}
+            if hook_filter and payload.get("hook") != hook_filter:
+                continue
+            if decision_filter and payload.get("decision") != decision_filter:
+                continue
+            if task_id_filter and event.task_id != task_id_filter:
+                continue
+            if worker_id_filter and event.worker_id != worker_id_filter:
+                continue
+            if session_id_filter and payload.get("session_id") != session_id_filter:
+                continue
+            filtered.append(event)
+            if len(filtered) >= limit:
+                break
+
+        # Build safe summaries
+        summaries = []
+        for event in filtered:
+            p = event.payload or {}
+            summaries.append({
+                "event_id": event.event_id,
+                "created_at": event.created_at,
+                "task_id": event.task_id,
+                "worker_id": event.worker_id,
+                "session_id": p.get("session_id"),
+                "hook": p.get("hook", ""),
+                "decision": p.get("decision", ""),
+                "requires_confirmation": p.get("requires_confirmation", False),
+                "blocked": p.get("blocked", False),
+                "reason_label": p.get("reason_label", ""),
+                "policy_version": p.get("policy_version", ""),
+                "matched_rules": p.get("matched_rules", []),
+                "category": p.get("category", ""),
+                "risk": p.get("risk", ""),
+                "action": p.get("action", ""),
+                "action_label": p.get("action_label", ""),
+                "action_present": p.get("action_present", False),
+            })
+
+        return _json.dumps({
+            "events": summaries,
+            "count": len(summaries),
+            "filters": {
+                "hook": hook_filter,
+                "decision": decision_filter,
+                "task_id": task_id_filter,
+                "worker_id": worker_id_filter,
+                "session_id": session_id_filter,
+                "limit": limit,
+            },
+        }, ensure_ascii=False)
+
+    registry.register(
+        "list_runtime_policy_hook_evaluations",
+        "列出最近的 runtime policy hook 评估事件。只读，可按 hook/decision/task_id/worker_id/session_id 过滤。",
+        _list_runtime_policy_hook_evaluations_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "hook": {
+                    "type": "string",
+                    "description": "按 hook 点过滤，如 pre_tool, pre_shell 等",
+                },
+                "decision": {
+                    "type": "string",
+                    "description": "按决策结果过滤: allow, confirm, block",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "按关联任务 ID 过滤",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "按关联 worker ID 过滤",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "按会话 ID 过滤",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "返回的最大事件数，默认 20，上限 100",
+                },
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     return registry
