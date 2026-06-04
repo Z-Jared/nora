@@ -1,50 +1,60 @@
 # Claude B Task
 
 Owner: Claude B
-Status: completed
+Status: assigned
 
 ## Task
 
-TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1
+TASK-102: Deterministic eval coverage for runtime policy hook evaluator v1
 
 ## Context
 
-TASK-099 extended scheduler decision durable event metadata for retry decisions:
+TASK-101 added a minimal read-only runtime policy evaluator tool:
 
-- Tick `SCHEDULER_DECISION` events now include bounded retry action metadata and aggregate retry counts.
-- Loop `SCHEDULER_DECISION` events now include aggregate retry counts and bounded per-tick retry counts.
-- `record_event=False` should still record no scheduler decision events.
-- Event payloads must not leak task goal, steps, failure_reason, shell/env/request strings, workspace paths, file contents, raw results, or secrets.
+```text
+evaluate_runtime_policy_hook(hook, action="", category="", risk="", reason="")
+```
+
+It supports lifecycle hooks such as `pre_tool`, `pre_shell`, `pre_git`, `post_test`, `before_handoff`, and `before_commit`, and returns bounded decision metadata:
+
+- `decision`: `allow`, `confirm`, or `block`
+- `requires_confirmation`
+- `blocked`
+- `reason_label`
+- `reason_present`
+- `policy_version`
+- `matched_rules`
+- sanitized action fields (`action`, `action_label`, `action_present`)
 
 Unit coverage exists in `tests/test_durable_workers.py`. The remaining gap is deterministic offline eval coverage in `evals/run_evals.py`.
 
 ## Goal
 
-Add deterministic eval cases proving scheduler retry decision event metadata is auditable, bounded, no-leak, and compatible.
+Add deterministic eval cases proving the runtime policy hook evaluator is auditable, bounded, no-leak, read-only, and compatible.
 
 ## Requirements
 
-- Add focused eval coverage in `evals/run_evals.py` for TASK-099 behavior.
-- Prefer small helper functions and isolated temp DB/workspace fixtures consistent with existing scheduler retry evals.
+- Add focused eval coverage in `evals/run_evals.py`.
+- Prefer small helper functions and isolated temp DB/workspace fixtures consistent with the existing durable-runtime eval style.
 - Cover at least:
-  1. Tick retry executed event metadata:
-     - `run_worker_lifecycle_scheduler_tick(dry_run=False, record_event=True)` records a `scheduler_decision` event.
-     - Event payload includes `retry_executed >= 1`, `retry_skipped`, `retry_failed`.
-     - `actions[]` contains a `retry_failed_task` entry with safe fields such as `executed=True`, `task_id`, `retry_count`, `max_retries`.
-  2. Tick retry skipped metadata:
-     - Missing idle capacity or equivalent guarded skip records a safe retry skipped reason such as `retry_blocked_missing_capacity`.
-     - No task mutation happens when skipped.
-  3. Loop retry metadata:
-     - `run_worker_lifecycle_scheduler_loop(dry_run=False, max_ticks=1, record_event=True)` records a loop `scheduler_decision` event.
-     - Loop payload includes aggregate `retry_executed`, `retry_skipped`, `retry_failed`.
-     - Loop payload includes bounded `ticks[]` per-tick retry counts.
-     - It does not persist raw `results`.
-  4. `record_event=False`:
-     - Tick and loop with `record_event=False` produce no scheduler decision events.
+  1. Read/pre-tool decision:
+     - `pre_tool` + `risk=read` returns `decision="allow"`, no confirmation, not blocked, and a safe matched rule.
+  2. Write/high-risk confirmation:
+     - `pre_tool` + `risk=write`, `pre_shell` or `pre_git` + `risk=write`, and/or `before_commit` + `risk=write/high` returns `decision="confirm"` with `requires_confirmation=True`.
+  3. Block decisions:
+     - `risk=destructive` and/or `risk=external_send` returns `decision="block"` and `blocked=True`.
+  4. Bounded validation:
+     - Unknown hook returns `error="unsupported_hook"` and does not echo the raw unknown hook sentinel.
+     - Unknown category/risk normalize to `"unknown"` where applicable.
   5. Safety/no-leak:
-     - Event payloads and eval-observed output do not contain task goal, steps, failure_reason sentinel, shell/env/request strings, workspace path, raw results, or secret-like sentinels.
-  6. Compatibility:
-     - Existing evals still pass and scheduler tick/loop/run-once/planner/explain remain callable after the new metadata checks.
+     - Raw `reason` sentinel is not present in output.
+     - Secret-like action (`SECRET_VALUE_XYZ` or similar), env-like action, shell command action, and workspace path action are redacted and not present in serialized output.
+     - Safe short action label such as `read_file` is preserved.
+  6. Read-only/no mutation:
+     - Running the evaluator does not create durable events and does not mutate task/worker state.
+  7. Compatibility:
+     - Existing evals still pass.
+     - `list_tool_permissions` includes `evaluate_runtime_policy_hook`.
 
 ## Tests
 
@@ -52,15 +62,16 @@ Run:
 
 ```text
 python3 evals/run_evals.py
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+python3 -m unittest tests.test_durable_workers.RuntimePolicyHookEvaluatorTests
+python3 -m unittest tests.test_durable_workers
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
 ## Boundaries
 
 - Prefer eval-only changes in `evals/run_evals.py`.
-- Do not modify runtime unless an eval exposes a real TASK-099 bug; if that happens, keep the runtime fix minimal and explain it in `B_DONE.md`.
+- Do not modify runtime unless an eval exposes a real TASK-101 bug; if that happens, keep the runtime fix minimal and explain it in `B_DONE.md`.
 - Do not edit `agent_tasks/A_TASK.md` or `agent_tasks/A_DONE.md`.
 - Do not edit `CODEX_TERMINAL_HANDOFF.md`.
 - Do not edit `designs/`.
@@ -76,6 +87,6 @@ agent_tasks/notify_codex.sh B
 
 ## Notes
 
-- TASK-099 is committed on `main`.
-- Keep eval assertions concrete; avoid tests that only assert event existence.
-- Keep outputs bounded and safe; do not store or assert raw task content, file contents, raw patch/diff, or unbounded result objects.
+- TASK-101 is committed on `main`.
+- Keep eval assertions concrete; avoid evals that only assert tool existence.
+- Keep outputs bounded and safe; do not store or assert raw task content, file contents, shell strings, env strings, workspace paths, or arbitrary unbounded input.

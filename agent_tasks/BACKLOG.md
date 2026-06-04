@@ -6,6 +6,11 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-102: Deterministic eval coverage for runtime policy hook evaluator v1
+- 分配给: Claude B
+- 目标: 为 TASK-101 的 `evaluate_runtime_policy_hook` 增加 deterministic offline eval coverage，验证 policy decision、bounded/no-leak 输出、read-only/no-mutation 和兼容性。
+- 状态: assigned
+
 ## 已完成
 
 ### TASK-101: Runtime policy hook evaluator v1 ✅
