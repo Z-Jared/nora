@@ -1,48 +1,52 @@
-# TASK-105 Completion Report (PM Review Fix)
+# Claude A Completion Report
 
-## Task
-Runtime policy hook event query v1
+Status: ready for Codex review
 
 ## Summary
-Added read-only `list_runtime_policy_hook_evaluations(...)` registry tool for querying `policy_hook_evaluation` durable events with safe bounded metadata.
 
-## PM Review Fixes
+Implemented `summarize_runtime_policy_hook_evaluations(...)` registry tool (TASK-107). This read-only tool provides an aggregate summary of recent `policy_hook_evaluation` durable events, answering "how many allow/confirm/block decisions happened recently, by hook/category/risk, and which recent safe event IDs contributed?"
 
-### 1. Expanded hook set
-- **Before:** `_VALID_POLICY_HOOKS` was a subset (`pre_tool`, `pre_shell`, `pre_git`, `before_commit`, `post_test`, `before_handoff`)
-- **After:** Uses `_VALID_HOOKS` from TASK-101/TASK-103: `pre_tool`, `post_tool`, `pre_edit`, `post_edit`, `pre_shell`, `pre_git`, `pre_plugin_call`, `post_test`, `before_handoff`, `before_commit`
+### Implementation
 
-### 2. Invalid/unsafe filters reject instead of degrade
-- **Before:** Invalid `hook`/`decision` filter silently cleared to `""`, returning all events
-- **After:** Non-empty invalid/unsafe filters return bounded empty result with `errors` list; raw sentinel values never leak into output
-- Applies to: `hook`, `decision`, `task_id`, `worker_id`, `session_id`
+**`mini_agent/toolkits/registry_builder.py`** — Added `_summarize_runtime_policy_hook_evaluations_json()` function and registered it as `summarize_runtime_policy_hook_evaluations`:
 
-### 3. New regression tests
-- `test_hook_filter_post_tool`, `test_hook_filter_pre_edit`, `test_hook_filter_post_edit`, `test_hook_filter_pre_plugin_call` — all previously missing hooks now tested
-- `test_invalid_hook_filter_returns_empty` — invalid hook returns 0 events + `errors`
-- `test_unsafe_hook_filter_returns_empty` — secret sentinel returns 0 events + `errors`
-- `test_invalid_decision_filter_returns_empty` — invalid decision returns 0 events + `errors`
-- `test_unsafe_task_id_returns_empty` — secret task_id returns 0 events + `errors`
+- Queries `policy_hook_evaluation` events from the durable event store
+- Supports bounded filters: `hook`, `decision`, `category`, `risk`, `task_id`, `worker_id`, `session_id`, `limit`
+- `limit` clamped to [1, 100], defaults to 20
+- Invalid/unsafe non-empty filters return bounded empty summary with `errors` list (consistent with `list_runtime_policy_hook_evaluations` pattern)
+- Returns bounded JSON with: `total`, `filters`, `decisions` (allow/confirm/block counts), `hooks`, `categories`, `risks`, `requires_confirmation_count`, `blocked_count`, `recent_event_ids`, `policy_versions`
+- Read-only: no event creation, no task/worker mutation
+- Registered with `ToolPermission(category="local", risk="read")`
 
-## Changes
+**`tests/test_durable_workers.py`** — Added `SummarizeRuntimePolicyHookEvaluationsTests` class with 28 tests:
 
-### `mini_agent/toolkits/registry_builder.py`
-- Removed `_VALID_POLICY_HOOKS`, now uses `_VALID_HOOKS` from evaluator scope
-- Invalid/unsafe non-empty filters return `{events: [], count: 0, errors: [...]}` instead of degrading to all-events query
+- Basic summary: empty returns zeros, decision counts, hook counts, category counts, risk counts, policy versions, recent event IDs
+- Filters: hook, decision, category, risk, task_id, worker_id, session_id
+- Invalid/unsafe filters: invalid hook/decision/category/risk/task_id/worker_id/session_id all return empty with errors
+- Limit: bounded, clamped to max, invalid defaults, zero clamps to one
+- No-leak: raw reason and action sentinels not in output
+- Read-only: no event creation, no task/worker mutation
+- Compatibility: evaluate, record, list, list_tool_permissions, confirm_action all still work
 
-### `tests/test_durable_workers.py`
-- 5 existing tests updated to match new rejection behavior
-- 4 new tests added for missing hooks and rejection semantics
-- Total: 29 tests in `ListRuntimePolicyHookEvaluationsTests`
+## Diff
 
-## Verification
-```
-python3 -m unittest tests.test_durable_workers          → 665 passed
-python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent → 311 passed
-python3 evals/run_evals.py                              → 383 passed, 0 failed
-git diff --check                                        → clean
+```text
+ mini_agent/toolkits/registry_builder.py | 135 ++++++++++++++++++++++++++++++++
+ tests/test_durable_workers.py           | 198 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 333 insertions(+)
 ```
 
-## Files Modified
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_durable_workers.py`
+## Tests
+
+```text
+python3 -m unittest tests.test_durable_workers                     — 701 tests, OK
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent — 311 tests, OK
+python3 evals/run_evals.py                                         — 395 passed, 0 failed
+git diff --check                                                   — clean
+```
+
+## Notes
+
+- No push performed.
+- No conflicts with other workers.
+- Existing evaluator, recorder, and listing tools remain unchanged and functional.

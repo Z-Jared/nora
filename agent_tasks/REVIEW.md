@@ -1,4 +1,4 @@
-# TASK-106 Review — Deterministic eval coverage for runtime policy hook event query v1
+# TASK-107 Review — Runtime policy hook decision summary v1
 
 **Status: APPROVED**
 
@@ -6,18 +6,20 @@
 
 No blocking issues.
 
-**Coverage completeness (12 evals):**
-- Basic listing with event ID matching, newest-first ordering, and safe bounded metadata fields
-- All 6 filter types tested: hook, decision, task_id, worker_id, session_id, combined
-- Limit bounds: default, explicit, max clamp (100), min clamp (1)
-- Invalid/unsafe filter rejection: invalid hook, invalid decision, path/secret/shell-metachar linkage
-- No-leak: raw reason sentinel, secret-like action, shell command, env-like string all verified absent from query output
-- Read-only: no event creation, no task mutation, no worker mutation (including status check)
-- Compatibility: tool registration, evaluate/record/durable task tools still functional
+**Implementation quality:**
+- Read-only tool (`risk="read"`) — no event creation, no task/worker mutation
+- Same filter validation pattern as `list_runtime_policy_hook_evaluations`: uses `_VALID_HOOKS`, `_VALID_POLICY_DECISIONS`, `_VALID_CATEGORIES`, `_VALID_RISKS`, `_sanitize_linkage_id`
+- Invalid/unsafe non-empty filters return bounded empty summary with `errors` list
+- Output shape is consistent: `total`, `filters`, `decisions` (always 3 keys), `hooks`, `categories`, `risks`, `requires_confirmation_count`, `blocked_count`, `recent_event_ids`, `policy_versions`
+- Limit clamped to [1, 100], defaults to 20
 
-**PM review fixes verified:**
-- Newest-first ordering: explicit assertions comparing first/last recorded event IDs with first/last listed event IDs
-- Raw reason no-leak: `reason="RAW_REASON_SENTINEL_XYZ_789"` recorded, verified absent from query output
-- Worker no-mutation: registers worker before query, compares count and individual worker status before/after
+**Test coverage (28 tests):**
+- Basic summary: empty zeros, decision/hook/category/risk counts, policy versions, recent event IDs (newest-first ordering verified)
+- All 7 filter types: hook, decision, category, risk, task_id, worker_id, session_id
+- Invalid/unsafe filters: 8 tests covering invalid hook/decision/category/risk and unsafe task_id/worker_id/session_id — all return empty with errors, no sentinel leak
+- Limit: bounded, clamped to max, invalid default, zero clamp
+- No-leak: raw reason sentinel and shell command action verified absent
+- Read-only: no event creation, no task mutation, no worker mutation
+- Compatibility: evaluate, record, list, list_tool_permissions, confirm_action all still work
 
-**Residual risk:** Ordering test (`eval_policy_hook_query_lists_events`) assumes DurableEventStore returns newest-first via `ORDER BY rowid DESC`. This is SQLite-specific but reasonable and documented in test comment. Not a blocker.
+**No test gaps or residual risks identified.**

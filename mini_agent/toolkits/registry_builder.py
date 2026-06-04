@@ -5126,4 +5126,218 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- summarize_runtime_policy_hook_evaluations (TASK-107) ---
+
+    def _summarize_runtime_policy_hook_evaluations_json(
+        hook: str = "",
+        decision: str = "",
+        category: str = "",
+        risk: str = "",
+        task_id: str = "",
+        worker_id: str = "",
+        session_id: str = "",
+        limit: int = 20,
+    ) -> str:
+        # Validate and clamp limit
+        try:
+            limit = max(1, min(int(limit), 100))
+        except (ValueError, TypeError):
+            limit = 20
+
+        # Normalize and validate filters — reject invalid/unsafe non-empty filters
+        errors = []
+
+        hook_filter = hook.strip() if isinstance(hook, str) else ""
+        if hook_filter:
+            if hook_filter not in _VALID_HOOKS:
+                errors.append("invalid_hook")
+
+        decision_filter = decision.strip() if isinstance(decision, str) else ""
+        if decision_filter:
+            if decision_filter not in _VALID_POLICY_DECISIONS:
+                errors.append("invalid_decision")
+
+        category_filter = category.strip() if isinstance(category, str) else ""
+        if category_filter:
+            if category_filter not in _VALID_CATEGORIES:
+                errors.append("invalid_category")
+
+        risk_filter = risk.strip() if isinstance(risk, str) else ""
+        if risk_filter:
+            if risk_filter not in _VALID_RISKS:
+                errors.append("invalid_risk")
+
+        task_id_raw = task_id if isinstance(task_id, str) else ""
+        task_id_filter = _sanitize_linkage_id(task_id_raw) if task_id_raw.strip() else ""
+        if task_id_raw.strip() and not task_id_filter:
+            errors.append("invalid_task_id")
+
+        worker_id_raw = worker_id if isinstance(worker_id, str) else ""
+        worker_id_filter = _sanitize_linkage_id(worker_id_raw) if worker_id_raw.strip() else ""
+        if worker_id_raw.strip() and not worker_id_filter:
+            errors.append("invalid_worker_id")
+
+        session_id_raw = session_id if isinstance(session_id, str) else ""
+        session_id_filter = _sanitize_linkage_id(session_id_raw) if session_id_raw.strip() else ""
+        if session_id_raw.strip() and not session_id_filter:
+            errors.append("invalid_session_id")
+
+        if errors:
+            return _json.dumps({
+                "total": 0,
+                "filters": {
+                    "hook": hook_filter if hook_filter in _VALID_HOOKS else "",
+                    "decision": decision_filter if decision_filter in _VALID_POLICY_DECISIONS else "",
+                    "category": category_filter if category_filter in _VALID_CATEGORIES else "",
+                    "risk": risk_filter if risk_filter in _VALID_RISKS else "",
+                    "task_id": task_id_filter,
+                    "worker_id": worker_id_filter,
+                    "session_id": session_id_filter,
+                    "limit": limit,
+                },
+                "decisions": {"allow": 0, "confirm": 0, "block": 0},
+                "hooks": {},
+                "categories": {},
+                "risks": {},
+                "requires_confirmation_count": 0,
+                "blocked_count": 0,
+                "recent_event_ids": [],
+                "policy_versions": {},
+                "errors": errors,
+            }, ensure_ascii=False)
+
+        # Query events
+        events = durable_event_store.list_events(
+            event_type=POLICY_HOOK_EVALUATION,
+            max_results=500,
+        )
+
+        # Apply filters
+        filtered = []
+        for event in events:
+            p = event.payload or {}
+            if hook_filter and p.get("hook") != hook_filter:
+                continue
+            if decision_filter and p.get("decision") != decision_filter:
+                continue
+            if category_filter and p.get("category") != category_filter:
+                continue
+            if risk_filter and p.get("risk") != risk_filter:
+                continue
+            if task_id_filter and event.task_id != task_id_filter:
+                continue
+            if worker_id_filter and event.worker_id != worker_id_filter:
+                continue
+            if session_id_filter and p.get("session_id") != session_id_filter:
+                continue
+            filtered.append(event)
+            if len(filtered) >= limit:
+                break
+
+        # Build summary
+        decision_counts = {"allow": 0, "confirm": 0, "block": 0}
+        hook_counts = {}
+        category_counts = {}
+        risk_counts = {}
+        requires_confirmation_count = 0
+        blocked_count = 0
+        recent_event_ids = []
+        policy_version_counts = {}
+
+        for event in filtered:
+            p = event.payload or {}
+            d = p.get("decision", "")
+            if d in decision_counts:
+                decision_counts[d] += 1
+
+            h = p.get("hook", "")
+            if h:
+                hook_counts[h] = hook_counts.get(h, 0) + 1
+
+            c = p.get("category", "")
+            if c:
+                category_counts[c] = category_counts.get(c, 0) + 1
+
+            r = p.get("risk", "")
+            if r:
+                risk_counts[r] = risk_counts.get(r, 0) + 1
+
+            if p.get("requires_confirmation"):
+                requires_confirmation_count += 1
+            if p.get("blocked"):
+                blocked_count += 1
+
+            pv = p.get("policy_version", "")
+            if pv:
+                policy_version_counts[pv] = policy_version_counts.get(pv, 0) + 1
+
+            recent_event_ids.append(event.event_id)
+
+        return _json.dumps({
+            "total": len(filtered),
+            "filters": {
+                "hook": hook_filter,
+                "decision": decision_filter,
+                "category": category_filter,
+                "risk": risk_filter,
+                "task_id": task_id_filter,
+                "worker_id": worker_id_filter,
+                "session_id": session_id_filter,
+                "limit": limit,
+            },
+            "decisions": decision_counts,
+            "hooks": hook_counts,
+            "categories": category_counts,
+            "risks": risk_counts,
+            "requires_confirmation_count": requires_confirmation_count,
+            "blocked_count": blocked_count,
+            "recent_event_ids": recent_event_ids,
+            "policy_versions": policy_version_counts,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "summarize_runtime_policy_hook_evaluations",
+        "汇总最近的 runtime policy hook 评估事件。只读，可按 hook/decision/category/risk/task_id/worker_id/session_id 过滤。",
+        _summarize_runtime_policy_hook_evaluations_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "hook": {
+                    "type": "string",
+                    "description": "按 hook 点过滤，如 pre_tool, pre_shell 等",
+                },
+                "decision": {
+                    "type": "string",
+                    "description": "按决策结果过滤: allow, confirm, block",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "按类别过滤: task, shell, git, file, network, plugin, model, test, local, unknown",
+                },
+                "risk": {
+                    "type": "string",
+                    "description": "按风险级别过滤: read, write, destructive, external_send, high, unknown",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "按关联任务 ID 过滤",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "按关联 worker ID 过滤",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "按会话 ID 过滤",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "汇总的最大事件数，默认 20，上限 100",
+                },
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     return registry

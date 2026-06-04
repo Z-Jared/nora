@@ -15,17 +15,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-107: Runtime policy hook decision summary v1
-- 分配给: Claude A
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-105/TASK-106 ✅
-- 目标: 新增只读 registry tool，汇总 `policy_hook_evaluation` durable events 的 safe bounded policy decision 计数，服务 PM/UI 快速判断 allow/confirm/block、hook、category、risk 和 recent event 状态。
-- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema、Priority 9 hook/policy kernel、Priority 10 Agent OS UI。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-107: Runtime policy hook decision summary v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 701 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`python3 evals/run_evals.py` 395 passed；`git diff --check` OK。
+- 内容: 新增只读 `summarize_runtime_policy_hook_evaluations(...)` registry tool，聚合 `policy_hook_evaluation` durable events 的 safe bounded summary；支持 hook/decision/category/risk/task_id/worker_id/session_id/limit 过滤；输出 decisions、hooks、categories、risks、requires_confirmation_count、blocked_count、recent_event_ids、policy_versions；无效/不安全 filter 返回 empty summary + safe errors；不泄漏 raw reason/action/sentinel，不 mutation events/tasks/workers。新增 28 个 unit tests 覆盖计数、过滤、limit、no-leak、read-only 和 compatibility。
 
 ### TASK-106: Deterministic eval coverage for runtime policy hook event query v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补齐 newest-first ordering、raw reason no-leak 和 worker no-mutation eval
