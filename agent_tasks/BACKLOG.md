@@ -4,7 +4,20 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-104: Deterministic eval coverage for runtime policy hook event recording v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-103
+- 目标: 为 TASK-103 的 runtime policy hook event recording 增加 deterministic offline eval coverage，验证事件 safe metadata、no-leak、read/write mutation boundaries 和 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel + Priority 1 durable trace schema。
+
 ## 进行中
+
+### TASK-103: Runtime policy hook evaluation event recording v1
+- 分配给: Claude A
+- 目标: 在不改变 `evaluate_runtime_policy_hook` read-only 行为的前提下，新增最小可追踪 runtime policy hook decision/event recording 能力，把 safe bounded policy decision metadata 写入 durable event log。
+- 状态: assigned
 
 ## 已完成
 
