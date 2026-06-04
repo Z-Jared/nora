@@ -4,7 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-109
+- 目标: 为 runtime policy hook rule catalog 增加 deterministic offline eval coverage，验证支持的 hooks/categories/risks、决策规则目录、policy version、safe bounded output、no-leak、read-only/no-mutation 和 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel、Priority 10 Trace graph and Agent OS UI。
+
 ## 进行中
+
+### TASK-109: Runtime policy hook rule catalog v1
+- 分配给: Claude A
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-108 ✅
+- 目标: 增加只读 registry tool，用 safe bounded JSON 描述 runtime policy hook kernel 的 policy version、支持的 hooks/categories/risks/decisions 和决策规则目录，让 policy kernel 可检查、可测试、可被 UI/trace 使用。
+- 验证: `python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel、Priority 10 Trace graph and Agent OS UI。
+- 状态: assigned
 
 ## 已完成
 
