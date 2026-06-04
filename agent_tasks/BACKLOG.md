@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-115: Capability router scaffold v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-113/TASK-114 ✅
-- 分配: Claude A
-- 目标: 增加最小只读 capability routing scaffold，根据用户目标和已声明 plugin manifest metadata 返回候选能力、风险级别、所需确认和预期交付物，不执行插件动作。
-- 验证: `python3 -m unittest tests.test_plugins tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`docs/knowledge/DECISIONS.md` 2026-06-03 capability router 决策。
-
-### TASK-116: Skill manifest schema and inspection v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: 无
-- 分配: Claude B
-- 目标: 增加最小只读 skill manifest schema / parser / inspection surface，为后续行业 skill packs 提供可检查、可治理的 manifest 元数据，不加载或执行 skill 内容。
-- 验证: `python3 -m unittest tests.test_mini_agent`；如新增测试则运行对应测试文件；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`docs/knowledge/DECISIONS.md` 2026-06-03 skill manifests 决策。
+暂无
 
 ## 已完成
+
+### TASK-116: Skill manifest schema and inspection v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补强 secret-like `version` no-leak 和 registry permission assertion
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_skills tests.test_mini_agent` 166 tests OK；`python3 evals/run_evals.py` 436 passed；`git diff --check` OK；PM sentinel no-leak / no-mutation probe OK。
+- 内容: 新增 `mini_agent/skills.py` skill manifest v1 dataclass、JSON/dict parser、validation result、safe inspection output 和 registry read-only 工具 `inspect_skill_manifest`；覆盖 required identity、bounded strings/lists、unknown field warnings、secret-like name/version/description/list item redaction、direct + registry no-leak、durable task/worker/event read-only no-mutation，以及 exact `ToolPermission(category="local", risk="read")`。
+
+### TASK-115: Capability router scaffold v1 ✅
+- 完成者: Claude A；按 PM 初审反馈补强 secret-like plugin `version` no-leak、malformed outer JSON safe error 和 registry permission assertion
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_plugins tests.test_mini_agent` 201 tests OK；`python3 evals/run_evals.py` 436 passed；`git diff --check` OK；PM sentinel no-leak / no-mutation probe OK。
+- 内容: 新增 `mini_agent/capability_router.py` 只读 capability routing scaffold 和 registry 工具 `route_capability_request`；根据用户 goal 与已声明 plugin manifest metadata 返回候选插件、匹配 domains/capabilities、聚合风险级别、确认需求和预期交付物；不加载或执行插件、不调用外部服务、不 mutation durable state；输出 bounded 且对 secret-like plugin name/version 做安全处理。
 
 ### TASK-114: Deterministic eval coverage for plugin manifest inspection v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补强 worker store no-mutation 和 no-plugin-execution eval

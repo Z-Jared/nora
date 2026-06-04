@@ -423,5 +423,295 @@ class TestUnknownValuesNormalized(unittest.TestCase):
         self.assertEqual(out["manifest"]["tools"][0]["event_log"], "unknown")
 
 
+# ---------------------------------------------------------------------------
+# Capability Router tests (TASK-115)
+# ---------------------------------------------------------------------------
+
+from mini_agent.capability_router import route_capability_request, route_capability_request_json
+
+
+def _coding_manifest():
+    return {
+        "name": "code-helper",
+        "version": "1.0.0",
+        "description": "Helps with coding tasks",
+        "domains": ["coding", "development"],
+        "capabilities": ["code_review", "refactoring"],
+        "tools": [
+            {
+                "name": "analyze_code",
+                "description": "Analyze code quality",
+                "permission_category": "local",
+                "risk": "read",
+                "requires_confirmation": False,
+            }
+        ],
+    }
+
+
+def _research_manifest():
+    return {
+        "name": "research-helper",
+        "version": "2.0.0",
+        "description": "Research and search",
+        "domains": ["research", "search"],
+        "capabilities": ["web_search", "document_retrieval"],
+        "tools": [
+            {
+                "name": "search_web",
+                "description": "Search the web",
+                "permission_category": "network",
+                "risk": "read",
+                "requires_confirmation": False,
+            }
+        ],
+    }
+
+
+def _high_risk_manifest():
+    return {
+        "name": "deploy-tool",
+        "version": "0.1.0",
+        "description": "Deployment tool",
+        "domains": ["deployment"],
+        "capabilities": ["deploy"],
+        "tools": [
+            {
+                "name": "deploy_prod",
+                "description": "Deploy to production",
+                "permission_category": "network",
+                "risk": "destructive",
+                "requires_confirmation": True,
+            }
+        ],
+    }
+
+
+class TestRouteCapabilityRequest(unittest.TestCase):
+
+    def test_basic_routing_finds_match(self):
+        result = route_capability_request(
+            goal="help me with code review",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertEqual(result["risk_level"], "low")
+        self.assertFalse(result["requires_confirmation"])
+        self.assertEqual(len(result["candidate_plugins"]), 1)
+        self.assertEqual(result["candidate_plugins"][0]["name"], "code-helper")
+        self.assertIn("code_review", result["candidate_plugins"][0]["matched_capabilities"])
+
+    def test_no_match_empty_candidates(self):
+        result = route_capability_request(
+            goal="cook dinner",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertEqual(len(result["candidate_plugins"]), 0)
+        self.assertEqual(result["risk_level"], "low")
+
+    def test_multiple_manifests_ranked(self):
+        result = route_capability_request(
+            goal="search for code examples",
+            plugin_manifest_jsons=[
+                json.dumps(_coding_manifest()),
+                json.dumps(_research_manifest()),
+            ],
+        )
+        self.assertGreaterEqual(len(result["candidate_plugins"]), 1)
+        # Both should match to some degree
+        names = [c["name"] for c in result["candidate_plugins"]]
+        self.assertIn("code-helper", names)
+
+    def test_high_risk_manifest_elevates_risk(self):
+        result = route_capability_request(
+            goal="deploy to production",
+            plugin_manifest_jsons=[json.dumps(_high_risk_manifest())],
+        )
+        self.assertEqual(result["risk_level"], "high")
+        self.assertTrue(result["requires_confirmation"])
+
+    def test_max_candidates_respected(self):
+        manifests = []
+        for i in range(10):
+            m = _coding_manifest()
+            m["name"] = f"plugin-{i}"
+            m["domains"] = ["coding"]
+            manifests.append(json.dumps(m))
+
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=manifests,
+            max_candidates=3,
+        )
+        self.assertLessEqual(len(result["candidate_plugins"]), 3)
+
+    def test_empty_goal_returns_warning(self):
+        result = route_capability_request(goal="")
+        self.assertIn("empty or missing goal", result["warnings"])
+        self.assertEqual(len(result["candidate_plugins"]), 0)
+
+    def test_none_manifests_returns_empty(self):
+        result = route_capability_request(goal="do something", plugin_manifest_jsons=None)
+        self.assertEqual(len(result["candidate_plugins"]), 0)
+        self.assertEqual(len(result["errors"]), 0)
+
+    def test_malformed_manifest_produces_error(self):
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=["{bad json"],
+        )
+        self.assertTrue(len(result["errors"]) > 0)
+        # Should still return a valid result
+        self.assertIn("goal_summary", result)
+
+    def test_invalid_manifest_type_produces_error(self):
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[123],  # not a string
+        )
+        self.assertTrue(len(result["errors"]) > 0)
+
+    def test_deterministic_output(self):
+        r1 = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        r2 = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertEqual(r1, r2)
+
+    def test_output_shape_complete(self):
+        result = route_capability_request(goal="test")
+        self.assertIn("goal_summary", result)
+        self.assertIn("risk_level", result)
+        self.assertIn("requires_confirmation", result)
+        self.assertIn("expected_deliverables", result)
+        self.assertIn("candidate_plugins", result)
+        self.assertIn("warnings", result)
+        self.assertIn("errors", result)
+
+    def test_no_secret_leak(self):
+        manifest = _coding_manifest()
+        manifest["name"] = "sk-SECRET-TOKEN-12345"
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[json.dumps(manifest)],
+        )
+        text = json.dumps(result)
+        self.assertNotIn("sk-SECRET-TOKEN-12345", text)
+
+    def test_expected_deliverables_code(self):
+        result = route_capability_request(
+            goal="implement a new feature",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertIn("code_changes", result["expected_deliverables"])
+
+    def test_expected_deliverables_search(self):
+        result = route_capability_request(
+            goal="search for documentation",
+            plugin_manifest_jsons=[json.dumps(_research_manifest())],
+        )
+        self.assertIn("search_results", result["expected_deliverables"])
+
+    def test_goal_summary_truncated(self):
+        long_goal = "a" * 3000
+        result = route_capability_request(goal=long_goal)
+        self.assertLessEqual(len(result["goal_summary"]), 103)  # 100 + "..."
+
+    def test_route_capability_request_json_wrapper(self):
+        json_str = route_capability_request_json(
+            goal="code review",
+            plugin_manifest_jsons=json.dumps([_coding_manifest()]),
+        )
+        result = json.loads(json_str)
+        self.assertIn("candidate_plugins", result)
+
+    def test_not_a_list_manifests_json(self):
+        result = route_capability_request(
+            goal="test",
+            plugin_manifest_jsons="not a list",
+        )
+        self.assertTrue(len(result["errors"]) > 0)
+
+    def test_dict_manifest_accepted(self):
+        """Dict manifests should be accepted directly."""
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[_coding_manifest()],
+        )
+        self.assertEqual(len(result["candidate_plugins"]), 1)
+
+    def test_domains_matched(self):
+        result = route_capability_request(
+            goal="development task",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertGreaterEqual(len(result["candidate_plugins"]), 1)
+        self.assertIn("development", result["candidate_plugins"][0]["matched_domains"])
+
+    def test_secret_version_not_leaked(self):
+        """Secret-like manifest version must not appear in output."""
+        manifest = _coding_manifest()
+        manifest["version"] = "sk-PM-SECRET-VERSION-XYZ"
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[json.dumps(manifest)],
+        )
+        text = json.dumps(result)
+        self.assertNotIn("sk-PM-SECRET-VERSION-XYZ", text)
+
+    def test_malformed_outer_json_returns_error(self):
+        """Malformed plugin_manifest_jsons JSON should produce a bounded safe error."""
+        result_json = route_capability_request_json(
+            goal="test",
+            plugin_manifest_jsons="{bad json",
+        )
+        result = json.loads(result_json)
+        self.assertTrue(len(result["errors"]) > 0)
+        self.assertTrue(any("invalid JSON" in e for e in result["errors"]))
+
+    def test_malformed_outer_json_not_a_list_returns_error(self):
+        """Non-list plugin_manifest_jsons should produce a bounded safe error."""
+        result_json = route_capability_request_json(
+            goal="test",
+            plugin_manifest_jsons='"not a list"',
+        )
+        result = json.loads(result_json)
+        self.assertTrue(len(result["errors"]) > 0)
+        self.assertTrue(any("invalid JSON" in e or "not a list" in e for e in result["errors"]))
+
+    def test_registry_tool_permission_exact(self):
+        """route_capability_request must have exact ToolPermission(local, read, no confirm)."""
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        reg = build_default_registry()
+        perm = reg.permission_for("route_capability_request")
+        self.assertIsNotNone(perm)
+        self.assertEqual(perm.category, "local")
+        self.assertEqual(perm.risk, "read")
+        self.assertFalse(perm.requires_confirmation)
+
+    def test_no_durable_state_mutation(self):
+        """Calling route_capability_request must not mutate durable task/worker/event counts."""
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        from mini_agent.database import NoraDB
+        with tempfile.TemporaryDirectory() as td:
+            db = NoraDB(Path(td) / "test.db")
+            reg = build_default_registry(db=db)
+            tasks_before = len(reg.durable_task_store.list_tasks())
+            workers_before = len(reg.durable_worker_store.list_workers())
+            events_before = len(reg.durable_event_store.list_events())
+
+            reg.call("route_capability_request", goal="code review", plugin_manifest_jsons=json.dumps([_coding_manifest()]))
+
+            tasks_after = len(reg.durable_task_store.list_tasks())
+            workers_after = len(reg.durable_worker_store.list_workers())
+            events_after = len(reg.durable_event_store.list_events())
+            self.assertEqual(tasks_before, tasks_after)
+            self.assertEqual(workers_before, workers_after)
+            self.assertEqual(events_before, events_after)
+
+
 if __name__ == "__main__":
     unittest.main()

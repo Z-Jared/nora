@@ -4689,6 +4689,31 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Skill manifest inspection (TASK-116) ---
+
+    from mini_agent.skills import inspect_skill_manifest_json
+
+    def _inspect_skill_manifest_handler(manifest_json: str = "{}") -> str:
+        result = inspect_skill_manifest_json(manifest_json)
+        return _json.dumps(result, ensure_ascii=False, indent=2)
+
+    registry.register(
+        "inspect_skill_manifest",
+        "校验并展示 skill manifest v1 的安全元数据。只读，不加载 skill 内容。",
+        _inspect_skill_manifest_handler,
+        parameters={
+            "type": "object",
+            "properties": {
+                "manifest_json": {
+                    "type": "string",
+                    "description": "Skill manifest JSON 文本",
+                },
+            },
+            "required": ["manifest_json"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     # --- Runtime policy hook evaluator (TASK-101) ---
 
     _POLICY_VERSION = "v1"
@@ -5486,6 +5511,46 @@ def build_default_registry(
         "返回 runtime policy hook 规则的安全有界目录。只读，不修改任何状态。",
         _describe_runtime_policy_hook_rules_json,
         parameters={"type": "object", "properties": {}},
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
+    # --- Capability Router (TASK-115) ---
+
+    from mini_agent.capability_router import route_capability_request_json
+
+    def _route_capability_request(
+        goal: str,
+        plugin_manifest_jsons: str = "[]",
+        max_candidates: int = 5,
+    ) -> str:
+        return route_capability_request_json(
+            goal=goal,
+            plugin_manifest_jsons=plugin_manifest_jsons,
+            max_candidates=max_candidates,
+        )
+
+    registry.register(
+        "route_capability_request",
+        "路由能力请求：根据目标和插件 manifest 元数据返回候选能力、风险级别、确认需求和预期交付物。只读，不执行插件代码。",
+        _route_capability_request,
+        parameters={
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "用户目标描述",
+                },
+                "plugin_manifest_jsons": {
+                    "type": "string",
+                    "description": 'JSON 字符串，包含 manifest JSON 字符串数组或 manifest 对象数组，例如 \'["{...}"]\' 或 \'[{...}]\'',
+                },
+                "max_candidates": {
+                    "type": "integer",
+                    "description": "最多返回候选插件数，默认 5，最大 20",
+                },
+            },
+            "required": ["goal"],
+        },
         permission=ToolPermission(category="local", risk="read"),
     )
 

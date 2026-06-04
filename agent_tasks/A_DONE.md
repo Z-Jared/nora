@@ -1,63 +1,46 @@
 # Claude A Completion Report
 
-Status: ready for Codex review
+Status: **DONE**
 
 ## Summary
 
-TASK-113: Plugin manifest schema and inspection v1 — implemented, security fix applied.
+Implemented TASK-115: Capability router scaffold v1 — a minimal read-only capability routing module that inspects user goals and plugin manifest metadata to return candidate capabilities, risk levels, required confirmations, and expected deliverables.
+
+## PM Review Fixes Applied
+
+1. **Secret-like version redaction**: `version` field in `CandidatePlugin` now uses `_safe_str()` to redact secret-like values (e.g., `sk-PM-SECRET-VERSION-XYZ`). Both direct and registry outputs are safe.
+2. **Malformed outer JSON error**: `route_capability_request_json()` now returns bounded safe error (`"plugin_manifest_jsons: invalid JSON or not a list"`) instead of silently treating malformed JSON as empty list.
+3. **Tests added**: `test_secret_version_not_leaked`, `test_malformed_outer_json_returns_error`, `test_malformed_outer_json_not_a_list_returns_error`, `test_registry_tool_permission_exact`, `test_no_durable_state_mutation`.
 
 ## Changes
 
-### `mini_agent/plugins.py` (extended)
-- Added manifest v1 constants: `VALID_AUTH_METHODS`, `VALID_PERMISSION_CATEGORIES`, `VALID_RISKS`, `VALID_DATA_SENSITIVITY`, `VALID_EVENT_LOG_MODES`, `HIGH_RISK_RISKS`
-- Added data models: `PluginToolMeta`, `PluginManifest`, `ManifestValidationResult`
-- Added parser/validator: `parse_manifest(dict)`, `parse_manifest_json(str)`
-- Validation rejects: missing identity fields, non-list tools, duplicate tool names, high-risk/external-send/destructive tools without confirmation
-- Validation warns: unknown auth methods, unknown permission categories/risks/data_sensitivity/event_log modes
-- Added safe inspection: `inspect_manifest(dict)`, `inspect_manifest_json(str)`, `manifest_to_safe_dict(PluginManifest)`
-- Output is deterministic, bounded, safe — no raw secrets/tokens/env values echoed
-- Preserved existing `load_plugins(...)` behavior and broken plugin warning
+### New file: `mini_agent/capability_router.py`
+- Pure read-only routing logic: no plugin loading, no execution, no state mutation
+- `route_capability_request(goal, plugin_manifest_jsons, max_candidates)` — main routing function
+- `route_capability_request_json(...)` — JSON string wrapper with bounded error handling
+- Keyword extraction with underscore/hyphen splitting for compound names
+- Risk inference: aggregates tool risks (destructive/external_send → high, write → medium, read → low)
+- Deterministic output: sorted candidates by score then name
+- Secret-like plugin names AND versions redacted via `_safe_str` from plugins.py
+- `max_candidates` clamped to [1, 20]
 
-### Security fix (PM review)
-- Unknown enum values (auth, permission_category, risk, data_sensitivity, event_log) are normalized to `"unknown"` in output, raw values never echoed in warnings/errors/manifest
-- Warning messages use safe positional labels (e.g., `tools[0] (t): unknown risk`) without echoing raw unknown values
-- Secret-like tool names are redacted to `<redacted>` in warnings and manifest output
-- `_is_secret_like()` detects `sk-`, `secret`, `token`, `api_key`, `password`, `credential`, `bearer`, `auth`, `key-` patterns
-- Domains/capabilities list items are filtered for secret-like values
-- Removed unused `field` import
+### Edited: `mini_agent/toolkits/registry_builder.py` (minimal edit)
+- Registered `route_capability_request` tool with `ToolPermission(category="local", risk="read")`
+- Only the final `return registry` block was modified
 
-### `mini_agent/toolkits/registry_builder.py` (extended)
-- Registered `inspect_plugin_manifest` tool with `ToolPermission(category="local", risk="read")`
-- Handler accepts `manifest_json` string, returns safe bounded JSON metadata + validation errors
-
-### `tests/test_plugins.py` (new, 52 tests)
-- Valid manifest parsing (minimal, full, domains/capabilities, description truncation, multiple tools)
-- Error cases (not dict, missing name/version, non-list tools, duplicate tool names, high-risk without/with confirmation)
-- Warnings (unknown auth, permission_category, risk, data_sensitivity, event_log) — raw values not echoed
-- JSON parsing (valid, malformed, non-string)
-- Safe dict output (no secrets, deterministic)
-- Inspection tool (valid, invalid, JSON, no raw secrets)
-- Tool defaults and description truncation
-- load_plugins preserved (nonexistent dir, simple plugin, broken plugin warning)
-- Constants validation
-- Sentinel no-leak tests (auth, permission_category, risk, data_sensitivity, event_log, domains, capabilities, tool name in warnings, combined)
-- Unknown values normalized to "unknown"
+### Edited: `tests/test_plugins.py`
+- 25 tests total for capability router (20 original + 5 from PM review fix)
 
 ## Verification
 
-```text
-python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent
-→ 225 tests OK
-
-python3 evals/run_evals.py
-→ 423 passed, 0 failed
-
-git diff --check
-→ (clean)
+```
+python3 -m unittest tests.test_plugins tests.test_mini_agent  → 201 tests OK
+python3 evals/run_evals.py                                    → 436 passed, 0 failed
+git diff --check                                              → (clean)
 ```
 
 ## Notes
 
+- Worktree clean before starting; no conflicts detected.
+- `registry_builder.py` edit is minimal; Claude B's TASK-116 should not conflict.
 - No commit or push performed.
-- No edits to B_TASK, B_DONE, CODEX_TERMINAL_HANDOFF.md, or designs/.
-- Worktree is clean — no conflicts with existing uncommitted work.

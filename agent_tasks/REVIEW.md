@@ -1,34 +1,31 @@
-# CCB Review — TASK-114: Deterministic eval coverage for plugin manifest inspection v1
+# CCB Review — TASK-115 / TASK-116
 
 **Status: APPROVED**
 
-## Summary
+## TASK-115: Capability router scaffold v1
 
-13 eval cases covering plugin manifest inspection safe surface. All offline, deterministic, no runtime changes. PM review fixes (worker store snapshot, no-plugin-execution marker) properly applied.
+Reviewer: CCB reviewer (`job_d9d0ab00b136`)
 
-## Coverage
+Clean implementation of a read-only capability routing scaffold. No blocking issues found.
 
-| Area | Evals | Notes |
-|------|-------|-------|
-| Tool permission | 1 | Verifies local/read via `registry._tools` |
-| Valid manifest | 1 | Bounded safe metadata, JSON-serializable |
-| Malformed input | 3 | JSON errors, non-object, malformed tools — all return bounded errors |
-| Duplicate tools | 1 | Rejected with clear error |
-| High-risk confirmation | 2 | Without confirm rejected, with confirm accepted (destructive/external_send/high) |
-| Unknown enums | 1 | All 5 enum types normalized to "unknown", raw values absent from output |
-| Secret redaction | 1 | Secret-like tool names/domains/capabilities redacted/omitted |
-| Read-only | 1 | Tasks/workers/events unchanged after inspection |
-| No execution | 1 | Marker file absent, plugin tool not registered |
-| Compatibility | 1 | MCP tools and list_tool_permissions still work |
+- Pure functions only: no plugin loading, external calls, durable mutation, file writes, shell, git, browser, or network actions.
+- Output is bounded and safe: goal summaries are capped, candidate count is clamped, plugin names and versions use secret-like redaction, and malformed outer JSON returns bounded errors without raw input echo.
+- Routing behavior is deterministic: keyword extraction, manifest scoring, risk aggregation, confirmation aggregation, and deliverable inference are stable and covered by tests.
+- Registry permission is exactly `ToolPermission(category="local", risk="read")`.
+- PM verification covered unit tests, evals, `git diff --check`, no-leak probes, and durable task/worker/event no-mutation.
 
-## Key Findings
+Residual risk: none identified.
 
-- **No runtime changes**: Only `evals/run_evals.py` modified (278 lines). No changes to `plugins.py`, `registry_builder.py`, or tests.
-- **Deterministic**: All evals use `tempfile.TemporaryDirectory()` + local `NoraDB`. No network/model dependencies.
-- **No-plugin-execution eval** (PM fix): Writes a side-effect plugin, inspects a manifest referencing it, asserts marker file absent and tool not registered. Strong proof that inspection is purely declarative.
-- **Read-only eval** (PM fix): Snapshots task/worker/event stores before and after inspection. All counts unchanged.
-- **Private attribute access**: `registry._tools.get("inspect_plugin_manifest")` is acceptable in eval context for precise permission verification. Not a runtime dependency.
+## TASK-116: Skill manifest schema and inspection v1
 
-## Residual Risk
+Reviewer: CCB reviewer (`job_94c6bb76260e`)
 
-None. Evals are comprehensive, deterministic, and properly isolated.
+Clean implementation of a read-only skill manifest inspection surface. No blocking issues found.
+
+- Parser and inspector are read-only: they inspect JSON/dict metadata only and do not load skill content, import skill modules, execute hooks, mutate durable state, or call external services.
+- Schema validation covers required identity fields, bounded string/list fields, unknown field warnings, and safe validation errors.
+- Secret-like values are redacted or omitted across `name`, `version`, `description`, list fields, unknown secret-like keys, direct output, and registry output.
+- Registry permission is exactly `ToolPermission(category="local", risk="read")`.
+- PM verification covered unit tests, evals, `git diff --check`, no-leak probes, and durable task/worker/event no-mutation.
+
+Residual risk: none identified.

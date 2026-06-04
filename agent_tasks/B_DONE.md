@@ -4,41 +4,39 @@ Status: ready for Codex review
 
 ## Summary
 
-Added 13 deterministic offline eval cases for TASK-114 plugin manifest inspection in `evals/run_evals.py`. All evals are offline, deterministic, and use temporary databases.
+TASK-116: Skill manifest schema and inspection v1. PM review fix applied — secret-like `version` now redacted in both parser and safe output.
 
-## New Eval Cases
+## Changes
 
-1. **plugin_manifest_tool_permission** — Verifies `inspect_plugin_manifest` registered with `ToolPermission(category="local", risk="read")`.
-2. **plugin_manifest_valid_productivity** — Valid developer/productivity manifest returns bounded safe metadata with correct fields.
-3. **plugin_manifest_malformed_json** — Malformed JSON returns safe bounded error, never raises.
-4. **plugin_manifest_non_object** — Non-object JSON returns safe bounded error.
-5. **plugin_manifest_malformed_tools** — Malformed tool entries (non-objects, empty names) return bounded errors; valid tools still parsed.
-6. **plugin_manifest_duplicate_tool_names** — Duplicate tool names are rejected with clear error.
-7. **plugin_manifest_high_risk_no_confirm** — High-risk/destructive/external-send without confirmation is rejected.
-8. **plugin_manifest_high_risk_with_confirm** — High-risk/destructive/external-send with confirmation is accepted.
-9. **plugin_manifest_unknown_enums** — Unknown enum values for auth, permission_category, risk, data_sensitivity, event_log are normalized to safe defaults; raw values not echoed.
-10. **plugin_manifest_secret_redaction** — Secret-like values in tool names/domains/capabilities are redacted or omitted.
-11. **plugin_manifest_read_only_no_mutation** — Inspection is read-only: no durable task/worker/event mutation (includes worker store check).
-12. **plugin_manifest_no_plugin_execution** — Inspection does not execute plugin code or register plugin tools: writes a marker-producing plugin file, inspects a matching manifest, asserts marker file absent and tool not registered.
-13. **plugin_manifest_compatibility** — Existing MCP evals and `list_tool_permissions` still work after plugin manifest inspection.
+### `mini_agent/skills.py` (new)
+- `SkillManifest` dataclass with 10 fields (name, version, description, domains, capabilities, workflows, deliverables, required_plugins, risk_boundaries, evals)
+- `parse_skill_manifest()` / `parse_skill_manifest_json()` — validate dict/JSON input
+- `inspect_skill_manifest()` / `inspect_skill_manifest_json()` — bounded safe output
+- Secret-like value redaction on `name`, `version`, `description`, and all list items
+- List/string length bounding, unknown field warnings
 
-## Diff
+### `mini_agent/toolkits/registry_builder.py` (+25 lines)
+- Registered `inspect_skill_manifest` tool with `ToolPermission(category="local", risk="read")`
 
-```text
- evals/run_evals.py | 278 ++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 278 insertions(+)
-```
+### `tests/test_skills.py` (new)
+- 40 tests covering: valid/invalid parsing, JSON parsing, sentinel no-leak (including `version` sentinel via direct + registry output), read-only no-mutation (durable task/worker/event), registry permission check, constants
+
+## PM Review Fix
+
+- `version` field now checked for `_is_secret_like()` during parsing — rejects as error
+- `manifest_to_safe_dict()` now applies `_safe_str()` to `version`
+- Added `test_version_sentinel_no_leak` (direct) and `test_version_sentinel_no_leak_registry` (via default registry)
+- Added `TestRegistryPermission` verifying exact `ToolPermission(category="local", risk="read")` on default registry
 
 ## Tests
 
-```text
-python3 evals/run_evals.py — 436 passed, 0 failed
-python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent — 225 tests, OK
-git diff --check — clean
+```
+python3 -m unittest tests.test_skills tests.test_mini_agent → 166 passed, 0 failed
+python3 evals/run_evals.py → 436 passed, 0 failed
+git diff --check → clean
 ```
 
 ## Notes
 
-- No push performed.
-- No runtime behavior changes.
-- PM review fix: added worker store snapshot to read-only eval; added dedicated no-plugin-execution eval with side-effect marker assertion.
+- No commit or push performed.
+- `registry_builder.py` edit is tightly scoped (25 lines).
