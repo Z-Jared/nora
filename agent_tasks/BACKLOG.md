@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-099: Scheduler retry decision event metadata v1
-- 分配给: Claude A
-- 目标: 扩展 scheduler decision durable event metadata，让 retry executed/skipped/failed/finalized decisions 可审计、可解释，并保持输出 bounded/no-leak。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-099: Scheduler retry decision event metadata v1 ✅
+- 完成者: Claude A；按 PM 初审反馈补齐 loop event retry aggregate / per-tick metadata
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests` 47 tests OK；`python3 -m unittest tests.test_durable_workers.SchedulerRetryEventMetadataTests` 11 tests OK；`python3 -m unittest tests.test_durable_workers` 570 tests OK；`python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent` 737 tests OK；`python3 evals/run_evals.py` 358 passed；`git diff --check` OK。
+- 内容: 扩展 scheduler tick/loop `SCHEDULER_DECISION` durable event metadata；tick actions 增加 bounded retry action fields（executed/skipped/reason/retry_count/max_retries），tick 与 loop API/event payload 增加 `retry_executed`、`retry_skipped`、`retry_failed` aggregate counts，loop event 额外记录 bounded `ticks[]` per-tick retry counts；不持久化 raw results，不泄漏 task goal/steps/failure_reason/workspace/shell/env/request/secrets；保持 `record_event=False` 无 scheduler decision event。
 
 ### TASK-098: Deterministic eval coverage for guarded scheduler retry execution v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补齐 active ASSIGNED/RUNNING owner 和 stale execution-time guard eval

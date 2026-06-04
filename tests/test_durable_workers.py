@@ -7870,5 +7870,169 @@ class RetryExecutionTests(unittest.TestCase):
         self.assertGreater(len(retry_reasons), 0)
 
 
+class SchedulerRetryEventMetadataTests(unittest.TestCase):
+    """Tests for scheduler retry decision event metadata (TASK-099)."""
+
+    SECRET_SENTINEL = "EVENT_META_SECRET_XYZ"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _create_failed_task(self, goal="g", steps="s"):
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal=goal, steps=steps))
+        task_id = task["task_id"]
+        self.registry.call("assign_durable_task", task_id=task_id, worker_id="wf")
+        self.registry.call("update_worker_status", worker_id="wf", status="running", current_task_id=task_id)
+        self.registry.call("update_durable_task", task_id=task_id, status="running")
+        self.registry.call("update_durable_task", task_id=task_id, status="failed", failure_reason="test")
+        self.registry.call("update_worker_status", worker_id="wf", status="idle")
+        return task_id
+
+    def _get_scheduler_events(self):
+        return [e for e in self.registry.durable_event_store.list_events()
+                if e.event_type == SCHEDULER_DECISION]
+
+    def test_tick_retry_executed_event_metadata(self):
+        """Tick with retry executed records safe retry action metadata."""
+        task_id = self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        self.assertGreater(len(events), 0)
+        event = events[0]
+        # Aggregate counts
+        self.assertIn("retry_executed", event.payload)
+        self.assertIn("retry_skipped", event.payload)
+        self.assertIn("retry_failed", event.payload)
+        self.assertGreaterEqual(event.payload["retry_executed"], 1)
+        # Per-action metadata
+        retry_actions = [a for a in event.payload.get("actions", []) if a.get("action") == "retry_failed_task"]
+        self.assertGreater(len(retry_actions), 0)
+        ra = retry_actions[0]
+        self.assertTrue(ra["executed"])
+        self.assertEqual(ra["task_id"], task_id)
+        self.assertEqual(ra["retry_count"], 1)
+        self.assertEqual(ra["max_retries"], 3)
+
+    def test_tick_retry_skipped_missing_capacity_event_metadata(self):
+        """Tick with retry skipped for missing capacity records safe skip reason."""
+        task_id = self._create_failed_task()
+        self.registry.call("update_worker_status", worker_id="wf", status="running")
+
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        self.assertGreater(len(events), 0)
+        retry_actions = [a for a in events[0].payload.get("actions", []) if a.get("action") == "retry_failed_task"]
+        for ra in retry_actions:
+            self.assertTrue(ra["skipped"])
+            self.assertEqual(ra["reason"], "retry_blocked_missing_capacity")
+
+    def test_tick_record_event_false_no_event(self):
+        """record_event=False records no scheduler decision event."""
+        self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=False)
+
+        events = self._get_scheduler_events()
+        self.assertEqual(len(events), 0)
+
+    def test_loop_retry_executed_event_metadata(self):
+        """Loop with retry executed records bounded per-tick retry metadata."""
+        task_id = self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1, record_event=True)
+
+        events = self._get_scheduler_events()
+        loop_events = [e for e in events if e.summary == "scheduler loop"]
+        self.assertGreater(len(loop_events), 0)
+        payload = loop_events[0].payload
+        # Aggregate retry counts
+        self.assertIn("retry_executed", payload)
+        self.assertIn("retry_skipped", payload)
+        self.assertIn("retry_failed", payload)
+        self.assertGreaterEqual(payload["retry_executed"], 1)
+        # Per-tick retry metadata in ticks[]
+        self.assertIn("ticks", payload)
+        self.assertGreater(len(payload["ticks"]), 0)
+        tick = payload["ticks"][0]
+        self.assertIn("retry_executed", tick)
+        self.assertIn("retry_skipped", tick)
+        self.assertIn("retry_failed", tick)
+
+    def test_loop_record_event_false_no_event(self):
+        """Loop with record_event=False records no scheduler decision event."""
+        self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_loop", dry_run=False, max_ticks=1, record_event=False)
+
+        events = self._get_scheduler_events()
+        self.assertEqual(len(events), 0)
+
+    def test_event_no_goal_leak(self):
+        """Event payload must not contain task goal."""
+        self._create_failed_task(goal=self.SECRET_SENTINEL)
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            self.assertNotIn(self.SECRET_SENTINEL, json.dumps(e.payload))
+
+    def test_event_no_steps_leak(self):
+        """Event payload must not contain task steps."""
+        self._create_failed_task(steps="SECRET_STEPS_EVENT")
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            self.assertNotIn("SECRET_STEPS_EVENT", json.dumps(e.payload))
+
+    def test_event_no_failure_reason_leak(self):
+        """Event payload must not contain failure_reason."""
+        self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            self.assertNotIn("failure_reason", json.dumps(e.payload))
+
+    def test_event_no_workspace_path_leak(self):
+        """Event payload must not contain workspace paths."""
+        self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            self.assertNotIn("/tmp/", json.dumps(e.payload))
+            self.assertNotIn("workspace_path", json.dumps(e.payload))
+
+    def test_event_no_secret_leak(self):
+        """Event payload must not contain shell/env/request secrets."""
+        self._create_failed_task(goal="SHELL_SECRET_EVENT_123")
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            self.assertNotIn("SHELL_SECRET_EVENT_123", json.dumps(e.payload))
+
+    def test_event_fields_are_safe_types(self):
+        """Event action fields must be bounded safe types (no raw objects)."""
+        self._create_failed_task()
+        self.registry.call("run_worker_lifecycle_scheduler_tick", dry_run=False, record_event=True)
+
+        events = self._get_scheduler_events()
+        for e in events:
+            for a in e.payload.get("actions", []):
+                for v in a.values():
+                    self.assertIsInstance(v, (str, int, float, bool, type(None)))
+
+
 if __name__ == "__main__":
     unittest.main()

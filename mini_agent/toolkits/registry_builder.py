@@ -3553,8 +3553,16 @@ def build_default_registry(
                 "skipped": bool(safe_result.get("skipped", False)),
                 "would_execute": bool(safe_result.get("would_execute", False)),
                 "finalized": bool(safe_result.get("finalized", False)),
+                "executed": bool(safe_result.get("executed", False)),
+                "retry_count": safe_result.get("retry_count", 0) if isinstance(safe_result.get("retry_count"), int) else 0,
+                "max_retries": safe_result.get("max_retries", 0) if isinstance(safe_result.get("max_retries"), int) else 0,
             })
         skipped_count = max(0, int(run_result.get("skipped_count", 0)) - blocked_count)
+
+        # Aggregate retry counts for event metadata
+        retry_executed = sum(1 for r in scheduler_results if r.get("action") == "retry_failed_task" and r.get("executed"))
+        retry_skipped = sum(1 for r in scheduler_results if r.get("action") == "retry_failed_task" and r.get("skipped"))
+        retry_failed = sum(1 for r in scheduler_results if r.get("action") == "retry_failed_task" and not r.get("executed") and not r.get("skipped") and r.get("reason") == "retry_execution_error")
 
         decision_event_recorded = False
         if record_event:
@@ -3573,6 +3581,9 @@ def build_default_registry(
                         "skipped_count": skipped_count,
                         "failed_count": run_result.get("failed_count", 0),
                         "blocked_count": blocked_count,
+                        "retry_executed": retry_executed,
+                        "retry_skipped": retry_skipped,
+                        "retry_failed": retry_failed,
                         "action_labels": [r.get("action", "") for r in scheduler_results],
                         "actions": event_actions,
                     },
@@ -3593,6 +3604,9 @@ def build_default_registry(
             "skipped_count": skipped_count,
             "failed_count": run_result.get("failed_count", 0),
             "blocked_count": blocked_count,
+            "retry_executed": retry_executed,
+            "retry_skipped": retry_skipped,
+            "retry_failed": retry_failed,
             "results": scheduler_results,
             "summary": run_result.get("summary", {}),
             "decision_event_recorded": decision_event_recorded,
@@ -3650,6 +3664,9 @@ def build_default_registry(
         total_skipped = 0
         total_failed = 0
         total_blocked = 0
+        total_retry_executed = 0
+        total_retry_skipped = 0
+        total_retry_failed = 0
         stopped_reason = "max_ticks_reached"
 
         for i in range(max_ticks):
@@ -3678,6 +3695,9 @@ def build_default_registry(
                 "skipped_count": tick_result.get("skipped_count", 0),
                 "failed_count": tick_result.get("failed_count", 0),
                 "blocked_count": tick_result.get("blocked_count", 0),
+                "retry_executed": tick_result.get("retry_executed", 0),
+                "retry_skipped": tick_result.get("retry_skipped", 0),
+                "retry_failed": tick_result.get("retry_failed", 0),
             }
             ticks.append(tick_summary)
 
@@ -3686,6 +3706,9 @@ def build_default_registry(
             total_skipped += tick_result.get("skipped_count", 0)
             total_failed += tick_result.get("failed_count", 0)
             total_blocked += tick_result.get("blocked_count", 0)
+            total_retry_executed += tick_result.get("retry_executed", 0)
+            total_retry_skipped += tick_result.get("retry_skipped", 0)
+            total_retry_failed += tick_result.get("retry_failed", 0)
 
             if stop_when_idle:
                 tick_planned = tick_result.get("planned_count", 0)
@@ -3718,7 +3741,11 @@ def build_default_registry(
                         "skipped_count": total_skipped,
                         "failed_count": total_failed,
                         "blocked_count": total_blocked,
+                        "retry_executed": total_retry_executed,
+                        "retry_skipped": total_retry_skipped,
+                        "retry_failed": total_retry_failed,
                         "tick_ids": [t.get("tick_id", "") for t in ticks],
+                        "ticks": ticks,
                         "release_workspace": release_workspace,
                         "stop_when_idle": stop_when_idle,
                         "record_event": record_event,
@@ -3742,6 +3769,9 @@ def build_default_registry(
             "skipped_count": total_skipped,
             "failed_count": total_failed,
             "blocked_count": total_blocked,
+            "retry_executed": total_retry_executed,
+            "retry_skipped": total_retry_skipped,
+            "retry_failed": total_retry_failed,
             "ticks": ticks,
             "summary": {
                 "loop_id": loop_id,
@@ -3753,6 +3783,9 @@ def build_default_registry(
                 "total_skipped": total_skipped,
                 "total_failed": total_failed,
                 "total_blocked": total_blocked,
+                "total_retry_executed": total_retry_executed,
+                "total_retry_skipped": total_retry_skipped,
+                "total_retry_failed": total_retry_failed,
                 "dry_run": dry_run,
                 "loop_event_recorded": loop_event_recorded,
             },

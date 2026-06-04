@@ -1,64 +1,54 @@
 # Claude A — Completion Report
 
 Owner: Claude A
-Task: TASK-097 — Guarded scheduler retry execution v1
-Status: **DONE** (PM fixes applied)
+Task: TASK-099 — Scheduler retry decision event metadata v1
+Status: **DONE** (PM loop event fix applied)
 
 ## Summary
 
-Extended guarded worker lifecycle execution so scheduler run-once/tick/loop can execute safe retry actions for failed durable tasks when `dry_run=False`.
+Extended scheduler decision durable event metadata so retry executed/skipped/failed decisions are auditable from events, while preserving bounded/no-leak output.
 
 ## Changes
 
-### `mini_agent/toolkits/registry_builder.py` (+~90 lines)
+### `mini_agent/toolkits/registry_builder.py` (+~30 lines)
 
-**`run_worker_lifecycle_once` — `retry_failed_task` execution:**
-- `dry_run=True`: reports `would_execute=True`, no mutation.
-- `dry_run=False`: re-checks guards at execution time:
-  1. Task exists and status is still `failed`.
-  2. `retry_count < max_retries`.
-  3. No active ASSIGNED/RUNNING worker attached.
-  4. **PM fix:** Idle capacity exists (`status==IDLE` and `current_task_id` empty). If no idle capacity → `retry_blocked_missing_capacity`.
-  5. All guards pass → calls `durable_task_store.retry_durable_task()`.
-  6. Any failure → safe `retry_execution_error` outcome.
+**Tick event `event_actions` per-action metadata:**
+- Added `executed` (bool), `retry_count` (int), `max_retries` (int) to each action entry.
 
-**Tick/Loop wrappers:** No changes needed — retry flows through `_run_worker_lifecycle_once_json` → tick → loop automatically.
+**Tick event + API output aggregate counts:**
+- Added `retry_executed`, `retry_skipped`, `retry_failed` to tick event payload and API return JSON.
 
-### `tests/test_durable_workers.py` (+~200 lines)
+**PM fix — Loop event + API output:**
+- Added `retry_executed`, `retry_skipped`, `retry_failed` aggregate counts to loop event payload and API return JSON.
+- Added per-tick retry counts in `ticks[]` summaries (`retry_executed`, `retry_skipped`, `retry_failed` per tick).
+- Added `ticks` array (with per-tick retry metadata) to loop event payload for bounded per-tick auditability.
 
-**`RetryExecutionTests`** (16 tests):
-- `test_dry_run_does_not_mutate_failed_task` — dry_run sees retryable, no mutation.
-- `test_non_dry_run_retries_failed_task` — executes retry, task becomes pending.
-- `test_tick_can_execute_retry` — tick wrapper executes retry.
-- `test_loop_can_execute_retry` — loop wrapper executes retry.
-- `test_exhausted_retry_skipped` — exhausted retries not mutated.
-- `test_active_worker_retry_skipped` — **PM fix:** covers both ASSIGNED and RUNNING via subTest.
-- `test_no_idle_capacity_skips_retry` — **PM fix:** no idle workers → `retry_blocked_missing_capacity`, no mutation.
-- `test_stale_state_guard` — **PM fix:** mock intercepts execution-time `get_task` to return cancelled; proves guard catches stale state.
-- `test_closeout_ahead_of_retry` — ordering preserved.
-- `test_no_goal_leak` — goal not in output.
-- `test_no_failure_reason_leak` — failure_reason not in output.
-- `test_no_steps_leak` — **PM fix:** steps not in output.
-- `test_no_workspace_path_leak` — **PM fix:** workspace path not in output.
-- `test_no_shell_env_secret_leak` — **PM fix:** shell/env secret not in output.
-- `test_compatibility_with_planner` — planner still sees retryable tasks.
-- `test_compatibility_with_explain` — explain still sees retry_available.
+### `tests/test_durable_workers.py` (+~150 lines)
 
-## PM Fixes
+**`SchedulerRetryEventMetadataTests`** (11 tests):
+- `test_tick_retry_executed_event_metadata` — tick event has `executed=True`, `retry_count=1`, `max_retries=3`, aggregate counts.
+- `test_tick_retry_skipped_missing_capacity_event_metadata` — skip reason in event.
+- `test_tick_record_event_false_no_event` — no event when disabled.
+- **PM fix:** `test_loop_retry_executed_event_metadata` — loop event has aggregate `retry_executed>=1`, `retry_skipped`, `retry_failed`, and per-tick retry counts in `ticks[]`.
+- `test_loop_record_event_false_no_event` — no event when disabled.
+- Safety no-leak: goal, steps, failure_reason, workspace path, secrets.
+- `test_event_fields_are_safe_types` — all action values are str/int/float/bool/None.
 
-1. **Idle capacity guard:** Added `retry_blocked_missing_capacity` check before calling `retry_durable_task`. Consistent with explain semantics.
-2. **ASSIGNED+RUNNING coverage:** `test_active_worker_retry_skipped` now uses `subTest` for both statuses.
-3. **Stale state guard:** Uses mock to return cancelled at execution-time `get_task` check, proving the guard works.
-4. **Safety no-leak:** Added steps, workspace path, shell/env/secret sentinel tests.
+## PM Fix
+
+Loop event payload now includes:
+- Aggregate `retry_executed`, `retry_skipped`, `retry_failed` counts.
+- Per-tick retry counts in `ticks[]` array.
+- No raw `results` persisted.
 
 ## Verification
 
 ```text
-WorkerLifecycleRunOnceTests + SchedulerTickTests + SchedulerLoopTests → 71 OK
-RetryExecutionTests → 16 OK
-test_durable_workers (559) → OK
-broader suite (726) → OK
-evals → 349 passed, 0 failed
+WorkerLifecycleSchedulerTickTests + SchedulerLoopTests → 47 OK
+SchedulerRetryEventMetadataTests → 11 OK
+test_durable_workers (570) → OK
+broader suite (737) → OK
+evals → 358 passed, 0 failed
 git diff --check → clean
 ```
 
@@ -67,6 +57,4 @@ git diff --check → clean
 - ✅ Only edited registry_builder.py and test_durable_workers.py
 - ✅ No B_TASK/B_DONE, CODEX_TERMINAL_HANDOFF.md, designs/
 - ✅ No commit/push
-- ✅ Dry-run remains read-only, no mutation
-- ✅ Retry execution uses existing `retry_durable_task` primitive
-- ✅ Bounded safe metadata only, no goal/steps/failure_reason/workspace path leak
+- ✅ Event metadata bounded/no-leak
