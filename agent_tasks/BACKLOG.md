@@ -6,17 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-106: Deterministic eval coverage for runtime policy hook event query v1
-- 分配给: Claude B
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-105 ✅
-- 目标: 为 runtime policy hook event query/listing 能力增加 deterministic offline eval coverage，验证过滤、排序、bounded output、no-leak、read-only/no-mutation 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema + Priority 9 hook/policy kernel。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-106: Deterministic eval coverage for runtime policy hook event query v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补齐 newest-first ordering、raw reason no-leak 和 worker no-mutation eval
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 395 passed；`python3 -m unittest tests.test_durable_workers` 665 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`git diff --check` OK。
+- 内容: 为 `list_runtime_policy_hook_evaluations(...)` 增加 12 个 deterministic offline eval，覆盖 safe bounded metadata、newest-first ordering、hook/decision/linkage/combined filters、limit bounds、invalid/unsafe filter no all-events fallback、raw reason/action/shell/env no-leak、read-only no event/task/worker mutation 和 compatibility；无 runtime 变更。
 
 ### TASK-105: Runtime policy hook event query v1 ✅
 - 完成者: Claude A；按 PM 初审反馈修复完整 hook 过滤和 invalid/unsafe filter 退化为 all-events 的风险
