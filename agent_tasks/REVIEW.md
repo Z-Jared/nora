@@ -1,62 +1,72 @@
-# TASK-101 Review — Runtime policy hook evaluator v1
+# TASK-102 Review — Deterministic eval coverage for runtime policy hook evaluator v1
 
 **Status: APPROVED**
 
-## 1. Read-only verification
+## Review Summary
 
-- `evaluate_runtime_policy_hook` does pure string manipulation and JSON serialization only.
-- No durable state mutation, no filesystem writes, no shell/git/browser/network/plugin calls, no enforcement wiring.
-- Tests `test_no_durable_task_mutation`, `test_no_worker_mutation`, `test_no_event_mutation` confirm zero side effects.
-- Registered as `risk="read"`.
+All 4 review criteria satisfied. The 9 eval cases are concrete, deterministic, isolated, and cover the full TASK-102 requirement surface without runtime changes.
 
-## 2. Bounded/no-leak output
+---
 
-- **reason**: never echoed; only `reason_present` bool returned. Tests `test_raw_reason_not_in_output`, `test_no_shell_command_leak`, `test_no_env_leak` verify.
-- **action**: sanitized via regex — paths, shell commands, env-like KEY=VALUE, secret-like tokens, all-caps ≥8 chars, metacharacters, and >60 char strings all redacted. Tests cover each case.
-- **unknown hook**: returns `error: "unsupported_hook"` + `valid_hooks` list; raw hook value not echoed. `test_unknown_hook_no_raw_leak` verifies.
-- **Output shape**: bounded to 13 named fields. No raw objects or unbounded data.
+## 1. Assertions are concrete and non-vacuous
 
-## 3. Policy decisions — conservative and deterministic
+Every eval verifies specific field values, not just presence:
 
-| Condition | Decision |
-|---|---|
-| `risk=destructive/external_send` | block |
-| `risk=high` | confirm |
-| `hook=pre_shell/pre_git` + `risk=write/high` | confirm |
-| `hook=before_commit` + `risk=write/high/destructive` | confirm |
-| `hook=pre_tool` + `risk=write` | confirm |
-| `hook=pre_tool` + `risk=read` | allow |
-| `risk=read` (any hook) | allow |
-| default write | confirm |
-| default other | allow |
+- **`policy_hook_allow_read`**: Checks `decision=="allow"`, `requires_confirmation is False`, `blocked is False`, `"rule_pre_tool_read" in matched_rules`, `action=="read_file"`, `action_label=="safe"`, `reason_present is False`. 12 assertions.
+- **`policy_hook_confirm_write`**: Covers 5 hook+risk combos (pre_tool/write, pre_shell/write, pre_git/write, before_commit/write, pre_tool/high). Each checks `decision=="confirm"`, `requires_confirmation is True`, specific `reason_label`. 15 assertions.
+- **`policy_hook_block_destructive`**: Checks destructive→block and external_send→block, `blocked is True`, `requires_confirmation is False`, `reason_label=="high_risk_blocked"`, matched rule present. 10 assertions.
+- **`policy_hook_unknown_hook_error`**: Uses sentinel `"UNKNOWN_HOOK_SENTINEL_XYZ_123"`, asserts `error=="unsupported_hook"`, sentinel absent from `json.dumps(result)`, `valid_hooks` non-empty. 4 assertions.
+- **`policy_hook_unknown_category_risk`**: Checks `category=="unknown"`, `risk=="unknown"`, `decision in ("allow","confirm","block")`. 3 assertions.
+- **`policy_hook_reason_no_leak`**: Uses sentinel `"REASON_SECRET_SENTINEL_ABC_789"`, asserts absent from `json.dumps(result)`, `reason_present is True`. Also tests no-reason→`reason_present is False`. 4 assertions.
+- **`policy_hook_action_redaction`**: 8 sub-cases (SECRET_VALUE_XYZ, /etc/passwd, DATABASE_URL=..., workspace path, shell command, long >60, safe label, empty). Each checks `action==""`, `action_label=="redacted"`, raw string absent. Safe label checks `action=="read_file"`, `action_label=="safe"`. 20+ assertions.
+- **`policy_hook_read_only_no_mutation`**: Snapshots task/worker/event counts before, calls evaluator 3 times, asserts counts unchanged. 3 assertions.
+- **`policy_hook_compatibility`**: Checks `"evaluate_runtime_policy_hook" in perms_str`, existing task CRUD still works. 3 assertions.
 
-All decision paths tested. `matched_rules` provides audit trail.
+No eval only asserts tool existence or event presence. All are field-value specific.
 
-## 4. Test quality
+## 2. Eval fixtures are deterministic and isolated
 
-37 tests in `RuntimePolicyHookEvaluatorTests`:
-- **Decision logic**: 10 tests covering allow/confirm/block for each rule path
-- **No-leak**: 7 tests covering reason, shell, env, workspace path, secret-like action, safe action preservation
-- **Read-only/no-mutation**: 3 tests (task, worker, event state unchanged)
-- **Output shape**: 4 tests (required fields, matched_rules type, policy_version, action length bound)
-- **Normalization**: 2 tests (unknown category/risk → "unknown")
-- **Compatibility**: 2 tests (permissions listing, confirm_action still works)
-- **Error handling**: 3 tests (unknown hook, empty hook, no raw leak)
+- Every eval uses `tempfile.TemporaryDirectory()` with `NoraDB(Path(tmpdir) / "test.db")`.
+- `db.close()` in `finally` blocks.
+- No shared state between evals.
+- No timing dependencies, no network calls, no external processes.
+- PM verification: 373 passed, 0 failed — fully deterministic.
 
-All assertions are specific and non-trivial.
+## 3. No raw sentinel leaks in serialized outputs
 
-## 5. Compatibility
+Leak checks cover:
+- **Reason sentinel**: `"REASON_SECRET_SENTINEL_ABC_789"` absent from `json.dumps(result)` ✓
+- **Unknown hook sentinel**: `"UNKNOWN_HOOK_SENTINEL_XYZ_123"` absent from `json.dumps(result)` ✓
+- **Secret-like action**: `"SECRET_VALUE_XYZ"` absent from `json.dumps(r1)` ✓
+- **Path action**: `"/etc/passwd"` absent from `json.dumps(r2)` ✓
+- **Env-like action**: `"DATABASE_URL=postgres://secret-user:secret-pass@localhost/db"` absent from `json.dumps(r2b)` ✓
+- **Workspace path action**: `str(Path(tmpdir) / "workspace" / "secret.txt")` absent from `json.dumps(r2c)` ✓
 
-- `list_tool_permissions` returns the new tool in its listing.
-- Existing `confirm_action` behavior unaffected.
-- No existing API shape changes.
-- 607 worker tests + 311 other tests + 364 evals all pass.
+All sentinel checks use `json.dumps(result)` on the full output, not just a field — catches leaks in any field.
 
-## Minor observations (non-blocking)
+## 4. No runtime behavior changed
 
-- `import re as _re` inside function body re-imports on each call. Harmless but could be module-level.
-- `test_action_bounded` asserts `<= 120` while code truncates to 60. Test is loose but correct.
+Diff touches only:
+- `evals/run_evals.py` — 9 eval functions + 9 case registrations
+- `agent_tasks/B_DONE.md` — completion report
+- `agent_tasks/PM_INBOX.md` — status entries
 
-## Verdict
+No changes to `mini_agent/`, `tests/`, or any runtime code. Eval count 364→373 (9 new). Existing tests unaffected (37 unit tests still pass, 607 worker tests still pass, 311 other tests still pass).
 
-Implementation is read-only, bounded, conservative, well-tested, and compatible. Ready to merge.
+---
+
+## Coverage Matrix vs B_TASK Requirements
+
+| Requirement | Eval | Covered |
+|---|---|---|
+| Read/pre_tool → allow | `policy_hook_allow_read` | ✓ |
+| Write/high → confirm | `policy_hook_confirm_write` | ✓ |
+| Destructive/external_send → block | `policy_hook_block_destructive` | ✓ |
+| Unknown hook bounded error | `policy_hook_unknown_hook_error` | ✓ |
+| Unknown category/risk normalization | `policy_hook_unknown_category_risk` | ✓ |
+| Reason no-leak | `policy_hook_reason_no_leak` | ✓ |
+| Action redaction (secret/path/env/shell/workspace/long/safe/empty) | `policy_hook_action_redaction` | ✓ |
+| Read-only/no mutation | `policy_hook_read_only_no_mutation` | ✓ |
+| Compatibility | `policy_hook_compatibility` | ✓ |
+
+All B_TASK requirements covered.

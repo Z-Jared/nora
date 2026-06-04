@@ -1,42 +1,39 @@
-# Claude B Done
+# B DONE — TASK-102
 
-Owner: Claude B
-Status: completed
+## Status: DONE
 
-## Task
+## What changed
 
-TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1
+Added 9 deterministic offline eval cases in `evals/run_evals.py` covering `evaluate_runtime_policy_hook`:
 
-## Summary
+| Eval | Coverage |
+|------|----------|
+| `policy_hook_allow_read` | pre_tool + risk=read → decision=allow, not blocked, no confirmation, safe matched rule |
+| `policy_hook_confirm_write` | pre_tool/pre_shell/pre_git + write, before_commit + write → decision=confirm, requires_confirmation=True |
+| `policy_hook_block_destructive` | risk=destructive/external_send → decision=block, blocked=True |
+| `policy_hook_unknown_hook_error` | Unknown hook → error=unsupported_hook, raw sentinel not echoed |
+| `policy_hook_unknown_category_risk` | Unknown category/risk normalize to "unknown" |
+| `policy_hook_reason_no_leak` | Raw reason sentinel not in output; reason_present correct |
+| `policy_hook_action_redaction` | Secret/path/env-like/workspace-path/shell/long actions redacted; safe labels preserved |
+| `policy_hook_read_only_no_mutation` | No durable task/worker/event mutation |
+| `policy_hook_compatibility` | list_tool_permissions includes tool; existing tools still work |
 
-Added 6 deterministic offline eval cases in `evals/run_evals.py` covering TASK-099 scheduler retry decision event metadata:
+### `eval_policy_hook_action_redaction` specifics (PM review fix):
+- `DATABASE_URL=postgres://secret-user:secret-pass@localhost/db` → redacted, raw string absent
+- `str(Path(tmpdir) / "workspace" / "secret.txt")` → redacted, raw path absent
 
-1. **tick_retry_executed_event_metadata**: Tick with retry executed records safe retry action metadata in scheduler_decision event. Verifies aggregate counts (`retry_executed >= 1`, `retry_skipped`, `retry_failed`) and per-action fields (`executed=True`, `task_id`, `retry_count=1`, `max_retries=3`).
-
-2. **tick_retry_skipped_event_metadata**: Tick with retry skipped for missing capacity records safe skip reason. Verifies `retry_skipped >= 1` in payload and per-action `reason="retry_blocked_missing_capacity"`. Confirms no task mutation.
-
-3. **loop_retry_event_metadata**: Loop with retry executed records aggregate and per-tick retry metadata. Verifies aggregate counts and per-tick counts in `ticks[]`. Confirms raw `results` not persisted in event payload.
-
-4. **retry_event_record_false**: Tick and loop with `record_event=False` produce no scheduler decision events.
-
-5. **retry_event_safety_no_leak**: Event payloads do not leak task goal, steps, failure_reason, shell/env/request, workspace paths, or secrets. Uses sentinels and verifies none appear in serialized event payloads.
-
-6. **retry_event_compatibility**: Scheduler tick/loop/run-once/planner/explain remain callable after retry event metadata checks.
-
-## Changes
-
-- `evals/run_evals.py`: Added 6 eval functions + registered in cases list. No runtime changes needed.
-
-## Tests
+## Tests run
 
 ```
-python3 evals/run_evals.py: 364 passed, 0 failed
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests: 58 tests, OK
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent: 737 tests, OK
-git diff --check: clean
+python3 evals/run_evals.py                    → 373 passed, 0 failed
+python3 -m unittest ...RuntimePolicyHookEvaluatorTests → 37 tests OK
+python3 -m unittest tests.test_durable_workers → 607 tests OK
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent → 311 tests OK
+git diff --check                              → clean
 ```
 
 ## Notes
 
-- TASK-099 runtime implementation already handles retry event metadata correctly; this task only adds eval coverage.
-- No runtime bugs found; no runtime changes made.
+- No runtime changes needed; TASK-101 implementation is correct.
+- Only `evals/run_evals.py` modified.
+- No commit/push performed.

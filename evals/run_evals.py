@@ -419,6 +419,16 @@ def main() -> int:
         EvalCase("retry_exec_priority_closeout_before_retry", eval_retry_exec_priority_closeout_before_retry),
         EvalCase("retry_exec_safety_no_leak", eval_retry_exec_safety_no_leak),
         EvalCase("retry_exec_compatibility", eval_retry_exec_compatibility),
+        # TASK-102: Runtime policy hook evaluator evals
+        EvalCase("policy_hook_allow_read", eval_policy_hook_allow_read),
+        EvalCase("policy_hook_confirm_write", eval_policy_hook_confirm_write),
+        EvalCase("policy_hook_block_destructive", eval_policy_hook_block_destructive),
+        EvalCase("policy_hook_unknown_hook_error", eval_policy_hook_unknown_hook_error),
+        EvalCase("policy_hook_unknown_category_risk", eval_policy_hook_unknown_category_risk),
+        EvalCase("policy_hook_reason_no_leak", eval_policy_hook_reason_no_leak),
+        EvalCase("policy_hook_action_redaction", eval_policy_hook_action_redaction),
+        EvalCase("policy_hook_read_only_no_mutation", eval_policy_hook_read_only_no_mutation),
+        EvalCase("policy_hook_compatibility", eval_policy_hook_compatibility),
         EvalCase("tick_retry_executed_event_metadata", eval_tick_retry_executed_event_metadata),
         EvalCase("tick_retry_skipped_event_metadata", eval_tick_retry_skipped_event_metadata),
         EvalCase("loop_retry_event_metadata", eval_loop_retry_event_metadata),
@@ -15486,6 +15496,258 @@ def eval_retry_exec_compatibility():
             assert "task_id" in claim or "error" in claim
             dispatch = json.loads(registry.call("dispatch_durable_tasks"))
             assert "dispatched" in dispatch
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-102: Runtime policy hook evaluator evals
+# ---------------------------------------------------------------------------
+
+def eval_policy_hook_allow_read():
+    """pre_tool + risk=read returns decision=allow, no confirmation, not blocked, safe matched rule."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="read_file", category="file", risk="read"))
+            assert result["decision"] == "allow", f"decision: {result['decision']}"
+            assert result["requires_confirmation"] is False, f"requires_confirmation: {result['requires_confirmation']}"
+            assert result["blocked"] is False, f"blocked: {result['blocked']}"
+            assert result["hook"] == "pre_tool"
+            assert result["action"] == "read_file"
+            assert result["action_label"] == "safe"
+            assert result["action_present"] is True
+            assert result["category"] == "file"
+            assert result["risk"] == "read"
+            assert result["policy_version"] != ""
+            assert len(result["matched_rules"]) >= 1
+            assert "rule_pre_tool_read" in result["matched_rules"]
+            assert result["reason_present"] is False
+        finally:
+            db.close()
+
+
+def eval_policy_hook_confirm_write():
+    """pre_tool/pre_shell/pre_git/before_commit + write/high risk returns decision=confirm with requires_confirmation=True."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # pre_tool + write
+            r1 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="write_file", category="file", risk="write"))
+            assert r1["decision"] == "confirm", f"pre_tool/write: {r1['decision']}"
+            assert r1["requires_confirmation"] is True
+            assert r1["blocked"] is False
+            assert r1["reason_label"] == "pre_tool_write_confirm"
+
+            # pre_shell + write
+            r2 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_shell", action="run_cmd", category="shell", risk="write"))
+            assert r2["decision"] == "confirm", f"pre_shell/write: {r2['decision']}"
+            assert r2["requires_confirmation"] is True
+            assert r2["reason_label"] == "pre_shell_write_confirm"
+
+            # pre_git + write
+            r3 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_git", action="git_commit", category="git", risk="write"))
+            assert r3["decision"] == "confirm", f"pre_git/write: {r3['decision']}"
+            assert r3["requires_confirmation"] is True
+            assert r3["reason_label"] == "pre_git_write_confirm"
+
+            # before_commit + write (high risk is caught by the generic high-risk rule first)
+            r4 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="before_commit", action="commit_code", category="git", risk="write"))
+            assert r4["decision"] == "confirm", f"before_commit/write: {r4['decision']}"
+            assert r4["requires_confirmation"] is True
+            assert r4["reason_label"] == "before_commit_confirm"
+
+            # high risk on any hook
+            r5 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="risky_op", category="task", risk="high"))
+            assert r5["decision"] == "confirm", f"high risk: {r5['decision']}"
+            assert r5["requires_confirmation"] is True
+            assert r5["reason_label"] == "high_risk_confirm"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_block_destructive():
+    """risk=destructive or external_send returns decision=block with blocked=True."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # destructive
+            r1 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="delete_all", category="file", risk="destructive"))
+            assert r1["decision"] == "block", f"destructive: {r1['decision']}"
+            assert r1["blocked"] is True
+            assert r1["requires_confirmation"] is False
+            assert r1["reason_label"] == "high_risk_blocked"
+            assert "rule_deny_destructive_external" in r1["matched_rules"]
+
+            # external_send
+            r2 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="send_data", category="network", risk="external_send"))
+            assert r2["decision"] == "block", f"external_send: {r2['decision']}"
+            assert r2["blocked"] is True
+            assert r2["reason_label"] == "high_risk_blocked"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_unknown_hook_error():
+    """Unknown hook returns error=unsupported_hook and does not echo the raw unknown hook sentinel."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            sentinel = "UNKNOWN_HOOK_SENTINEL_XYZ_123"
+            result = json.loads(registry.call("evaluate_runtime_policy_hook", hook=sentinel))
+            assert result.get("error") == "unsupported_hook", f"error: {result.get('error')}"
+            assert sentinel not in json.dumps(result), "raw unknown hook echoed"
+            assert "valid_hooks" in result
+            assert len(result["valid_hooks"]) >= 1
+        finally:
+            db.close()
+
+
+def eval_policy_hook_unknown_category_risk():
+    """Unknown category/risk normalize to 'unknown' where applicable."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", category="nonexistent_cat", risk="nonexistent_risk"))
+            assert result["category"] == "unknown", f"category: {result['category']}"
+            assert result["risk"] == "unknown", f"risk: {result['risk']}"
+            assert result["decision"] in ("allow", "confirm", "block")
+        finally:
+            db.close()
+
+
+def eval_policy_hook_reason_no_leak():
+    """Raw reason sentinel is not present in output; reason_present is True when reason is given."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            sentinel = "REASON_SECRET_SENTINEL_ABC_789"
+            result = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", reason=sentinel))
+            assert sentinel not in json.dumps(result), "raw reason leaked"
+            assert result["reason_present"] is True
+
+            # No reason given
+            result2 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool"))
+            assert result2["reason_present"] is False
+        finally:
+            db.close()
+
+
+def eval_policy_hook_action_redaction():
+    """Secret-like, env-like, shell command, workspace path actions are redacted; safe short labels preserved."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Secret-like action (ALL_CAPS > 7 chars)
+            r1 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="SECRET_VALUE_XYZ"))
+            assert r1["action"] == "", f"secret action not redacted: {r1['action']}"
+            assert r1["action_label"] == "redacted"
+            assert "SECRET_VALUE_XYZ" not in json.dumps(r1)
+
+            # Path-like action
+            r2 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="/etc/passwd"))
+            assert r2["action"] == "", f"path action not redacted: {r2['action']}"
+            assert r2["action_label"] == "redacted"
+            assert "/etc/passwd" not in json.dumps(r2)
+
+            # Env-like action (KEY=value with secret-like content)
+            env_sentinel = "DATABASE_URL=postgres://secret-user:secret-pass@localhost/db"
+            r2b = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action=env_sentinel))
+            assert r2b["action"] == "", f"env-like action not redacted: {r2b['action']}"
+            assert r2b["action_label"] == "redacted"
+            assert env_sentinel not in json.dumps(r2b), "raw env-like string leaked"
+
+            # Workspace path action (derived from temp workspace)
+            ws_path = str(Path(tmpdir) / "workspace" / "secret.txt")
+            r2c = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action=ws_path))
+            assert r2c["action"] == "", f"workspace path not redacted: {r2c['action']}"
+            assert r2c["action_label"] == "redacted"
+            assert ws_path not in json.dumps(r2c), "raw workspace path leaked"
+
+            # Shell command action
+            r3 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="rm -rf /"))
+            assert r3["action"] == "", f"shell action not redacted: {r3['action']}"
+            assert r3["action_label"] == "redacted"
+
+            # Long action (>60 chars)
+            r4 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="a" * 61))
+            assert r4["action"] == "", f"long action not redacted: {r4['action']}"
+            assert r4["action_label"] == "redacted"
+
+            # Safe short label preserved
+            r5 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="read_file"))
+            assert r5["action"] == "read_file", f"safe action: {r5['action']}"
+            assert r5["action_label"] == "safe"
+            assert r5["action_present"] is True
+
+            # Empty action
+            r6 = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool"))
+            assert r6["action"] == ""
+            assert r6["action_label"] == "empty"
+            assert r6["action_present"] is False
+        finally:
+            db.close()
+
+
+def eval_policy_hook_read_only_no_mutation():
+    """Running the evaluator does not create durable events and does not mutate task/worker state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            # Snapshot state before
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            # Call evaluator multiple times
+            registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="read_file", risk="read")
+            registry.call("evaluate_runtime_policy_hook", hook="pre_shell", action="run_cmd", risk="write")
+            registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="delete_all", risk="destructive")
+
+            # Verify no mutation
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks changed: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers changed: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events changed: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_compatibility():
+    """list_tool_permissions includes evaluate_runtime_policy_hook; existing tools still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            # list_tool_permissions includes evaluate_runtime_policy_hook
+            perms_str = registry.call("list_tool_permissions")
+            assert "evaluate_runtime_policy_hook" in perms_str, f"not in permissions: {perms_str[:200]}"
+
+            # Existing tools still work
+            new_task = ts.create_task(goal="compat test", steps=[{"text": "step1"}])
+            assert ts.get_task(new_task.task_id) is not None
+
+            task = json.loads(registry.call("get_durable_task", task_id=new_task.task_id))
+            assert task["goal"] == "compat test"
         finally:
             db.close()
 

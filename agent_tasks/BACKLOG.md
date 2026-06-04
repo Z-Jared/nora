@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-102: Deterministic eval coverage for runtime policy hook evaluator v1
-- 分配给: Claude B
-- 目标: 为 TASK-101 的 `evaluate_runtime_policy_hook` 增加 deterministic offline eval coverage，验证 policy decision、bounded/no-leak 输出、read-only/no-mutation 和兼容性。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-102: Deterministic eval coverage for runtime policy hook evaluator v1 ✅
+- 完成者: Claude B；按 PM 初审反馈补齐 env-like action 和 workspace path action no-leak eval 断言
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 373 passed；`python3 -m unittest tests.test_durable_workers.RuntimePolicyHookEvaluatorTests` 37 tests OK；`python3 -m unittest tests.test_durable_workers` 607 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-101 `evaluate_runtime_policy_hook` 增加 9 个 deterministic offline eval，覆盖 allow/confirm/block policy decision、unknown hook bounded error/no raw sentinel、unknown category/risk normalization、raw reason no-leak、secret/path/env-like/workspace-path/shell/long action redaction、安全 action label preservation、read-only no durable task/worker/event mutation，以及 `list_tool_permissions` compatibility；无 runtime 变更。
 
 ### TASK-101: Runtime policy hook evaluator v1 ✅
 - 完成者: Claude A；Codex PM 因 A 最终 CCB job provider/API 输出噪声，集成 A 工作树已完成补丁并更新准确 DONE 报告
