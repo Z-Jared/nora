@@ -1,11 +1,11 @@
 # Claude B Task
 
 Owner: Claude B
-Status: assigned
+Status: idle
 
 ## Task
 
-TASK-108: Deterministic eval coverage for runtime policy hook summary v1
+No active task.
 
 ## Context
 

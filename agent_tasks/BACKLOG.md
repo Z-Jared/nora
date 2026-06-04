@@ -6,17 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-108: Deterministic eval coverage for runtime policy hook summary v1
-- 分配给: Claude B
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-107 ✅
-- 目标: 为 runtime policy hook decision summary 能力增加 deterministic offline eval coverage，验证聚合计数、过滤、limit bounds、safe bounded output、no-leak、read-only/no-mutation 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1 durable trace schema、Priority 9 hook/policy kernel、Priority 10 Agent OS UI。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-108: Deterministic eval coverage for runtime policy hook summary v1 ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 406 passed；`python3 -m unittest tests.test_durable_workers` 701 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`git diff --check` OK。
+- 内容: 为 `summarize_runtime_policy_hook_evaluations(...)` 增加 11 个 deterministic offline eval，覆盖 decision/hook/category/risk/confirmation/blocked/policy version/recent event ID 聚合计数，hook/decision/category/risk/task_id/worker_id/session_id 过滤，limit bounds，invalid/unsafe filter empty safe errors/no all-events fallback，raw reason/action/shell/env/secret no-leak，read-only no event/task/worker mutation，以及 evaluate/record/list/summary/list_tool_permissions/durable store compatibility；无 runtime 变更。
 
 ### TASK-107: Runtime policy hook decision summary v1 ✅
 - 完成者: Claude A
