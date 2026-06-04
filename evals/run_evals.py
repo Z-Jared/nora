@@ -429,6 +429,17 @@ def main() -> int:
         EvalCase("policy_hook_action_redaction", eval_policy_hook_action_redaction),
         EvalCase("policy_hook_read_only_no_mutation", eval_policy_hook_read_only_no_mutation),
         EvalCase("policy_hook_compatibility", eval_policy_hook_compatibility),
+        # TASK-104: Runtime policy hook event recording evals
+        EvalCase("policy_hook_record_creates_event", eval_policy_hook_record_creates_event),
+        EvalCase("policy_hook_record_event_fields", eval_policy_hook_record_event_fields),
+        EvalCase("policy_hook_record_event_queryable", eval_policy_hook_record_event_queryable),
+        EvalCase("policy_hook_record_reason_no_leak", eval_policy_hook_record_reason_no_leak),
+        EvalCase("policy_hook_record_action_redaction", eval_policy_hook_record_action_redaction),
+        EvalCase("policy_hook_record_unsupported_no_event", eval_policy_hook_record_unsupported_no_event),
+        EvalCase("policy_hook_record_linkage_sanitize", eval_policy_hook_record_linkage_sanitize),
+        EvalCase("policy_hook_evaluate_still_read_only", eval_policy_hook_evaluate_still_read_only),
+        EvalCase("policy_hook_record_no_mutation", eval_policy_hook_record_no_mutation),
+        EvalCase("policy_hook_record_compatibility", eval_policy_hook_record_compatibility),
         EvalCase("tick_retry_executed_event_metadata", eval_tick_retry_executed_event_metadata),
         EvalCase("tick_retry_skipped_event_metadata", eval_tick_retry_skipped_event_metadata),
         EvalCase("loop_retry_event_metadata", eval_loop_retry_event_metadata),
@@ -15748,6 +15759,348 @@ def eval_policy_hook_compatibility():
 
             task = json.loads(registry.call("get_durable_task", task_id=new_task.task_id))
             assert task["goal"] == "compat test"
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-104: Runtime policy hook event recording evals
+# ---------------------------------------------------------------------------
+
+def eval_policy_hook_record_creates_event():
+    """record_runtime_policy_hook_evaluation creates exactly one policy_hook_evaluation event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            before_count = len(es.list_events())
+            result = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", action="read_file", category="file", risk="read",
+            ))
+            after_events = es.list_events()
+            new_events = [e for e in after_events if e.event_type == "policy_hook_evaluation"]
+            assert len(new_events) == 1, f"expected 1 event, got {len(new_events)}"
+            assert new_events[0].event_id == result["event_id"]
+            assert new_events[0].event_type == "policy_hook_evaluation"
+            assert new_events[0].source == "policy_engine"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_event_fields():
+    """Event payload includes bounded decision fields and safe action metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            result = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", action="write_file", category="file", risk="write",
+            ))
+            events = [e for e in es.list_events() if e.event_type == "policy_hook_evaluation"]
+            assert len(events) == 1
+            payload = events[0].payload
+
+            # Decision fields
+            assert payload["decision"] == "confirm"
+            assert payload["requires_confirmation"] is True
+            assert payload["blocked"] is False
+            assert payload["reason_label"] == "pre_tool_write_confirm"
+            assert payload["policy_version"] != ""
+            assert isinstance(payload["matched_rules"], list)
+            assert len(payload["matched_rules"]) >= 1
+
+            # Normalized hook/category/risk
+            assert payload["hook"] == "pre_tool"
+            assert payload["category"] == "file"
+            assert payload["risk"] == "write"
+
+            # Safe action metadata
+            assert payload["action"] == "write_file"
+            assert payload["action_label"] == "safe"
+            assert payload["action_present"] is True
+
+            # Output fields match event payload
+            for key in ("decision", "requires_confirmation", "blocked", "reason_label",
+                        "policy_version", "hook", "category", "risk", "action", "action_label"):
+                assert result[key] == payload[key], f"{key}: output={result[key]} vs event={payload[key]}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_event_queryable():
+    """Returned event_id is queryable via durable event store."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            result = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_shell", action="run_cmd", category="shell", risk="write",
+            ))
+            event_id = result["event_id"]
+            assert event_id is not None and event_id != ""
+
+            # Query by event_id
+            found = [e for e in es.list_events() if e.event_id == event_id]
+            assert len(found) == 1, f"event_id {event_id} not found"
+            assert found[0].event_type == "policy_hook_evaluation"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_reason_no_leak():
+    """Raw reason sentinel is absent from both tool output and event payload."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            sentinel = "REASON_SECRET_SENTINEL_RECORD_999"
+
+            result_str = registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", reason=sentinel,
+            )
+            result = json.loads(result_str)
+            assert sentinel not in result_str, "raw reason in tool output"
+            assert result["reason_present"] is True
+
+            events = [e for e in es.list_events() if e.event_type == "policy_hook_evaluation"]
+            assert len(events) == 1
+            payload_str = json.dumps(events[0].payload)
+            assert sentinel not in payload_str, "raw reason in event payload"
+            assert events[0].payload["reason_present"] is True
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_action_redaction():
+    """Secret/env/shell/path actions are redacted in both output and event payload; safe labels preserved."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            # Secret-like action
+            secret = "SECRET_VALUE_XYZ"
+            r1_str = registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action=secret)
+            r1 = json.loads(r1_str)
+            assert r1["action"] == "", f"secret not redacted in output: {r1['action']}"
+            assert r1["action_label"] == "redacted"
+            assert secret not in r1_str
+            ev1 = es.get_event(r1["event_id"])
+            assert ev1 is not None
+            assert secret not in json.dumps(ev1.payload), "secret leaked in event payload"
+
+            # Env-like action
+            env = "DATABASE_URL=postgres://user:pass@localhost/db"
+            r2_str = registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action=env)
+            r2 = json.loads(r2_str)
+            assert r2["action"] == "", f"env not redacted in output: {r2['action']}"
+            assert r2["action_label"] == "redacted"
+            assert env not in r2_str
+            ev2 = es.get_event(r2["event_id"])
+            assert ev2 is not None
+            assert env not in json.dumps(ev2.payload), "env leaked in event payload"
+
+            # Shell command action
+            shell = "rm -rf /"
+            r3_str = registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action=shell)
+            r3 = json.loads(r3_str)
+            assert r3["action"] == "", f"shell not redacted: {r3['action']}"
+            assert r3["action_label"] == "redacted"
+
+            # Workspace path action
+            ws_path = str(Path(tmpdir) / "workspace" / "secret.txt")
+            r4_str = registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action=ws_path)
+            r4 = json.loads(r4_str)
+            assert r4["action"] == "", f"path not redacted: {r4['action']}"
+            assert r4["action_label"] == "redacted"
+            assert ws_path not in r4_str
+            ev4 = es.get_event(r4["event_id"])
+            assert ev4 is not None
+            assert ws_path not in json.dumps(ev4.payload), "path leaked in event payload"
+
+            # Safe label preserved
+            r5_str = registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action="read_file")
+            r5 = json.loads(r5_str)
+            assert r5["action"] == "read_file", f"safe label not preserved: {r5['action']}"
+            assert r5["action_label"] == "safe"
+            assert r5["action_present"] is True
+            ev5 = es.get_event(r5["event_id"])
+            assert ev5 is not None
+            assert ev5.payload["action"] == "read_file"
+            assert ev5.payload["action_label"] == "safe"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_unsupported_no_event():
+    """Unsupported hook returns bounded error, does not echo raw hook, and creates no event."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+            sentinel = "UNSUPPORTED_HOOK_SENTINEL_ABC"
+
+            before_events = es.list_events()
+            result = json.loads(registry.call("record_runtime_policy_hook_evaluation", hook=sentinel))
+            after_events = es.list_events()
+
+            assert result.get("error") == "unsupported_hook"
+            assert sentinel not in json.dumps(result), "raw hook echoed in output"
+            assert "valid_hooks" in result
+
+            policy_events = [e for e in after_events if e.event_type == "policy_hook_evaluation"
+                             and e not in before_events]
+            assert len(policy_events) == 0, f"event created for unsupported hook: {len(policy_events)}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_linkage_sanitize():
+    """Linkage fields preserve safe IDs and sanitize unsafe task/worker/session sentinels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            # Safe linkage IDs
+            r1 = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", task_id="task_123", worker_id="worker_abc", session_id="sess_001",
+            ))
+            ev1 = es.get_event(r1["event_id"])
+            assert ev1 is not None
+            assert ev1.task_id == "task_123", f"safe task_id: {ev1.task_id}"
+            assert ev1.worker_id == "worker_abc", f"safe worker_id: {ev1.worker_id}"
+            assert ev1.payload["session_id"] == "sess_001", f"safe session_id: {ev1.payload['session_id']}"
+
+            # Unsafe linkage: secret-like
+            r2 = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", task_id="SECRET_TOKEN_ABCDEF", worker_id="API_KEY_XYZ",
+            ))
+            ev2 = es.get_event(r2["event_id"])
+            assert ev2 is not None
+            assert ev2.task_id is None or ev2.task_id == "", f"unsafe task_id not sanitized: {ev2.task_id}"
+            assert ev2.worker_id is None or ev2.worker_id == "", f"unsafe worker_id not sanitized: {ev2.worker_id}"
+            assert "SECRET_TOKEN_ABCDEF" not in json.dumps(ev2.payload)
+            assert "API_KEY_XYZ" not in json.dumps(ev2.payload)
+
+            # Unsafe linkage: path-like
+            r3 = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", task_id="/etc/passwd", session_id="session with spaces",
+            ))
+            ev3 = es.get_event(r3["event_id"])
+            assert ev3 is not None
+            assert ev3.task_id is None or ev3.task_id == "", f"path task_id not sanitized: {ev3.task_id}"
+            assert ev3.payload.get("session_id") is None or ev3.payload.get("session_id") == "", \
+                f"space session_id not sanitized: {ev3.payload.get('session_id')}"
+            assert "/etc/passwd" not in json.dumps(ev3.payload)
+
+            # Unsafe linkage: long ID
+            r4 = json.loads(registry.call(
+                "record_runtime_policy_hook_evaluation",
+                hook="pre_tool", worker_id="a" * 81,
+            ))
+            ev4 = es.get_event(r4["event_id"])
+            assert ev4 is not None
+            assert ev4.worker_id is None or ev4.worker_id == "", f"long worker_id not sanitized: {ev4.worker_id}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_evaluate_still_read_only():
+    """evaluate_runtime_policy_hook remains read-only and creates no events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            es = registry.durable_event_store
+
+            before_events = es.list_events()
+            registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="read_file", risk="read")
+            registry.call("evaluate_runtime_policy_hook", hook="pre_shell", action="run_cmd", risk="write")
+            registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="delete_all", risk="destructive")
+            after_events = es.list_events()
+
+            policy_events = [e for e in after_events if e.event_type == "policy_hook_evaluation"
+                             and e not in before_events]
+            assert len(policy_events) == 0, f"evaluate created events: {len(policy_events)}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_no_mutation():
+    """No durable task or worker mutation from evaluation or recording."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+
+            # Evaluate (should not mutate)
+            registry.call("evaluate_runtime_policy_hook", hook="pre_tool", action="read_file", risk="read")
+
+            # Record (should not mutate tasks/workers)
+            registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action="read_file", risk="read")
+            registry.call("record_runtime_policy_hook_evaluation", hook="pre_shell", action="run_cmd", risk="write")
+            registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action="delete_all", risk="destructive")
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            assert len(tasks_after) == len(tasks_before), f"tasks changed: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers changed: {len(workers_before)} -> {len(workers_after)}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_record_compatibility():
+    """Existing tools still work after policy hook recording."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            es = registry.durable_event_store
+
+            # Record some events
+            registry.call("record_runtime_policy_hook_evaluation", hook="pre_tool", action="read_file", risk="read")
+            registry.call("record_runtime_policy_hook_evaluation", hook="pre_shell", action="run_cmd", risk="write")
+
+            # list_tool_permissions still works
+            perms_str = registry.call("list_tool_permissions")
+            assert "evaluate_runtime_policy_hook" in perms_str
+            assert "record_runtime_policy_hook_evaluation" in perms_str
+
+            # evaluate_runtime_policy_hook still works
+            eval_result = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read"))
+            assert eval_result["decision"] == "allow"
+
+            # Durable task tools still work
+            new_task = ts.create_task(goal="compat test 2", steps=[{"text": "step1"}])
+            assert ts.get_task(new_task.task_id) is not None
+
+            # Event store still works
+            all_events = es.list_events()
+            assert len(all_events) >= 2
         finally:
             db.close()
 

@@ -1,20 +1,23 @@
-# TASK-103 Review — Runtime policy hook evaluation event recording v1
+# TASK-104 Review — Deterministic eval coverage for runtime policy hook event recording v1
 
 **Status: APPROVED**
 
 ## Findings
 
-No blocking findings.
+No blocking issues found.
 
-- **Evaluator read-only preserved:** `_evaluate_runtime_policy_hook_json` delegates to `_evaluate_policy_hook_core` (returns dict, no event store access). Permission remains `risk="read"`. Test `test_evaluator_creates_no_events` confirms zero events written.
-- **Recorder writes exactly one event on success:** `_record_runtime_policy_hook_evaluation_json` calls core → checks error → sanitizes linkage → calls `durable_event_store.record()` once → returns bounded JSON. Unsupported hooks return early before any write.
-- **Unsupported hook bounded:** Core returns `{"error": "unsupported_hook", "valid_hooks": [...]}` without echoing raw hook value. No event created. Test `test_unsupported_hook_returns_error_no_event` confirms.
-- **No raw leak:** `reason` stored only as `reason_present` bool. `action` sanitized by regex (paths, shell metachar, secret-like tokens, ALL_CAPS, length>60 → redacted). Linkage IDs sanitized by `_sanitize_linkage_id()` (path separators, shell metachar, secret-like, ALL_CAPS ≥8 chars, length>80 → None). Event payload contains only safe policy metadata fields.
-- **`risk="write"` appropriate:** Tool mutates durable event store (writes one `policy_hook_evaluation` event per call). Consistent with other event-recording tools. `confirm_action` integration preserved.
-- **No out-of-scope changes:** No enforcement wiring, no auto-recording, no task/worker mutation (verified by `test_no_task_mutation`, `test_no_worker_mutation`). Refactoring of evaluator to shared `_evaluate_policy_hook_core` is clean and behavior-preserving.
+**Coverage completeness**: All 10 required areas are covered — event creation, bounded metadata fields, event_id queryability, reason/action no-leak, unsupported hook handling, linkage sanitization, read-only evaluator boundary, task/worker no-mutation, and compatibility. Each eval goes beyond existence checks to verify specific field values and side effects.
+
+**PM fix verified**: No `list_events()[-1]` ordering assumptions remain. Event lookups use either `get_event(event_id)` (action redaction, linkage sanitize evals) or filtered `list_events()` by event_type with count=1 assertions (creates_event, event_fields, reason_no_leak evals). Both patterns are ordering-safe.
+
+**Deterministic/offline**: All evals use isolated `tempfile.TemporaryDirectory()` + local `NoraDB`. No external calls, no shared state.
+
+**No runtime changes**: Only `evals/run_evals.py` and `agent_tasks/B_DONE.md` modified. No runtime behavior changes.
+
+**No weak assertions**: Assertions verify concrete values (e.g., `payload["decision"] == "confirm"`, `r["action"] == ""`, `r["action_label"] == "redacted"`), not just field presence. Sentinel strings are checked for absence in both tool output JSON and event payload JSON.
 
 ## Notes
 
-- Tests: 31 tests in `RuntimePolicyHookRecordingTests` covering recording, no-leak, linkage sanitization, read-only evaluator preservation, mutation checks, permissions.
-- PM linkage no-leak fix applied: unsafe sentinels sanitized to None, safe IDs (`task_123`, `worker_456`, `sess_789`) preserved.
-- Remaining risk: `_sanitize_linkage_id` compiles regex on every call (minor perf, no security impact).
+- Eval count: 373 → 383 (10 new evals).
+- `eval_policy_hook_record_unsupported_no_event` uses before/after event list comparison to detect spurious event creation — a solid pattern for negative testing.
+- `eval_policy_hook_record_event_fields` cross-validates output fields against event payload fields, catching serialization mismatches.

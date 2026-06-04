@@ -6,17 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-104: Deterministic eval coverage for runtime policy hook event recording v1
-- 分配给: Claude B
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-103 ✅
-- 目标: 为 TASK-103 的 runtime policy hook event recording 增加 deterministic offline eval coverage，验证事件 safe metadata、no-leak、read/write mutation boundaries 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel + Priority 1 durable trace schema。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-104: Deterministic eval coverage for runtime policy hook event recording v1 ✅
+- 完成者: Claude B；按 PM 初审反馈修复 event lookup ordering assumption
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 383 passed；`python3 -m unittest tests.test_durable_workers` 635 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-103 `record_runtime_policy_hook_evaluation` 增加 10 个 deterministic offline eval，覆盖 policy_hook_evaluation event creation、bounded decision metadata、returned event_id queryability、reason/action no-leak、unsupported hook no-event/no-raw-echo、safe/unsafe linkage sanitizer、`evaluate_runtime_policy_hook` read-only boundary、task/worker no-mutation 和 compatibility；无 runtime 变更；eval 通过 returned `event_id` 精确查询 event，避免依赖 `list_events()` 顺序。
 
 ### TASK-103: Runtime policy hook evaluation event recording v1 ✅
 - 完成者: Claude A；Codex PM 补强 linkage sanitizer 和 registry permission 风险级别
