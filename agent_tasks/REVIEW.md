@@ -1,4 +1,4 @@
-# CCB Review — TASK-109: Runtime policy hook rule catalog v1
+# CCB Review — TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1
 
 **Status: APPROVED**
 
@@ -8,37 +8,39 @@ No blocking findings.
 
 ## Scope Reviewed
 
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_durable_workers.py`
-- `agent_tasks/A_DONE.md`
+- `evals/run_evals.py`
+- `agent_tasks/B_DONE.md`
 - `agent_tasks/PM_INBOX.md`
 
 ## Review Notes
 
-TASK-109 is now present in the current repository state.
+TASK-110 adds deterministic offline eval coverage for `describe_runtime_policy_hook_rules(...)` without changing runtime behavior.
 
-The new `describe_runtime_policy_hook_rules` registry tool returns a bounded JSON catalog with:
+The new evals cover:
 
+- tool registration and exact `local/read` permission via `list_tool_permissions`
 - `policy_version`
-- sorted supported `hooks`, `categories`, `risks`, and `decisions`
-- 10 stable rule entries matching the current `_evaluate_policy_hook_core` rule IDs
-- safe metadata only: rule ID, decision, hooks, risks, reason label, confirmation/block flags, and descriptions
+- sorted `hooks`, `categories`, `risks`, and `decisions`
+- all 10 stable rule IDs in priority order
+- rule metadata for decision, hook/risk coverage, `reason_label`, `requires_confirmation`, and `blocked`
+- evaluator priority alignment for destructive/external-send, high risk, hook-specific write/read, generic read/write, and default allow
+- no-leak output boundaries
+- read-only/no-mutation behavior for durable tasks, workers, and events
+- compatibility with policy hook tools, permission listing, and durable task CRUD
 
-The tool is registered as read-only with `ToolPermission(category="local", risk="read")`. The implementation does not read durable event payloads, task goals, raw actions, raw reasons, request strings, env values, shell commands, or file paths.
-
-The catalog correctly describes evaluator priority: destructive/external-send risk blocks first, high risk confirms before hook-specific write rules, then hook-specific write/read rules, generic read/write, and default allow.
+PM review fix: tightened the permission assertion to require the exact `- describe_runtime_policy_hook_rules: local/read` line, and expanded no-mutation coverage to snapshot durable worker state.
 
 ## Verification
 
 ```text
+python3 evals/run_evals.py
+415 passed, 0 failed
+
 python3 -m unittest tests.test_durable_workers
-Ran 737 tests in 12.235s — OK
+Ran 737 tests in 11.313s — OK
 
 python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
-Ran 311 tests in 8.091s — OK
-
-python3 evals/run_evals.py
-406 passed, 0 failed
+Ran 311 tests in 14.336s — OK
 
 git diff --check
 clean
@@ -46,4 +48,4 @@ clean
 
 ## Decision
 
-Approved for local integration. TASK-109 satisfies the assigned requirements and unblocks TASK-110 deterministic eval coverage for the rule catalog.
+Approved for local integration. TASK-110 satisfies the assigned requirements and completes the current runtime policy hook rule catalog coverage slice.

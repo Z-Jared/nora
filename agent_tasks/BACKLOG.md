@@ -8,17 +8,33 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1
+### TASK-111: MCP adapter permission-aware tool surface hardening v1
+- 分配给: Claude A
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-110 ✅
+- 目标: 加固 `mini_agent/mcp_server.py` 的 MCP tool surface，使 MCP adapter 能安全暴露 registry permission metadata，并为 custom allowlist 增加明确的高风险/需确认工具防护或显式 opt-in。
+- 验证: `python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7 Plugin runtime and capability routing、Priority 9 Hook and policy kernel；`docs/knowledge/MCP_INTEGRATION.md`。
+- 状态: assigned
+
+### TASK-112: Deterministic eval coverage for MCP adapter safe tool surface v1
 - 分配给: Claude B
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-109 ✅
-- 目标: 为 runtime policy hook rule catalog 增加 deterministic offline eval coverage，验证支持的 hooks/categories/risks、决策规则目录、policy version、safe bounded output、no-leak、read-only/no-mutation 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel、Priority 10 Trace graph and Agent OS UI。
+- 依赖: TASK-110 ✅
+- 目标: 为现有 MCP adapter 增加 deterministic offline eval coverage，验证 default/custom allowlist、registry permission boundaries、safe errors/no-leak、bounded output 和 memory-tool compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7 Plugin runtime and capability routing；`docs/knowledge/MCP_INTEGRATION.md`；`mini_agent/mcp_server.py`。
 - 状态: assigned
 
 ## 已完成
+
+### TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1 ✅
+- 完成者: Claude B；Codex PM 补强 exact permission assertion 和 worker no-mutation eval
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 415 passed；`python3 -m unittest tests.test_durable_workers` 737 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`git diff --check` OK。
+- 内容: 为 `describe_runtime_policy_hook_rules(...)` 增加 9 个 deterministic offline eval，覆盖 tool registration + exact `local/read` permission、`policy_version`、完整且排序的 hooks/categories/risks/decisions、10 条 stable rule IDs/order、规则 metadata、catalog priority 与 evaluator priority 对齐、safe bounded no-leak、read-only no durable task/worker/event mutation，以及 policy hook tools/list_tool_permissions/durable task CRUD compatibility；无 runtime 变更。
 
 ### TASK-109: Runtime policy hook rule catalog v1 ✅
 - 完成者: Claude A

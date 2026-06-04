@@ -464,6 +464,16 @@ def main() -> int:
         EvalCase("policy_hook_summary_no_leak", eval_policy_hook_summary_no_leak),
         EvalCase("policy_hook_summary_read_only_no_mutation", eval_policy_hook_summary_read_only_no_mutation),
         EvalCase("policy_hook_summary_compatibility", eval_policy_hook_summary_compatibility),
+        # TASK-110: Runtime policy hook rule catalog evals
+        EvalCase("policy_hook_rule_catalog_registered", eval_policy_hook_rule_catalog_registered),
+        EvalCase("policy_hook_rule_catalog_policy_version", eval_policy_hook_rule_catalog_policy_version),
+        EvalCase("policy_hook_rule_catalog_enums_complete", eval_policy_hook_rule_catalog_enums_complete),
+        EvalCase("policy_hook_rule_catalog_rules_present", eval_policy_hook_rule_catalog_rules_present),
+        EvalCase("policy_hook_rule_catalog_rule_metadata", eval_policy_hook_rule_catalog_rule_metadata),
+        EvalCase("policy_hook_rule_catalog_priority_matches_evaluator", eval_policy_hook_rule_catalog_priority_matches_evaluator),
+        EvalCase("policy_hook_rule_catalog_no_leak", eval_policy_hook_rule_catalog_no_leak),
+        EvalCase("policy_hook_rule_catalog_read_only_no_mutation", eval_policy_hook_rule_catalog_read_only_no_mutation),
+        EvalCase("policy_hook_rule_catalog_compatibility", eval_policy_hook_rule_catalog_compatibility),
         EvalCase("tick_retry_executed_event_metadata", eval_tick_retry_executed_event_metadata),
         EvalCase("tick_retry_skipped_event_metadata", eval_tick_retry_skipped_event_metadata),
         EvalCase("loop_retry_event_metadata", eval_loop_retry_event_metadata),
@@ -16796,6 +16806,356 @@ def eval_policy_hook_summary_compatibility():
             # Event store still works
             all_events = es.list_events()
             assert len(all_events) >= 1
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-110: Runtime policy hook rule catalog evals
+# ---------------------------------------------------------------------------
+
+_EXPECTED_RULE_IDS = [
+    "rule_deny_destructive_external",
+    "rule_high_risk_confirm",
+    "rule_pre_shell_write",
+    "rule_pre_git_write",
+    "rule_before_commit_write",
+    "rule_pre_tool_write",
+    "rule_pre_tool_read",
+    "rule_read_allow",
+    "rule_write_confirm",
+    "rule_default_allow",
+]
+
+_EXPECTED_HOOKS = sorted([
+    "pre_tool", "post_tool", "pre_edit", "post_edit",
+    "pre_shell", "pre_git", "pre_plugin_call",
+    "post_test", "before_handoff", "before_commit",
+])
+
+_EXPECTED_CATEGORIES = sorted([
+    "task", "shell", "git", "file", "network",
+    "plugin", "model", "test", "local", "unknown",
+])
+
+_EXPECTED_RISKS = sorted([
+    "read", "write", "destructive", "external_send", "high", "unknown",
+])
+
+_EXPECTED_DECISIONS = sorted(["allow", "confirm", "block"])
+
+
+def eval_policy_hook_rule_catalog_registered():
+    """describe_runtime_policy_hook_rules is registered and has read-only permission."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            perms_str = registry.call("list_tool_permissions")
+            assert "describe_runtime_policy_hook_rules" in perms_str, f"tool not in permissions: {perms_str[:300]}"
+            permission_line = next(
+                (line for line in perms_str.splitlines() if line.startswith("- describe_runtime_policy_hook_rules: ")),
+                "",
+            )
+            assert permission_line == "- describe_runtime_policy_hook_rules: local/read", (
+                f"expected local/read permission, got: {permission_line!r}"
+            )
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_policy_version():
+    """Output includes policy_version."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+            assert "policy_version" in result, f"missing policy_version: {list(result.keys())}"
+            assert isinstance(result["policy_version"], str) and result["policy_version"], f"empty policy_version: {result['policy_version']!r}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_enums_complete():
+    """Supported hooks, categories, risks, and decisions are present, complete, and sorted."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+
+            assert result["hooks"] == _EXPECTED_HOOKS, f"hooks mismatch: {result['hooks']}"
+            assert result["categories"] == _EXPECTED_CATEGORIES, f"categories mismatch: {result['categories']}"
+            assert result["risks"] == _EXPECTED_RISKS, f"risks mismatch: {result['risks']}"
+            assert result["decisions"] == _EXPECTED_DECISIONS, f"decisions mismatch: {result['decisions']}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_rules_present():
+    """rules is bounded and contains all expected stable rule IDs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+
+            rules = result["rules"]
+            assert isinstance(rules, list), f"rules not a list: {type(rules)}"
+            assert len(rules) == len(_EXPECTED_RULE_IDS), f"rule count mismatch: {len(rules)} vs {len(_EXPECTED_RULE_IDS)}"
+
+            rule_ids = [r["rule_id"] for r in rules]
+            assert rule_ids == _EXPECTED_RULE_IDS, f"rule IDs mismatch or order wrong: {rule_ids}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_rule_metadata():
+    """Known rule metadata matches current evaluator behavior."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+            rules_by_id = {r["rule_id"]: r for r in result["rules"]}
+
+            # rule_deny_destructive_external
+            r = rules_by_id["rule_deny_destructive_external"]
+            assert r["decision"] == "block"
+            assert r["risks"] == ["destructive", "external_send"]
+            assert r["requires_confirmation"] is False
+            assert r["blocked"] is True
+            assert r["reason_label"] == "high_risk_blocked"
+            assert r["hooks"] == _EXPECTED_HOOKS
+
+            # rule_high_risk_confirm
+            r = rules_by_id["rule_high_risk_confirm"]
+            assert r["decision"] == "confirm"
+            assert r["risks"] == ["high"]
+            assert r["requires_confirmation"] is True
+            assert r["blocked"] is False
+            assert r["reason_label"] == "high_risk_confirm"
+            assert r["hooks"] == _EXPECTED_HOOKS
+
+            # rule_pre_shell_write
+            r = rules_by_id["rule_pre_shell_write"]
+            assert r["decision"] == "confirm"
+            assert r["hooks"] == ["pre_shell"]
+            assert r["risks"] == ["write"]
+            assert r["requires_confirmation"] is True
+            assert r["blocked"] is False
+            assert r["reason_label"] == "pre_shell_write_confirm"
+
+            # rule_pre_git_write
+            r = rules_by_id["rule_pre_git_write"]
+            assert r["decision"] == "confirm"
+            assert r["hooks"] == ["pre_git"]
+            assert r["risks"] == ["write"]
+            assert r["reason_label"] == "pre_git_write_confirm"
+
+            # rule_before_commit_write
+            r = rules_by_id["rule_before_commit_write"]
+            assert r["decision"] == "confirm"
+            assert r["hooks"] == ["before_commit"]
+            assert r["risks"] == ["write"]
+            assert r["reason_label"] == "before_commit_confirm"
+
+            # rule_pre_tool_write
+            r = rules_by_id["rule_pre_tool_write"]
+            assert r["decision"] == "confirm"
+            assert r["hooks"] == ["pre_tool"]
+            assert r["risks"] == ["write"]
+            assert r["reason_label"] == "pre_tool_write_confirm"
+
+            # rule_pre_tool_read
+            r = rules_by_id["rule_pre_tool_read"]
+            assert r["decision"] == "allow"
+            assert r["hooks"] == ["pre_tool"]
+            assert r["risks"] == ["read"]
+            assert r["requires_confirmation"] is False
+            assert r["blocked"] is False
+            assert r["reason_label"] == ""
+
+            # rule_read_allow
+            r = rules_by_id["rule_read_allow"]
+            assert r["decision"] == "allow"
+            assert r["risks"] == ["read"]
+            assert r["requires_confirmation"] is False
+            assert r["blocked"] is False
+            assert r["hooks"] == _EXPECTED_HOOKS
+
+            # rule_write_confirm
+            r = rules_by_id["rule_write_confirm"]
+            assert r["decision"] == "confirm"
+            assert r["risks"] == ["write"]
+            assert r["requires_confirmation"] is True
+            assert r["blocked"] is False
+            assert r["reason_label"] == "write_confirm"
+            assert r["hooks"] == _EXPECTED_HOOKS
+
+            # rule_default_allow
+            r = rules_by_id["rule_default_allow"]
+            assert r["decision"] == "allow"
+            assert r["risks"] == ["unknown"]
+            assert r["requires_confirmation"] is False
+            assert r["blocked"] is False
+            assert r["hooks"] == _EXPECTED_HOOKS
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_priority_matches_evaluator():
+    """Catalog rule order matches evaluator priority for key cases."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+            rule_ids = [r["rule_id"] for r in result["rules"]]
+
+            # Destructive/external_send block before hook-specific rules
+            assert rule_ids.index("rule_deny_destructive_external") < rule_ids.index("rule_pre_shell_write")
+            assert rule_ids.index("rule_deny_destructive_external") < rule_ids.index("rule_pre_tool_write")
+
+            # High risk confirm before hook-specific write rules
+            assert rule_ids.index("rule_high_risk_confirm") < rule_ids.index("rule_pre_shell_write")
+            assert rule_ids.index("rule_high_risk_confirm") < rule_ids.index("rule_before_commit_write")
+
+            # Hook-specific write rules before generic write confirm
+            assert rule_ids.index("rule_pre_shell_write") < rule_ids.index("rule_write_confirm")
+            assert rule_ids.index("rule_pre_git_write") < rule_ids.index("rule_write_confirm")
+            assert rule_ids.index("rule_before_commit_write") < rule_ids.index("rule_write_confirm")
+            assert rule_ids.index("rule_pre_tool_write") < rule_ids.index("rule_write_confirm")
+
+            # pre_tool read allow before generic read allow
+            assert rule_ids.index("rule_pre_tool_read") < rule_ids.index("rule_read_allow")
+
+            # Generic write confirm before default allow
+            assert rule_ids.index("rule_write_confirm") < rule_ids.index("rule_default_allow")
+
+            # Cross-check with actual evaluator: destructive blocks regardless of hook
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="destructive"))
+            assert ev["decision"] == "block" and ev["matched_rules"] == ["rule_deny_destructive_external"]
+
+            # High risk confirms regardless of hook
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="post_test", risk="high"))
+            assert ev["decision"] == "confirm" and ev["matched_rules"] == ["rule_high_risk_confirm"]
+
+            # pre_shell write confirms
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_shell", risk="write"))
+            assert ev["decision"] == "confirm" and ev["matched_rules"] == ["rule_pre_shell_write"]
+
+            # pre_tool read allows
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read"))
+            assert ev["decision"] == "allow" and ev["matched_rules"] == ["rule_pre_tool_read"]
+
+            # Generic read allows (non-pre_tool hook)
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="post_tool", risk="read"))
+            assert ev["decision"] == "allow" and ev["matched_rules"] == ["rule_read_allow"]
+
+            # Generic write confirms (non-special hook)
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="post_tool", risk="write"))
+            assert ev["decision"] == "confirm" and ev["matched_rules"] == ["rule_write_confirm"]
+
+            # Unknown risk defaults to allow
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="post_tool", risk="bogus"))
+            assert ev["decision"] == "allow" and ev["matched_rules"] == ["rule_default_allow"]
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_no_leak():
+    """Output does not leak raw action, reason, shell commands, paths, env strings, secrets, or user input."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            raw = registry.call("describe_runtime_policy_hook_rules")
+            result = json.loads(raw)
+            serialized = json.dumps(result)
+
+            # No raw action/reason leakage (the tool takes no user input, but verify absence)
+            sentinel = "LEAK_SENTINEL_CATALOG_98765"
+            assert sentinel not in serialized, "unexpected sentinel in output"
+
+            # No shell commands
+            assert "rm -rf" not in serialized
+            assert "/bin/" not in serialized
+
+            # No file/workspace paths
+            assert "/tmp/" not in serialized
+            assert "/home/" not in serialized
+            assert "/Users/" not in serialized
+
+            # No env/request strings
+            assert "DATABASE_URL" not in serialized
+            assert "SECRET_TOKEN" not in serialized
+            assert "API_KEY" not in serialized
+
+            # No event payloads
+            assert "event_id" not in serialized
+            assert "event_type" not in serialized
+
+            # No task goals
+            assert "task_goal" not in serialized
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_read_only_no_mutation():
+    """Tool is read-only: does not create durable events or mutate tasks/workers."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            ws.register_worker("test_worker_rule_catalog_001", role="coder")
+            tasks_before = ts.list_tasks()
+            workers_before = [w.to_dict() for w in ws.list_workers()]
+            events_before = es.list_events()
+
+            registry.call("describe_runtime_policy_hook_rules")
+
+            tasks_after = ts.list_tasks()
+            workers_after = [w.to_dict() for w in ws.list_workers()]
+            events_after = es.list_events()
+
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert workers_after == workers_before, f"workers mutated: {workers_before} -> {workers_after}"
+            assert len(events_after) == len(events_before), f"events created: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_policy_hook_rule_catalog_compatibility():
+    """Existing tools still work after calling describe_runtime_policy_hook_rules."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+            ts = registry.durable_task_store
+
+            # Call the catalog tool
+            result = json.loads(registry.call("describe_runtime_policy_hook_rules"))
+            assert "policy_version" in result
+
+            # evaluate_runtime_policy_hook still works
+            ev = json.loads(registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read"))
+            assert ev["decision"] == "allow"
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "describe_runtime_policy_hook_rules" in perms
+
+            # Durable task CRUD still works
+            new_task = ts.create_task(goal="compat test task", steps=[{"text": "step1"}])
+            assert ts.get_task(new_task.task_id) is not None
+            fetched = json.loads(registry.call("get_durable_task", task_id=new_task.task_id))
+            assert fetched["goal"] == "compat test task"
         finally:
             db.close()
 
