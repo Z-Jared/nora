@@ -5,24 +5,25 @@ Status: assigned
 
 ## Task
 
-TASK-105: Runtime policy hook event query v1
+TASK-107: Runtime policy hook decision summary v1
 
 ## Context
 
-TASK-101 added the read-only `evaluate_runtime_policy_hook(...)` tool. TASK-103 added explicit event recording via `record_runtime_policy_hook_evaluation(...)`. TASK-104 added deterministic eval coverage for the recorder.
+TASK-101 added the read-only `evaluate_runtime_policy_hook(...)` tool. TASK-103 added explicit policy hook event recording. TASK-105 added `list_runtime_policy_hook_evaluations(...)`, and TASK-106 added deterministic eval coverage for that query tool.
 
-The next step is trace inspectability for policy decisions:
+The next step is an aggregate view for PM/UI workflows:
 
 - `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 1: durable traces should record and expose important runtime decisions.
 - Priority 9: hook/policy decisions should be runtime-backed, testable, and traceable.
+- Priority 10: Agent OS UI needs concise summaries of task/runtime decisions.
 
-Existing generic `list_durable_events` exists, but PM/UI workflows need a small policy-specific read-only view that returns only safe bounded policy hook evaluation metadata.
+Existing `list_runtime_policy_hook_evaluations(...)` is useful for recent event inspection. PM/UI workflows also need a small policy-specific read-only summary that answers "how many allow/confirm/block decisions happened recently, by hook/category/risk, and which recent safe event IDs contributed?"
 
 ## Goal
 
-Add a read-only registry tool for listing recent runtime policy hook evaluation events.
+Add a read-only registry tool for summarizing recent runtime policy hook evaluation events.
 
-Suggested name: `list_runtime_policy_hook_evaluations(...)`.
+Suggested name: `summarize_runtime_policy_hook_evaluations(...)`.
 
 ## Requirements
 
@@ -33,37 +34,41 @@ The tool should:
 - Support bounded filters:
   - `hook=""`
   - `decision=""`
+  - `category=""`
+  - `risk=""`
   - `task_id=""`
   - `worker_id=""`
   - `session_id=""`
   - `limit=20`
 - Clamp/validate `limit` consistently with local style, with a small maximum such as 100.
 - Return bounded JSON with:
-  - `events`: list of safe summaries
-  - `count`
+  - `total`: number of included policy hook events
   - normalized filters used
-- Each event summary should include safe fields only:
-  - `event_id`, `created_at`, `task_id`, `worker_id`, `session_id`
-  - `hook`, `decision`, `requires_confirmation`, `blocked`
-  - `reason_label`, `policy_version`, `matched_rules`
-  - `category`, `risk`, `action`, `action_label`, `action_present`
-- Never return raw `reason`, raw unsupported hook values, shell commands, env/request strings, file contents, workspace paths, secrets, or unbounded payload.
-- Ignore or safely normalize invalid/unknown filter values rather than leaking raw sentinels.
-- Preserve existing `evaluate_runtime_policy_hook` and `record_runtime_policy_hook_evaluation` behavior.
+  - `decisions`: counts for `allow`, `confirm`, and `block`
+  - `hooks`: bounded counts by supported hook
+  - `categories`: bounded counts by safe category label
+  - `risks`: bounded counts by safe risk label
+  - `requires_confirmation_count`
+  - `blocked_count`
+  - `recent_event_ids`: bounded list of event IDs included in newest-first order
+  - `policy_versions`: bounded counts by safe policy version
+- Never return raw `reason`, raw unsupported hook values, shell commands, env/request strings, file contents, workspace paths, secrets, raw actions, or unbounded payload.
+- Invalid/unsafe non-empty filters should return a bounded empty summary with safe errors instead of degrading to all-events.
+- Preserve existing `evaluate_runtime_policy_hook`, `record_runtime_policy_hook_evaluation`, and `list_runtime_policy_hook_evaluations` behavior.
 
-Implementation should stay local near the existing policy hook evaluator/recorder code in `mini_agent/toolkits/registry_builder.py`.
+Implementation should stay local near the existing policy hook evaluator/recorder/listing code in `mini_agent/toolkits/registry_builder.py`.
 
 ## Tests
 
 Add focused unit tests, likely in `tests/test_durable_workers.py`, covering:
 
-- Listing returns recent recorded policy hook events with safe metadata.
-- `hook`, `decision`, `task_id`, `worker_id`, and `session_id` filters work.
-- `limit` is bounded and rejects or clamps invalid values according to local style.
+- Summary counts for allow/confirm/block, hooks, categories, risks, confirmation count, blocked count, policy versions, and recent event IDs.
+- `hook`, `decision`, `category`, `risk`, `task_id`, `worker_id`, and `session_id` filters work.
+- `limit` is bounded and deterministic.
+- Invalid/unsafe filters return empty safe summaries with errors and do not return all events.
 - Raw reason/action/linkage sentinels do not appear in output.
-- Unsupported or unsafe filter sentinels do not leak raw strings.
-- The query tool is read-only and does not create events or mutate tasks/workers.
-- Compatibility: existing evaluator, recorder, `list_tool_permissions`, and `confirm_action` still work.
+- The summary tool is read-only and does not create events or mutate tasks/workers.
+- Compatibility: existing evaluator, recorder, listing tool, `list_tool_permissions`, and `confirm_action` still work.
 
 Run:
 
