@@ -4,14 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-114: Deterministic eval coverage for plugin manifest inspection v1
-- 优先级: high
-- 预计: 1 小时
-- 依赖: TASK-113
-- 目标: 为 TASK-113 的 plugin manifest 解析/校验/inspection 工具增加 deterministic offline eval coverage。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`evals/run_evals.py` 现有 MCP safe surface eval；`mini_agent/plugins.py`。
-
 ### TASK-115: Capability router scaffold v1
 - 优先级: medium
 - 预计: 1-2 小时
@@ -22,7 +14,14 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-无。
+### TASK-114: Deterministic eval coverage for plugin manifest inspection v1
+- 优先级: high
+- 预计: 1 小时
+- 依赖: TASK-113 ✅
+- 分配: Claude B
+- 目标: 为 TASK-113 的 plugin manifest 解析/校验/inspection 工具增加 deterministic offline eval coverage。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_mcp_server tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7；`evals/run_evals.py` 现有 MCP safe surface eval；`mini_agent/plugins.py`。
 
 ## 已完成
 
