@@ -1,40 +1,54 @@
 # Claude B Completion Report
 
-## TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1
-
-**Status:** Completed
+Status: ready for Codex review
 
 ## Summary
 
-Added 9 deterministic offline eval cases in `evals/run_evals.py` for `describe_runtime_policy_hook_rules(...)`:
+TASK-112: Deterministic eval coverage for MCP adapter safe tool surface v1.
 
-1. **policy_hook_rule_catalog_registered** — Tool registered with read-only permission
-2. **policy_hook_rule_catalog_policy_version** — Output includes `policy_version`
-3. **policy_hook_rule_catalog_enums_complete** — `hooks`, `categories`, `risks`, `decisions` present, complete, sorted
-4. **policy_hook_rule_catalog_rules_present** — `rules` bounded, deterministic, contains all 10 expected rule IDs in correct order
-5. **policy_hook_rule_catalog_rule_metadata** — Each rule's decision, hook coverage, risk coverage, `reason_label`, `requires_confirmation`, `blocked` match current evaluator behavior
-6. **policy_hook_rule_catalog_priority_matches_evaluator** — Catalog rule order matches evaluator priority chain; cross-validated with actual `evaluate_runtime_policy_hook` calls for destructive→block, high→confirm, pre_shell write→confirm, pre_tool read→allow, generic read→allow, generic write→confirm, unknown→default allow
-7. **policy_hook_rule_catalog_no_leak** — No shell commands, file paths, env strings, secrets, event payloads, or task goals in output
-8. **policy_hook_rule_catalog_read_only_no_mutation** — No durable events created, no tasks/workers mutated
-9. **policy_hook_rule_catalog_compatibility** — Existing tools (`evaluate_runtime_policy_hook`, `list_tool_permissions`, durable task CRUD) still work
+Added deterministic offline eval coverage for the MCP adapter's safe tool surface.
 
-## Diff
+## Changes
 
-```text
-evals/run_evals.py | 250 ++++++++++++++++++++++++++++++++++++++++++++++
-1 file changed, 250 insertions(+)
-```
+- `evals/run_evals.py`
+  - Added MCP helper imports.
+  - Added 8 deterministic evals:
+    - `mcp_default_allowlist_boundaries`
+    - `mcp_permission_surface_inspection`
+    - `mcp_custom_allowlist_boundaries`
+    - `mcp_custom_allowlist_unsafe_guard`
+    - `mcp_registry_permission_boundaries`
+    - `mcp_safe_json_errors_no_leak`
+    - `mcp_bounded_output_truncation`
+    - `mcp_memory_tool_compatibility`
+
+## Coverage
+
+- Default allowlist includes safe tools and excludes high-risk tools.
+- Custom allowlists are deterministic and can be empty or scoped.
+- Permission surface inspection exposes safe metadata for both exposed and hidden/blocked tools.
+- Unsafe custom allowlist tools are hidden/blocked by default and require explicit opt-in.
+- Registered tools outside the allowlist are rejected with safe JSON errors.
+- Handler exceptions, unknown tools, malformed args, and disallowed tools do not leak secret sentinels.
+- Long output remains bounded and short output remains unchanged.
+- Memory and calculate tools still work through `call_mcp_tool`.
 
 ## Tests
 
-```
-python3 evals/run_evals.py → 415 passed, 0 failed
-python3 -m unittest tests.test_durable_workers → 737 tests OK
-python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent → 311 tests OK
-git diff --check → clean
+```text
+python3 evals/run_evals.py
+423 passed, 0 failed
+
+python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache
+Ran 182 tests in 7.844s — OK
+
+git diff --check
+clean
 ```
 
 ## Notes
 
-- No runtime behavior changes needed. `describe_runtime_policy_hook_rules` implementation is correct.
-- No commit or push performed.
+- No runtime behavior changes were made by Claude B.
+- PM integrated the evals onto current `main` without removing TASK-110 eval coverage.
+- PM added one eval for `inspect_mcp_tool_surface(...)` after review found the inspection requirement needed coverage for unexposed tools.
+- No push performed.

@@ -8,27 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-111: MCP adapter permission-aware tool surface hardening v1
-- 分配给: Claude A
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-110 ✅
-- 目标: 加固 `mini_agent/mcp_server.py` 的 MCP tool surface，使 MCP adapter 能安全暴露 registry permission metadata，并为 custom allowlist 增加明确的高风险/需确认工具防护或显式 opt-in。
-- 验证: `python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7 Plugin runtime and capability routing、Priority 9 Hook and policy kernel；`docs/knowledge/MCP_INTEGRATION.md`。
-- 状态: assigned
-
-### TASK-112: Deterministic eval coverage for MCP adapter safe tool surface v1
-- 分配给: Claude B
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-110 ✅
-- 目标: 为现有 MCP adapter 增加 deterministic offline eval coverage，验证 default/custom allowlist、registry permission boundaries、safe errors/no-leak、bounded output 和 memory-tool compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 7 Plugin runtime and capability routing；`docs/knowledge/MCP_INTEGRATION.md`；`mini_agent/mcp_server.py`。
-- 状态: assigned
+无。
 
 ## 已完成
+
+### TASK-112: Deterministic eval coverage for MCP adapter safe tool surface v1 ✅
+- 完成者: Claude B；Codex PM 集成时补充 inspection-surface eval
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 423 passed；`python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 182 tests OK；`git diff --check` OK。
+- 内容: 为 MCP adapter 增加 deterministic offline eval coverage，覆盖 default/custom allowlist、unsafe custom allowlist hide/block、explicit unsafe opt-in、registered-but-not-allowed rejection、safe JSON errors/no secret leak、bounded truncation、memory/calculate compatibility，以及 `inspect_mcp_tool_surface(...)` 完整安全 inspection metadata；无网络、无模型、无共享状态。
+
+### TASK-111: MCP adapter permission-aware tool surface hardening v1 ✅
+- 完成者: Claude A；Codex PM 补强 unsafe non-memory write block 和 full inspection helper
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_mcp_server tests.test_mini_agent tests.test_tool_cache` 182 tests OK；`python3 evals/run_evals.py` 423 passed；`git diff --check` OK。
+- 内容: 加固 `mini_agent/mcp_server.py`，默认 MCP surface 继续只暴露安全工具；custom allowlist 默认仍会屏蔽 confirmation-required、execute/interact/delete/destructive/external-send/high risk 和非 memory write 工具；新增显式 `allow_unsafe_tools=True` trusted-local opt-in、`validate_allowlist(...)` allowlist 审计，以及 `inspect_mcp_tool_surface(...)` 全量安全元数据 inspection；文档同步更新。
 
 ### TASK-110: Deterministic eval coverage for runtime policy hook rule catalog v1 ✅
 - 完成者: Claude B；Codex PM 补强 exact permission assertion 和 worker no-mutation eval

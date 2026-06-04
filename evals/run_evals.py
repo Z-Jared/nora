@@ -36,6 +36,14 @@ from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
 from mini_agent.tools import WorkspaceFiles, build_default_registry
+from mini_agent.mcp_server import (
+    DEFAULT_ALLOWLIST,
+    call_mcp_tool,
+    inspect_mcp_tool_surface,
+    is_tool_allowed,
+    registry_to_mcp_tools,
+)
+from mini_agent.registry import ToolRegistry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SCHEDULER_DECISION, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
 from mini_agent.durable_workers import WorkerStatus
@@ -480,6 +488,14 @@ def main() -> int:
         EvalCase("retry_event_record_false", eval_retry_event_record_false),
         EvalCase("retry_event_safety_no_leak", eval_retry_event_safety_no_leak),
         EvalCase("retry_event_compatibility", eval_retry_event_compatibility),
+        EvalCase("mcp_default_allowlist_boundaries", eval_mcp_default_allowlist_boundaries),
+        EvalCase("mcp_permission_surface_inspection", eval_mcp_permission_surface_inspection),
+        EvalCase("mcp_custom_allowlist_boundaries", eval_mcp_custom_allowlist_boundaries),
+        EvalCase("mcp_custom_allowlist_unsafe_guard", eval_mcp_custom_allowlist_unsafe_guard),
+        EvalCase("mcp_registry_permission_boundaries", eval_mcp_registry_permission_boundaries),
+        EvalCase("mcp_safe_json_errors_no_leak", eval_mcp_safe_json_errors_no_leak),
+        EvalCase("mcp_bounded_output_truncation", eval_mcp_bounded_output_truncation),
+        EvalCase("mcp_memory_tool_compatibility", eval_mcp_memory_tool_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -17390,6 +17406,280 @@ def eval_retry_event_compatibility():
             assert ws.get_worker("w_after_retry_event") is not None
             new_task = ts.create_task(goal="compat test task", steps=[{"text": "step1"}])
             assert ts.get_task(new_task.task_id) is not None
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-112: MCP adapter safe tool surface evals
+# ---------------------------------------------------------------------------
+
+def eval_mcp_default_allowlist_boundaries():
+    """Default allowlist includes safe tools and excludes high-risk tools."""
+    # Safe tools present
+    for name in (
+        "calculate",
+        "search_memory",
+        "save_memory",
+        "search_memory_records",
+        "list_memory_records",
+        "get_memory_record",
+        "save_memory_record",
+    ):
+        assert name in DEFAULT_ALLOWLIST, f"{name} should be in DEFAULT_ALLOWLIST"
+    # High-risk tools absent
+    for name in (
+        "run_shell_command",
+        "write_file",
+        "replace_in_file",
+        "git_commit",
+        "git_push",
+        "browser_click",
+        "process_start",
+        "list_tool_permissions",
+        "create_durable_task",
+        "delete_durable_task",
+    ):
+        assert name not in DEFAULT_ALLOWLIST, f"{name} should NOT be in DEFAULT_ALLOWLIST"
+
+
+def eval_mcp_permission_surface_inspection():
+    """Inspection surface shows exposed and blocked tools with bounded metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            surface = inspect_mcp_tool_surface(registry)
+            assert surface, "inspection surface should not be empty"
+            by_name = {t["name"]: t for t in surface}
+
+            calc = by_name["calculate"]
+            assert calc["exposed"] is True, calc
+            assert calc["category"] == "local", calc
+            assert calc["risk"] == "read", calc
+            assert calc["requires_confirmation"] is False, calc
+            assert isinstance(calc["description"], str), calc
+            assert isinstance(calc["inputSchema"], dict), calc
+
+            shell = by_name["run_shell_command"]
+            assert shell["exposed"] is False, shell
+            assert shell["block_reason"] == "confirmation_required", shell
+            assert shell["category"] == "terminal", shell
+            assert shell["risk"] == "execute", shell
+            assert shell["requires_confirmation"] is True, shell
+
+            register_default = by_name["register_worker"]
+            assert register_default["exposed"] is False, register_default
+
+            custom_surface = inspect_mcp_tool_surface(registry, allowlist={"register_worker"})
+            custom_register = {t["name"]: t for t in custom_surface}["register_worker"]
+            assert custom_register["exposed"] is False, custom_register
+            assert custom_register["block_reason"] == "unsafe_write", custom_register
+
+            unsafe_surface = inspect_mcp_tool_surface(
+                registry,
+                allowlist={"register_worker"},
+                allow_unsafe_tools=True,
+            )
+            unsafe_register = {t["name"]: t for t in unsafe_surface}["register_worker"]
+            assert unsafe_register["exposed"] is True, unsafe_register
+            assert "block_reason" not in unsafe_register, unsafe_register
+
+            exported_names = {t["name"] for t in registry_to_mcp_tools(registry)}
+            exposed_names = {t["name"] for t in surface if t["exposed"]}
+            assert exported_names == exposed_names, (exported_names, exposed_names)
+
+            serialized = json.dumps(surface, ensure_ascii=False)
+            assert len(serialized) < 200000, f"inspection surface unexpectedly large: {len(serialized)}"
+            assert "sk-" not in serialized.lower(), "secret-like sentinel leaked"
+        finally:
+            db.close()
+
+
+def eval_mcp_custom_allowlist_boundaries():
+    """Custom allowlist overrides default; registry_to_mcp_tools filters correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Custom allowlist with only calculate
+            tools = registry_to_mcp_tools(registry, allowlist={"calculate"})
+            names = {t["name"] for t in tools}
+            assert names == {"calculate"}, f"expected only calculate, got {names}"
+
+            # Empty allowlist yields no tools
+            tools_empty = registry_to_mcp_tools(registry, allowlist=set())
+            assert tools_empty == [], f"expected empty list, got {tools_empty}"
+
+            # None uses default
+            tools_default = registry_to_mcp_tools(registry, allowlist=None)
+            default_names = {t["name"] for t in tools_default}
+            assert "calculate" in default_names
+            assert "run_shell_command" not in default_names
+
+            # is_tool_allowed respects custom
+            assert is_tool_allowed("my_tool", {"my_tool"})
+            assert not is_tool_allowed("calculate", {"my_tool"})
+        finally:
+            db.close()
+
+
+def eval_mcp_custom_allowlist_unsafe_guard():
+    """Unsafe custom allowlist tools are hidden/blocked unless explicitly opted in."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            tools = registry_to_mcp_tools(registry, allowlist={"calculate", "register_worker"})
+            names = {t["name"] for t in tools}
+            assert names == {"calculate"}, f"unsafe tool should be hidden without opt-in: {names}"
+
+            blocked = json.loads(call_mcp_tool(
+                registry,
+                "register_worker",
+                {"worker_id": "w_mcp_eval"},
+                allowlist={"register_worker"},
+            ))
+            assert blocked["reason"] == "unsafe_write", f"expected unsafe_write block: {blocked}"
+            assert blocked["category"] == "task"
+            assert blocked["risk"] == "write"
+            assert registry.durable_worker_store.get_worker("w_mcp_eval") is None
+
+            tools_unsafe = registry_to_mcp_tools(
+                registry,
+                allowlist={"register_worker"},
+                allow_unsafe_tools=True,
+            )
+            assert [t["name"] for t in tools_unsafe] == ["register_worker"], tools_unsafe
+
+            allowed = json.loads(call_mcp_tool(
+                registry,
+                "register_worker",
+                {"worker_id": "w_mcp_eval"},
+                allowlist={"register_worker"},
+                allow_unsafe_tools=True,
+            ))
+            assert allowed["worker_id"] == "w_mcp_eval", allowed
+            assert registry.durable_worker_store.get_worker("w_mcp_eval") is not None
+        finally:
+            db.close()
+
+
+def eval_mcp_registry_permission_boundaries():
+    """Tools outside allowlist are rejected even if registered in the registry."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # Shell command is registered but not in default allowlist
+            result = call_mcp_tool(registry, "run_shell_command", {"command": "echo hello"})
+            data = json.loads(result)
+            assert "error" in data, f"expected error for blocked tool, got {data}"
+            assert "未在允许列表中" in data["error"]
+            assert "run_shell_command" in data["error"]
+
+            # write_file also blocked
+            result2 = call_mcp_tool(registry, "write_file", {"path": "/tmp/x", "content": "y"})
+            data2 = json.loads(result2)
+            assert "error" in data2
+            assert "未在允许列表中" in data2["error"]
+
+            # calculate is allowed and works
+            result3 = call_mcp_tool(registry, "calculate", {"expression": "1+1"})
+            assert result3 == "2", f"expected '2', got {result3!r}"
+        finally:
+            db.close()
+
+
+def eval_mcp_safe_json_errors_no_leak():
+    """Error responses are valid JSON and do not leak secrets or internals."""
+    registry = ToolRegistry()
+
+    secret_val = "sk-super-secret-REDACTED-99999"
+    registry.register(
+        "leaky_tool",
+        "Raises with a secret.",
+        lambda: (_ for _ in ()).throw(RuntimeError(secret_val)),
+        parameters={"type": "object", "properties": {}},
+    )
+    registry.register(
+        "strict_tool",
+        "Requires an int.",
+        lambda n: f"got:{n}",
+        parameters={"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]},
+    )
+
+    # Handler error does not leak secret
+    result = call_mcp_tool(registry, "leaky_tool", {}, allowlist={"leaky_tool"})
+    assert secret_val not in result, "secret leaked in handler error"
+    data = json.loads(result)
+    assert data["error"] == "工具调用失败"
+
+    # Unknown tool returns JSON error
+    result2 = call_mcp_tool(registry, "nonexistent", {}, allowlist={"nonexistent"})
+    data2 = json.loads(result2)
+    assert "error" in data2
+    assert "未知工具" in data2["error"]
+
+    # Malformed args returns JSON error
+    result3 = call_mcp_tool(registry, "strict_tool", {}, allowlist={"strict_tool"})
+    data3 = json.loads(result3)
+    assert "error" in data3
+    assert "参数错误" in data3["error"]
+
+    # Disallowed tool returns JSON error (not raw exception)
+    result4 = call_mcp_tool(registry, "leaky_tool", {}, allowlist={"other"})
+    data4 = json.loads(result4)
+    assert "error" in data4
+    assert "未在允许列表中" in data4["error"]
+
+
+def eval_mcp_bounded_output_truncation():
+    """Long tool output is truncated to MAX_OUTPUT_CHARS."""
+    registry = ToolRegistry()
+    registry.register(
+        "long_tool",
+        "Returns long text.",
+        lambda: "Z" * 5000,
+        parameters={"type": "object", "properties": {}},
+    )
+
+    result = call_mcp_tool(registry, "long_tool", {}, allowlist={"long_tool"})
+    assert "truncated" in result, f"expected truncation marker, got {result[:200]}"
+    assert len(result) < 5000, f"output not truncated: {len(result)} chars"
+
+    # Short output unchanged
+    registry.register("short_tool", "Short.", lambda: "ok", parameters={"type": "object", "properties": {}})
+    result2 = call_mcp_tool(registry, "short_tool", {}, allowlist={"short_tool"})
+    assert result2 == "ok", f"short output changed: {result2!r}"
+
+
+def eval_mcp_memory_tool_compatibility():
+    """Memory tools work through MCP call path; registry state is preserved."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db, confirm_action=lambda _: True)
+
+            # save_memory through call_mcp_tool
+            result = call_mcp_tool(registry, "save_memory", {"text": "mcp eval memory", "tags": "test"}, allowlist=DEFAULT_ALLOWLIST)
+            assert "error" not in result, f"save_memory failed: {result}"
+
+            # search_memory through call_mcp_tool
+            result2 = call_mcp_tool(registry, "search_memory", {"query": "mcp eval memory"}, allowlist=DEFAULT_ALLOWLIST)
+            assert "mcp eval memory" in result2, f"search_memory missing result: {result2[:200]}"
+
+            # calculate through call_mcp_tool
+            result3 = call_mcp_tool(registry, "calculate", {"expression": "2+3"}, allowlist=DEFAULT_ALLOWLIST)
+            assert "5" in result3, f"calculate result wrong: {result3}"
+
+            # Registry still works directly after MCP calls
+            direct = registry.call("calculate", expression="10*10")
+            assert direct == "100", f"registry broken after MCP calls: {direct}"
         finally:
             db.close()
 
