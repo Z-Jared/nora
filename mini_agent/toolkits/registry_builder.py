@@ -4663,4 +4663,163 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Runtime policy hook evaluator (TASK-101) ---
+
+    _POLICY_VERSION = "v1"
+    _VALID_HOOKS = frozenset({
+        "pre_tool", "post_tool", "pre_edit", "post_edit",
+        "pre_shell", "pre_git", "pre_plugin_call",
+        "post_test", "before_handoff", "before_commit",
+    })
+    _VALID_CATEGORIES = frozenset({
+        "task", "shell", "git", "file", "network",
+        "plugin", "model", "test", "local", "unknown",
+    })
+    _VALID_RISKS = frozenset({
+        "read", "write", "destructive", "external_send", "high", "unknown",
+    })
+
+    def _evaluate_runtime_policy_hook_json(
+        hook: str,
+        action: str = "",
+        category: str = "",
+        risk: str = "",
+        reason: str = "",
+    ) -> str:
+        # Validate inputs
+        if not isinstance(hook, str) or not hook.strip():
+            return _json.dumps({"error": "hook 必须是非空字符串"}, ensure_ascii=False)
+        hook = hook.strip()
+        if hook not in _VALID_HOOKS:
+            return _json.dumps({
+                "error": "unsupported_hook",
+                "valid_hooks": sorted(_VALID_HOOKS),
+            }, ensure_ascii=False)
+
+        raw_action = (action or "").strip()
+        category = (category or "").strip().lower() or "unknown"
+        risk = (risk or "").strip().lower() or "unknown"
+        reason_present = bool(reason and reason.strip())
+
+        # Sanitize action: only keep safe labels, redact paths/commands/secrets
+        import re as _re
+        _UNSAFE_ACTION = _re.compile(r'[/\\=\s`$;|&<>{}()\[\]!#~]')
+        _SECRET_LIKE = _re.compile(r'(?i)(SECRET|TOKEN|API_?KEY|PASSWORD|DATABASE_URL|CREDENTIAL|AUTH)')
+        _ALL_CAPS = _re.compile(r'^[A-Z][A-Z0-9_]{7,}$')
+        if not raw_action:
+            action = ""
+            action_label = "empty"
+        elif (_UNSAFE_ACTION.search(raw_action) or len(raw_action) > 60
+              or _SECRET_LIKE.search(raw_action) or _ALL_CAPS.match(raw_action)):
+            action = ""
+            action_label = "redacted"
+        else:
+            action = raw_action[:60]
+            action_label = "safe"
+
+        # Normalize category/risk
+        if category not in _VALID_CATEGORIES:
+            category = "unknown"
+        if risk not in _VALID_RISKS:
+            risk = "unknown"
+
+        # Policy decision logic
+        decision = "allow"
+        requires_confirmation = False
+        blocked = False
+        reason_label = ""
+        matched_rules = []
+
+        # Conservative policy rules
+        if risk in ("destructive", "external_send"):
+            decision = "block"
+            blocked = True
+            reason_label = "high_risk_blocked"
+            matched_rules.append("rule_deny_destructive_external")
+        elif risk == "high":
+            decision = "confirm"
+            requires_confirmation = True
+            reason_label = "high_risk_confirm"
+            matched_rules.append("rule_high_risk_confirm")
+        elif hook in ("pre_shell", "pre_git") and risk in ("write", "high"):
+            decision = "confirm"
+            requires_confirmation = True
+            reason_label = f"{hook}_write_confirm"
+            matched_rules.append(f"rule_{hook}_write")
+        elif hook == "before_commit" and risk in ("write", "high", "destructive"):
+            decision = "confirm"
+            requires_confirmation = True
+            reason_label = "before_commit_confirm"
+            matched_rules.append("rule_before_commit_write")
+        elif hook == "pre_tool" and risk == "write":
+            decision = "confirm"
+            requires_confirmation = True
+            reason_label = "pre_tool_write_confirm"
+            matched_rules.append("rule_pre_tool_write")
+        elif hook == "pre_tool" and risk == "read":
+            decision = "allow"
+            matched_rules.append("rule_pre_tool_read")
+        elif risk == "read":
+            decision = "allow"
+            matched_rules.append("rule_read_allow")
+        else:
+            # Default: allow for unknown/low-risk, confirm for write
+            if risk == "write":
+                decision = "confirm"
+                requires_confirmation = True
+                reason_label = "write_confirm"
+                matched_rules.append("rule_write_confirm")
+            else:
+                decision = "allow"
+                matched_rules.append("rule_default_allow")
+
+        return _json.dumps({
+            "hook": hook,
+            "action": action,
+            "action_label": action_label,
+            "action_present": bool(raw_action),
+            "category": category,
+            "risk": risk,
+            "decision": decision,
+            "requires_confirmation": requires_confirmation,
+            "blocked": blocked,
+            "reason_label": reason_label,
+            "reason_present": reason_present,
+            "policy_version": _POLICY_VERSION,
+            "matched_rules": matched_rules,
+        }, ensure_ascii=False)
+
+    registry.register(
+        "evaluate_runtime_policy_hook",
+        "评估生命周期 hook 策略决策。只读，不修改任何状态。",
+        _evaluate_runtime_policy_hook_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "hook": {
+                    "type": "string",
+                    "description": "生命周期 hook 点，如 pre_tool, pre_shell, pre_git, before_commit, post_test, before_handoff",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "可选的操作/工具名称",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "可选的权限类别，如 task, shell, git, file, network, plugin, model, test",
+                },
+                "risk": {
+                    "type": "string",
+                    "description": "可选的风险级别，如 read, write, destructive, external_send, high",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "可选的人类可读原因（不会在输出中回显原文）",
+                },
+            },
+            "required": ["hook"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     return registry

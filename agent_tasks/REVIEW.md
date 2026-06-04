@@ -1,73 +1,62 @@
-# TASK-100 Review — Deterministic eval coverage for scheduler retry decision event metadata v1
+# TASK-101 Review — Runtime policy hook evaluator v1
 
 **Status: APPROVED**
 
-## Review Summary
+## 1. Read-only verification
 
-All 6 eval cases are present, assertions are concrete and specific, eval-only with no runtime changes, no test pollution or resource leaks, and safety no-leak coverage is comprehensive.
+- `evaluate_runtime_policy_hook` does pure string manipulation and JSON serialization only.
+- No durable state mutation, no filesystem writes, no shell/git/browser/network/plugin calls, no enforcement wiring.
+- Tests `test_no_durable_task_mutation`, `test_no_worker_mutation`, `test_no_event_mutation` confirm zero side effects.
+- Registered as `risk="read"`.
 
-## Detailed Review
+## 2. Bounded/no-leak output
 
-### 1. Coverage of B_TASK requirements ✅
+- **reason**: never echoed; only `reason_present` bool returned. Tests `test_raw_reason_not_in_output`, `test_no_shell_command_leak`, `test_no_env_leak` verify.
+- **action**: sanitized via regex — paths, shell commands, env-like KEY=VALUE, secret-like tokens, all-caps ≥8 chars, metacharacters, and >60 char strings all redacted. Tests cover each case.
+- **unknown hook**: returns `error: "unsupported_hook"` + `valid_hooks` list; raw hook value not echoed. `test_unknown_hook_no_raw_leak` verifies.
+- **Output shape**: bounded to 13 named fields. No raw objects or unbounded data.
 
-| Requirement | Eval | Status |
-|---|---|---|
-| Tick retry executed event metadata | `eval_tick_retry_executed_event_metadata` | ✅ |
-| Tick retry skipped metadata | `eval_tick_retry_skipped_event_metadata` | ✅ |
-| Loop retry metadata (aggregate + per-tick + no raw results) | `eval_loop_retry_event_metadata` | ✅ |
-| `record_event=False` | `eval_retry_event_record_false` | ✅ |
-| Safety/no-leak | `eval_retry_event_safety_no_leak` | ✅ |
-| Compatibility | `eval_retry_event_compatibility` | ✅ |
+## 3. Policy decisions — conservative and deterministic
 
-### 2. Assertion specificity ✅
+| Condition | Decision |
+|---|---|
+| `risk=destructive/external_send` | block |
+| `risk=high` | confirm |
+| `hook=pre_shell/pre_git` + `risk=write/high` | confirm |
+| `hook=before_commit` + `risk=write/high/destructive` | confirm |
+| `hook=pre_tool` + `risk=write` | confirm |
+| `hook=pre_tool` + `risk=read` | allow |
+| `risk=read` (any hook) | allow |
+| default write | confirm |
+| default other | allow |
 
-All evals go beyond checking event existence:
+All decision paths tested. `matched_rules` provides audit trail.
 
-- **tick_retry_executed_event_metadata**: Verifies `retry_executed >= 1`, `retry_skipped`, `retry_failed` in aggregate; per-action `executed=True`, `task_id` match, `retry_count=1`, `max_retries=3`
-- **tick_retry_skipped_event_metadata**: Verifies `retry_skipped >= 1`, per-action `reason="retry_blocked_missing_capacity"`, post-call task status/retry_count unchanged
-- **loop_retry_event_metadata**: Verifies aggregate `retry_executed >= 1`, `retry_skipped`, `retry_failed`; per-tick `retry_executed`, `retry_skipped`, `retry_failed` in `ticks[0]`; `results` not in payload
-- **retry_event_record_false**: Verifies `len(tick_events) == 0` and `len(loop_events) == 0` after `record_event=False`
-- **retry_event_safety_no_leak**: Checks 6 sentinels (goal, secret, step, env/failure_reason, request, workspace path) absent from serialized payload for both tick and loop events; also checks `results` not in payload
-- **retry_event_compatibility**: Verifies tick, loop, run-once, planner, explain all return expected keys after retry event recording
+## 4. Test quality
 
-### 3. Eval-only, no runtime changes ✅
+37 tests in `RuntimePolicyHookEvaluatorTests`:
+- **Decision logic**: 10 tests covering allow/confirm/block for each rule path
+- **No-leak**: 7 tests covering reason, shell, env, workspace path, secret-like action, safe action preservation
+- **Read-only/no-mutation**: 3 tests (task, worker, event state unchanged)
+- **Output shape**: 4 tests (required fields, matched_rules type, policy_version, action length bound)
+- **Normalization**: 2 tests (unknown category/risk → "unknown")
+- **Compatibility**: 2 tests (permissions listing, confirm_action still works)
+- **Error handling**: 3 tests (unknown hook, empty hook, no raw leak)
 
-Diff only touches:
-- `evals/run_evals.py` (6 new eval functions + registration)
-- `agent_tasks/B_DONE.md` (completion report)
-- `agent_tasks/PM_INBOX.md` (notification)
+All assertions are specific and non-trivial.
 
-No changes to `mini_agent/` or `tests/`.
+## 5. Compatibility
 
-### 4. No test pollution, state reuse, resource leaks, or flaky ordering ✅
+- `list_tool_permissions` returns the new tool in its listing.
+- Existing `confirm_action` behavior unaffected.
+- No existing API shape changes.
+- 607 worker tests + 311 other tests + 364 evals all pass.
 
-- Each eval uses `tempfile.TemporaryDirectory()` with `try/finally: db.close()`
-- Each eval uses unique worker IDs (`w_tick_retry_exec`, `w_tick_retry_skip`, `w_loop_retry_meta`, `w_tick_no_event`, `w_loop_no_event`, `w_retry_event_safe`, `w_retry_event_safe2`, `w_retry_event_compat`)
-- Uses `before_event_ids` snapshot pattern to isolate new events from setup events
-- No ordering-dependent assertions on event sequence (uses filtering by event_type and summary)
+## Minor observations (non-blocking)
 
-### 5. Safety no-leak coverage ✅
+- `import re as _re` inside function body re-imports on each call. Harmless but could be module-level.
+- `test_action_bounded` asserts `<= 120` while code truncates to 60. Test is loose but correct.
 
-`eval_retry_event_safety_no_leak` checks against:
-- `_LIFECYCLE_SENTINEL_GOAL` — task goal
-- `_LIFECYCLE_SENTINEL_SECRET` — secret
-- `_LIFECYCLE_SENTINEL_STEP` — task steps
-- `_LIFECYCLE_SENTINEL_ENV` — failure_reason / env
-- `_LIFECYCLE_SENTINEL_REQUEST` — request string
-- `".workspaces"` — workspace path
-- `"results"` — raw results not persisted
+## Verdict
 
-Covers both tick events and loop events. Sentinels passed as `goal`, `steps`, and `failure_reason` during task setup.
-
-## PM Verification
-
-```
-python3 evals/run_evals.py: 364 passed, 0 failed
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests tests.test_durable_workers.SchedulerRetryEventMetadataTests: 58 tests, OK
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent: 737 tests, OK
-git diff --check: clean
-```
-
-## Findings
-
-None. All requirements met, assertions are concrete, no runtime changes, no leaks.
+Implementation is read-only, bounded, conservative, well-tested, and compatible. Ready to merge.

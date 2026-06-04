@@ -6,12 +6,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-101: Runtime policy hook evaluator v1
-- 分配给: Claude A
-- 目标: 新增最小只读 runtime policy hook evaluator，用统一、安全、可追踪的 decision 结构描述 pre-tool/pre-shell/pre-git/before-commit 等 hook 点会允许、要求确认或阻止哪些动作，为后续 policy kernel 打基础。
-- 状态: assigned
-
 ## 已完成
+
+### TASK-101: Runtime policy hook evaluator v1 ✅
+- 完成者: Claude A；Codex PM 因 A 最终 CCB job provider/API 输出噪声，集成 A 工作树已完成补丁并更新准确 DONE 报告
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers.RuntimePolicyHookEvaluatorTests` 37 tests OK；`python3 -m unittest tests.test_durable_workers` 607 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`python3 evals/run_evals.py` 364 passed；`git diff --check` OK。
+- 内容: 新增只读 `evaluate_runtime_policy_hook` registry tool，支持 `pre_tool`、`post_tool`、`pre_edit`、`post_edit`、`pre_shell`、`pre_git`、`pre_plugin_call`、`post_test`、`before_handoff`、`before_commit` 等 hook；输出 bounded policy decision metadata（allow/confirm/block、confirmation/block flags、safe reason label、matched rules、policy version）；不执行 enforcement、不 mutation、不写文件、不调用 shell/git/browser/network/plugin；action/reason/unknown hook 输出安全处理，覆盖 path、shell、env-like、secret-like、all-caps token、workspace path 和 unknown hook sentinel no-leak。
 
 ### TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1 ✅
 - 完成者: Claude B

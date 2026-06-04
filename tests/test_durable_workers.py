@@ -8034,5 +8034,264 @@ class SchedulerRetryEventMetadataTests(unittest.TestCase):
                     self.assertIsInstance(v, (str, int, float, bool, type(None)))
 
 
+class RuntimePolicyHookEvaluatorTests(unittest.TestCase):
+    """Tests for evaluate_runtime_policy_hook (TASK-101)."""
+
+    SECRET_SENTINEL = "POLICY_HOOK_SECRET_XYZ"
+    SHELL_SENTINEL = "rm -rf /important"
+    ENV_SENTINEL = "DATABASE_URL=secret123"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _call(self, **kwargs):
+        result = self.registry.call("evaluate_runtime_policy_hook", **kwargs)
+        return json.loads(result)
+
+    # --- Basic decision tests ---
+
+    def test_read_pre_tool_returns_allow(self):
+        r = self._call(hook="pre_tool", category="file", risk="read")
+        self.assertEqual(r["decision"], "allow")
+        self.assertFalse(r["requires_confirmation"])
+        self.assertFalse(r["blocked"])
+        self.assertIn("rule_pre_tool_read", r["matched_rules"])
+
+    def test_write_pre_tool_returns_confirm(self):
+        r = self._call(hook="pre_tool", category="file", risk="write")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        self.assertFalse(r["blocked"])
+        self.assertIn("rule_pre_tool_write", r["matched_rules"])
+
+    def test_before_commit_write_returns_confirm(self):
+        r = self._call(hook="before_commit", category="git", risk="write")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        self.assertIn("rule_before_commit_write", r["matched_rules"])
+
+    def test_destructive_returns_block(self):
+        r = self._call(hook="pre_shell", category="shell", risk="destructive")
+        self.assertEqual(r["decision"], "block")
+        self.assertTrue(r["blocked"])
+        self.assertFalse(r["requires_confirmation"])
+        self.assertEqual(r["reason_label"], "high_risk_blocked")
+
+    def test_external_send_returns_block(self):
+        r = self._call(hook="pre_tool", category="network", risk="external_send")
+        self.assertEqual(r["decision"], "block")
+        self.assertTrue(r["blocked"])
+
+    def test_high_risk_returns_confirm(self):
+        r = self._call(hook="pre_tool", category="model", risk="high")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        self.assertEqual(r["reason_label"], "high_risk_confirm")
+
+    def test_pre_shell_write_returns_confirm(self):
+        r = self._call(hook="pre_shell", category="shell", risk="write")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        self.assertIn("rule_pre_shell_write", r["matched_rules"])
+
+    def test_pre_git_write_returns_confirm(self):
+        r = self._call(hook="pre_git", category="git", risk="write")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        self.assertIn("rule_pre_git_write", r["matched_rules"])
+
+    def test_read_risk_default_allow(self):
+        r = self._call(hook="post_test", category="test", risk="read")
+        self.assertEqual(r["decision"], "allow")
+        self.assertIn("rule_read_allow", r["matched_rules"])
+
+    def test_unknown_hook_returns_error(self):
+        r = self._call(hook="nonexistent_hook")
+        self.assertIn("error", r)
+        self.assertIn("valid_hooks", r)
+        self.assertEqual(r["error"], "unsupported_hook")
+
+    def test_unknown_hook_no_raw_leak(self):
+        """Unknown hook error must not echo raw hook value."""
+        sentinel = "SECRET_HOOK_XYZ_123"
+        r = self._call(hook=sentinel)
+        result_str = json.dumps(r)
+        self.assertNotIn(sentinel, result_str)
+
+    def test_empty_hook_returns_error(self):
+        r = self._call(hook="")
+        self.assertIn("error", r)
+
+    # --- reason_present / no-leak ---
+
+    def test_reason_present_true_when_reason_given(self):
+        r = self._call(hook="pre_tool", risk="read", reason="user requested file read")
+        self.assertTrue(r["reason_present"])
+
+    def test_reason_present_false_when_empty(self):
+        r = self._call(hook="pre_tool", risk="read", reason="")
+        self.assertFalse(r["reason_present"])
+
+    def test_reason_present_false_when_none(self):
+        r = self._call(hook="pre_tool", risk="read")
+        self.assertFalse(r["reason_present"])
+
+    def test_raw_reason_not_in_output(self):
+        r = self._call(hook="pre_tool", risk="read", reason=self.SECRET_SENTINEL)
+        result_str = json.dumps(r)
+        self.assertNotIn(self.SECRET_SENTINEL, result_str)
+
+    # --- Safety/no-leak ---
+
+    def test_no_shell_command_leak(self):
+        r = self._call(hook="pre_shell", risk="write", reason=self.SHELL_SENTINEL)
+        result_str = json.dumps(r)
+        self.assertNotIn(self.SHELL_SENTINEL, result_str)
+
+    def test_no_env_leak(self):
+        r = self._call(hook="pre_tool", risk="read", reason=self.ENV_SENTINEL)
+        result_str = json.dumps(r)
+        self.assertNotIn(self.ENV_SENTINEL, result_str)
+
+    def test_no_workspace_path_leak(self):
+        """Workspace/temp path in action must be redacted."""
+        path = str(self.root / "secret.txt")
+        r = self._call(hook="pre_tool", risk="read", action=path)
+        result_str = json.dumps(r)
+        self.assertNotIn(path, result_str)
+        self.assertNotIn("/tmp/", result_str)
+        self.assertNotIn("/var/folders", result_str)
+        self.assertNotIn("secret.txt", result_str)
+        self.assertEqual(r["action_label"], "redacted")
+
+    def test_no_shell_command_action_leak(self):
+        """Shell command in action must be redacted."""
+        r = self._call(hook="pre_shell", risk="write", action=self.SHELL_SENTINEL)
+        result_str = json.dumps(r)
+        self.assertNotIn(self.SHELL_SENTINEL, result_str)
+        self.assertNotIn("rm -rf", result_str)
+        self.assertEqual(r["action_label"], "redacted")
+
+    def test_no_env_like_action_leak(self):
+        """Env-like KEY=value in action must be redacted."""
+        r = self._call(hook="pre_tool", risk="read", action=self.ENV_SENTINEL)
+        result_str = json.dumps(r)
+        self.assertNotIn(self.ENV_SENTINEL, result_str)
+        self.assertEqual(r["action_label"], "redacted")
+
+    def test_no_secret_like_action_leak(self):
+        """Secret-like all-caps token in action must be redacted."""
+        r = self._call(hook="pre_tool", risk="read", action="SECRET_VALUE_XYZ")
+        result_str = json.dumps(r)
+        self.assertNotIn("SECRET_VALUE_XYZ", result_str)
+        self.assertEqual(r["action_label"], "redacted")
+        self.assertTrue(r["action_present"])
+
+    def test_safe_action_preserved(self):
+        """Simple safe action label is preserved."""
+        r = self._call(hook="pre_tool", risk="read", action="read_file")
+        self.assertEqual(r["action"], "read_file")
+        self.assertEqual(r["action_label"], "safe")
+        self.assertTrue(r["action_present"])
+
+    def test_empty_action(self):
+        r = self._call(hook="pre_tool", risk="read")
+        self.assertEqual(r["action"], "")
+        self.assertEqual(r["action_label"], "empty")
+        self.assertFalse(r["action_present"])
+
+    def test_action_present_true_when_given(self):
+        r = self._call(hook="pre_tool", risk="read", action="some_tool")
+        self.assertTrue(r["action_present"])
+
+    def test_no_secret_in_reason_label(self):
+        r = self._call(hook="pre_tool", risk="destructive", reason=self.SECRET_SENTINEL)
+        self.assertNotIn(self.SECRET_SENTINEL, r.get("reason_label", ""))
+
+    # --- Read-only/no mutation ---
+
+    def test_no_durable_task_mutation(self):
+        # Create a task
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        tid = task["task_id"]
+
+        before_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self.registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="write")
+        after_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(before_tasks, after_tasks)
+
+    def test_no_worker_mutation(self):
+        self.registry.call("register_worker", worker_id="wf")
+        before = json.loads(self.registry.call("list_workers"))
+        self.registry.call("evaluate_runtime_policy_hook", hook="pre_shell", risk="read")
+        after = json.loads(self.registry.call("list_workers"))
+        self.assertEqual(before, after)
+
+    def test_no_event_mutation(self):
+        before_count = len(self.registry.durable_event_store.list_events())
+        self.registry.call("evaluate_runtime_policy_hook", hook="before_commit", risk="write")
+        after_count = len(self.registry.durable_event_store.list_events())
+        self.assertEqual(before_count, after_count)
+
+    # --- Output shape ---
+
+    def test_output_has_required_fields(self):
+        r = self._call(hook="pre_tool", risk="read")
+        for field in ["hook", "action", "action_label", "action_present",
+                       "category", "risk", "decision", "requires_confirmation",
+                       "blocked", "reason_label", "reason_present",
+                       "policy_version", "matched_rules"]:
+            self.assertIn(field, r)
+
+    def test_matched_rules_is_list(self):
+        r = self._call(hook="pre_tool", risk="read")
+        self.assertIsInstance(r["matched_rules"], list)
+        self.assertGreater(len(r["matched_rules"]), 0)
+
+    def test_policy_version_present(self):
+        r = self._call(hook="pre_tool", risk="read")
+        self.assertTrue(r["policy_version"])
+
+    def test_action_bounded(self):
+        long_action = "x" * 500
+        r = self._call(hook="pre_tool", risk="read", action=long_action)
+        self.assertLessEqual(len(r["action"]), 120)
+
+    # --- Category/risk normalization ---
+
+    def test_unknown_category_normalized(self):
+        r = self._call(hook="pre_tool", category="bogus", risk="read")
+        self.assertEqual(r["category"], "unknown")
+
+    def test_unknown_risk_normalized(self):
+        r = self._call(hook="pre_tool", risk="bogus")
+        self.assertEqual(r["risk"], "unknown")
+
+    # --- Compatibility ---
+
+    def test_registry_permissions_still_work(self):
+        """list_tool_permissions still works after adding policy evaluator."""
+        result = self.registry.call("list_tool_permissions")
+        self.assertIsInstance(result, str)
+        self.assertIn("evaluate_runtime_policy_hook", result)
+
+    def test_existing_confirm_action_still_works(self):
+        """Registry with confirm_action=lambda _:False still rejects."""
+        reg = build_default_registry(db=self.db, workspace_root=self.root, confirm_action=lambda _: False)
+        result = reg.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="write")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["decision"], "confirm")
+
+
 if __name__ == "__main__":
     unittest.main()
