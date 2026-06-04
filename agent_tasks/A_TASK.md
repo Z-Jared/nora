@@ -1,61 +1,86 @@
 # Claude A Task
 
 Owner: Claude A
-Status: completed
+Status: assigned
 
 ## Task
 
-TASK-099: Scheduler retry decision event metadata v1
+TASK-101: Runtime policy hook evaluator v1
 
 ## Context
 
-Recent scheduler work now covers closeout planning, guarded run-once/tick/loop, scheduler explainability, read-only retry planning, guarded retry execution, and deterministic eval coverage for retry execution.
+Recent work completed scheduler retry planning/execution/event metadata and deterministic eval coverage. The next north-star priority is the hook/policy kernel:
 
-The next runtime gap is observability: scheduler decision events need enough bounded metadata to explain retry decisions after the fact, without leaking task content or workspace details.
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9: lifecycle hooks for `pre-tool`, `post-tool`, `pre-edit`, `post-edit`, `pre-shell`, `pre-git`, `pre-plugin-call`, `post-test`, `before-handoff`, `before-commit`, `compact`, `stop`, and recovery events.
+- Hooks should become policy-backed, testable, and traceable runtime mechanisms rather than prompt-only conventions.
+
+This task is the smallest runtime foundation: add a read-only policy hook evaluator that returns safe decision metadata. Do not wire it into enforcement yet.
 
 ## Goal
 
-Extend scheduler decision durable event metadata so retry executed/skipped/failed/finalized decisions are auditable and explainable from events, while preserving bounded/no-leak output.
+Add a minimal, deterministic, read-only runtime policy evaluator tool that can answer:
+
+> At this lifecycle hook, for this action/tool category/risk, what would runtime policy decide?
+
+The output should be bounded, safe, and ready for future enforcement and event tracing.
 
 ## Requirements
 
-- Inspect how `run_worker_lifecycle_scheduler_tick(..., record_event=True)` and `run_worker_lifecycle_scheduler_loop(..., record_event=True)` currently record `SCHEDULER_DECISION` events.
-- Extend event payloads so retry-related decisions are visible in durable events:
-  - retry executed
-  - retry skipped because task not failed / retry exhausted / active owner / missing idle capacity
-  - retry execution failed with bounded reason
-  - closeout finalized and dispatch skipped should remain represented at least as well as today.
-- Event metadata must be bounded and safe:
-  - Include stable safe fields such as `action`, `task_id`, `worker_id` when present, `reason`, `executed`, `skipped`, `failed`, `retry_count`, `max_retries`, and aggregate counts.
-  - Do not include task goal, steps, notes, prompts, file contents, raw diffs, reviewer summaries, shell/env/request strings, workspace paths, or secrets.
-- Preserve existing API output shape unless a minimal additive field is clearly needed.
-- Preserve `record_event=False` semantics: no scheduler decision event should be recorded when disabled.
-- Preserve dry-run behavior and existing guarded execution behavior from TASK-097.
-- Keep event payload sizes bounded; do not persist raw `results` if it can contain unbounded or unsafe fields. Prefer a sanitized per-action summary list if needed.
+- Add a registry tool such as `evaluate_runtime_policy_hook(...)` or an equivalent name consistent with local style.
+- The tool must be read-only: no durable state mutation, no filesystem writes, no tool execution, no shell/git/browser/network/plugin calls.
+- Inputs should support at least:
+  - `hook`: lifecycle point, with support for at least `pre_tool`, `pre_shell`, `pre_git`, `before_commit`, `post_test`, `before_handoff`.
+  - `action`: optional short action/tool name.
+  - `category`: optional permission/category label such as `task`, `shell`, `git`, `file`, `network`, `plugin`, `model`, `test`.
+  - `risk`: optional risk label such as `read`, `write`, `destructive`, `external_send`, `high`.
+  - `reason`: optional human reason string, but do not echo raw reason text in output.
+- Return a bounded JSON object with safe fields such as:
+  - `hook`
+  - `action`
+  - `category`
+  - `risk`
+  - `decision`: one of `allow`, `confirm`, `block`
+  - `requires_confirmation`: bool
+  - `blocked`: bool
+  - `reason_label`: bounded label, not raw user text
+  - `reason_present`: bool
+  - `policy_version`
+  - `matched_rules`: bounded list of safe rule labels
+- Initial policy can be simple and conservative:
+  - read-like actions generally `allow`
+  - write/high-risk/destructive/external-send actions generally `confirm`
+  - unsupported/unknown hooks or clearly destructive git/shell categories can `block` or return bounded validation errors, whichever fits current style best
+  - `before_commit` should require confirmation for write/high-risk commit-like actions
+- Output must not leak raw `reason`, prompts, shell command strings, env/request strings, file contents, workspace paths, secrets, or arbitrary unbounded inputs.
+- Keep implementation small and local to the registry/toolkit area that already handles permissions if possible.
+- Add focused unit tests in `tests/test_durable_workers.py` or a more appropriate existing test file.
 
 ## Tests
 
-Add focused unit tests in `tests/test_durable_workers.py`, covering at least:
+Add tests covering at least:
 
-- Tick with `record_event=True` and retry executed records a `scheduler_decision` event with safe retry action metadata and aggregate counts.
-- Tick with retry skipped for missing capacity records safe skip reason metadata.
-- Tick/loop with `record_event=False` records no scheduler decision event.
-- Loop with retry executed records bounded per-tick/action metadata or equivalent aggregate retry metadata.
-- Safety/no-leak: event payload does not contain task goal, steps, failure_reason sentinel, shell/env/request strings, workspace path, or secrets.
-- Compatibility: existing scheduler tick/loop/run-once behavior and evals still pass.
+- Known read/pre_tool policy returns `allow` and no confirmation.
+- Known write/pre_tool or before_commit policy returns `confirm` / `requires_confirmation=True`.
+- Clearly destructive shell/git/high-risk action returns `block` or `confirm` according to your chosen conservative policy, with safe `reason_label`.
+- Unknown/bad hook validation is bounded and deterministic.
+- `reason_present=True` when reason is passed, but raw reason sentinel is not present in output.
+- Safety/no-leak for shell/env/request/workspace/secret-like sentinels.
+- Read-only/no mutation: durable task/worker/event state counts are unchanged by evaluation.
+- Compatibility: existing registry permission/approval behavior still works.
 
 Run:
 
 ```text
-python3 -m unittest tests.test_durable_workers.WorkerLifecycleSchedulerTickTests tests.test_durable_workers.WorkerLifecycleSchedulerLoopTests
 python3 -m unittest tests.test_durable_workers
-python3 -m unittest tests.test_durable_workers tests.test_workspace tests.test_workspace_extra tests.test_mini_agent
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
 ## Boundaries
 
+- Do not enforce the policy yet; this is evaluator/scaffold only.
+- Do not alter existing confirmation behavior unless a test exposes a real compatibility bug.
 - Do not edit `agent_tasks/B_TASK.md` or `agent_tasks/B_DONE.md`.
 - Do not edit `CODEX_TERMINAL_HANDOFF.md`.
 - Do not edit `designs/`.
@@ -71,6 +96,6 @@ agent_tasks/notify_codex.sh A
 
 ## Notes
 
-- TASK-098 eval coverage is already committed on main.
-- Keep implementation scoped to scheduler decision event metadata and focused tests.
-- If you find existing scheduler event metadata is already sufficient, add tests proving it and explain that in A_DONE.md rather than changing runtime.
+- Keep the public API additive and bounded.
+- Prefer rule labels over raw input echoing.
+- This task should make future policy enforcement easier, but it should not attempt to build the whole hook kernel in one pass.

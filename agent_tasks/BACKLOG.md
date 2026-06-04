@@ -6,6 +6,11 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-101: Runtime policy hook evaluator v1
+- 分配给: Claude A
+- 目标: 新增最小只读 runtime policy hook evaluator，用统一、安全、可追踪的 decision 结构描述 pre-tool/pre-shell/pre-git/before-commit 等 hook 点会允许、要求确认或阻止哪些动作，为后续 policy kernel 打基础。
+- 状态: assigned
+
 ## 已完成
 
 ### TASK-100: Deterministic eval coverage for scheduler retry decision event metadata v1 ✅
