@@ -4,22 +4,25 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+## 进行中
+
 ### TASK-104: Deterministic eval coverage for runtime policy hook event recording v1
+- 分配给: Claude B
 - 优先级: high
 - 预计: 1-2 小时
-- 依赖: TASK-103
+- 依赖: TASK-103 ✅
 - 目标: 为 TASK-103 的 runtime policy hook event recording 增加 deterministic offline eval coverage，验证事件 safe metadata、no-leak、read/write mutation boundaries 和 compatibility。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_durable_workers`；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent`；`git diff --check`。
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 9 hook/policy kernel + Priority 1 durable trace schema。
-
-## 进行中
-
-### TASK-103: Runtime policy hook evaluation event recording v1
-- 分配给: Claude A
-- 目标: 在不改变 `evaluate_runtime_policy_hook` read-only 行为的前提下，新增最小可追踪 runtime policy hook decision/event recording 能力，把 safe bounded policy decision metadata 写入 durable event log。
 - 状态: assigned
 
 ## 已完成
+
+### TASK-103: Runtime policy hook evaluation event recording v1 ✅
+- 完成者: Claude A；Codex PM 补强 linkage sanitizer 和 registry permission 风险级别
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_durable_workers` 635 tests OK；`python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent` 311 tests OK；`python3 evals/run_evals.py` 373 passed；`git diff --check` OK；manual linkage no-leak probe OK。
+- 内容: 新增 `POLICY_HOOK_EVALUATION` durable event type 和显式 `record_runtime_policy_hook_evaluation` registry tool；复用 read-only evaluator core logic，成功 supported hook 只写一条 bounded safe policy decision event；保留 `evaluate_runtime_policy_hook` read-only/no-mutation；输出和事件仅含 safe action/decision/reason label/matched rules/policy version/normalized hook/category/risk/linkage metadata；unsupported hook bounded error/no event/no raw leak；不做 enforcement、不自动记录普通工具执行、不 mutation task/worker。
 
 ### TASK-102: Deterministic eval coverage for runtime policy hook evaluator v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补齐 env-like action 和 workspace path action no-leak eval 断言

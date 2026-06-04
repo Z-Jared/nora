@@ -8293,5 +8293,238 @@ class RuntimePolicyHookEvaluatorTests(unittest.TestCase):
         self.assertEqual(parsed["decision"], "confirm")
 
 
+class RuntimePolicyHookRecordingTests(unittest.TestCase):
+    """Tests for record_runtime_policy_hook_evaluation (TASK-103)."""
+
+    SECRET_SENTINEL = "POLICY_RECORD_SECRET_XYZ"
+    SHELL_SENTINEL = "rm -rf /important"
+    ENV_SENTINEL = "DATABASE_URL=secret123"
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+        self.db = NoraDB(self.root / "test.db")
+        self.registry = build_default_registry(
+            db=self.db, workspace_root=self.root, confirm_action=lambda _: True,
+        )
+        self.event_store = self.registry.durable_event_store
+
+    def tearDown(self):
+        self.db.close()
+        self.tmpdir.cleanup()
+
+    def _call_record(self, **kwargs):
+        result = self.registry.call("record_runtime_policy_hook_evaluation", **kwargs)
+        return json.loads(result)
+
+    def _get_policy_events(self):
+        return self.event_store.list_events(event_type="policy_hook_evaluation")
+
+    # --- Successful recording ---
+
+    def test_successful_recording_creates_one_event(self):
+        before = len(self._get_policy_events())
+        self._call_record(hook="pre_tool", risk="read")
+        after = self._get_policy_events()
+        self.assertEqual(len(after), before + 1)
+
+    def test_event_id_queryable(self):
+        r = self._call_record(hook="pre_tool", risk="read")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNotNone(event)
+        self.assertEqual(event.event_type, "policy_hook_evaluation")
+
+    def test_event_payload_has_decision_fields(self):
+        r = self._call_record(hook="pre_tool", risk="read")
+        event = self.event_store.get_event(r["event_id"])
+        payload = event.payload
+        self.assertEqual(payload["hook"], "pre_tool")
+        self.assertEqual(payload["decision"], "allow")
+        self.assertEqual(payload["risk"], "read")
+        self.assertIn("matched_rules", payload)
+        self.assertIn("policy_version", payload)
+
+    def test_output_has_event_id_and_type(self):
+        r = self._call_record(hook="pre_tool", risk="read")
+        self.assertIn("event_id", r)
+        self.assertEqual(r["event_type"], "policy_hook_evaluation")
+
+    def test_output_has_decision_fields(self):
+        r = self._call_record(hook="pre_tool", risk="read")
+        for field in ["hook", "action", "action_label", "action_present",
+                       "category", "risk", "decision", "requires_confirmation",
+                       "blocked", "reason_label", "reason_present",
+                       "policy_version", "matched_rules"]:
+            self.assertIn(field, r)
+
+    # --- Decision propagation ---
+
+    def test_write_confirm_recorded(self):
+        r = self._call_record(hook="pre_tool", risk="write")
+        self.assertEqual(r["decision"], "confirm")
+        self.assertTrue(r["requires_confirmation"])
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.payload["decision"], "confirm")
+
+    def test_destructive_block_recorded(self):
+        r = self._call_record(hook="pre_shell", risk="destructive")
+        self.assertEqual(r["decision"], "block")
+        self.assertTrue(r["blocked"])
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.payload["decision"], "block")
+
+    # --- Reason no-leak ---
+
+    def test_raw_reason_not_in_output_or_event(self):
+        r = self._call_record(hook="pre_tool", risk="read", reason=self.SECRET_SENTINEL)
+        output_str = json.dumps(r)
+        self.assertNotIn(self.SECRET_SENTINEL, output_str)
+        self.assertTrue(r["reason_present"])
+        event = self.event_store.get_event(r["event_id"])
+        event_str = json.dumps(event.payload)
+        self.assertNotIn(self.SECRET_SENTINEL, event_str)
+        self.assertTrue(event.payload["reason_present"])
+
+    # --- Action sanitization in output and event ---
+
+    def test_secret_action_redacted_in_output_and_event(self):
+        r = self._call_record(hook="pre_tool", risk="read", action=self.SECRET_SENTINEL)
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(r))
+        self.assertEqual(r["action_label"], "redacted")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertNotIn(self.SECRET_SENTINEL, json.dumps(event.payload))
+        self.assertEqual(event.payload["action_label"], "redacted")
+
+    def test_shell_action_redacted_in_output_and_event(self):
+        r = self._call_record(hook="pre_shell", risk="write", action=self.SHELL_SENTINEL)
+        self.assertNotIn(self.SHELL_SENTINEL, json.dumps(r))
+        event = self.event_store.get_event(r["event_id"])
+        self.assertNotIn(self.SHELL_SENTINEL, json.dumps(event.payload))
+
+    def test_env_action_redacted_in_output_and_event(self):
+        r = self._call_record(hook="pre_tool", risk="read", action=self.ENV_SENTINEL)
+        self.assertNotIn(self.ENV_SENTINEL, json.dumps(r))
+        event = self.event_store.get_event(r["event_id"])
+        self.assertNotIn(self.ENV_SENTINEL, json.dumps(event.payload))
+
+    def test_path_action_redacted_in_output_and_event(self):
+        path = str(self.root / "secret.txt")
+        r = self._call_record(hook="pre_tool", risk="read", action=path)
+        self.assertNotIn(path, json.dumps(r))
+        event = self.event_store.get_event(r["event_id"])
+        self.assertNotIn(path, json.dumps(event.payload))
+
+    def test_safe_action_preserved_in_output_and_event(self):
+        r = self._call_record(hook="pre_tool", risk="read", action="read_file")
+        self.assertEqual(r["action"], "read_file")
+        self.assertEqual(r["action_label"], "safe")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.payload["action"], "read_file")
+
+    # --- Unsupported hook ---
+
+    def test_unsupported_hook_returns_error_no_event(self):
+        before = len(self._get_policy_events())
+        r = self._call_record(hook="SECRET_HOOK_XYZ")
+        self.assertIn("error", r)
+        self.assertEqual(r["error"], "unsupported_hook")
+        self.assertNotIn("SECRET_HOOK_XYZ", json.dumps(r))
+        after = self._get_policy_events()
+        self.assertEqual(len(after), before)
+
+    # --- Linkage fields ---
+
+    def test_task_id_linkage(self):
+        r = self._call_record(hook="pre_tool", risk="read", task_id="task_123")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.task_id, "task_123")
+
+    def test_worker_id_linkage(self):
+        r = self._call_record(hook="pre_tool", risk="read", worker_id="worker_456")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.worker_id, "worker_456")
+
+    def test_session_id_in_payload(self):
+        r = self._call_record(hook="pre_tool", risk="read", session_id="sess_789")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertEqual(event.payload["session_id"], "sess_789")
+
+    def test_unsafe_task_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", task_id="TASK_SECRET_XYZ")
+        output_str = json.dumps(r)
+        self.assertNotIn("TASK_SECRET_XYZ", output_str)
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.task_id)
+
+    def test_unsafe_worker_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", worker_id="WORKER_SECRET_XYZ")
+        output_str = json.dumps(r)
+        self.assertNotIn("WORKER_SECRET_XYZ", output_str)
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.worker_id)
+
+    def test_unsafe_session_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", session_id="SESSION_SECRET_XYZ")
+        output_str = json.dumps(r)
+        self.assertNotIn("SESSION_SECRET_XYZ", output_str)
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.payload["session_id"])
+
+    def test_path_task_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", task_id="/var/secret/task")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.task_id)
+
+    def test_shell_worker_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", worker_id="rm -rf /")
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.worker_id)
+
+    def test_long_session_id_sanitized(self):
+        r = self._call_record(hook="pre_tool", risk="read", session_id="x" * 200)
+        event = self.event_store.get_event(r["event_id"])
+        self.assertIsNone(event.payload["session_id"])
+
+    # --- Read-only evaluator unchanged ---
+
+    def test_evaluator_creates_no_events(self):
+        before = len(self.event_store.list_events())
+        self.registry.call("evaluate_runtime_policy_hook", hook="pre_tool", risk="read")
+        after = len(self.event_store.list_events())
+        self.assertEqual(before, after)
+
+    # --- No task/worker mutation ---
+
+    def test_no_task_mutation(self):
+        self.registry.call("register_worker", worker_id="wf")
+        task = json.loads(self.registry.call("create_durable_task", goal="g", steps="s"))
+        before_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self._call_record(hook="pre_tool", risk="write")
+        after_tasks = json.loads(self.registry.call("list_durable_tasks"))
+        self.assertEqual(before_tasks, after_tasks)
+
+    def test_no_worker_mutation(self):
+        self.registry.call("register_worker", worker_id="wf")
+        before = json.loads(self.registry.call("list_workers"))
+        self._call_record(hook="pre_shell", risk="read")
+        after = json.loads(self.registry.call("list_workers"))
+        self.assertEqual(before, after)
+
+    # --- Compatibility ---
+
+    def test_registry_permissions_still_work(self):
+        result = self.registry.call("list_tool_permissions")
+        self.assertIsInstance(result, str)
+        self.assertIn("record_runtime_policy_hook_evaluation", result)
+        # Recording tool uses risk="write" since it mutates durable events
+        self.assertIn("write", result.split("record_runtime_policy_hook_evaluation")[-1].split("\n")[0])
+
+    def test_confirm_action_still_works(self):
+        reg = build_default_registry(db=self.db, workspace_root=self.root, confirm_action=lambda _: False)
+        result = reg.call("record_runtime_policy_hook_evaluation", hook="pre_tool", risk="write")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["decision"], "confirm")
+
+
 if __name__ == "__main__":
     unittest.main()

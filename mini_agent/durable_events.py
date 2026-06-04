@@ -55,6 +55,7 @@ RECOVERY_PLANNED = "recovery_planned"
 WORKSPACE_PREPARED = "workspace_prepared"
 WORKSPACE_RELEASED = "workspace_released"
 SCHEDULER_DECISION = "scheduler_decision"
+POLICY_HOOK_EVALUATION = "policy_hook_evaluation"
 
 VALID_EVENT_TYPES = {
     TASK_CREATED,
@@ -97,6 +98,7 @@ VALID_EVENT_TYPES = {
     WORKSPACE_PREPARED,
     WORKSPACE_RELEASED,
     SCHEDULER_DECISION,
+    POLICY_HOOK_EVALUATION,
 }
 
 _DURABLE_EVENTS_TABLE = """

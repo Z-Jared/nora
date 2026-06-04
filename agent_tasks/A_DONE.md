@@ -1,58 +1,58 @@
-# Claude A Completion Report
+# TASK-103 Completion Report
 
-Owner: Claude A
-Task: TASK-101 - Runtime policy hook evaluator v1
-Status: ready for Codex review
+**Task:** Runtime policy hook evaluation event recording v1
+**Status:** DONE (PM review fix applied)
+**Agent:** Claude A
+**Date:** 2026-06-04
 
-## Summary
+## Changes Made
 
-Added a minimal read-only `evaluate_runtime_policy_hook` registry tool for bounded policy decisions at lifecycle hooks such as `pre_tool`, `pre_shell`, `pre_git`, `post_test`, `before_handoff`, and `before_commit`.
+### `mini_agent/durable_events.py`
+- Added `POLICY_HOOK_EVALUATION = "policy_hook_evaluation"` event type constant
+- Added to `VALID_EVENT_TYPES` set
 
-The tool returns safe metadata only: normalized hook/category/risk, `decision`, `requires_confirmation`, `blocked`, bounded `reason_label`, `reason_present`, `policy_version`, `matched_rules`, and sanitized action fields.
+### `mini_agent/toolkits/registry_builder.py`
+- Imported `POLICY_HOOK_EVALUATION` from `durable_events`
+- Extracted evaluation logic from `_evaluate_runtime_policy_hook_json` into reusable `_evaluate_policy_hook_core()` helper
+- Refactored `_evaluate_runtime_policy_hook_json` to use the helper (read-only behavior unchanged)
+- Added `_sanitize_linkage_id()` helper: validates linkage IDs (task_id, worker_id, session_id) against path separators, shell metachar, secret-like tokens, all-caps tokens, length >80; returns None for unsafe values
+- Added `record_runtime_policy_hook_evaluation` registry tool:
+  - Accepts same inputs as evaluator: `hook`, `action`, `category`, `risk`, `reason`
+  - Plus optional linkage fields: `task_id`, `worker_id`, `session_id`
+  - Calls `_evaluate_policy_hook_core` for decision logic (no duplication)
+  - Sanitizes all linkage IDs via `_sanitize_linkage_id()` before writing to event
+  - Records exactly one `POLICY_HOOK_EVALUATION` durable event on supported hooks
+  - Returns bounded JSON with event id, decision metadata, sanitized action, matched rules
+  - Unsupported hooks return bounded error, no event created
+  - Raw reason/secret/path/shell/env never stored or returned
+  - Permission: `risk="write"` (writes durable events, consistent with other mutation tools)
 
-## Diff
+### PM Review Fix (2026-06-04)
+- **Problem:** `task_id`, `worker_id`, `session_id` were stored raw in events, leaking secret sentinels
+- **Fix:** Added `_sanitize_linkage_id()` sanitizer; applied to all three linkage fields before event storage
+- **Permission:** Changed from `risk="read"` to `risk="write"` since tool mutates durable events
+- **Tests added:** 6 new tests for unsafe linkage sentinels (secret, path, shell, long values)
 
-```text
- mini_agent/toolkits/registry_builder.py | 159 ++++++++++++++++++++
- tests/test_durable_workers.py           | 259 ++++++++++++++++++++++++++++++++
- 2 files changed, 418 insertions(+)
+### `tests/test_durable_workers.py`
+- Added `RuntimePolicyHookRecordingTests` class with 31 tests:
+  - Successful recording creates exactly one event
+  - Event id is queryable via `get_event`
+  - Event payload includes decision fields and matched rules
+  - Raw reason sentinel not in output or event payload
+  - Secret-like, shell, env, path actions redacted in output and event
+  - Safe action preserved
+  - Unsupported hook returns error, no event, no raw leak
+  - Safe task/worker/session linkage preserved
+  - Unsafe linkage sentinels (SECRET_XYZ, path, shell, long) sanitized to None
+  - `evaluate_runtime_policy_hook` remains read-only (no events)
+  - No task/worker mutation from recording
+  - Registry permissions (write) and confirm_action compatibility
+
+## Verification
+
 ```
-
-## Implementation Notes
-
-- The evaluator is additive and read-only: no durable state mutation, no filesystem writes, no shell/git/browser/network/plugin calls, and no enforcement wiring.
-- Supported hooks are bounded to `pre_tool`, `post_tool`, `pre_edit`, `post_edit`, `pre_shell`, `pre_git`, `pre_plugin_call`, `post_test`, `before_handoff`, and `before_commit`.
-- Initial policy is conservative: destructive and external-send risks block; high risk confirms; shell/git write confirms; before-commit write/high/destructive confirms; read-like actions allow.
-- Raw `reason` is never echoed; output only includes `reason_present`.
-- Raw unknown hook values are never echoed; unsupported hooks return `error: unsupported_hook` plus a bounded valid hook list.
-- `action` is sanitized: paths, shell-like strings, env-like values, secret-like tokens, all-caps secret-looking labels, whitespace-heavy strings, metacharacters, and long values are redacted. Simple safe labels such as `read_file` are preserved.
-
-## Tests
-
-```text
-python3 -m unittest tests.test_durable_workers.RuntimePolicyHookEvaluatorTests
-37 tests, OK
-
-python3 -m unittest tests.test_durable_workers
-607 tests, OK
-
-python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent
-311 tests, OK
-
-python3 evals/run_evals.py
-364 passed, 0 failed
-
-git diff --check
-clean
+python3 -m unittest tests.test_durable_workers        → 635 passed
+python3 -m unittest tests.test_durable_events tests.test_config tests.test_mini_agent → 311 passed
+python3 evals/run_evals.py                            → 373 passed
+git diff --check                                      → clean
 ```
-
-## PM Review Notes
-
-- PM reproduced the prior no-leak failure with `action="SECRET_VALUE_XYZ"` and confirmed it now redacts.
-- PM also checked path action, shell command action, env-like action, unknown hook sentinel, and safe action label behavior.
-- Claude A's final CCB job ended with provider/API output noise before refreshing this report, so Codex PM integrated the already-present A worktree diff and wrote this accurate completion report from the inspected changes and verification results.
-
-## Boundaries
-
-- No commit or push performed by worker.
-- No edits to `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.

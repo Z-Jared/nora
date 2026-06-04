@@ -42,6 +42,7 @@ from mini_agent.durable_events import (
     FILE_EDIT_ERROR,
     FILE_EDIT_FINISHED,
     FILE_EDIT_STARTED,
+    POLICY_HOOK_EVALUATION,
     RECOVERY_PLANNED,
     REVIEW_GATE_FINISHED,
     SCHEDULER_DECISION,
@@ -4679,42 +4680,69 @@ def build_default_registry(
         "read", "write", "destructive", "external_send", "high", "unknown",
     })
 
-    def _evaluate_runtime_policy_hook_json(
+    # --- Runtime policy hook evaluator (TASK-101) and event recorder (TASK-103) ---
+
+    _POLICY_VERSION = "v1"
+
+    def _sanitize_linkage_id(value: str) -> Optional[str]:
+        """Sanitize a linkage ID (task_id, worker_id, session_id).
+        Returns None for unsafe/empty values. Only allows short safe ASCII labels.
+        """
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > 80:
+            return None
+        import re as _re
+        # Reject path separators, shell metachar, whitespace, =, secret-like tokens
+        _UNSAFE_LINKAGE = _re.compile(r'[/\\=\s`$;|&<>{}()\[\]!#~]')
+        _SECRET_LIKE = _re.compile(r'(?i)(SECRET|TOKEN|API_?KEY|PASSWORD|DATABASE_URL|CREDENTIAL|AUTH)')
+        _ALL_CAPS = _re.compile(r'^[A-Z][A-Z0-9_]{7,}$')
+        if _UNSAFE_LINKAGE.search(value):
+            return None
+        if _SECRET_LIKE.search(value):
+            return None
+        if _ALL_CAPS.match(value):
+            return None
+        return value
+
+    def _evaluate_policy_hook_core(
         hook: str,
         action: str = "",
         category: str = "",
         risk: str = "",
         reason: str = "",
-    ) -> str:
-        # Validate inputs
+    ) -> dict:
+        """Core policy evaluation logic. Returns a dict with decision metadata.
+        Returns {"error": ...} for unsupported hooks.
+        """
         if not isinstance(hook, str) or not hook.strip():
-            return _json.dumps({"error": "hook 必须是非空字符串"}, ensure_ascii=False)
+            return {"error": "hook 必须是非空字符串"}
         hook = hook.strip()
         if hook not in _VALID_HOOKS:
-            return _json.dumps({
-                "error": "unsupported_hook",
-                "valid_hooks": sorted(_VALID_HOOKS),
-            }, ensure_ascii=False)
+            return {"error": "unsupported_hook", "valid_hooks": sorted(_VALID_HOOKS)}
 
         raw_action = (action or "").strip()
         category = (category or "").strip().lower() or "unknown"
         risk = (risk or "").strip().lower() or "unknown"
         reason_present = bool(reason and reason.strip())
 
-        # Sanitize action: only keep safe labels, redact paths/commands/secrets
+        # Sanitize action
         import re as _re
         _UNSAFE_ACTION = _re.compile(r'[/\\=\s`$;|&<>{}()\[\]!#~]')
         _SECRET_LIKE = _re.compile(r'(?i)(SECRET|TOKEN|API_?KEY|PASSWORD|DATABASE_URL|CREDENTIAL|AUTH)')
         _ALL_CAPS = _re.compile(r'^[A-Z][A-Z0-9_]{7,}$')
         if not raw_action:
-            action = ""
+            sanitized_action = ""
             action_label = "empty"
         elif (_UNSAFE_ACTION.search(raw_action) or len(raw_action) > 60
               or _SECRET_LIKE.search(raw_action) or _ALL_CAPS.match(raw_action)):
-            action = ""
+            sanitized_action = ""
             action_label = "redacted"
         else:
-            action = raw_action[:60]
+            sanitized_action = raw_action[:60]
             action_label = "safe"
 
         # Normalize category/risk
@@ -4730,7 +4758,6 @@ def build_default_registry(
         reason_label = ""
         matched_rules = []
 
-        # Conservative policy rules
         if risk in ("destructive", "external_send"):
             decision = "block"
             blocked = True
@@ -4763,7 +4790,6 @@ def build_default_registry(
             decision = "allow"
             matched_rules.append("rule_read_allow")
         else:
-            # Default: allow for unknown/low-risk, confirm for write
             if risk == "write":
                 decision = "confirm"
                 requires_confirmation = True
@@ -4773,9 +4799,9 @@ def build_default_registry(
                 decision = "allow"
                 matched_rules.append("rule_default_allow")
 
-        return _json.dumps({
+        return {
             "hook": hook,
-            "action": action,
+            "action": sanitized_action,
             "action_label": action_label,
             "action_present": bool(raw_action),
             "category": category,
@@ -4787,7 +4813,17 @@ def build_default_registry(
             "reason_present": reason_present,
             "policy_version": _POLICY_VERSION,
             "matched_rules": matched_rules,
-        }, ensure_ascii=False)
+        }
+
+    def _evaluate_runtime_policy_hook_json(
+        hook: str,
+        action: str = "",
+        category: str = "",
+        risk: str = "",
+        reason: str = "",
+    ) -> str:
+        result = _evaluate_policy_hook_core(hook, action, category, risk, reason)
+        return _json.dumps(result, ensure_ascii=False)
 
     registry.register(
         "evaluate_runtime_policy_hook",
@@ -4820,6 +4856,114 @@ def build_default_registry(
             "required": ["hook"],
         },
         permission=ToolPermission(category="local", risk="read"),
+    )
+
+    def _record_runtime_policy_hook_evaluation_json(
+        hook: str,
+        action: str = "",
+        category: str = "",
+        risk: str = "",
+        reason: str = "",
+        task_id: str = "",
+        worker_id: str = "",
+        session_id: str = "",
+    ) -> str:
+        result = _evaluate_policy_hook_core(hook, action, category, risk, reason)
+        if "error" in result:
+            return _json.dumps(result, ensure_ascii=False)
+
+        # Sanitize linkage IDs
+        safe_task_id = _sanitize_linkage_id(task_id)
+        safe_worker_id = _sanitize_linkage_id(worker_id)
+        safe_session_id = _sanitize_linkage_id(session_id)
+
+        # Record exactly one durable event
+        event = durable_event_store.record(
+            event_type=POLICY_HOOK_EVALUATION,
+            task_id=safe_task_id,
+            worker_id=safe_worker_id,
+            summary=f"policy hook: {result['hook']} → {result['decision']}",
+            payload={
+                "hook": result["hook"],
+                "action": result["action"],
+                "action_label": result["action_label"],
+                "action_present": result["action_present"],
+                "category": result["category"],
+                "risk": result["risk"],
+                "decision": result["decision"],
+                "requires_confirmation": result["requires_confirmation"],
+                "blocked": result["blocked"],
+                "reason_label": result["reason_label"],
+                "reason_present": result["reason_present"],
+                "policy_version": result["policy_version"],
+                "matched_rules": result["matched_rules"],
+                "session_id": safe_session_id,
+            },
+            source="policy_engine",
+            severity="info",
+        )
+
+        return _json.dumps({
+            "event_id": event.event_id,
+            "event_type": event.event_type,
+            "hook": result["hook"],
+            "action": result["action"],
+            "action_label": result["action_label"],
+            "action_present": result["action_present"],
+            "category": result["category"],
+            "risk": result["risk"],
+            "decision": result["decision"],
+            "requires_confirmation": result["requires_confirmation"],
+            "blocked": result["blocked"],
+            "reason_label": result["reason_label"],
+            "reason_present": result["reason_present"],
+            "policy_version": result["policy_version"],
+            "matched_rules": result["matched_rules"],
+        }, ensure_ascii=False)
+
+    registry.register(
+        "record_runtime_policy_hook_evaluation",
+        "评估并记录生命周期 hook 策略决策事件。记录一条 durable event。",
+        _record_runtime_policy_hook_evaluation_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "hook": {
+                    "type": "string",
+                    "description": "生命周期 hook 点",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "可选的操作/工具名称",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "可选的权限类别",
+                },
+                "risk": {
+                    "type": "string",
+                    "description": "可选的风险级别",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "可选的人类可读原因（不会在输出中回显原文）",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "可选的关联任务 ID",
+                },
+                "worker_id": {
+                    "type": "string",
+                    "description": "可选的关联 worker ID",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "可选的会话 ID",
+                },
+            },
+            "required": ["hook"],
+        },
+        permission=ToolPermission(category="local", risk="write"),
     )
 
     return registry
