@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-127: Context compiler local skill catalog bridge v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-125/TASK-126
+- 分配: Claude A
+- 目标: 将 local skill manifest discovery 接入 ContextCompiler / registry `compile_context_pack`，允许通过项目相对 `skill_manifest_paths` 自动发现本地 skill manifests 并生成 bounded/untrusted Skill Context Preview。
+- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`mini_agent/context_compiler.py`；`mini_agent/skills.py`；`mini_agent/toolkits/registry_builder.py`
+
+### TASK-128: Deterministic eval coverage for context compiler local skill catalog bridge v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-127
+- 分配: Claude B
+- 目标: 为 TASK-127 增加 deterministic offline eval，覆盖 direct/compiler + registry compile_context_pack 的本地 skill manifest path 发现、排序、路径安全、malformed input、secret no-leak、read-only 和 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/context_compiler.py`
 
 ## 已完成
 
