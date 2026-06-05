@@ -4,30 +4,30 @@ Status: ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for TASK-133 CLI slash launcher/menu and startup welcome polish.
+Added deterministic offline eval coverage for TASK-136 CLI terminal UI polish.
 
-- Added 10 eval cases for exact `/` launcher menu structure, required commands, no model-call noise, no raw JSON, banner next-action hints, core info preservation, missing/configured key safety, hidden-reasoning marker absence, and secret/raw JSON leak prevention.
-- Codex PM strengthened the banner next-action assertion to require exact `/ 打开命令菜单`, `/wake`, and `/setup` hints.
-- Codex PM added explicit tempdir `env_path` isolation to configured-key evals so local `.env` cannot affect results.
+- Added 9 eval cases for terminal landing sections, task/worker summary sections, missing/configured key safety, exact normal and multiline lifecycle feedback, slash/blank/exit no lifecycle noise, plain-text command surfaces, exact recovery guidance, and no prompt/secret/hidden-reasoning leakage from lifecycle lines.
+- Used tempdir-isolated roots and explicit `env_path` for settings-sensitive evals.
+- Codex PM completed this eval-only patch directly in main because Claude B's CCB worktree still contained stale TASK-134 changes.
 - No runtime implementation files were changed.
 
 ## Diff
 
 ```text
-evals/run_evals.py | 218 +++++++++++++++++++++++++++++++++++++++++++++++++++++
-1 file changed, 218 insertions(+)
+evals/run_evals.py | 248 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+1 file changed, 248 insertions(+)
 ```
 
 ## Tests
 
 ```text
-python3 evals/run_evals.py -> 528 passed, 0 failed
-python3 -m unittest tests.test_cli -> 79 tests OK
-git diff --check -- evals/run_evals.py -> clean
+python3 evals/run_evals.py -> 537 passed, 0 failed
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent -> 225 tests OK
+git diff --check -> clean
 ```
 
 ## Notes
 
-- No push performed by worker.
-- Worktree synced to main commit `abce218` before eval work.
-- Known issues: none for TASK-134.
+- No push performed.
+- No runtime, CLI implementation, worker, scheduler, provider, or durable-state files were changed.
+- Known issues: Claude B's CCB workspace remains stale/dirty with prior TASK-134 eval work and should be resynced before assigning new B work.

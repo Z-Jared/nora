@@ -99,6 +99,16 @@ def main() -> int:
         EvalCase("banner_configured_key_no_leak", eval_banner_configured_key_no_leak),
         EvalCase("no_chain_of_thought_markers", eval_no_chain_of_thought_markers),
         EvalCase("no_secret_or_raw_json_leak", eval_no_secret_or_raw_json_leak),
+        # TASK-136: CLI terminal UI polish eval coverage
+        EvalCase("cli_terminal_landing_sections", eval_cli_terminal_landing_sections),
+        EvalCase("cli_terminal_landing_tasks_workers", eval_cli_terminal_landing_tasks_workers),
+        EvalCase("cli_terminal_landing_key_states_safe", eval_cli_terminal_landing_key_states_safe),
+        EvalCase("cli_terminal_lifecycle_normal_exact", eval_cli_terminal_lifecycle_normal_exact),
+        EvalCase("cli_terminal_lifecycle_multiline_exact", eval_cli_terminal_lifecycle_multiline_exact),
+        EvalCase("cli_terminal_lifecycle_non_model_no_noise", eval_cli_terminal_lifecycle_non_model_no_noise),
+        EvalCase("cli_terminal_surfaces_plain_text", eval_cli_terminal_surfaces_plain_text),
+        EvalCase("cli_terminal_recovery_guidance_exact", eval_cli_terminal_recovery_guidance_exact),
+        EvalCase("cli_terminal_lifecycle_no_prompt_or_reasoning_leak", eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -1300,6 +1310,244 @@ def eval_no_secret_or_raw_json_leak():
             assert "sk-leak-test-key-98765" not in output, f"secret leaked: {output[:100]}"
             assert not output.lstrip().startswith("{"), f"raw JSON: {output[:100]}"
             assert not output.lstrip().startswith("["), f"raw JSON array: {output[:100]}"
+
+
+# --- TASK-136: CLI terminal UI polish deterministic eval coverage ---
+
+def eval_cli_terminal_landing_sections():
+    """Startup banner has deterministic terminal landing sections and preserves core hints."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        for section in [
+            "─── Status ───",
+            "─── Workspace ───",
+            "─── Model ───",
+            "─── Tools ───",
+            "─── Next ───",
+        ]:
+            assert section in banner, f"missing landing section {section}: {banner[:500]}"
+        for exact in [
+            "✓ Nora ready",
+            "✓ 高风险工具需要确认",
+            "Workspace:",
+            "LLM:",
+            "API key: missing",
+            "Tools:",
+            "输入 / 查看命令菜单，输入 exit 或 quit 退出。",
+            "下一步: / 打开命令菜单；/wake 查看项目；/setup 检查配置",
+        ]:
+            assert exact in banner, f"missing landing text {exact}: {banner[:500]}"
+
+
+def eval_cli_terminal_landing_tasks_workers():
+    """Startup banner preserves task and worker state in dedicated sections when present."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        tasks = root / "agent_tasks"
+        tasks.mkdir()
+        (tasks / "BACKLOG.md").write_text(
+            "# Task Backlog\n\n## 进行中\n\n### TASK-900: CLI polish regression\n",
+            encoding="utf-8",
+        )
+        a_done = root / ".ccb" / "workspaces" / "claude-a" / "agent_tasks"
+        b_done = root / ".ccb" / "workspaces" / "claude-b" / "agent_tasks"
+        a_done.mkdir(parents=True)
+        b_done.mkdir(parents=True)
+        (a_done / "A_DONE.md").write_text("Status: ready for review\n", encoding="utf-8")
+        (b_done / "B_DONE.md").write_text("Status: done\n", encoding="utf-8")
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "─── Tasks ───" in banner, f"missing task section: {banner[:500]}"
+        assert "Active tasks: TASK-900" in banner, f"missing active task summary: {banner[:500]}"
+        assert "─── Workers ───" in banner, f"missing worker section: {banner[:500]}"
+        assert "Workers: claude-a: done, claude-b: done" in banner, f"missing worker state: {banner[:500]}"
+
+
+def eval_cli_terminal_landing_key_states_safe():
+    """Missing-key and configured-key landing states are explicit and do not leak secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        missing_settings = load_settings(env_path=root / ".missing.env", environ={})
+        missing_outputs = []
+        MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=missing_settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=missing_outputs.append,
+        ).run()
+        missing_banner = missing_outputs[0]
+        assert "API key: missing" in missing_banner, f"missing key state absent: {missing_banner[:500]}"
+        assert "sk-terminal-secret-12345" not in missing_banner, "unexpected fake secret in missing-key banner"
+
+        configured_settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-terminal-secret-12345",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        configured_outputs = []
+        MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=configured_settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=configured_outputs.append,
+        ).run()
+        configured_banner = configured_outputs[0]
+        assert "API key: configured" in configured_banner, f"configured state absent: {configured_banner[:500]}"
+        assert "openai-compatible" in configured_banner, f"provider missing: {configured_banner[:500]}"
+        assert "gpt-4.1-mini" in configured_banner, f"model missing: {configured_banner[:500]}"
+        assert "sk-terminal-secret-12345" not in configured_banner, "API key leaked in configured banner"
+
+
+def eval_cli_terminal_lifecycle_normal_exact():
+    """Normal prompt emits exact deterministic lifecycle feedback in order."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(
+        agent,
+        FakeCLIRegistry(),
+        input_func=_fake_input(["hello", "exit"]),
+        output_func=outputs.append,
+    )
+    cli.run()
+    assert agent.inputs == ["hello"], f"unexpected model inputs: {agent.inputs}"
+    accepted = outputs.index("✓ 已接收输入")
+    started = outputs.index("⏳ 正在调用模型...")
+    done = outputs.index("✓ 模型响应完成")
+    reply = next(index for index, output in enumerate(outputs) if "Agent: reply: hello" in output)
+    assert accepted < started < done < reply, f"lifecycle order wrong: {outputs}"
+
+
+def eval_cli_terminal_lifecycle_multiline_exact():
+    """Multiline input emits exact deterministic lifecycle feedback and preserves prompt content to agent."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(
+        agent,
+        FakeCLIRegistry(),
+        input_func=_fake_input(["<<<", "line1", "line2", ">>>", "exit"]),
+        output_func=outputs.append,
+    )
+    cli.run()
+    assert agent.inputs == ["line1\nline2"], f"unexpected multiline input: {agent.inputs}"
+    assert outputs.count("✓ 已接收输入") == 1, f"accepted status count wrong: {outputs}"
+    assert outputs.count("⏳ 正在调用模型...") == 1, f"start status count wrong: {outputs}"
+    assert outputs.count("✓ 模型响应完成") == 1, f"done status count wrong: {outputs}"
+
+
+def eval_cli_terminal_lifecycle_non_model_no_noise():
+    """Slash commands, blank input, and exits emit no lifecycle feedback."""
+    for inputs in [["/help", "exit"], ["/", "exit"], ["", "   ", "exit"], ["exit"], ["quit"]]:
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(
+            agent,
+            FakeCLIRegistry(),
+            input_func=_fake_input(inputs),
+            output_func=outputs.append,
+        )
+        cli.run()
+        full = "\n".join(outputs)
+        assert agent.inputs == [], f"non-model input called agent: {inputs} -> {agent.inputs}"
+        assert "✓ 已接收输入" not in full, f"accepted status leaked for {inputs}: {full[:300]}"
+        assert "正在调用模型" not in full, f"model start leaked for {inputs}: {full[:300]}"
+        assert "模型响应完成" not in full, f"model done leaked for {inputs}: {full[:300]}"
+
+
+def eval_cli_terminal_surfaces_plain_text():
+    """/, /setup, /model, /workers, and /help remain plain text rather than raw JSON."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+        for command in ["/", "/setup", "/model", "/workers", "/help"]:
+            output = cli.handle_slash_command(command)
+            assert output.strip(), f"{command} returned empty output"
+            assert not output.lstrip().startswith("{"), f"{command} returned raw JSON object: {output[:100]}"
+            assert not output.lstrip().startswith("["), f"{command} returned raw JSON array: {output[:100]}"
+            assert "```json" not in output.lower(), f"{command} exposes JSON block: {output[:200]}"
+
+
+def eval_cli_terminal_recovery_guidance_exact():
+    """Config and error recovery surfaces keep exact useful guidance strings."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
+        setup = cli.handle_slash_command("/setup")
+        assert "Nora Setup / Config" in setup, f"missing /setup surface: {setup[:500]}"
+        for exact in ["API key", "401 Unauthorized", "provider/model 不匹配"]:
+            assert exact in setup, f"missing recovery guidance {exact}: {setup[:500]}"
+        unknown = cli.handle_slash_command("/unknown")
+        assert "输入 / 查看命令菜单" in unknown, f"unknown slash lacks / launcher guidance: {unknown}"
+        response = cli._append_recovery_hint("Error: 401 Unauthorized - invalid API key")
+        assert "API key" in response and "检查" in response, f"missing 401 recovery hint: {response}"
+
+
+def eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak():
+    """Lifecycle feedback does not reveal raw prompts, secrets, raw payloads, or hidden reasoning markers."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-terminal-no-leak-999",
+                "LLM_MODEL": "gpt-4.1-mini",
+            },
+        )
+        outputs = []
+        prompt = "please hide sk-prompt-secret-888 and chain_of_thought"
+        class NonEchoAgent(FakeCLIAgent):
+            def run(self, text):
+                self.inputs.append(text)
+                return "reply: ok"
+
+        cli = MiniAgentCLI(
+            NonEchoAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input([prompt, "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        status_lines = [
+            output for output in outputs
+            if "已接收输入" in output or "正在调用模型" in output or "模型响应完成" in output
+        ]
+        assert status_lines == ["✓ 已接收输入", "⏳ 正在调用模型...", "✓ 模型响应完成"], \
+            f"unexpected lifecycle lines: {status_lines}"
+        lifecycle_text = "\n".join(status_lines).lower()
+        for forbidden in ["sk-terminal-no-leak-999", "sk-prompt-secret-888", "chain_of_thought", "hidden_reasoning", "{", "["]:
+            assert forbidden not in lifecycle_text, f"lifecycle leaked {forbidden}: {status_lines}"
 
 
 def eval_notes_round_trip():

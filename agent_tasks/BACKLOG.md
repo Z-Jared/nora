@@ -4,24 +4,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-136: CLI terminal UI polish deterministic eval coverage
-- 架构层: Agent OS Dashboard / Eval-Review System
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-135 implementation surface
-- 分配: Claude B after TASK-135 integration
-- 目标: 为 TASK-135 增加 deterministic offline eval，覆盖启动 landing panel section、模型调用 lifecycle feedback、slash/blank/exit no lifecycle noise、plain-text/no raw JSON、config/error recovery guidance、安全 no secret/no hidden reasoning。
-- 非目标: 不实现 runtime，不修改 CLI 行为，不调用网络/模型/CCB。
-- 安全边界: tempdir 隔离、explicit env_path、no secret/no raw prompt/no hidden reasoning/no raw JSON。
-- 持久证据: `evals/run_evals.py` eval cases；`agent_tasks/B_DONE.md` 完成报告。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
-- 参考: `mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard / Eval-Review System。
+暂无
 
 ## 进行中
 
 暂无
 
 ## 已完成
+
+### TASK-136: CLI terminal UI polish deterministic eval coverage ✅
+- 完成者: Codex PM 直接完成 eval-only patch；Claude B CCB worktree 因 stale TASK-134 残留未继续使用
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 537 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 225 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-135 terminal UI polish 增加 9 个 deterministic offline eval，覆盖启动 landing panel 固定分区、task/worker section、missing/configured key no-leak、normal/multiline exact lifecycle order、slash/blank/exit no lifecycle noise、`/`/`/setup`/`/model`/`/workers`/`/help` plain-text no raw JSON、`API key`/`401 Unauthorized`/`provider/model 不匹配` recovery guidance，以及 lifecycle lines 不泄漏 raw prompt/API key/hidden reasoning/raw payload。
 
 ### TASK-135: CLI terminal UI polish v3 ✅
 - 完成者: Claude A；Codex PM 手动集成并修正 deterministic 输出和测试契约

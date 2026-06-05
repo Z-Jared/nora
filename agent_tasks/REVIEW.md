@@ -356,3 +356,41 @@ Claude A implemented the requested CLI terminal UI polish direction. Codex PM ma
 ## Verdict
 
 Approved for integration. TASK-136 should now add deterministic offline eval coverage against this integrated TASK-135 surface.
+
+---
+
+# TASK-136 Review: CLI terminal UI polish deterministic eval coverage
+
+**Status: APPROVED**
+
+## Summary
+
+Codex PM completed the TASK-136 eval-only patch directly on main. Claude B's CCB worktree still contained stale TASK-134 eval work, so assigning there would have tripped the worker dirty-worktree safety rule instead of producing useful coverage.
+
+## Coverage
+
+- Startup landing panel requires deterministic sections: `Status`, `Workspace`, `Model`, `Tools`, and `Next`.
+- Banner task/worker summaries are covered when `agent_tasks/BACKLOG.md` and `.ccb/workspaces/*/DONE` files exist.
+- Missing-key and configured-key banner states are explicit and do not leak fake API keys.
+- Normal prompt lifecycle output is exact and ordered: `✓ 已接收输入`, `⏳ 正在调用模型...`, `✓ 模型响应完成`, then agent reply.
+- Multiline input emits the same exact lifecycle once and passes joined input to the agent.
+- Slash commands, blank input, `exit`, and `quit` emit no lifecycle noise and do not call the agent.
+- `/`, `/setup`, `/model`, `/workers`, and `/help` remain plain text and do not start with raw JSON.
+- Recovery guidance keeps exact useful substrings: `API key`, `401 Unauthorized`, `provider/model 不匹配`, and unknown slash guidance back to `/`.
+- Lifecycle lines do not leak raw prompt text, fake API keys, raw JSON payload markers, or hidden-reasoning markers.
+
+## Review Notes
+
+- No runtime implementation files were modified.
+- Settings-sensitive evals use tempdir roots and explicit `env_path`.
+- Grep found no new `or True` or tautological TASK-136 assertions.
+
+## Evidence
+
+- `python3 evals/run_evals.py` → 537 passed, 0 failed
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 225 tests OK
+- `git diff --check` → clean
+
+## Verdict
+
+Approved for integration. This closes the CLI terminal UI polish implementation + deterministic eval coverage pair for TASK-135/TASK-136.
