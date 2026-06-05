@@ -84,7 +84,7 @@ class MiniAgentCLI:
             lines.append(worker_summary)
         # Common commands hint
         lines.append("")
-        lines.append("常用命令: /wake  /model  /workers  /status  /test  /help")
+        lines.append("常用命令: /wake  /setup  /model  /workers  /status  /test  /help")
         return "\n".join(lines)
 
     def _task_backlog_summary(self) -> str:
@@ -261,6 +261,76 @@ class MiniAgentCLI:
         lines.append("  模型不存在 → 检查模型名称拼写和 provider 匹配")
         return "\n".join(lines)
 
+    def _setup_info(self) -> str:
+        """Show setup/config guidance without leaking key values."""
+        lines = ["=== Nora Setup / Config ===", ""]
+
+        if self.settings:
+            provider = getattr(self.settings, "provider", "")
+            model = getattr(self.settings, "model", "")
+            base_url = getattr(self.settings, "base_url", "")
+            api_key = getattr(self.settings, "api_key", "")
+            timeout = getattr(self.settings, "timeout_seconds", 60)
+
+            lines.append("当前配置:")
+            lines.append(f"  Provider: {provider or '(not set)'}")
+            lines.append(f"  Model: {model or '(not set)'}")
+            lines.append(f"  Base URL: {base_url or '(not set)'}")
+            lines.append(f"  API key: {'configured' if api_key else 'missing'}")
+            lines.append(f"  Timeout: {timeout}s")
+            lines.append(f"  Enabled: {'yes' if getattr(self.settings, 'is_llm_enabled', False) else 'no'}")
+        else:
+            lines.append("当前配置: Settings 未加载")
+            provider = ""
+
+        lines.append("")
+        lines.append("各 Provider 配置键:")
+        lines.append("  openai-compatible:")
+        lines.append("    LLM_PROVIDER=openai-compatible")
+        lines.append("    LLM_API_KEY=your-key  (或 OPENAI_API_KEY)")
+        lines.append("    LLM_MODEL=gpt-4.1-mini")
+        lines.append("    LLM_BASE_URL=https://api.openai.com/v1  (可选)")
+        lines.append("")
+        lines.append("  anthropic:")
+        lines.append("    LLM_PROVIDER=anthropic")
+        lines.append("    ANTHROPIC_API_KEY=your-key")
+        lines.append("    ANTHROPIC_MODEL=claude-sonnet-4-5")
+        lines.append("    ANTHROPIC_BASE_URL=https://api.anthropic.com/v1  (可选)")
+        lines.append("")
+        lines.append("  gemini:")
+        lines.append("    LLM_PROVIDER=gemini")
+        lines.append("    GEMINI_API_KEY=your-key")
+        lines.append("    GEMINI_MODEL=gemini-2.5-pro")
+        lines.append("    GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta  (可选)")
+
+        lines.append("")
+        lines.append("诊断:")
+        if not provider:
+            lines.append("  LLM_PROVIDER 未设置，默认 openai-compatible")
+        if self.settings:
+            api_key = getattr(self.settings, "api_key", "")
+            model = getattr(self.settings, "model", "")
+            if not api_key:
+                env_vars = required_env_vars(provider)
+                lines.append(f"  API key 缺失。需设置: {', '.join(env_vars)}")
+                alternatives = env_alternatives(provider)
+                for primary, alt in alternatives.items():
+                    lines.append(f"    {primary} 也可用 {alt} 替代")
+            if not model:
+                lines.append("  LLM_MODEL 未设置，将使用默认模型")
+
+        lines.append("")
+        lines.append("常见问题排查:")
+        lines.append("  401 Unauthorized → API key 无效或过期，请检查 .env")
+        lines.append("  403 Forbidden → key 无权限，请检查 key 的访问范围")
+        lines.append("  连接超时 → 检查网络或 base URL 是否正确")
+        lines.append("  模型不存在 → 检查模型名称拼写和 provider 匹配")
+        lines.append("  provider/model 不匹配 → openai-compatible 用 gpt-*，anthropic 用 claude-*，gemini 用 gemini-*")
+        lines.append("  端口占用 → 关闭占用端口的进程或更换端口")
+        lines.append("  频率超限 → 稍后重试或升级 API 计划")
+
+        return "\n".join(lines)
+
     def _workers_status(self) -> str:
         """Show Claude A/B / CCB worker status from project files."""
         lines = ["=== Nora Worker Status ===", ""]
@@ -374,11 +444,15 @@ class MiniAgentCLI:
             multiline = self.read_multiline(text)
             if not multiline:
                 return None
+            self.output_func("⏳ 正在调用模型...")
             response = self._format_agent_response(self.agent.run(multiline))
+            self.output_func("✓ 模型响应完成")
             return self._append_recovery_hint(response)
         if text.startswith("/"):
             return self.handle_slash_command(text)
+        self.output_func("⏳ 正在调用模型...")
         response = self._format_agent_response(self.agent.run(text))
+        self.output_func("✓ 模型响应完成")
         return self._append_recovery_hint(response)
 
     def _append_recovery_hint(self, response: str) -> str:
@@ -416,6 +490,8 @@ class MiniAgentCLI:
             return self._wake_panel()
         if command == "/model":
             return self._model_info()
+        if command in ("/setup", "/config"):
+            return self._setup_info()
         if command == "/workers":
             return self._workers_status()
         if command == "/tools":
@@ -744,6 +820,7 @@ class MiniAgentCLI:
                 "",
                 "推荐开始:",
                 "  /wake - 项目状态面板（新窗口推荐）",
+                "  /setup - 完整配置检查与排查指南",
                 "  /model - 查看当前模型配置和诊断",
                 "  /workers - 查看 worker 状态",
                 "  /status - 查看当前 Git 状态",
@@ -753,6 +830,7 @@ class MiniAgentCLI:
                 "状态与工具:",
                 "  /help - 查看命令帮助",
                 "  /wake - 项目状态面板",
+                "  /setup - 完整配置检查（/config 别名）",
                 "  /model - 模型配置和诊断",
                 "  /workers - worker 状态",
                 "  /tools - 查看工具列表",

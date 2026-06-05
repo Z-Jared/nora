@@ -1,37 +1,37 @@
-# TASK-129 Completion Report
+# Codex A Completion Report
 
 Status: ready for Codex review
 
 ## Summary
 
-Implemented CLI wake/setup/status UX v1: `/wake`, `/model`, `/workers` commands, improved startup banner, and error recovery hints.
+Implemented TASK-131: CLI setup/config and response-status UX v1.
 
-## Changes
+- Added `/setup` with `/config` alias for read-only provider/model/base URL/API-key presence guidance.
+- Added safe provider-specific `.env` key guidance for openai-compatible, anthropic, and gemini without printing key values.
+- Added common setup recovery guidance for missing key, 401, provider/model mismatch, timeout, port conflicts, and rate limits.
+- Added deterministic model-call status lines before and after normal prompt and multiline `agent.run(...)` execution.
+- Kept slash commands, blank input, and exit free of model-call status noise.
+- Added focused CLI unit coverage for setup/config output, secret no-leak, status output, and no-status cases.
 
-### `mini_agent/cli.py`
-- **`/wake`**: Reads project context from `docs/knowledge/PROJECT_WAKEUP.md`, `DECISIONS.md`, `CHAT_INDEX.md`, `AGENTS.md`, git status, and `agent_tasks/BACKLOG.md`. Outputs a concise project wake panel. Shows recovery guidance for missing files or non-project directories.
-- **Startup banner**: Now shows workspace, branch, provider/model, API key presence (without leaking), task/backlog summary, worker state summary, and common commands hint.
-- **`/model`**: Shows current provider/model/base URL/key presence. Diagnoses missing provider/model/key with concrete next steps. Includes error recovery hints for common failures.
-- **`/workers`**: Shows Claude A/B / CCB worker status from `.ccb/` project files. Includes current tasks and whether A_DONE/B_DONE appear ready for PM review. Handles missing `.ccb` or task files gracefully.
-- **Error recovery hints**: Added `_error_recovery_hint()` for common provider/config failures (401/unauthorized, missing key, port in use, connection timeout, unsupported provider, model not found, rate limit, quota/billing). Hints are appended to agent responses automatically.
-- **Bug fix (PM review)**: `_worker_state_summary()` used `agent.split('-')[0].upper()` which gave `CLAUDE_DONE.md` instead of `A_DONE.md`. Fixed to `agent.split('-')[-1].upper()`.
-- **Cleanup (PM review)**: Removed unused top-level `import json` and `import os` (both only used in local imports or not at all).
+## Diff
 
-### `tests/test_cli.py`
-- **`CLIWakeCommandTests`**: 5 tests for `/wake` (basic, knowledge files, missing files, no-git hint, with git).
-- **`CLIModelCommandTests`**: 6 tests for `/model` (no settings, provider info, key missing, key configured, no leak, recovery hints).
-- **`CLIWorkersCommandTests`**: 4 tests for `/workers` (no .ccb, shows status, shows done status, banner detects done file).
-- **`CLIErrorRecoveryTests`**: 8 tests for error recovery hints (401, timeout, model not found, rate limit, missing key, port in use, no hint for normal, agent response integration).
-
-## Verification
-
+```text
+mini_agent/cli.py |  80 +++++++++++++++++++++++++++++++++++-
+tests/test_cli.py | 121 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2 files changed, 200 insertions(+), 1 deletion(-)
 ```
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent → 207 tests OK
-python3 evals/run_evals.py → 497 passed, 0 failed
-git diff --check → clean
+
+## Tests
+
+```text
+python3 -m unittest tests.test_cli -> 74 tests OK
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent -> 220 tests OK
+python3 evals/run_evals.py -> 508 passed, 0 failed
+git diff --check -> clean
 ```
 
 ## Notes
 
-- No push performed.
-- No edits to `evals/run_evals.py`, `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
+- No push performed by worker.
+- Codex PM manually ported only the TASK-131 increment because Claude A's CCB worktree was stale at `67a1145` and its raw diff included already-merged TASK-129 changes.
+- Known issues: TASK-132 eval coverage still needs to be implemented by Codex B against the integrated TASK-131 surface.

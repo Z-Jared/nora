@@ -695,6 +695,127 @@ class CLIWorkersCommandTests(unittest.TestCase):
             self.assertIn("claude-a: done", banner)
 
 
+class CLISetupCommandTests(unittest.TestCase):
+    """Tests for /setup and /config commands (TASK-131)."""
+
+    def test_setup_no_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertIn("Nora Setup / Config", result)
+            self.assertIn("openai-compatible", result)
+            self.assertIn("anthropic", result)
+            self.assertIn("gemini", result)
+
+    def test_config_is_alias_for_setup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
+            setup_result = cli.handle_slash_command("/setup")
+            config_result = cli.handle_slash_command("/config")
+            self.assertEqual(setup_result, config_result)
+
+    def test_setup_shows_provider_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertIn("ANTHROPIC_API_KEY", result)
+            self.assertIn("ANTHROPIC_MODEL", result)
+            self.assertIn("ANTHROPIC_BASE_URL", result)
+
+    def test_setup_shows_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertIn("API key 缺失", result)
+            self.assertIn("LLM_API_KEY", result)
+
+    def test_setup_no_key_leak(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini", api_key="sk-secret123")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertNotIn("sk-secret123", result)
+
+    def test_setup_shows_error_recovery(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertIn("401 Unauthorized", result)
+            self.assertIn("provider/model 不匹配", result)
+            self.assertIn("端口占用", result)
+
+    def test_setup_shows_mismatch_guidance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/setup")
+            self.assertIn("provider/model 不匹配", result)
+
+    def test_help_includes_setup(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        result = cli._help()
+        self.assertIn("/setup", result)
+        self.assertIn("/config", result)
+
+
+class CLIResponseStatusTests(unittest.TestCase):
+    """Tests for response status lines (TASK-131)."""
+
+    def test_model_call_shows_status_lines(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        status_outputs = [o for o in outputs if "正在调用模型" in o]
+        done_outputs = [o for o in outputs if "模型响应完成" in o]
+        self.assertTrue(len(status_outputs) >= 1)
+        self.assertTrue(len(done_outputs) >= 1)
+
+    def test_slash_command_no_status_noise(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["/help", "exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        status_outputs = [o for o in outputs if "正在调用模型" in o]
+        self.assertEqual(len(status_outputs), 0)
+
+    def test_blank_input_no_status_noise(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["", "   ", "exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        status_outputs = [o for o in outputs if "正在调用模型" in o]
+        self.assertEqual(len(status_outputs), 0)
+
+    def test_exit_no_status_noise(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        status_outputs = [o for o in outputs if "正在调用模型" in o]
+        self.assertEqual(len(status_outputs), 0)
+
+    def test_multiline_input_shows_status(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["<<<", "line1", ">>>", "exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        status_outputs = [o for o in outputs if "正在调用模型" in o]
+        self.assertTrue(len(status_outputs) >= 1)
+
+
 class CLIErrorRecoveryTests(unittest.TestCase):
     """Tests for error recovery hints (TASK-129)."""
 

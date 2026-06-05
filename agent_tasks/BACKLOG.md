@@ -8,25 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-131: CLI setup/config and response-status UX v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-129/TASK-130
-- 分配: Claude A
-- 目标: 增加只读 `/setup`/`/config` 配置引导，展示 provider/model/base URL/key presence、安全 `.env` 示例和常见配置错误恢复；为普通 prompt 增加 deterministic 响应状态输出，让 CLI 不再像突然冒出回复。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: 用户 CLI UX 反馈；`mini_agent/cli.py`；`mini_agent/settings.py`；`tests/test_cli.py`
-
 ### TASK-132: CLI setup/status UX deterministic eval coverage
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-131 implementation surface
 - 分配: Claude B
+- 状态: waiting for TASK-131 commit on main; B should resume after PM dispatch
 - 目标: 为 TASK-131 增加 deterministic offline eval，覆盖 `/setup`/`/config` provider/env guidance、no secret leak、401/missing-key/provider-model mismatch guidance、普通 prompt 状态输出、slash/blank/exit 无状态噪声、plain-text/no raw JSON。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
 - 参考: `evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
 
 ## 已完成
+
+### TASK-131: CLI setup/config and response-status UX v1 ✅
+- 完成者: Claude A；Codex PM 因 A CCB worktree 落后在 `67a1145`，手动移植 TASK-131 增量到当前主线，避免带入已合并的 TASK-129 旧 diff
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_cli` 74 tests OK；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 220 tests OK；`python3 evals/run_evals.py` 508 passed；`git diff --check` OK。
+- 内容: 新增只读 `/setup` 与 `/config` alias，展示 provider/model/base URL/API key presence、openai-compatible/anthropic/gemini 安全 `.env` 键示例和 missing-key/401/provider-model mismatch 等配置恢复提示；普通 prompt 与 multiline 在 `agent.run(...)` 前后输出 deterministic 状态行，让 CLI 有模型调用反馈；slash/blank/exit 不输出状态噪声；不泄漏 API key、token 或 hidden reasoning。
 
 ### TASK-130: CLI UX smoke/eval coverage ✅
 - 完成者: Claude B；按 PM 反馈在 TASK-129 合入后重做 eval，覆盖真实 `/wake`、`/model`、`/workers` CLI 表面

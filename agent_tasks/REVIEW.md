@@ -172,3 +172,39 @@ Claude B revised TASK-130 after TASK-129 was integrated at `aa3c084`. The final 
 ## Verdict
 
 Approved for integration. This closes the CLI UX implementation + deterministic eval coverage pair for TASK-129/TASK-130.
+
+---
+
+# TASK-131 Review: CLI setup/config and response-status UX v1
+
+**Status: APPROVED**
+
+## Summary
+
+Claude A implemented the requested CLI setup/config guidance and deterministic response-status output. Codex PM did not apply A's raw worktree diff because the CCB worktree was stale at `67a1145` and included already-integrated TASK-129 changes; only the TASK-131 increment was manually ported onto current main.
+
+## Coverage
+
+- `/setup` and `/config` alias show provider/model/base URL/API-key presence without leaking key values.
+- Setup guidance lists safe placeholder env keys for openai-compatible, anthropic, and gemini.
+- Diagnostics cover missing keys, 401/403, timeout, port conflicts, rate limits, and provider/model mismatch.
+- Normal prompt and multiline input emit deterministic model-call started/completed status lines around `agent.run(...)`.
+- Slash commands, blank input, and exit do not emit model-call status noise.
+- Help text and startup common commands include `/setup`.
+
+## Review Notes
+
+- The status output is intentionally phase-level only and does not expose hidden reasoning or chain-of-thought.
+- The implementation stays inside CLI/test scope and does not change model provider semantics, runtime scheduling, or eval harness behavior.
+- Existing TASK-129 `/wake`, `/model`, `/workers`, and recovery-hint behavior remains compatible.
+
+## Evidence
+
+- `python3 -m unittest tests.test_cli` → 74 tests OK
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 220 tests OK
+- `python3 evals/run_evals.py` → 508 passed, 0 failed
+- `git diff --check` → clean
+
+## Verdict
+
+Approved for integration. TASK-132 remains open and should now be rerun by Codex B against the integrated TASK-131 surface.
