@@ -5,9 +5,9 @@ Status: assigned
 
 ## Task
 
-TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1.
+TASK-120: Deterministic eval coverage for skill-aware capability routing v1.
 
-Add deterministic offline eval coverage for the just-landed TASK-115/TASK-116 surfaces: `inspect_skill_manifest` and `route_capability_request`. This task should prove read-only behavior, safe bounded outputs, secret no-leak, exact permission metadata, and compatibility without changing runtime behavior.
+Add deterministic offline eval coverage specifically for TASK-117's `skill_manifest_jsons` skill-aware capability routing path. Existing TASK-118 evals cover the earlier plugin-only router and skill manifest inspection; this task should prove the new skill routing bridge behavior.
 
 ## Scope
 
@@ -21,17 +21,15 @@ Add deterministic offline eval coverage for the just-landed TASK-115/TASK-116 su
 
 Add focused eval cases covering:
 
-- `inspect_skill_manifest` registry tool permission is exactly `ToolPermission(category="local", risk="read")`.
-- Valid skill manifest produces bounded safe metadata.
-- Malformed skill manifest JSON / non-object / invalid list fields produce bounded safe errors or warnings.
-- Secret-like skill manifest values do not leak through direct or registry inspection.
-- Skill manifest inspection does not mutate durable tasks, workers, or events.
-- `route_capability_request` registry tool permission is exactly `ToolPermission(category="local", risk="read")`.
-- Valid plugin manifest routing returns deterministic candidate metadata, risk level, confirmation flag, and expected deliverables.
-- Malformed outer plugin manifest JSON and malformed individual manifests produce bounded safe errors.
-- Secret-like plugin manifest name/version do not leak through routing.
-- Capability routing does not mutate durable tasks, workers, or events.
-- Existing plugin manifest / MCP / durable task eval compatibility still passes.
+- Registry `route_capability_request` accepts `skill_manifest_jsons` and returns `candidate_skills`.
+- Skill-only routing returns matched domains/capabilities and expected skill deliverables.
+- Combined skill + plugin routing returns both `candidate_skills` and `candidate_plugins`.
+- `required_plugins` and `risk_boundaries` aggregate as deterministic deduplicated top-level fields.
+- High-risk skill boundary elevates top-level `risk_level` to `high`.
+- Malformed outer skill manifest JSON and malformed individual skill manifests return bounded safe errors.
+- Secret-like skill manifest `name`, `version`, list items, or unknown fields do not leak through routing.
+- Skill-aware routing does not mutate durable tasks, workers, or events.
+- Existing plugin-only routing eval compatibility still passes.
 
 ## Verification
 
@@ -55,6 +53,6 @@ Do not commit or push.
 
 ## Notes
 
-- Claude A is working independently on TASK-117 skill-aware capability routing bridge. Avoid editing `mini_agent/capability_router.py` unless you uncover a blocker.
+- Claude A is independently implementing TASK-119 skill manifest catalog summary. Avoid editing `mini_agent/skills.py` unless you uncover a blocker.
 - Do not edit `agent_tasks/A_TASK.md`, `agent_tasks/A_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
 - If task scope conflicts with uncommitted work, stop and write the conflict in `agent_tasks/B_DONE.md`.

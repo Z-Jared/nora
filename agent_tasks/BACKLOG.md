@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-119: Skill manifest catalog summary v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-116/TASK-117 ✅
+- 分配: Claude A
+- 目标: 增加只读 skill manifest catalog summary surface，可对一组 skill manifest metadata 做安全汇总，返回 bounded skills 列表、domains/capabilities/workflows/deliverables/required_plugins/risk_boundaries/evals 聚合和 validation stats；不安装、加载或执行 skill。
+- 验证: `python3 -m unittest tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6 skill registry；`docs/knowledge/DECISIONS.md` 2026-06-03 skill manifests 决策。
+
+### TASK-120: Deterministic eval coverage for skill-aware capability routing v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-117 ✅
+- 分配: Claude B
+- 目标: 为 TASK-117 的 `skill_manifest_jsons` skill-aware routing path 增加 deterministic offline eval 覆盖，证明 candidate_skills、required_plugins/risk_boundaries/deliverables 聚合、high-risk boundary、malformed skill input、secret no-leak、read-only 和 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6/7/11；最近提交 `d1fc814`。
 
 ## 已完成
 
