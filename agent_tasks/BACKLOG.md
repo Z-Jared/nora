@@ -8,16 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-130: CLI UX smoke/eval coverage
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-129 implementation surface
-- 分配: Claude B
-- 目标: 为 CLI UX 增加 deterministic smoke/eval coverage，覆盖无模型、有模型、错误 key、非项目目录启动、`/wake`、`/model`、`/workers`、Markdown 输出和错误恢复提示；不要扩展后端 runtime。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
-- 参考: 用户 CLI UX 方向；`evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
+暂无
 
 ## 已完成
+
+### TASK-130: CLI UX smoke/eval coverage ✅
+- 完成者: Claude B；按 PM 反馈在 TASK-129 合入后重做 eval，覆盖真实 `/wake`、`/model`、`/workers` CLI 表面
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 508 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 207 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-129 CLI workbench UX 增加 11 个 deterministic offline eval，覆盖启动页 no-model/key-missing/common commands、configured provider/model no secret leak、worker DONE summary、`/wake` 项目面板与非项目恢复提示、`/model` provider/model/base URL/key-safe diagnostics、`/workers` A/B task/DONE/PM inbox 状态、401 recovery hint 自动附加，以及 CLI 输出保持 Markdown/plain-text、无 raw JSON；无 runtime 行为变更。
 
 ### TASK-129: CLI wake/setup/status UX v1 ✅
 - 完成者: Claude A；按 PM 初审反馈修复启动页 worker DONE 文件识别 bug 并补回归测试

@@ -65,6 +65,18 @@ def main() -> int:
         EvalCase("cli_slash_status_uses_registry", eval_cli_slash_status_uses_registry),
         EvalCase("cli_doctor_reports_runtime_status", eval_cli_doctor_reports_runtime_status),
         EvalCase("cli_multiline_input", eval_cli_multiline_input),
+        # TASK-130: CLI UX smoke/eval coverage
+        EvalCase("cli_startup_banner_no_model", eval_cli_startup_banner_no_model),
+        EvalCase("cli_startup_banner_with_model", eval_cli_startup_banner_with_model),
+        EvalCase("cli_startup_banner_worker_summary", eval_cli_startup_banner_worker_summary),
+        EvalCase("cli_wake_project_panel", eval_cli_wake_project_panel),
+        EvalCase("cli_wake_non_project_guidance", eval_cli_wake_non_project_guidance),
+        EvalCase("cli_model_provider_diagnostics", eval_cli_model_provider_diagnostics),
+        EvalCase("cli_model_no_settings", eval_cli_model_no_settings),
+        EvalCase("cli_workers_ccb_status", eval_cli_workers_ccb_status),
+        EvalCase("cli_workers_no_ccb", eval_cli_workers_no_ccb),
+        EvalCase("cli_error_recovery_hint", eval_cli_error_recovery_hint),
+        EvalCase("cli_markdown_no_raw_json", eval_cli_markdown_no_raw_json),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -676,6 +688,241 @@ def eval_cli_multiline_input():
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["<<<", "line1", "line2", ">>>", "exit"]), output_func=lambda output: None)
     cli.run()
     assert agent.inputs == ["line1\nline2"]
+
+
+# --- TASK-130: CLI UX smoke/eval coverage ---
+
+def eval_cli_startup_banner_no_model():
+    """Startup banner shows API key missing and common commands when no key is configured."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "Nora 已启动" in banner, f"missing startup message: {banner}"
+        assert "API key: missing" in banner, f"missing API key indication: {banner}"
+        assert "Workspace:" in banner, f"missing workspace: {banner}"
+        assert "/wake" in banner, f"missing /wake hint: {banner}"
+        assert "/model" in banner, f"missing /model hint: {banner}"
+        assert "/workers" in banner, f"missing /workers hint: {banner}"
+
+
+def eval_cli_startup_banner_with_model():
+    """Startup banner shows configured provider/model with no API key leak."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-test-secret-key-12345",
+            "LLM_MODEL": "gpt-4.1-mini",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
+        })
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "openai-compatible" in banner, f"missing provider: {banner}"
+        assert "gpt-4.1-mini" in banner, f"missing model: {banner}"
+        assert "API key: configured" in banner, f"missing key configured: {banner}"
+        assert "sk-test-secret-key-12345" not in banner, "API key leaked in banner"
+
+
+def eval_cli_startup_banner_worker_summary():
+    """Startup banner detects .ccb worker DONE files as done."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        # Create A_DONE.md with "ready for review"
+        a_done = root / ".ccb" / "workspaces" / "claude-a" / "agent_tasks"
+        a_done.mkdir(parents=True)
+        (a_done / "A_DONE.md").write_text("# Claude A Done\n\nStatus: ready for review\n", encoding="utf-8")
+        # Create B_DONE.md with "done"
+        b_done = root / ".ccb" / "workspaces" / "claude-b" / "agent_tasks"
+        b_done.mkdir(parents=True)
+        (b_done / "B_DONE.md").write_text("# Claude B Done\n\nStatus: done\n", encoding="utf-8")
+
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "claude-a: done" in banner, f"missing claude-a status: {banner}"
+        assert "claude-b: done" in banner, f"missing claude-b status: {banner}"
+
+
+def eval_cli_wake_project_panel():
+    """Wake panel includes workspace, branch, knowledge file status, and task summary."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        # Set up git repo
+        import subprocess
+        subprocess.run(["git", "init"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=root, capture_output=True)
+
+        # Create knowledge files
+        docs = root / "docs" / "knowledge"
+        docs.mkdir(parents=True)
+        (docs / "PROJECT_WAKEUP.md").write_text("# Wakeup\n", encoding="utf-8")
+        (docs / "DECISIONS.md").write_text("# Decisions\n", encoding="utf-8")
+
+        # Create AGENTS.md
+        (root / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+        settings = load_settings(environ={})
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+        ).handle_slash_command("/wake")
+        assert "Nora Project Wake" in result, f"missing wake header: {result[:300]}"
+        assert "Workspace:" in result, f"missing workspace: {result[:300]}"
+        assert "Branch:" in result, f"missing branch: {result[:300]}"
+        assert "✓ PROJECT_WAKEUP.md" in result, f"missing PROJECT_WAKEUP status: {result[:300]}"
+        assert "✓ DECISIONS.md" in result, f"missing DECISIONS status: {result[:300]}"
+        assert "✓ AGENTS.md" in result, f"missing AGENTS status: {result[:300]}"
+        assert "Active tasks:" in result, f"missing task summary: {result[:300]}"
+
+
+def eval_cli_wake_non_project_guidance():
+    """Wake panel gives recovery guidance outside a git project."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={})
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=Path(tmpdir),
+        ).handle_slash_command("/wake")
+        assert "Nora Project Wake" in result, f"missing wake header: {result[:300]}"
+        assert "not in git repo" in result.lower() or "not in git" in result.lower() or "(not in git repo)" in result, f"missing non-git guidance: {result[:300]}"
+        assert "提示:" in result, f"missing recovery hints: {result[:300]}"
+
+
+def eval_cli_model_provider_diagnostics():
+    """Model command shows provider/model/base URL/key-safe diagnostics."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-fake-secret-abc",
+            "LLM_MODEL": "gpt-4.1",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
+        })
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=Path(tmpdir),
+        ).handle_slash_command("/model")
+        assert "Nora Model Configuration" in result, f"missing header: {result[:300]}"
+        assert "Provider: openai-compatible" in result, f"missing provider: {result[:300]}"
+        assert "Model: gpt-4.1" in result, f"missing model: {result[:300]}"
+        assert "API key: configured" in result, f"missing key status: {result[:300]}"
+        assert "sk-fake-secret-abc" not in result, "API key leaked in /model"
+
+
+def eval_cli_model_no_settings():
+    """Model command with no settings shows setup guidance."""
+    result = MiniAgentCLI(
+        FakeCLIAgent(), FakeCLIRegistry(),
+    ).handle_slash_command("/model")
+    assert "Nora Model Configuration" in result, f"missing header: {result[:300]}"
+    assert "Settings 未配置" in result or "未设置" in result, f"missing no-settings message: {result[:300]}"
+    assert "LLM_API_KEY" in result, f"missing setup hint: {result[:300]}"
+
+
+def eval_cli_workers_ccb_status():
+    """Workers command shows A/B task and DONE status with ready-for-PM-review detection."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        # Set up .ccb structure
+        a_ws = root / ".ccb" / "workspaces" / "claude-a" / "agent_tasks"
+        a_ws.mkdir(parents=True)
+        (a_ws / "A_TASK.md").write_text("# TASK-129: CLI wake/setup/status UX v1\n", encoding="utf-8")
+        (a_ws / "A_DONE.md").write_text("# Claude A Done\nStatus: ready for review\n", encoding="utf-8")
+
+        b_ws = root / ".ccb" / "workspaces" / "claude-b" / "agent_tasks"
+        b_ws.mkdir(parents=True)
+        (b_ws / "B_TASK.md").write_text("# TASK-130: CLI UX smoke/eval coverage\n", encoding="utf-8")
+        # No B_DONE.md -> not done yet
+
+        # Create PM inbox
+        (root / "agent_tasks").mkdir(parents=True)
+        (root / "agent_tasks" / "PM_INBOX.md").write_text("# PM Inbox\n", encoding="utf-8")
+
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=root,
+        ).handle_slash_command("/workers")
+        assert "Nora Worker Status" in result, f"missing header: {result[:300]}"
+        assert "claude-a" in result, f"missing claude-a: {result[:300]}"
+        assert "claude-b" in result, f"missing claude-b: {result[:300]}"
+        assert "TASK-129" in result, f"missing task ID for A: {result[:300]}"
+        assert "ready for PM review" in result, f"missing ready-for-review: {result[:300]}"
+        assert "未完成" in result, f"missing not-done for B: {result[:300]}"
+        assert "PM inbox:" in result, f"missing PM inbox: {result[:300]}"
+
+
+def eval_cli_workers_no_ccb():
+    """Workers command handles missing .ccb directory gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+        ).handle_slash_command("/workers")
+        assert "Nora Worker Status" in result, f"missing header: {result[:300]}"
+        assert "未找到 .ccb/" in result, f"missing no-ccb message: {result[:300]}"
+
+
+def eval_cli_error_recovery_hint():
+    """Agent responses with 401/unauthorized get recovery hint appended."""
+    class ErrorAgent:
+        def run(self, text):
+            return "Error: 401 Unauthorized - invalid API key"
+        def run_autonomous(self, goal, max_steps=None):
+            return ""
+    outputs = []
+    cli = MiniAgentCLI(
+        ErrorAgent(), FakeCLIRegistry(),
+        input_func=_fake_input(["test query", "exit"]),
+        output_func=outputs.append,
+    )
+    cli.run()
+    full = "\n".join(outputs)
+    assert "401 Unauthorized" in full, f"missing error: {full}"
+    assert "API key" in full and "检查" in full, f"missing recovery hint: {full}"
+
+
+def eval_cli_markdown_no_raw_json():
+    """CLI surfaces remain human-readable Markdown/plain-text, no raw JSON."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        import subprocess
+        subprocess.run(["git", "init"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=root, capture_output=True)
+
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+        for cmd in ["/wake", "/model", "/workers", "/help", "/doctor"]:
+            result = cli.handle_slash_command(cmd)
+            assert not result.lstrip().startswith("{"), f"{cmd} returned raw JSON: {result[:100]}"
+            assert not result.lstrip().startswith("["), f"{cmd} returned raw JSON array: {result[:100]}"
 
 
 def eval_notes_round_trip():

@@ -136,3 +136,39 @@ Claude A implemented the first CLI workbench UX pass: `/wake`, `/model`, `/worke
 ## Verdict
 
 Approved for integration. TASK-130 remains open because the current B eval patch was authored before TASK-129 was integrated and does not yet cover `/wake`, `/model`, or `/workers`.
+
+---
+
+# TASK-130 Review: CLI UX smoke/eval coverage
+
+**Status: APPROVED**
+
+## Summary
+
+Claude B revised TASK-130 after TASK-129 was integrated at `aa3c084`. The final eval patch covers the real CLI workbench surface rather than the older `/doctor`-only surface.
+
+## Coverage
+
+- Startup banner: no-model/key-missing diagnostics, common command hints, configured provider/model, no key leakage.
+- Worker summary: startup banner detects `.ccb/workspaces/claude-a/agent_tasks/A_DONE.md` and `B_DONE.md` as done.
+- `/wake`: project panel with workspace, branch, knowledge file status and active task summary; non-project recovery guidance.
+- `/model`: provider/model/base URL/key-safe diagnostics and no-settings setup hint.
+- `/workers`: CCB A/B task and DONE status, ready-for-PM-review detection, missing `.ccb` recovery.
+- Error recovery: 401/unauthorized model failure appends API-key recovery hint to normal agent responses.
+- Output structure: `/wake`, `/model`, `/workers`, `/help`, `/doctor` stay plain text/Markdown and do not emit raw JSON.
+
+## PM Review Notes
+
+- B worktree was based on `aa3c084 Add CLI wake and worker status UX`.
+- No runtime implementation files were modified.
+- Grep found no new `or True` / tautological TASK-130 assertions.
+
+## Evidence
+
+- `python3 evals/run_evals.py` → 508 passed, 0 failed
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 207 tests OK
+- `git diff --check` → clean
+
+## Verdict
+
+Approved for integration. This closes the CLI UX implementation + deterministic eval coverage pair for TASK-129/TASK-130.
