@@ -1,6 +1,6 @@
 # Nora Project Wakeup
 
-Last updated: 2026-06-03
+Last updated: 2026-06-05
 
 ## Mission
 
@@ -25,6 +25,8 @@ Use `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` as the architecture north star.
 - A skill registry, plugin runtime, and capability router for professional and industry workflows.
 - Multi-agent execution with isolated workers, review gates, and deterministic handoff artifacts.
 - Auditable local-first operation where every model call, tool call, file edit, test, approval, and error is traceable.
+
+Use `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` as the framework contract for task design. PM-generated tasks must name the architecture layer they affect, include non-goals, safety boundaries, durable evidence, verification, and references to the relevant architecture section.
 
 ## Current Operating Model
 
@@ -63,6 +65,7 @@ Do not assume this state is still current. Verify before editing.
 - Enterprise Nora should optimize for governed agent runtime needs: RBAC, SSO, audit logs, policy controls, isolated worker pools, internal connectors, approvals, cost metrics, reliability, and compliance.
 - The 2026-06-03 frontier scan pushes Nora's next runtime priorities toward scheduler automation, hook/policy kernel, graph-shaped traces, plugin manifests, skill manifests, capability routing, Agent OS dashboard, end-to-end workflow evals, and minimal model routing.
 - Nora's orchestration complexity now justifies comparing LangChain, LangGraph, and OpenAI Agents SDK as references, but the default remains Nora's custom local-first durable runtime unless a specific subsystem clearly outgrows it.
+- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` is now the PM task-generation contract. Future PM loops should issue tasks according to its architecture layers, core objects, workflow, and review checklist.
 - Every daily frontier scan should answer how Codex, Claude Code, MCP, OpenAI Agents SDK, and new research should change Nora's roadmap.
 - The project needs a persistent knowledge base because new Codex windows do not automatically inherit prior conversation context.
 
@@ -109,18 +112,20 @@ Initial skill pack priority should stay close to Nora's strengths: software engi
 
 1. Read this file.
 2. Read `docs/knowledge/DECISIONS.md`.
-3. Read `docs/knowledge/CHAT_INDEX.md`.
-4. Read `CLAUDE.md` or `AGENTS.md` depending on the runtime.
-5. Read the assigned task file under `agent_tasks/`.
-6. Run `git status --short --branch`.
-7. Continue from the current task, not from stale memory.
+3. Read `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`.
+4. Read `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`.
+5. Read `docs/knowledge/CHAT_INDEX.md`.
+6. Read `CLAUDE.md` or `AGENTS.md` depending on the runtime.
+7. Read the assigned task file under `agent_tasks/`.
+8. Run `git status --short --branch`.
+9. Continue from the current task, not from stale memory.
 
 ## New Codex Window Wakeup Prompt
 
 Paste this into a new Codex window opened in `/Users/mac/Documents/agent`:
 
 ```text
-你现在接手 Nora/Agent 项目。请先读取 docs/knowledge/PROJECT_WAKEUP.md、docs/knowledge/DECISIONS.md、docs/knowledge/CHAT_INDEX.md、AGENTS.md，然后运行 git status --short --branch 和 git log --oneline --decorate -8。不要凭空假设旧聊天上下文，以项目知识库和当前仓库状态为准。
+你现在接手 Nora/Agent 项目。请先读取 docs/knowledge/PROJECT_WAKEUP.md、docs/knowledge/DECISIONS.md、docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md、docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md、docs/knowledge/CHAT_INDEX.md、AGENTS.md，然后运行 git status --short --branch 和 git log --oneline --decorate -8。不要凭空假设旧聊天上下文，以项目知识库和当前仓库状态为准。
 ```
 
 If Codex Desktop shows no old conversation list, do not treat that as memory loss. The durable project memory is this repository's `docs/knowledge/` directory plus the desktop snapshot folder:

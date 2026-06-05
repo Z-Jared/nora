@@ -7,13 +7,15 @@ New Codex or Claude Code windows should read these files before starting work:
 1. `PROJECT_WAKEUP.md`
 2. `DECISIONS.md`
 3. `AGENT_OS_DURABLE_RUNTIME.md`
-4. `CHAT_INDEX.md`
-5. The current task file under `agent_tasks/`
+4. `NORA_FRAMEWORK_ARCHITECTURE.md`
+5. `CHAT_INDEX.md`
+6. The current task file under `agent_tasks/`
 
 ## What Belongs Here
 
 - Project direction and strategy.
 - Agent OS / Durable Runtime architecture decisions.
+- Nora framework architecture and PM task-generation contracts.
 - Stable decisions from chats.
 - Daily AI agent radar summaries.
 - Imported Codex conversation transcripts for this repository.

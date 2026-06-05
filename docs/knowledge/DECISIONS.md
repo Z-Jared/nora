@@ -1,5 +1,29 @@
 # Nora Development Decisions
 
+## 2026-06-05: Framework Architecture Should Be Continuously Optimized
+
+Nora's framework architecture is a living contract, not a one-time document. Codex PM and reviewer loops should continuously refine it from implementation evidence, eval results, review findings, user feedback, and frontier agent platform signals.
+
+Implication:
+
+- After PM review/integration, check whether the task revealed missing architecture layers, weak boundaries, repeated patterns, unsafe workflows, or eval gaps.
+- After daily radar or user-requested information gathering, decide whether `NORA_FRAMEWORK_ARCHITECTURE.md`, `DECISIONS.md`, `PROJECT_WAKEUP.md`, or `DAILY_AI_AGENT_RADAR.md` need updates.
+- Architecture updates should be small and explicit: trigger, affected layer, changed design rule, PM impact, reviewer impact, and verification evidence.
+- Do not interrupt active worker implementation or expand task scope just because a new architecture idea appears, unless the active work violates safety, durability, or scope boundaries.
+- Convert architecture changes into PM candidate tasks only when they include architecture layer, non-goals, safety boundaries, durable evidence, and verification path.
+
+## 2026-06-05: Framework Architecture Becomes The PM Task Contract
+
+`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` is the architecture contract for Nora development. Future Codex PM loops should use it when generating tasks, reviewing scope, and deciding whether work belongs on the roadmap.
+
+Implication:
+
+- PM-generated tasks must name the affected architecture layer: Durable Kernel, Scheduler, Worker Runtime, Policy Hook Kernel, Trace Graph, Tool/Plugin Broker, Skill/Capability Router, Context Compiler, Model Router, Eval/Review System, or Agent OS Dashboard.
+- Tasks must include non-goals, safety boundaries, durable evidence, verification, and architecture references.
+- Runtime work should prefer narrow vertical slices through the architecture over broad refactors.
+- New automation should start read-only or dry-run, then add guarded execution only after deterministic eval coverage exists.
+- Reviewers should use the architecture checklist when approving or requesting changes.
+
 ## 2026-06-03: Frontier Signals Push Nora Toward Scheduler, Policy Hooks, Trace Graphs, And Pluggable Capabilities
 
 Current AI agent platform signals from Codex, Claude Code, OpenAI Agents SDK, MCP, and agent research reinforce Nora's existing Agent OS direction. The next improvement wave should convert Nora's durable primitives into a running, governed, observable runtime.

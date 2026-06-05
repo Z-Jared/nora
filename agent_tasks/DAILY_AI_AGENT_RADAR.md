@@ -69,6 +69,7 @@ This is not a generic news digest. Every entry must answer: "What should Nora bu
 - Treat papers as directional until reproduced or backed by strong benchmarks.
 - Treat social posts as weak signal unless they point to official artifacts, code, or measurable behavior.
 - Do not chase every feature. Convert findings only into Nora priorities when they improve reliability, autonomy, safety, context quality, or multi-agent throughput.
+- After every radar, explicitly decide whether `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` needs a small architecture update. If yes, record the trigger, affected layer, design rule change, PM impact, reviewer impact, and verification evidence.
 - Downgrade old-style vector RAG for code understanding unless evidence shows it beats agentic search and context compilation on real coding tasks.
 - Prefer agentic search, structured project memory, trace logs, review gates, worker isolation, and evals as the core coding-agent direction.
 

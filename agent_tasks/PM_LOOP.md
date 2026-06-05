@@ -37,7 +37,11 @@
 9. 更新 BACKLOG.md：
    - 把完成的任务移到「已完成」
    - 更新任务描述或添加新发现的任务
-10. 回到步骤 1，分配下一个任务
+10. **架构优化检查**：
+   - 根据 completion report、review findings、测试/eval 结果、用户反馈和 radar 信号，判断是否需要更新 `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
+   - 如果只是候选方向，写入 PM 候选建议或 radar，不直接扩大当前任务 scope
+   - 如果是稳定架构决策，同步更新 `docs/knowledge/DECISIONS.md`；如果新窗口必须继承，同步更新 `docs/knowledge/PROJECT_WAKEUP.md`
+11. 回到步骤 1，分配下一个任务
 
 ## 任务生成流程
 
@@ -50,8 +54,9 @@
 1. `docs/knowledge/PROJECT_WAKEUP.md` — 项目使命和当前状态
 2. `docs/knowledge/DECISIONS.md` — 已做的架构决策
 3. `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` — 北极星架构和优先级列表
-4. `agent_tasks/BACKLOG.md`「已完成」部分 — 了解已实现的能力
-5. 最近的 git log（`git log --oneline -15`）— 了解最近的代码变更
+4. `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` — 框架设计、模块边界、PM 任务契约
+5. `agent_tasks/BACKLOG.md`「已完成」部分 — 了解已实现的能力
+6. 最近的 git log（`git log --oneline -15`）— 了解最近的代码变更
 
 ### 第二步：评估当前状态
 
@@ -73,9 +78,13 @@ git diff --stat origin/main..HEAD 2>/dev/null
 根据北极星文档的「What To Build Next」优先级列表，结合当前代码状态，生成 1-3 个具体任务。
 
 任务生成原则：
-- **跟随北极星**：优先推进 Priority 1-4 中尚未完成的部分
+- **跟随北极星和框架架构**：优先推进 `AGENT_OS_DURABLE_RUNTIME.md` 和 `NORA_FRAMEWORK_ARCHITECTURE.md` 中尚未完成的部分
+- **标明架构层**：每个任务必须写明对应架构层，例如 Scheduler、Policy Hook Kernel、Trace Graph、Plugin Runtime、Skill Runtime、Capability Router、Context Compiler、Model Router、Eval/Review System、Agent OS Dashboard
+- **持续优化架构**：如果任务生成、review、eval 或用户反馈暴露出架构层/模块边界/核心对象/PM 契约的问题，先按 `NORA_FRAMEWORK_ARCHITECTURE.md` 的 Continuous Framework Optimization 规则记录或更新架构，再生成任务
 - **增量推进**：每个任务应该是可独立完成的小块工作（1-2 小时可完成）
 - **可验证**：每个任务必须有明确的完成标准和验证方式
+- **有安全边界**：涉及写入、shell、Git、插件、模型、外部发送、财务/法律/医疗等高风险动作时，必须写明 policy/confirmation/review gate 要求
+- **有持久证据**：runtime 行为必须说明写入或查询哪些 event、trace、artifact、state、review gate 或 eval 结果
 - **避免重复**：检查「已完成」部分，不要重复已做过的任务
 - **发现依赖**：如果任务 A 依赖任务 B，标注「等待 B」
 
@@ -85,12 +94,16 @@ git diff --stat origin/main..HEAD 2>/dev/null
 
 ```markdown
 ### TASK-XXX: [简短标题]
+- 架构层: [Scheduler / Policy Hook Kernel / Trace Graph / ...]
 - 优先级: high/medium/low
 - 预计: [工作量估计]
 - 依赖: [如有]
 - 目标: [一句话描述要达成什么]
+- 非目标: [本任务明确不做什么，避免 scope creep]
+- 安全边界: [no-leak/no-mutation/path safety/policy hook/confirmation/review gate]
+- 持久证据: [event/trace/artifact/state/review gate/eval]
 - 验证: [如何验证完成]
-- 参考: [相关的北极星文档章节或代码位置]
+- 参考: [`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` 章节、北极星文档章节或代码位置]
 ```
 
 ### 第五步：继续分配
