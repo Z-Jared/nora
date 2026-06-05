@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-121: Skill context preview surface v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-119 ✅
+- 分配: Claude A
+- 目标: 增加只读 skill context preview surface，根据用户 goal 和一组 skill manifest metadata 选择相关 skill，并生成 bounded/untrusted context hints（domains/capabilities/workflows/deliverables/required_plugins/risk_boundaries/evals），用于后续 context compiler 引入 skill metadata；不安装、加载或执行 skill 内容。
+- 验证: `python3 -m unittest tests.test_skills tests.test_context_memory tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6 skill registry/context compiler；最近提交 `09ebf80`。
+
+### TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-119 ✅
+- 分配: Claude B
+- 目标: 为 `summarize_skill_manifests` / registry `summarize_skill_manifests` 增加 deterministic offline eval 覆盖，证明 catalog aggregation、bounds/clamp、malformed input、secret no-leak、read-only no-mutation、permission 和 compatibility。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6 skill registry；最近提交 `09ebf80`。
 
 ## 已完成
 

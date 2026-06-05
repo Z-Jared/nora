@@ -1,58 +1,77 @@
-# Claude B Task
+# TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
 
-Owner: Claude B
-Status: assigned
+You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
-## Task
+## Context
 
-TASK-120: Deterministic eval coverage for skill-aware capability routing v1.
+Codex PM assigned you TASK-122 after TASK-119 landed in `09ebf80`.
 
-Add deterministic offline eval coverage specifically for TASK-117's `skill_manifest_jsons` skill-aware capability routing path. Existing TASK-118 evals cover the earlier plugin-only router and skill manifest inspection; this task should prove the new skill routing bridge behavior.
+Read first:
+- `AGENTS.md`
+- `docs/knowledge/PROJECT_WAKEUP.md`
+- `docs/knowledge/DECISIONS.md`
+- `docs/knowledge/CHAT_INDEX.md`
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
+- `agent_tasks/BACKLOG.md`
 
-## Scope
+## Goal
 
-- Work in `.ccb/workspaces/claude-b`.
-- Primary target: `evals/run_evals.py`.
-- Do not change runtime modules unless you find a real blocker; if you do, document it clearly in `agent_tasks/B_DONE.md`.
-- Keep evals offline, deterministic, and isolated with temporary local stores where needed.
-- Do not edit `designs/` or `CODEX_TERMINAL_HANDOFF.md`.
+Add deterministic offline eval coverage for the TASK-119 skill manifest catalog summary surface.
 
-## Required Eval Coverage
+Primary target: `evals/run_evals.py`.
 
-Add focused eval cases covering:
+Do not change runtime behavior unless an eval reveals a real bug; if so, keep the runtime fix tiny and call it out clearly in `B_DONE.md`.
 
-- Registry `route_capability_request` accepts `skill_manifest_jsons` and returns `candidate_skills`.
-- Skill-only routing returns matched domains/capabilities and expected skill deliverables.
-- Combined skill + plugin routing returns both `candidate_skills` and `candidate_plugins`.
-- `required_plugins` and `risk_boundaries` aggregate as deterministic deduplicated top-level fields.
-- High-risk skill boundary elevates top-level `risk_level` to `high`.
-- Malformed outer skill manifest JSON and malformed individual skill manifests return bounded safe errors.
-- Secret-like skill manifest `name`, `version`, list items, or unknown fields do not leak through routing.
-- Skill-aware routing does not mutate durable tasks, workers, or events.
-- Existing plugin-only routing eval compatibility still passes.
+## Required Coverage
 
-## Verification
+Add eval cases for direct or registry use of `summarize_skill_manifests` / `summarize_skill_manifests` registry tool.
 
-Run before writing `agent_tasks/B_DONE.md`:
+Cover at least:
+
+1. Tool registration and exact permission:
+   - `ToolPermission(category="local", risk="read")`
+2. Valid catalog summary:
+   - `valid_count`, bounded `skills`, sorted/deduplicated domains/capabilities/workflows/deliverables/required_plugins/risk_boundaries/evals
+3. Bounds:
+   - default max behavior or explicit `max_skills`
+   - high values clamp to the upper bound
+   - zero/low values clamp safely
+4. Malformed input:
+   - malformed outer JSON
+   - malformed individual manifest
+   - non-list input
+5. Secret no-leak:
+   - secret-like name/version/list fields are absent or redacted
+   - raw malformed secret content is not echoed
+6. Read-only:
+   - durable task, worker, and event counts unchanged
+7. Compatibility:
+   - `inspect_skill_manifest`, `route_capability_request`, and existing skill/capability evals still pass with the new evals present
+
+## Constraints
+
+- Evals must be deterministic and offline.
+- Use tempdir-isolated `NoraDB` / registry patterns already present in `evals/run_evals.py`.
+- Avoid network, LLM, external services, or shared mutable state.
+- Do not edit `mini_agent/skills.py` unless you find a genuine bug.
+- Do not edit A task/done files, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
+
+## Required Verification
+
+Run:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent
+python3 -m unittest tests.test_skills tests.test_mini_agent
 git diff --check
 ```
 
-## Completion
+## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the required report format, then run:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results and known issues.
+
+Then notify Codex PM:
 
 ```bash
 agent_tasks/notify_codex.sh B
 ```
-
-Do not commit or push.
-
-## Notes
-
-- Claude A is independently implementing TASK-119 skill manifest catalog summary. Avoid editing `mini_agent/skills.py` unless you uncover a blocker.
-- Do not edit `agent_tasks/A_TASK.md`, `agent_tasks/A_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
-- If task scope conflicts with uncommitted work, stop and write the conflict in `agent_tasks/B_DONE.md`.

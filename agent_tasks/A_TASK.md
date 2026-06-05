@@ -1,103 +1,122 @@
-# Claude A Task
+# TASK-121: Skill context preview surface v1
 
-Owner: Claude A
-Status: assigned
+You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
-## Task
+## Context
 
-TASK-119: Skill manifest catalog summary v1.
+Codex PM assigned you TASK-121 after TASK-119 landed in `09ebf80`.
 
-Add a minimal read-only skill manifest catalog summary surface. This should summarize a list of declared skill manifest metadata without installing, loading, importing, or executing skill content. It is the next small step from single-manifest inspection toward a governed skill registry.
+Read first:
+- `AGENTS.md`
+- `docs/knowledge/PROJECT_WAKEUP.md`
+- `docs/knowledge/DECISIONS.md`
+- `docs/knowledge/CHAT_INDEX.md`
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
+- `agent_tasks/BACKLOG.md`
 
-## Scope
+## Goal
 
-- Work in `.ccb/workspaces/claude-a`.
-- Main target: `mini_agent/skills.py`.
-- Register a read-only registry tool named `summarize_skill_manifests` with `ToolPermission(category="local", risk="read")`.
-- Add focused unit tests, preferably in `tests/test_skills.py`.
-- Keep output deterministic, bounded, and safe.
-- Do not edit `evals/run_evals.py` unless a tiny compatibility adjustment is strictly required.
-- Do not edit `designs/` or `CODEX_TERMINAL_HANDOFF.md`.
+Add a read-only skill context preview surface. It should take a user goal plus a bounded list of skill manifest JSON strings/objects, select relevant skill manifests using metadata only, and return safe context hints that a future context compiler can include without dumping full skill content.
 
-## Suggested API
+This is a metadata preview only. Do not install, load, import, execute, or read skill pack content.
 
-Pure helper:
+## Implementation Guidance
+
+Primary target: `mini_agent/skills.py`.
+
+Suggested pure helper:
 
 ```python
-summarize_skill_manifests(
-    skill_manifest_jsons: list[str] | None = None,
-    max_skills: int = 20,
-) -> dict
+preview_skill_context(
+    goal: str,
+    skill_manifest_jsons: list[Any] | None = None,
+    max_skills: int = 5,
+) -> dict[str, Any]
 ```
 
-Registry wrapper may accept `skill_manifest_jsons` as a JSON string containing an array of manifest JSON strings or manifest objects.
+Suggested registry wrapper:
 
-Expected output shape can be adjusted to match local style, but should include:
+```python
+preview_skill_context_json(goal: Any, skill_manifest_jsons: Any, max_skills: int = 5) -> dict[str, Any]
+```
+
+Register a tool in `mini_agent/toolkits/registry_builder.py`:
+
+- name: `preview_skill_context`
+- permission: `ToolPermission(category="local", risk="read")`
+- params: `goal`, `skill_manifest_jsons`, `max_skills`
+
+Expected output shape should be stable and bounded, for example:
 
 ```json
 {
-  "valid_count": 0,
+  "goal": "...safe bounded goal...",
+  "selected_count": 1,
   "invalid_count": 0,
-  "skills": [
+  "context_sections": [
     {
-      "name": "...",
-      "version": "...",
-      "domains": ["..."],
-      "capabilities": ["..."],
-      "workflows": ["..."],
-      "deliverables": ["..."],
-      "required_plugins": ["..."],
-      "risk_boundaries": ["..."],
+      "skill": "software-engineering",
+      "version": "1",
+      "matched_domains": ["software"],
+      "matched_capabilities": ["testing"],
+      "workflows": ["tdd"],
+      "deliverables": ["test_results"],
+      "required_plugins": ["git"],
+      "risk_boundaries": ["no-production-deploy"],
       "evals": ["..."]
     }
   ],
-  "domains": ["..."],
-  "capabilities": ["..."],
-  "workflows": ["..."],
-  "deliverables": ["..."],
-  "required_plugins": ["..."],
-  "risk_boundaries": ["..."],
-  "evals": ["..."],
+  "required_plugins": ["git"],
+  "risk_boundaries": ["no-production-deploy"],
   "warnings": [],
   "errors": []
 }
 ```
 
+Exact field names can vary if you keep them clear and tests assert them, but include enough metadata for context compiler preview.
+
 ## Requirements
 
-- Reuse existing skill manifest parser and safe-output helpers.
-- Accept both JSON strings and dict objects in the pure helper.
-- Malformed manifests should produce bounded safe errors while allowing other valid manifests to be summarized.
-- Clamp `max_skills` to a small safe range, e.g. 1-50.
-- Deduplicate and sort aggregate fields deterministically.
-- Redact or omit secret-like values; never echo raw malformed manifest content or secret-like values.
-- Keep it read-only: no durable task/worker/event mutation, no file loading, no imports of skill modules, no hook execution, no external calls.
-- Preserve `inspect_skill_manifest`, `route_capability_request`, plugin manifest, and MCP behavior.
+- Reuse existing skill manifest parser/safe helpers where possible.
+- Match skills against `goal` using manifest metadata (`name`, `description`, `domains`, `capabilities`, `workflows`, `deliverables`) with deterministic ordering.
+- Bound `max_skills` to a small safe range, e.g. 1-20.
+- Output must not include raw malformed input or secret-like values.
+- Include an explicit untrusted/read-only framing field or section text so downstream context cannot be treated as instructions.
+- Do not mutate durable task, worker, or event state.
+- Do not touch `evals/run_evals.py`; Claude B owns TASK-122.
+- Do not edit `CODEX_TERMINAL_HANDOFF.md` or `designs/`.
 
-## Verification
+## Tests
 
-Run before writing `agent_tasks/A_DONE.md`:
+Add focused unit tests, likely in `tests/test_skills.py`.
+
+Cover:
+- valid relevant skill is selected with matched metadata
+- irrelevant skill is skipped
+- multiple selected skills are deterministic and bounded
+- malformed skill input returns bounded safe errors
+- secret-like values do not leak
+- registry tool exists with exact `ToolPermission(category="local", risk="read")`
+- registry wrapper honors `max_skills`
+- read-only no durable task/worker/event mutation
+- compatibility with `inspect_skill_manifest`, `summarize_skill_manifests`, and `route_capability_request`
+
+## Required Verification
+
+Run:
 
 ```bash
-python3 -m unittest tests.test_skills tests.test_mini_agent
+python3 -m unittest tests.test_skills tests.test_context_memory tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
 
-Add focused tests for valid catalog summary, invalid/malformed entries, bounds, deterministic sorting, secret no-leak, registry permission, registry wrapper JSON handling, read-only no-mutation, and compatibility with existing skill inspection.
+## Completion Report
 
-## Completion
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results and known issues.
 
-Write `agent_tasks/A_DONE.md` using the required report format, then run:
+Then notify Codex PM:
 
 ```bash
 agent_tasks/notify_codex.sh A
 ```
-
-Do not commit or push.
-
-## Notes
-
-- Claude B is independently adding eval coverage for TASK-117 skill-aware routing. Avoid editing `evals/run_evals.py` if possible.
-- Do not edit `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
-- If task scope conflicts with uncommitted work, stop and write the conflict in `agent_tasks/A_DONE.md`.
