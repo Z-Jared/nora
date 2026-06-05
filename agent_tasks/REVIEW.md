@@ -1,33 +1,33 @@
-# CCB Review — TASK-117 / TASK-118
+# CCB Review — TASK-119 / TASK-120
 
 **Status: APPROVED**
 
-## TASK-117: Skill-aware capability routing bridge v1
+## TASK-119: Skill manifest catalog summary v1
 
-Reviewer: CCB reviewer (`job_f788d6ec4c66`)
+Reviewer: CCB reviewer (`job_9cda9cec273b`)
 
-Clean implementation of the skill-aware capability routing bridge. No blocking issues found.
+Clean implementation of `summarize_skill_manifests` read-only surface. No blocking issues found.
 
-- Backwards compatible: `skill_manifest_jsons` defaults to `None` / `"[]"`; plugin-only callers keep the existing behavior.
-- Read-only: routing remains pure and does not load skill files, import skill modules, load plugins, execute plugin code, call external services, or mutate durable task/worker/event state.
-- Safe bounded output: candidate skill/plugin names and versions use secret-like redaction, malformed skill/plugin manifest input returns bounded errors, and sentinel no-leak tests pass.
-- Aggregation is correct: matched skills contribute deduplicated `required_plugins`, `risk_boundaries`, and deliverables; high-risk skill boundaries elevate the top-level risk.
-- Registry integration is correct: `route_capability_request` accepts `skill_manifest_jsons` and retains `ToolPermission(category="local", risk="read")`.
-- PM verification: 265 focused tests OK, 436 evals passed, `git diff --check` clean, and combined skill+plugin permission/no-leak/no-mutation probe OK.
+- Correctness: accepts JSON strings or dict manifests, returns bounded catalog summary, valid/invalid counts, bounded `skills`, and sorted deduplicated aggregate fields for domains, capabilities, workflows, deliverables, required_plugins, risk_boundaries, and evals.
+- PM review fix verified: registry `max_skills` is now passed through to `summarize_skill_manifests_json(text, max_skills=20)` and forwarded to `summarize_skill_manifests(..., max_skills=max_skills)`.
+- Bounded output: `max_skills` clamps to 1-50, with tests for below default, above clamp, and zero.
+- Safety: parser and safe output helpers redact or omit secret-like values; malformed input returns bounded safe errors without raw content echo.
+- Read-only: no file loading, no skill module imports, no hook execution, no external calls, and no durable task/worker/event mutation.
+- Registry integration is correct: `summarize_skill_manifests` is registered with `ToolPermission(category="local", risk="read")`.
+- PM verification: `python3 -m unittest tests.test_skills tests.test_mini_agent` 200 tests OK, `python3 evals/run_evals.py` 450 passed, `git diff --check` clean.
 
 Residual risk: none identified.
 
-## TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1
+## TASK-120: Deterministic eval coverage for skill-aware capability routing v1
 
-Reviewer: CCB reviewer (`job_8a68523d230c`)
+Reviewer: CCB reviewer (`job_07a10ab25a0b`)
 
-Clean deterministic eval expansion for the skill manifest and capability routing surfaces. No blocking issues found.
+Clean deterministic eval expansion for the TASK-117 skill-aware routing path. No blocking issues found.
 
-- Added 14 offline evals: 7 for `inspect_skill_manifest`, 7 for `route_capability_request`.
-- Coverage includes exact local/read permission, valid bounded output, malformed JSON/non-object/list-field safety, secret no-leak, durable task/worker/event no-mutation, and plugin/skill/routing/MCP compatibility.
-- Evals are deterministic and isolated with temporary workspaces and local `NoraDB`; no LLM, network, or external state.
-- Runtime behavior is unchanged; only `evals/run_evals.py` was modified.
-- Non-blocking note: permission evals use `registry._tools`, which matches existing eval practice and has no runtime impact.
-- PM verification: 450 evals passed, 242 focused tests OK, and `git diff --check` clean.
+- Added 9 offline evals covering skill-only routing, combined skill+plugin routing, required_plugins/risk_boundaries aggregation, high-risk boundary elevation, malformed outer and individual skill JSON, secret no-leak, read-only no-mutation, and plugin-only compatibility.
+- Coverage verifies candidate_skills output and top-level aggregation behavior introduced by TASK-117.
+- Evals are deterministic, tempdir-isolated, and do not require LLM/network/external state.
+- Runtime behavior is unchanged; only `evals/run_evals.py` was modified for TASK-120.
+- PM verification: `python3 evals/run_evals.py` 459 passed, `python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent` 265 tests OK, `git diff --check` clean.
 
 Residual risk: none identified.

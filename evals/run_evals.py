@@ -526,6 +526,16 @@ def main() -> int:
         EvalCase("capability_router_secret_no_leak", eval_capability_router_secret_no_leak),
         EvalCase("capability_router_read_only_no_mutation", eval_capability_router_read_only_no_mutation),
         EvalCase("skill_capability_compatibility", eval_skill_capability_compatibility),
+        # TASK-120: Skill-aware capability routing evals
+        EvalCase("skill_aware_routing_skill_only", eval_skill_aware_routing_skill_only),
+        EvalCase("skill_aware_routing_combined", eval_skill_aware_routing_combined),
+        EvalCase("skill_aware_routing_required_plugins_aggregation", eval_skill_aware_routing_required_plugins_aggregation),
+        EvalCase("skill_aware_routing_high_risk_boundary", eval_skill_aware_routing_high_risk_boundary),
+        EvalCase("skill_aware_routing_malformed_outer_skill_json", eval_skill_aware_routing_malformed_outer_skill_json),
+        EvalCase("skill_aware_routing_malformed_individual_skill", eval_skill_aware_routing_malformed_individual_skill),
+        EvalCase("skill_aware_routing_secret_no_leak", eval_skill_aware_routing_secret_no_leak),
+        EvalCase("skill_aware_routing_no_mutation", eval_skill_aware_routing_no_mutation),
+        EvalCase("skill_aware_routing_plugin_only_compatibility", eval_skill_aware_routing_plugin_only_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -18587,6 +18597,296 @@ def eval_skill_capability_compatibility():
             )
             parsed = json.loads(route_result)
             assert "goal_summary" in parsed
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-120: Skill-aware capability routing evals
+# ---------------------------------------------------------------------------
+
+def eval_skill_aware_routing_skill_only():
+    """Skill-only routing returns candidate_skills with matched domains/capabilities and expected deliverables."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            skill = {
+                "name": "python-expert",
+                "version": "2.0.0",
+                "domains": ["python", "refactoring"],
+                "capabilities": ["code-review", "testing"],
+                "workflows": ["tdd"],
+                "deliverables": ["test_results", "code_changes"],
+                "required_plugins": ["git-tools"],
+                "risk_boundaries": ["no-deploy"],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="review python code and write tests",
+                skill_manifest_jsons=json.dumps([json.dumps(skill)]),
+            )
+            result = json.loads(result_str)
+            assert "candidate_skills" in result, "missing candidate_skills"
+            assert len(result["candidate_skills"]) > 0, "expected at least one skill candidate"
+            cand = result["candidate_skills"][0]
+            assert cand["name"] == "python-expert"
+            assert cand["version"] == "2.0.0"
+            assert "python" in cand["matched_domains"]
+            assert "code-review" in cand["matched_capabilities"] or "testing" in cand["matched_capabilities"]
+            assert "git-tools" in cand["required_plugins"]
+            assert "no-deploy" in cand["risk_boundaries"]
+            assert len(cand["expected_deliverables"]) > 0
+            # No plugin candidates
+            assert len(result["candidate_plugins"]) == 0
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_combined():
+    """Combined skill + plugin routing returns both candidate_skills and candidate_plugins."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            plugin = {
+                "name": "code-helper",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["refactor"],
+                "tools": [{"name": "refactor_tool", "risk": "write", "requires_confirmation": True}],
+            }
+            skill = {
+                "name": "python-expert",
+                "version": "2.0.0",
+                "domains": ["python"],
+                "capabilities": ["code-review"],
+                "deliverables": ["review_report"],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="refactor python code",
+                plugin_manifest_jsons=json.dumps([json.dumps(plugin)]),
+                skill_manifest_jsons=json.dumps([json.dumps(skill)]),
+            )
+            result = json.loads(result_str)
+            assert len(result["candidate_skills"]) > 0, "expected skill candidates"
+            assert len(result["candidate_plugins"]) > 0, "expected plugin candidates"
+            assert result["candidate_skills"][0]["name"] == "python-expert"
+            assert result["candidate_plugins"][0]["name"] == "code-helper"
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_required_plugins_aggregation():
+    """required_plugins and risk_boundaries aggregate as deterministic deduplicated top-level fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            skill1 = {
+                "name": "skill-a",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["testing"],
+                "required_plugins": ["git-tools", "ci-runner"],
+                "risk_boundaries": ["no-deploy", "no-external"],
+            }
+            skill2 = {
+                "name": "skill-b",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["testing"],
+                "required_plugins": ["git-tools", "linter"],
+                "risk_boundaries": ["no-external", "high"],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="run python tests",
+                skill_manifest_jsons=json.dumps([json.dumps(skill1), json.dumps(skill2)]),
+            )
+            result = json.loads(result_str)
+            # Should be deduplicated and sorted
+            rp = result["required_plugins"]
+            rb = result["risk_boundaries"]
+            assert rp == sorted(set(rp)), f"required_plugins not deduplicated: {rp}"
+            assert rb == sorted(set(rb)), f"risk_boundaries not deduplicated: {rb}"
+            assert "git-tools" in rp
+            assert "ci-runner" in rp
+            assert "linter" in rp
+            assert "no-deploy" in rb
+            assert "no-external" in rb
+            assert "high" in rb
+            # Deterministic
+            result2_str = registry.call(
+                "route_capability_request",
+                goal="run python tests",
+                skill_manifest_jsons=json.dumps([json.dumps(skill1), json.dumps(skill2)]),
+            )
+            assert result_str == result2_str, "routing not deterministic"
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_high_risk_boundary():
+    """High-risk skill boundary elevates top-level risk_level to high."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            skill = {
+                "name": "deploy-skill",
+                "version": "1.0.0",
+                "domains": ["deploy"],
+                "capabilities": ["deploy"],
+                "risk_boundaries": ["high"],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="deploy application",
+                skill_manifest_jsons=json.dumps([json.dumps(skill)]),
+            )
+            result = json.loads(result_str)
+            assert result["risk_level"] == "high", f"expected high risk, got {result['risk_level']}"
+            assert "high" in result["risk_boundaries"]
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_malformed_outer_skill_json():
+    """Malformed outer skill manifest JSON produces bounded safe errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test goal",
+                skill_manifest_jsons="{not valid json!!!",
+            )
+            result = json.loads(result_str)
+            assert len(result["errors"]) > 0
+            assert any("invalid JSON" in e or "not a list" in e for e in result["errors"])
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_malformed_individual_skill():
+    """Malformed individual skill manifests produce bounded safe errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            bad_manifests = [
+                json.dumps({"name": "bad-skill"}),  # missing version
+                json.dumps({"version": "1.0.0"}),    # missing name
+                "not json at all",
+            ]
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test goal",
+                skill_manifest_jsons=json.dumps(bad_manifests),
+            )
+            result = json.loads(result_str)
+            assert len(result["errors"]) > 0
+            assert "candidate_skills" in result
+            assert len(result["candidate_skills"]) == 0
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_secret_no_leak():
+    """Secret-like skill manifest name, version, list items, or unknown fields do not leak through routing."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            secret = "sk-SECRET-KEY-12345"
+            skill = {
+                "name": secret,
+                "version": secret,
+                "domains": [secret, "python"],
+                "capabilities": ["testing"],
+                "required_plugins": [secret],
+                "risk_boundaries": [secret],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test python code",
+                skill_manifest_jsons=json.dumps([json.dumps(skill)]),
+            )
+            assert secret not in result_str, f"secret leaked through routing: {result_str}"
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_no_mutation():
+    """Skill-aware routing does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            skill = {
+                "name": "read-only-skill",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["testing"],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test python code",
+                skill_manifest_jsons=json.dumps([json.dumps(skill)]),
+            )
+            result = json.loads(result_str)
+            assert "candidate_skills" in result
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_skill_aware_routing_plugin_only_compatibility():
+    """Existing plugin-only routing still works when skill_manifest_jsons is not provided."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            plugin = {
+                "name": "compat-plugin",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["build"],
+                "tools": [{"name": "build_tool", "risk": "read"}],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="build python project",
+                plugin_manifest_jsons=json.dumps([json.dumps(plugin)]),
+            )
+            result = json.loads(result_str)
+            assert len(result["candidate_plugins"]) > 0, "expected plugin candidates"
+            assert result["candidate_plugins"][0]["name"] == "compat-plugin"
+            assert len(result["candidate_skills"]) == 0
+            # Deterministic
+            result2_str = registry.call(
+                "route_capability_request",
+                goal="build python project",
+                plugin_manifest_jsons=json.dumps([json.dumps(plugin)]),
+            )
+            assert result_str == result2_str, "plugin-only routing not deterministic"
         finally:
             db.close()
 

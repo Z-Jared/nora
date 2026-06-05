@@ -4,60 +4,51 @@ Status: ready for Codex review
 
 ## Summary
 
-Extended `mini_agent/capability_router.py` to support skill-aware capability routing (TASK-117). The router now accepts optional `skill_manifest_jsons` alongside existing `plugin_manifest_jsons`, scores skill manifests against goals, and aggregates skill metadata (required_plugins, risk_boundaries, deliverables) into the route result.
+Implemented TASK-119: Skill manifest catalog summary v1. Added `summarize_skill_manifests` read-only surface to summarize multiple skill manifest metadata without loading, importing, or executing skill content.
+
+**PM review fix:** `summarize_skill_manifests_json` now accepts and forwards `max_skills` to `summarize_skill_manifests`, so registry callers can control the bound. Previously the registry handler declared `max_skills` but silently ignored it.
 
 ## Changes
 
 ```text
- M mini_agent/capability_router.py
+ M mini_agent/skills.py
  M mini_agent/toolkits/registry_builder.py
- M tests/test_plugins.py
+ M tests/test_skills.py
 ```
 
-### mini_agent/capability_router.py
+### mini_agent/skills.py
 
-- Added `CandidateSkill` dataclass with: name, version, matched_domains, matched_capabilities, required_plugins, risk_boundaries, expected_deliverables
-- Added `skill_manifest_jsons` parameter to `route_capability_request()` (pure function) and `route_capability_request_json()` (registry wrapper)
-- Added `_score_skill_manifest()` for keyword-based scoring against skill manifest metadata
-- Updated `_build_result()` to include candidate_skills, required_plugins, risk_boundaries
-- Skill risk_boundaries aggregate into top-level risk_level (high boundaries elevate overall risk)
-- Skill deliverables merge into expected_deliverables
-- Imports from `mini_agent.skills`: `SkillManifest`, `parse_skill_manifest`, `parse_skill_manifest_json`, `_safe_str`
-- Backwards compatible: callers using only `plugin_manifest_jsons` see identical behavior
+- Added `summarize_skill_manifests(skill_manifest_jsons, max_skills)` pure helper: accepts list of JSON strings or dicts, returns bounded catalog summary with `valid_count`, `invalid_count`, `skills` array, and deduplicated sorted aggregate fields (`domains`, `capabilities`, `workflows`, `deliverables`, `required_plugins`, `risk_boundaries`, `evals`), plus `warnings` and `errors`.
+- Added `summarize_skill_manifests_json(text, max_skills=20)` wrapper for registry JSON string input. Forwards `max_skills` to `summarize_skill_manifests`.
+- Reuses existing `parse_skill_manifest`, `parse_skill_manifest_json`, `manifest_to_safe_dict` helpers.
+- Clamps `max_skills` to 1-50.
+- Never echoes raw malformed content or secret-like values.
 
 ### mini_agent/toolkits/registry_builder.py
 
-- Updated `route_capability_request` registration to accept `skill_manifest_jsons` JSON string parameter
-- Description updated to mention skill manifests
+- Registered `summarize_skill_manifests` tool with `ToolPermission(category="local", risk="read")`.
+- Handler now passes `max_skills` through to `summarize_skill_manifests_json`.
 
-### tests/test_plugins.py
+### tests/test_skills.py
 
-- Added `TestSkillAwareRouting` class with 25 tests:
-  - Skill routing match/no-match
-  - Skill + plugin combined routing
-  - required_plugins aggregation
-  - risk_boundaries aggregation and risk elevation
-  - Deliverables from skills
-  - Backwards compatibility (plugin-only, no skill param)
-  - Malformed skill JSON / type errors
-  - Output shape validation
-  - No secret leak (name, version)
-  - Multiple skills ranked, max_candidates
-  - Deterministic output
-  - JSON wrapper with skills
-  - Registry tool has skill_manifest_jsons param
-  - Registry call with skills
-  - Registry call with skills + plugins combined
-  - No durable mutation with skills
+- Added 28 new tests across 8 test classes:
+  - `TestSummarizeSkillManifestsValid`: empty, none, single, multiple, JSON string, sorted aggregate, dedup
+  - `TestSummarizeSkillManifestsInvalid`: malformed JSON, non-string/dict, missing fields, mixed valid/invalid, non-list input
+  - `TestSummarizeSkillManifestsBounds`: max_skills clamp low/high/default
+  - `TestSummarizeSkillManifestsSafety`: sentinel no-leak for name, version, domains, capabilities, all fields, malformed entry
+  - `TestSummarizeSkillManifestsRegistry`: tool registered, permission, JSON handling, malformed, empty, **registry max_skills below default / above clamp / zero clamps to one**
+  - `TestSummarizeSkillManifestsReadOnly`: no durable mutation via registry
+  - `TestSummarizeSkillManifestsCompatibility`: inspect still works, summarize doesn't affect inspect
+  - Added `import tempfile` to fix missing import
 
 ## Tests
 
 ```text
-python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent
-Ran 265 tests in 2.095s - OK
+python3 -m unittest tests.test_skills tests.test_mini_agent -v
+Ran 200 tests in 2.280s — OK
 
 python3 evals/run_evals.py
-436 passed, 0 failed
+450 passed, 0 failed
 
 git diff --check
 (clean)
@@ -65,6 +56,8 @@ git diff --check
 
 ## Notes
 
-- No push performed.
-- No edits to B_TASK, B_DONE, CODEX_TERMINAL_HANDOFF.md, or designs/.
-- No conflicts with uncommitted work detected.
+- No edits to `evals/run_evals.py`, `designs/`, or `CODEX_TERMINAL_HANDOFF.md`.
+- No edits to B_TASK/B_DONE.
+- No commit/push performed.
+- Read-only: no durable task/worker/event mutation, no file loading, no skill module imports, no hook execution, no external calls.
+- Preserves existing `inspect_skill_manifest`, `route_capability_request`, plugin manifest, and MCP behavior.

@@ -4691,7 +4691,7 @@ def build_default_registry(
 
     # --- Skill manifest inspection (TASK-116) ---
 
-    from mini_agent.skills import inspect_skill_manifest_json
+    from mini_agent.skills import inspect_skill_manifest_json, summarize_skill_manifests_json
 
     def _inspect_skill_manifest_handler(manifest_json: str = "{}") -> str:
         result = inspect_skill_manifest_json(manifest_json)
@@ -4710,6 +4710,36 @@ def build_default_registry(
                 },
             },
             "required": ["manifest_json"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
+    # --- Skill manifest catalog summary (TASK-119) ---
+
+    def _summarize_skill_manifests_handler(
+        skill_manifest_jsons: str = "[]",
+        max_skills: int = 20,
+    ) -> str:
+        result = summarize_skill_manifests_json(skill_manifest_jsons, max_skills=max_skills)
+        return _json.dumps(result, ensure_ascii=False, indent=2)
+
+    registry.register(
+        "summarize_skill_manifests",
+        "汇总多个 skill manifest 的安全元数据目录。只读，不加载 skill 内容。",
+        _summarize_skill_manifests_handler,
+        parameters={
+            "type": "object",
+            "properties": {
+                "skill_manifest_jsons": {
+                    "type": "string",
+                    "description": 'JSON 字符串，包含 skill manifest JSON 字符串数组或 manifest 对象数组',
+                },
+                "max_skills": {
+                    "type": "integer",
+                    "description": "最多处理的 manifest 数量，默认 20，上限 50",
+                },
+            },
+            "required": [],
         },
         permission=ToolPermission(category="local", risk="read"),
     )
