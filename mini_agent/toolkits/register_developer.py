@@ -630,6 +630,11 @@ def register_developer_tools(
                         ],
                         "description": "skill manifest JSON 字符串，或 JSON 字符串/对象数组，用于预览 skill context",
                     },
+                    "skill_manifest_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "项目相对路径列表（文件或目录），用于自动发现本地 skill manifests",
+                    },
                     "skill_context_max_skills": {
                         "type": "integer",
                         "description": "skill context 最多返回几个 skill，默认 5，最大 20",

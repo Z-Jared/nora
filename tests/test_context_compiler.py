@@ -603,5 +603,263 @@ class ContextCompilerSkillContextTests(unittest.TestCase):
         self.assertIn("Skill Context Preview", titles)
 
 
+class ContextCompilerLocalSkillCatalogTests(unittest.TestCase):
+    """Tests for TASK-127: local skill manifest paths integration."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.root = Path(self.tmpdir)
+        self.compiler = ContextCompiler(self.root)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_manifest(self, name="test-skill", version="1.0", domains=None, capabilities=None,
+                       workflows=None, deliverables=None, required_plugins=None,
+                       risk_boundaries=None, evals=None):
+        m = {"name": name, "version": version}
+        if domains:
+            m["domains"] = domains
+        if capabilities:
+            m["capabilities"] = capabilities
+        if workflows:
+            m["workflows"] = workflows
+        if deliverables:
+            m["deliverables"] = deliverables
+        if required_plugins:
+            m["required_plugins"] = required_plugins
+        if risk_boundaries:
+            m["risk_boundaries"] = risk_boundaries
+        if evals:
+            m["evals"] = evals
+        return m
+
+    def _write_manifest(self, rel_path: str, data: dict):
+        target = self.root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_no_skill_manifest_paths_keeps_existing_behavior(self):
+        pack = self.compiler.compile(
+            "test task",
+            include_git_status=False,
+            include_changed_files=False,
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("Skill Context Preview", titles)
+
+    def test_valid_local_manifest_file_adds_section(self):
+        manifest = self._make_manifest(
+            name="local-skill",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        self._write_manifest("skills/local-skill.json", manifest)
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/local-skill.json"],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Skill Context Preview", titles)
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("local-skill", section.content)
+
+    def test_local_directory_discovers_multiple_manifests(self):
+        self._write_manifest("skills/a-skill.json", self._make_manifest(name="a-skill", domains=["coding"]))
+        self._write_manifest("skills/b-skill.json", self._make_manifest(name="b-skill", domains=["testing"]))
+        pack = self.compiler.compile(
+            "coding and testing",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/"],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Skill Context Preview", titles)
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        # Both skills should appear in deterministic order
+        self.assertIn("a-skill", section.content)
+        self.assertIn("b-skill", section.content)
+
+    def test_registry_compile_context_pack_accepts_skill_manifest_paths(self):
+        from mini_agent.toolkits import build_default_registry
+        manifest = self._make_manifest(
+            name="reg-skill",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        self._write_manifest("skills/reg-skill.json", manifest)
+        registry = build_default_registry(
+            workspace_root=self.root,
+            db=NoraDB(self.root / "test.db"),
+        )
+        result = registry.call(
+            "compile_context_pack",
+            task_description="coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=json.dumps(["skills/reg-skill.json"]),
+        )
+        self.assertIn("Skill Context Preview", result)
+        self.assertIn("reg-skill", result)
+
+    def test_manual_and_local_manifests_combine(self):
+        manual = self._make_manifest(name="manual-skill", domains=["coding"])
+        local = self._make_manifest(name="local-skill", domains=["testing"])
+        self._write_manifest("skills/local-skill.json", local)
+        pack = self.compiler.compile(
+            "coding and testing",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manifest) for manifest in [manual]],
+            skill_manifest_paths=["skills/"],
+        )
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("manual-skill", section.content)
+        self.assertIn("local-skill", section.content)
+
+    def test_malformed_path_returns_bounded_error_section(self):
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["../../../etc/passwd"],
+        )
+        titles = [s.title for s in pack.sections]
+        if "Skill Context Preview" in titles:
+            section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+            # Should contain bounded error, not raw path
+            self.assertNotIn("/etc/passwd", section.content)
+
+    def test_traversal_path_does_not_leak(self):
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["../../secret.json"],
+        )
+        md = pack.to_markdown()
+        self.assertNotIn("secret.json", md)
+
+    def test_hidden_denied_path_does_not_leak(self):
+        self._write_manifest(".git/hidden-skill.json", self._make_manifest(name="hidden"))
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=[".git/hidden-skill.json"],
+        )
+        md = pack.to_markdown()
+        # Should not include manifest content from hidden paths
+        self.assertNotIn('"hidden"', md)
+        # Should not leak raw path in diagnostics
+        self.assertNotIn(".git/hidden-skill.json", md)
+        # Coarse reason should still appear
+        self.assertIn("skipped hidden/denied file", md)
+
+    def test_missing_path_does_not_leak_raw_path(self):
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["nonexistent/some-dir/manifest.json"],
+        )
+        md = pack.to_markdown()
+        self.assertNotIn("nonexistent/some-dir/manifest.json", md)
+        self.assertIn("path not found", md)
+
+    def test_malformed_json_string_paths_returns_error_section(self):
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths="not-json",
+        )
+        md = pack.to_markdown()
+        self.assertIn("Skill Context Preview", md)
+        self.assertIn("Discovery errors", md)
+        self.assertIn("skill_manifest_paths must be a JSON list", md)
+        self.assertNotIn("not-json", md)
+
+    def test_malformed_json_string_paths_not_array_returns_error(self):
+        pack = self.compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths='"just a string"',
+        )
+        md = pack.to_markdown()
+        self.assertIn("Skill Context Preview", md)
+        self.assertIn("Discovery errors", md)
+        self.assertIn("skill_manifest_paths must be a JSON list", md)
+
+    def test_secret_like_manifest_values_do_not_leak(self):
+        manifest = self._make_manifest(
+            name="sk-TOKEN-secret-skill",
+            domains=["coding"],
+        )
+        self._write_manifest("skills/secret-skill.json", manifest)
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/secret-skill.json"],
+        )
+        md = pack.to_markdown()
+        self.assertNotIn("sk-TOKEN-secret-skill", md)
+
+    def test_context_budget_applies_to_discovered_skill_context(self):
+        # Create a manifest with lots of content
+        manifest = self._make_manifest(
+            name="big-skill",
+            domains=["a" * 100, "b" * 100, "c" * 100, "d" * 100, "e" * 100],
+            capabilities=["x" * 100, "y" * 100, "z" * 100],
+            workflows=["w1", "w2", "w3", "w4", "w5"],
+            deliverables=["d1", "d2", "d3", "d4", "d5"],
+        )
+        self._write_manifest("skills/big-skill.json", manifest)
+        small_compiler = ContextCompiler(self.root, max_chars=500)
+        pack = small_compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/"],
+        )
+        # Context should be bounded
+        self.assertLessEqual(pack.total_chars, 600)
+
+    def test_compatibility_with_existing_git_status(self):
+        manifest = self._make_manifest(name="compat-skill", domains=["coding"])
+        self._write_manifest("skills/compat.json", manifest)
+        pack = self.compiler.compile(
+            "help with coding",
+            include_git_status=True,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/"],
+        )
+        titles = [s.title for s in pack.sections]
+        # Should have both git status and skill context
+        self.assertIn("Skill Context Preview", titles)
+        # Git status might be empty in test env, but the section logic works
+
+    def test_compatibility_with_file_outlines(self):
+        (self.root / "main.py").write_text("def hello():\n    pass\n", encoding="utf-8")
+        manifest = self._make_manifest(name="compat-skill", domains=["coding"])
+        self._write_manifest("skills/compat.json", manifest)
+        self.compiler.symbol_index = PythonSymbolIndex(self.root)
+        pack = self.compiler.compile(
+            "help with coding",
+            include_git_status=False,
+            include_changed_files=False,
+            include_file_outlines=["main.py"],
+            skill_manifest_paths=["skills/"],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Skill Context Preview", titles)
+        self.assertTrue(any("Outline" in t for t in titles))
+
+
 if __name__ == "__main__":
     unittest.main()

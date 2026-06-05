@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,49 @@ from mini_agent.symbols import PythonSymbolIndex
 MAX_CONTEXT_CHARS = 12000
 DENIED_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", "data", "logs"}
 DENIED_FILE_NAMES = {".env"}
+
+
+def _sanitize_discovery_message(msg: str) -> str:
+    """Strip raw paths from discovery error/warning messages.
+
+    Maps known patterns to coarse reason labels without leaking caller-supplied paths.
+    """
+    if not isinstance(msg, str):
+        return ""
+    # "path not found: <path>" -> "path not found"
+    if msg.startswith("path not found:"):
+        return "path not found"
+    # "skipped hidden/denied file: <path>" -> "skipped hidden/denied file"
+    if msg.startswith("skipped hidden/denied file:"):
+        return "skipped hidden/denied file"
+    # "skipped hidden/denied directory: <path>" -> "skipped hidden/denied directory"
+    if msg.startswith("skipped hidden/denied directory:"):
+        return "skipped hidden/denied directory"
+    # "skipped non-JSON file: <path>" -> "skipped non-JSON file"
+    if msg.startswith("skipped non-JSON file:"):
+        return "skipped non-JSON file"
+    # "cannot read file: <path>" -> "cannot read file"
+    if msg.startswith("cannot read file:"):
+        return "cannot read file"
+    # "cannot stat file: <path>" -> "cannot stat file"
+    if msg.startswith("cannot stat file:"):
+        return "cannot stat file"
+    # "file too large, skipped: <path>" -> "file too large, skipped"
+    if msg.startswith("file too large, skipped:"):
+        return "file too large, skipped"
+    # "empty file, skipped: <path>" -> "empty file, skipped"
+    if msg.startswith("empty file, skipped:"):
+        return "empty file, skipped"
+    # "unsupported path type: <path>" -> "unsupported path type"
+    if msg.startswith("unsupported path type:"):
+        return "unsupported path type"
+    # "resolved path escapes project root" — already safe, no path
+    # "rejected path: <reason>" — already safe (reason is a label, not a path)
+    # "[<path>] <error>" — manifest parse errors with path prefix; strip the prefix
+    if msg.startswith("[") and "] " in msg:
+        _, _, rest = msg.partition("] ")
+        return rest
+    return msg
 
 
 @dataclass(frozen=True)
@@ -80,6 +124,7 @@ class ContextCompiler:
         memory_query: Optional[str] = None,
         memory_max_results: int = 3,
         skill_manifest_jsons: Optional[Any] = None,
+        skill_manifest_paths: Optional[list[str]] = None,
         skill_context_max_skills: int = 5,
     ) -> ContextPack:
         pack = ContextPack(task_description=task_description)
@@ -115,10 +160,39 @@ class ContextCompiler:
             if section:
                 budget = self._append_if_fits(pack, section, budget)
 
-        if skill_manifest_jsons:
-            section = self._skill_context_section(task_description, skill_manifest_jsons, skill_context_max_skills)
-            if section:
-                budget = self._append_if_fits(pack, section, budget)
+        if skill_manifest_jsons or skill_manifest_paths:
+            # Parse skill_manifest_paths if it's a JSON string (from registry)
+            parsed_paths = skill_manifest_paths
+            malformed_paths_input = False
+            if isinstance(skill_manifest_paths, str):
+                try:
+                    parsed_paths = json.loads(skill_manifest_paths)
+                    if not isinstance(parsed_paths, list):
+                        malformed_paths_input = True
+                        parsed_paths = None
+                except (json.JSONDecodeError, TypeError):
+                    malformed_paths_input = True
+                    parsed_paths = None
+            elif skill_manifest_paths is not None and not isinstance(skill_manifest_paths, list):
+                malformed_paths_input = True
+                parsed_paths = None
+
+            combined = self._combine_skill_manifests(skill_manifest_jsons, parsed_paths)
+
+            # If malformed paths input, inject a diagnostic marker
+            if malformed_paths_input:
+                if combined is None:
+                    combined = []
+                combined.append(json.dumps({
+                    "_discovery_diagnostics": True,
+                    "errors": ["skill_manifest_paths must be a JSON list or array of strings"],
+                    "warnings": [],
+                }))
+
+            if combined is not None:
+                section = self._skill_context_section(task_description, combined, skill_context_max_skills)
+                if section:
+                    budget = self._append_if_fits(pack, section, budget)
 
         return pack
 
@@ -250,19 +324,95 @@ class ContextCompiler:
             source="memory records",
         )
 
+    def _combine_skill_manifests(
+        self,
+        skill_manifest_jsons: Optional[Any],
+        skill_manifest_paths: Optional[list[str]],
+    ) -> Optional[list[str]]:
+        """Combine manual manifest JSONs with locally-discovered manifests.
+
+        Returns a flat list of manifest JSON strings, or None if nothing to process.
+        Discovery is bound to self.root; caller-supplied project_root is ignored.
+        """
+        combined: list[str] = []
+
+        # Add manual manifests as-is
+        if skill_manifest_jsons:
+            if isinstance(skill_manifest_jsons, str):
+                combined.append(skill_manifest_jsons)
+            elif isinstance(skill_manifest_jsons, list):
+                for item in skill_manifest_jsons:
+                    if isinstance(item, str):
+                        combined.append(item)
+                    else:
+                        combined.append(json.dumps(item))
+            else:
+                combined.append(json.dumps(skill_manifest_jsons))
+
+        # Discover local manifests from paths
+        if skill_manifest_paths:
+            from mini_agent.skills import discover_local_skill_manifests_json
+            discovery = discover_local_skill_manifests_json(
+                paths=json.dumps(skill_manifest_paths),
+                project_root=str(self.root),
+            )
+            # Sanitize discovery warnings/errors to remove raw paths
+            disc_errors = [_sanitize_discovery_message(e) for e in discovery.get("errors", [])]
+            disc_warnings = [_sanitize_discovery_message(w) for w in discovery.get("warnings", [])]
+            # Filter out empty messages after sanitization
+            disc_errors = [e for e in disc_errors if e]
+            disc_warnings = [w for w in disc_warnings if w]
+            manifests = discovery.get("manifests", [])
+            for m in manifests:
+                # Each discovered manifest is already a safe dict; serialize it
+                combined.append(json.dumps(m))
+            # Attach discovery diagnostics as a synthetic marker
+            if disc_errors or disc_warnings:
+                combined.append(json.dumps({
+                    "_discovery_diagnostics": True,
+                    "errors": disc_errors,
+                    "warnings": disc_warnings,
+                }))
+
+        return combined if combined else None
+
     def _skill_context_section(
         self, goal: str, skill_manifest_jsons: Any, max_skills: int
     ) -> Optional[ContextSection]:
         from mini_agent.skills import preview_skill_context_json
 
+        # Extract discovery diagnostics if present (from _combine_skill_manifests)
+        discovery_diagnostics: dict[str, Any] = {}
+        filtered_manifests: list[str] = []
+        if isinstance(skill_manifest_jsons, list):
+            for item in skill_manifest_jsons:
+                try:
+                    parsed = json.loads(item)
+                    if isinstance(parsed, dict) and parsed.get("_discovery_diagnostics"):
+                        discovery_diagnostics = parsed
+                    elif isinstance(parsed, list):
+                        # Expand nested list (e.g., from double-JSON encoding)
+                        for sub in parsed:
+                            if isinstance(sub, str):
+                                filtered_manifests.append(sub)
+                            else:
+                                filtered_manifests.append(json.dumps(sub))
+                    else:
+                        filtered_manifests.append(item)
+                except (json.JSONDecodeError, TypeError):
+                    filtered_manifests.append(item)
+        else:
+            filtered_manifests = skill_manifest_jsons
+
         result = preview_skill_context_json(
             goal=goal,
-            skill_manifest_jsons=skill_manifest_jsons,
+            skill_manifest_jsons=filtered_manifests,
             max_skills=max_skills,
         )
 
         sections = result.get("context_sections", [])
-        if not sections and not result.get("errors"):
+        has_diagnostics = bool(discovery_diagnostics.get("errors") or discovery_diagnostics.get("warnings"))
+        if not sections and not result.get("errors") and not has_diagnostics:
             return None
 
         parts: list[str] = []
@@ -275,6 +425,14 @@ class ContextCompiler:
 
         if result.get("warnings"):
             parts.append(f"Warnings: {'; '.join(result['warnings'])}")
+            parts.append("")
+
+        # Include discovery diagnostics from local path scanning
+        if discovery_diagnostics.get("errors"):
+            parts.append(f"Discovery errors: {'; '.join(discovery_diagnostics['errors'])}")
+            parts.append("")
+        if discovery_diagnostics.get("warnings"):
+            parts.append(f"Discovery warnings: {'; '.join(discovery_diagnostics['warnings'])}")
             parts.append("")
 
         if sections:

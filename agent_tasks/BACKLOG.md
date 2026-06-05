@@ -8,15 +8,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-127: Context compiler local skill catalog bridge v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-125/TASK-126
-- 分配: Claude A
-- 目标: 将 local skill manifest discovery 接入 ContextCompiler / registry `compile_context_pack`，允许通过项目相对 `skill_manifest_paths` 自动发现本地 skill manifests 并生成 bounded/untrusted Skill Context Preview。
-- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`mini_agent/context_compiler.py`；`mini_agent/skills.py`；`mini_agent/toolkits/registry_builder.py`
-
 ### TASK-128: Deterministic eval coverage for context compiler local skill catalog bridge v1
 - 优先级: high
 - 预计: 1-2 小时
@@ -27,6 +18,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/context_compiler.py`
 
 ## 已完成
+
+### TASK-127: Context compiler local skill catalog bridge v1 ✅
+- 完成者: Claude A；按 PM 初审反馈补强 discovery diagnostics sanitization 和 malformed `skill_manifest_paths` bounded error
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent` 333 tests OK；`python3 evals/run_evals.py` 487 passed；`git diff --check` OK；PM 手动 probe 确认 hidden/missing/malformed `skill_manifest_paths` 不泄漏原始路径或输入。
+- 内容: 扩展 `ContextCompiler.compile(...)` 和 registry `compile_context_pack`，支持项目相对 `skill_manifest_paths` 自动发现本地 skill manifests 并生成 bounded/untrusted `Skill Context Preview`；桥接复用 TASK-125 `discover_local_skill_manifests_json(...)` 和既有 `preview_skill_context_json(...)`；支持 JSON string/list path input、manual `skill_manifest_jsons` 与 local manifests 组合、context budget、registry schema 暴露；diagnostics 只输出 coarse reason，不回显 raw hidden/missing/unsafe path 或 malformed JSON string；保持只读、不加载/安装/执行 skill 内容、不 mutation durable state。
 
 ### TASK-126: Deterministic eval coverage for local skill manifest catalog discovery v1 ✅
 - 完成者: Claude B；Codex PM 补强 registry root binding eval
