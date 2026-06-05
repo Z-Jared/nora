@@ -4,9 +4,33 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-暂无
+### TASK-136: CLI terminal UI polish deterministic eval coverage
+- 架构层: Agent OS Dashboard / Eval-Review System
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-135 implementation surface
+- 分配: Claude B after TASK-135 integration
+- 目标: 为 TASK-135 增加 deterministic offline eval，覆盖启动 landing panel section、模型调用 lifecycle feedback、slash/blank/exit no lifecycle noise、plain-text/no raw JSON、config/error recovery guidance、安全 no secret/no hidden reasoning。
+- 非目标: 不实现 runtime，不修改 CLI 行为，不调用网络/模型/CCB。
+- 安全边界: tempdir 隔离、explicit env_path、no secret/no raw prompt/no hidden reasoning/no raw JSON。
+- 持久证据: `evals/run_evals.py` eval cases；`agent_tasks/B_DONE.md` 完成报告。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
+- 参考: `mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard / Eval-Review System。
 
 ## 进行中
+
+### TASK-135: CLI terminal UI polish v3
+- 架构层: Agent OS Dashboard
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-133/TASK-134
+- 分配: Claude A
+- 目标: 优化 Nora CLI 终端 UI，形成更完整的启动 landing panel、模型调用 lifecycle feedback、输出分区/可读性 helper、配置/错误恢复提示 polish，同时保持 plain text、deterministic、无重型 TUI 依赖。
+- 非目标: 不做 Web UI；不做 curses/rich/textual/full-screen TUI；不做 streaming；不改后端 runtime/scheduler/policy/worker/provider 语义；不展示隐藏思考过程。
+- 安全边界: no API key/token/.env/private file/raw prompt/raw tool payload/hidden reasoning leak；slash/blank/exit 无模型状态噪声；保持既有 slash command 兼容。
+- 持久证据: `tests/test_cli.py` focused unit tests；`agent_tasks/A_DONE.md` 完成报告；本任务不新增 durable runtime event。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: 用户 CLI UX 反馈；`mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard。
 
 ## 已完成
 

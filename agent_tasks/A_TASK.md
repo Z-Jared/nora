@@ -1,15 +1,16 @@
-# TASK-133: CLI slash launcher and welcome polish v2
+# TASK-135: CLI terminal UI polish v3
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora now has `/wake`, `/setup`, `/config`, `/model`, `/workers`, startup worker status, and deterministic model-call status lines. The next user-facing gap is CLI discoverability: typing `/` should open a usable command launcher/menu instead of feeling broken, and the startup/welcome text should feel more intentional without adding a full terminal UI framework.
+Nora's CLI now has `/wake`, `/setup`, `/config`, `/model`, `/workers`, deterministic model-call status lines, a startup banner, and exact `/` command launcher. The user still feels the terminal UI is rough: replies appear abruptly, startup lacks a polished terminal landing surface, configuration/errors need clearer treatment, and the CLI should feel closer to Claude/Codex terminal ergonomics without adding a heavy TUI framework.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
+- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
 - `mini_agent/cli.py`
@@ -27,32 +28,35 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Implement CLI UX v2 focused on slash discoverability and welcome polish:
+Improve the terminal UI polish without changing backend runtime semantics:
 
-1. Slash launcher
-   - When the user enters exactly `/`, return a concise command launcher/menu.
-   - The menu should group common commands by purpose, such as:
-     - Start: `/wake`, `/setup`, `/model`
-     - Project: `/status`, `/diff`, `/test`
-     - Workers: `/workers`
-     - Memory/tasks/context: existing relevant commands if already supported
-     - Help: `/help`
-   - Include one-line descriptions. Keep it plain text/Markdown and deterministic.
-   - Do not execute a model call for `/`.
-   - Do not emit model-call status lines for `/`.
-   - Do not print raw JSON.
+1. Startup landing panel
+   - Make `banner()` look like a compact terminal landing panel with clear sections:
+     - identity/status
+     - workspace/branch
+     - model/API-key state
+     - worker/task state if available
+     - next actions
+   - Keep it plain text/Markdown and deterministic.
+   - Avoid noisy ASCII art or raw ANSI styling.
+   - Keep all existing information and no secret leakage.
 
-2. Startup welcome polish
-   - Improve `banner()` so a new terminal starts with a clearer, more useful landing panel.
-   - Keep existing key information: workspace, branch, LLM/provider/model, API-key presence, tool count, active tasks, worker summary, common commands.
-   - Add a short “next action” hint that points users to `/`, `/wake`, and `/setup`.
-   - Make missing API-key state easy to understand without leaking secrets.
-   - Keep output deterministic and friendly in plain terminal text.
+2. Response lifecycle feedback
+   - Replace the current bare status lines with a small deterministic lifecycle:
+     - user prompt accepted / model request started / response ready, or equivalent concise lines.
+   - Normal prompt and multiline should show lifecycle feedback.
+   - Slash commands, blank input, and exit must not show model-call lifecycle noise.
+   - Do not reveal hidden reasoning or chain-of-thought.
+   - Do not add streaming, async, curses, rich, textual, or other heavy dependencies.
 
-3. Prompt/status polish
-   - Keep the existing prompt shape compatible.
-   - If you adjust wording of status lines, preserve deterministic started/completed semantics and update tests.
-   - Do not add streaming, async, curses/rich/textual dependencies, or hidden reasoning output.
+3. Output readability helpers
+   - Add small formatting helpers if useful, such as section headers/separators used consistently by banner, `/`, `/setup`, `/model`, `/workers`, and recovery hints.
+   - Keep output compact and scannable on narrow terminals.
+   - Avoid raw JSON for user-facing CLI surfaces except existing commands that intentionally inspect structured durable task/trace data.
+
+4. Error/config recovery polish
+   - Make provider/API-key/model mismatch recovery hints easier to scan.
+   - Keep exact useful substrings already covered by tests/evals, including `/setup`, `API key`, `401 Unauthorized`, `provider/model 不匹配`, and no secret leak.
 
 ## Scope
 
@@ -62,19 +66,31 @@ Primary files:
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
-- `evals/run_evals.py` — Codex B will own TASK-134 eval coverage after TASK-133 is integrated.
+- `evals/run_evals.py` — Codex B will own TASK-136 eval coverage after TASK-135 is integrated.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 
-## UX Constraints
+## Non-Goals
 
-- Never print API keys, tokens, `.env` values, full secrets, private file contents, or hidden reasoning.
-- Do not add raw ANSI art that may look noisy in logs. Simple ASCII separators are okay.
-- Keep terminal output compact enough for small screens.
-- Preserve existing command compatibility.
-- Do not broaden backend runtime behavior.
+- No web UI redesign.
+- No curses/rich/textual/full-screen TUI.
+- No model streaming transport.
+- No backend runtime, scheduler, policy, worker, memory, or provider semantic changes.
+- No hidden reasoning display.
+
+## Safety Boundaries
+
+- Never print API keys, tokens, `.env` values, private file contents, hidden reasoning, raw prompts, or raw tool payloads.
+- Keep terminal UI deterministic for tests.
+- Preserve existing slash command compatibility and prior CLI eval expectations.
+
+## Durable Evidence
+
+- Unit tests in `tests/test_cli.py`.
+- Completion report in `agent_tasks/A_DONE.md`.
+- No durable runtime event changes in this task.
 
 ## Required Verification
 

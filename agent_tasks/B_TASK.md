@@ -1,15 +1,16 @@
-# TASK-134: CLI slash launcher/welcome deterministic eval coverage
+# TASK-136: CLI terminal UI polish deterministic eval coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-133 implementation for the `/` slash launcher/menu and startup welcome polish. You own deterministic offline eval coverage after TASK-133 is integrated by Codex PM.
+Claude A owns TASK-135 implementation for terminal UI polish: startup landing panel, model-call lifecycle feedback, output formatting consistency, and clearer config/error recovery text. You own deterministic offline eval coverage after TASK-135 is integrated by Codex PM.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
+- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/A_TASK.md`
@@ -29,25 +30,23 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic eval coverage for TASK-133 after PM integrates it:
+Add deterministic offline eval coverage for TASK-135 after PM integrates it:
 
-1. Slash launcher/menu
-   - Exact `/` returns a command launcher/menu.
-   - Menu contains grouped start/project/worker/help commands.
-   - Menu includes `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, and `/help`.
-   - `/` does not trigger model-call status lines or model execution.
-   - Output is plain text/Markdown, not raw JSON.
+1. Startup landing panel
+   - Banner has clear deterministic sections for identity/status, workspace/branch, model/API-key state, and next actions.
+   - Banner preserves existing workspace, model/provider, key presence, tools count, task/worker state when present.
+   - Missing-key and configured-key states are safe and do not leak fake secrets.
 
-2. Startup welcome polish
-   - Banner includes a next-action hint for `/`, `/wake`, and `/setup`.
-   - Banner preserves workspace, branch when available, provider/model/key presence, tools count, active task summary, and worker summary.
-   - Missing-key state is explicit and safe.
-   - Configured-key state does not leak fake secrets.
+2. Response lifecycle feedback
+   - Normal prompt emits deterministic lifecycle feedback.
+   - Multiline prompt emits deterministic lifecycle feedback.
+   - Slash commands, blank input, and exit emit no model-call lifecycle noise.
+   - Lifecycle output does not reveal hidden reasoning or chain-of-thought.
 
-3. Safety/structure
-   - No chain-of-thought or hidden-reasoning markers.
-   - No API key, token, `.env` secret, or raw JSON leakage.
-   - Evals are offline, deterministic, tempdir-isolated, and do not call network/LLMs/CCB.
+3. Output readability and recovery safety
+   - `/`, `/setup`, `/model`, `/workers`, and `/help` remain plain text/Markdown and not raw JSON.
+   - Config/error recovery output still includes useful exact guidance substrings: `/setup`, `API key`, `401 Unauthorized`, `provider/model 不匹配`.
+   - No API key, token, `.env` secret, hidden reasoning, raw prompt, or raw tool payload leakage.
 
 ## Scope
 
@@ -57,10 +56,10 @@ Primary files:
 
 Only touch `tests/test_cli.py` if a tiny helper is absolutely needed.
 
-Avoid editing runtime implementation files. If TASK-133 surface is not yet present in your worktree, do not implement it yourself. Instead write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-133 integration` and list the exact missing surface.
+Avoid editing runtime implementation files. If TASK-135 surface is not yet present in your worktree, do not implement it yourself. Instead write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-135 integration` and list the exact missing surface.
 
 Do not edit:
-- `mini_agent/cli.py` unless PM explicitly asks after TASK-133 integration.
+- `mini_agent/cli.py` unless PM explicitly asks after TASK-135 integration.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -84,7 +83,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-133 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
+If TASK-135 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
 
 ## Completion Report
 
