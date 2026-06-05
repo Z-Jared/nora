@@ -5521,17 +5521,19 @@ def build_default_registry(
     def _route_capability_request(
         goal: str,
         plugin_manifest_jsons: str = "[]",
+        skill_manifest_jsons: str = "[]",
         max_candidates: int = 5,
     ) -> str:
         return route_capability_request_json(
             goal=goal,
             plugin_manifest_jsons=plugin_manifest_jsons,
+            skill_manifest_jsons=skill_manifest_jsons,
             max_candidates=max_candidates,
         )
 
     registry.register(
         "route_capability_request",
-        "路由能力请求：根据目标和插件 manifest 元数据返回候选能力、风险级别、确认需求和预期交付物。只读，不执行插件代码。",
+        "路由能力请求：根据目标、技能 manifest 和插件 manifest 元数据返回候选能力、风险级别、确认需求和预期交付物。只读，不执行插件代码。",
         _route_capability_request,
         parameters={
             "type": "object",
@@ -5542,11 +5544,15 @@ def build_default_registry(
                 },
                 "plugin_manifest_jsons": {
                     "type": "string",
-                    "description": 'JSON 字符串，包含 manifest JSON 字符串数组或 manifest 对象数组，例如 \'["{...}"]\' 或 \'[{...}]\'',
+                    "description": 'JSON 字符串，包含插件 manifest JSON 字符串数组或 manifest 对象数组',
+                },
+                "skill_manifest_jsons": {
+                    "type": "string",
+                    "description": 'JSON 字符串，包含技能 manifest JSON 字符串数组或 manifest 对象数组',
                 },
                 "max_candidates": {
                     "type": "integer",
-                    "description": "最多返回候选插件数，默认 5，最大 20",
+                    "description": "最多返回候选数，默认 5，最大 20",
                 },
             },
             "required": ["goal"],

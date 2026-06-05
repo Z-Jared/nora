@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-117: Skill-aware capability routing bridge v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-115/TASK-116 ✅
-- 分配: Claude A
-- 目标: 扩展只读 capability router，使其可同时读取 skill manifest metadata 和 plugin manifest metadata，返回候选 skill packs、候选 plugins、required plugins、risk boundaries 和预期交付物；不加载/执行 skill 或 plugin。
-- 验证: `python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6/7；`docs/knowledge/DECISIONS.md` 2026-06-03 skill manifests / capability routing 决策。
-
-### TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-115/TASK-116 ✅
-- 分配: Claude B
-- 目标: 为当前 skill manifest inspection 和 capability router scaffold 增加 deterministic offline eval 覆盖，证明 read-only、bounded safe output、secret no-leak、permission metadata 和 compatibility；不改 runtime 行为。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5/6/7/11；最近提交 `f9d8a0d`。
+暂无
 
 ## 已完成
+
+### TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1 ✅
+- 完成者: Claude B
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 450 passed；`python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent` 242 tests OK；`git diff --check` OK。
+- 内容: 为 `inspect_skill_manifest` 和 `route_capability_request` 增加 14 个 deterministic offline eval，覆盖 exact local/read permission、有效 bounded output、malformed JSON / non-object / invalid list fields safe errors/warnings、secret-like no-leak、durable task/worker/event read-only no-mutation，以及 plugin/skill/routing/MCP/list_tool_permissions compatibility；无 runtime 变更。
+
+### TASK-117: Skill-aware capability routing bridge v1 ✅
+- 完成者: Claude A
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent` 265 tests OK；`python3 evals/run_evals.py` 436 passed；`git diff --check` OK；PM combined skill+plugin no-leak / permission / no-mutation probe OK。
+- 内容: 扩展只读 `route_capability_request`，支持 `skill_manifest_jsons` 与 `plugin_manifest_jsons` 共同路由；新增候选 skill 输出、top-level `required_plugins` / `risk_boundaries` 聚合、skill deliverables 合并和高风险边界风险提升；保持 plugin-only backwards compatibility；registry 工具增加 `skill_manifest_jsons` 参数，权限仍为 `ToolPermission(category="local", risk="read")`。
 
 ### TASK-116: Skill manifest schema and inspection v1 ✅
 - 完成者: Claude B；按 PM 初审反馈补强 secret-like `version` no-leak 和 registry permission assertion

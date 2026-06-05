@@ -21,6 +21,12 @@ from mini_agent.plugins import (
     parse_manifest,
     parse_manifest_json,
 )
+from mini_agent.skills import (
+    SkillManifest,
+    parse_skill_manifest,
+    parse_skill_manifest_json,
+    _safe_str as _skill_safe_str,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -39,12 +45,26 @@ class CandidatePlugin:
 
 
 @dataclass(frozen=True)
+class CandidateSkill:
+    name: str
+    version: str
+    matched_domains: tuple[str, ...] = ()
+    matched_capabilities: tuple[str, ...] = ()
+    required_plugins: tuple[str, ...] = ()
+    risk_boundaries: tuple[str, ...] = ()
+    expected_deliverables: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RoutingResult:
     goal_summary: str = ""
     risk_level: str = "low"
     requires_confirmation: bool = False
     expected_deliverables: tuple[str, ...] = ()
+    candidate_skills: tuple[CandidateSkill, ...] = ()
     candidate_plugins: tuple[CandidatePlugin, ...] = ()
+    required_plugins: tuple[str, ...] = ()
+    risk_boundaries: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -122,14 +142,62 @@ def _keyword_overlap(a: set[str], b: set[str]) -> set[str]:
 # Core routing logic
 # ---------------------------------------------------------------------------
 
+def _score_skill_manifest(
+    manifest: SkillManifest,
+    goal_keywords: set[str],
+) -> tuple[float, CandidateSkill]:
+    """Score a skill manifest against goal keywords. Returns (score, candidate) or (0, ...)."""
+    manifest_keywords: set[str] = set()
+
+    for d in manifest.domains:
+        manifest_keywords.update(_extract_keywords(d))
+    for c in manifest.capabilities:
+        manifest_keywords.update(_extract_keywords(c))
+    for w in manifest.workflows:
+        manifest_keywords.update(_extract_keywords(w))
+    for d in manifest.deliverables:
+        manifest_keywords.update(_extract_keywords(d))
+
+    overlap = _keyword_overlap(goal_keywords, manifest_keywords)
+    if not overlap:
+        return 0, CandidateSkill(
+            name=_skill_safe_str(manifest.name),
+            version=_skill_safe_str(manifest.version),
+        )
+
+    matched_domains = tuple(sorted(
+        d for d in manifest.domains
+        if _keyword_overlap(goal_keywords, _extract_keywords(d))
+    ))
+    matched_capabilities = tuple(sorted(
+        c for c in manifest.capabilities
+        if _keyword_overlap(goal_keywords, _extract_keywords(c))
+    ))
+
+    score = len(overlap) + len(matched_domains) * 2 + len(matched_capabilities) * 2
+
+    candidate = CandidateSkill(
+        name=_skill_safe_str(manifest.name),
+        version=_skill_safe_str(manifest.version),
+        matched_domains=matched_domains,
+        matched_capabilities=matched_capabilities,
+        required_plugins=tuple(manifest.required_plugins),
+        risk_boundaries=tuple(manifest.risk_boundaries),
+        expected_deliverables=tuple(manifest.deliverables),
+    )
+
+    return score, candidate
+
+
 def route_capability_request(
     goal: str,
     plugin_manifest_jsons: list[str] | None = None,
+    skill_manifest_jsons: list[str] | None = None,
     max_candidates: int = 5,
 ) -> dict[str, Any]:
-    """Route a capability request against declared plugin manifests.
+    """Route a capability request against declared plugin and skill manifests.
 
-    Pure read-only: no plugin loading, no execution, no state mutation.
+    Pure read-only: no plugin/skill loading, no execution, no state mutation.
     Returns a bounded safe dict.
     """
     warnings: list[str] = []
@@ -142,7 +210,10 @@ def route_capability_request(
             risk_level="low",
             requires_confirmation=False,
             expected_deliverables=(),
+            candidate_skills=(),
             candidate_plugins=(),
+            required_plugins=(),
+            risk_boundaries=(),
             warnings=("empty or missing goal",),
             errors=(),
         )
@@ -155,6 +226,8 @@ def route_capability_request(
 
     if plugin_manifest_jsons is None:
         plugin_manifest_jsons = []
+    if skill_manifest_jsons is None:
+        skill_manifest_jsons = []
 
     if not isinstance(plugin_manifest_jsons, list):
         return _build_result(
@@ -162,61 +235,116 @@ def route_capability_request(
             risk_level="low",
             requires_confirmation=False,
             expected_deliverables=(),
+            candidate_skills=(),
             candidate_plugins=(),
+            required_plugins=(),
+            risk_boundaries=(),
             warnings=(),
             errors=("plugin_manifest_jsons must be a list",),
+        )
+    if not isinstance(skill_manifest_jsons, list):
+        return _build_result(
+            goal_summary=goal[:100],
+            risk_level="low",
+            requires_confirmation=False,
+            expected_deliverables=(),
+            candidate_skills=(),
+            candidate_plugins=(),
+            required_plugins=(),
+            risk_boundaries=(),
+            warnings=(),
+            errors=("skill_manifest_jsons must be a list",),
         )
 
     # Clamp max_candidates
     max_candidates = max(1, min(max_candidates, 20))
 
-    # Parse manifests
-    parsed_manifests: list[tuple[PluginManifest, list[str], list[str]]] = []
+    # Parse plugin manifests
+    parsed_plugin_manifests: list[tuple[PluginManifest, list[str], list[str]]] = []
     for i, raw in enumerate(plugin_manifest_jsons):
         if isinstance(raw, str):
             result = parse_manifest_json(raw)
         elif isinstance(raw, dict):
             result = parse_manifest(raw)
         else:
-            errors.append(f"manifest[{i}]: must be a JSON string or object")
+            errors.append(f"plugin_manifest[{i}]: must be a JSON string or object")
             continue
 
         if result.errors:
             for err in result.errors:
-                errors.append(f"manifest[{i}]: {err}")
+                errors.append(f"plugin_manifest[{i}]: {err}")
         if result.warnings:
             for warn in result.warnings:
-                warnings.append(f"manifest[{i}]: {warn}")
+                warnings.append(f"plugin_manifest[{i}]: {warn}")
 
         if result.manifest:
-            parsed_manifests.append((result.manifest, list(result.errors), list(result.warnings)))
+            parsed_plugin_manifests.append((result.manifest, list(result.errors), list(result.warnings)))
 
-    # Score and rank candidates
-    candidates: list[tuple[float, CandidatePlugin]] = []
+    # Parse skill manifests
+    parsed_skill_manifests: list[tuple[SkillManifest, list[str], list[str]]] = []
+    for i, raw in enumerate(skill_manifest_jsons):
+        if isinstance(raw, str):
+            result = parse_skill_manifest_json(raw)
+        elif isinstance(raw, dict):
+            result = parse_skill_manifest(raw)
+        else:
+            errors.append(f"skill_manifest[{i}]: must be a JSON string or object")
+            continue
 
-    for manifest, man_errors, man_warnings in parsed_manifests:
+        if result.errors:
+            for err in result.errors:
+                errors.append(f"skill_manifest[{i}]: {err}")
+        if result.warnings:
+            for warn in result.warnings:
+                warnings.append(f"skill_manifest[{i}]: {warn}")
+
+        if result.manifest:
+            parsed_skill_manifests.append((result.manifest, list(result.errors), list(result.warnings)))
+
+    # Score and rank plugin candidates
+    plugin_candidates: list[tuple[float, CandidatePlugin]] = []
+    for manifest, man_errors, man_warnings in parsed_plugin_manifests:
         if man_errors:
-            continue  # Skip invalid manifests
-
+            continue
         score, cand = _score_manifest(manifest, goal_keywords)
         if score > 0:
-            candidates.append((score, cand))
+            plugin_candidates.append((score, cand))
+    plugin_candidates.sort(key=lambda x: (-x[0], x[1].name))
+    top_plugin_candidates = [cand for _, cand in plugin_candidates[:max_candidates]]
 
-    # Sort by score descending, then name for determinism
-    candidates.sort(key=lambda x: (-x[0], x[1].name))
+    # Score and rank skill candidates
+    skill_candidates: list[tuple[float, CandidateSkill]] = []
+    for manifest, man_errors, man_warnings in parsed_skill_manifests:
+        if man_errors:
+            continue
+        score, cand = _score_skill_manifest(manifest, goal_keywords)
+        if score > 0:
+            skill_candidates.append((score, cand))
+    skill_candidates.sort(key=lambda x: (-x[0], x[1].name))
+    top_skill_candidates = [cand for _, cand in skill_candidates[:max_candidates]]
 
-    # Take top N
-    top_candidates = [cand for _, cand in candidates[:max_candidates]]
+    # Aggregate required_plugins and risk_boundaries from matched skills
+    all_required_plugins: set[str] = set()
+    all_risk_boundaries: set[str] = set()
+    for skill in top_skill_candidates:
+        all_required_plugins.update(skill.required_plugins)
+        all_risk_boundaries.update(skill.risk_boundaries)
 
-    # Aggregate risk
-    risk_levels = [c.risk_level for c in top_candidates]
-    overall_risk = _aggregate_risk(risk_levels)
-    overall_requires_confirmation = any(c.requires_confirmation for c in top_candidates)
+    # Aggregate risk from plugins + skill boundaries
+    plugin_risk_levels = [c.risk_level for c in top_plugin_candidates]
+    overall_risk = _aggregate_risk(plugin_risk_levels)
+    # Skill risk boundaries can elevate risk
+    if any(rb.lower() in HIGH_RISK_RISKS or rb.lower() == "high" for rb in all_risk_boundaries):
+        overall_risk = _aggregate_risk([overall_risk, "high"])
 
-    # Infer deliverables from goal keywords
-    deliverables = _infer_deliverables(goal_keywords, top_candidates)
+    overall_requires_confirmation = any(c.requires_confirmation for c in top_plugin_candidates)
 
-    # Build goal summary
+    # Infer deliverables from goal keywords + skill deliverables
+    deliverables = _infer_deliverables(goal_keywords, top_plugin_candidates)
+    for skill in top_skill_candidates:
+        deliverables.extend(skill.expected_deliverables)
+    deliverables = sorted(set(deliverables))
+
     goal_summary = goal[:100] + ("..." if len(goal) > 100 else "")
 
     return _build_result(
@@ -224,7 +352,10 @@ def route_capability_request(
         risk_level=overall_risk,
         requires_confirmation=overall_requires_confirmation,
         expected_deliverables=tuple(deliverables),
-        candidate_plugins=tuple(top_candidates),
+        candidate_skills=tuple(top_skill_candidates),
+        candidate_plugins=tuple(top_plugin_candidates),
+        required_plugins=tuple(sorted(all_required_plugins)),
+        risk_boundaries=tuple(sorted(all_risk_boundaries)),
         warnings=tuple(warnings),
         errors=tuple(errors),
     )
@@ -318,7 +449,10 @@ def _build_result(
     risk_level: str,
     requires_confirmation: bool,
     expected_deliverables: tuple[str, ...],
+    candidate_skills: tuple[CandidateSkill, ...],
     candidate_plugins: tuple[CandidatePlugin, ...],
+    required_plugins: tuple[str, ...],
+    risk_boundaries: tuple[str, ...],
     warnings: tuple[str, ...],
     errors: tuple[str, ...],
 ) -> dict[str, Any]:
@@ -328,6 +462,18 @@ def _build_result(
         "risk_level": risk_level,
         "requires_confirmation": requires_confirmation,
         "expected_deliverables": list(expected_deliverables),
+        "candidate_skills": [
+            {
+                "name": s.name,
+                "version": s.version,
+                "matched_domains": list(s.matched_domains),
+                "matched_capabilities": list(s.matched_capabilities),
+                "required_plugins": list(s.required_plugins),
+                "risk_boundaries": list(s.risk_boundaries),
+                "expected_deliverables": list(s.expected_deliverables),
+            }
+            for s in candidate_skills
+        ],
         "candidate_plugins": [
             {
                 "name": c.name,
@@ -340,34 +486,52 @@ def _build_result(
             }
             for c in candidate_plugins
         ],
+        "required_plugins": list(required_plugins),
+        "risk_boundaries": list(risk_boundaries),
         "warnings": list(warnings),
         "errors": list(errors),
     }
 
 
-def route_capability_request_json(goal: str, plugin_manifest_jsons: str = "[]", max_candidates: int = 5) -> str:
+def route_capability_request_json(
+    goal: str,
+    plugin_manifest_jsons: str = "[]",
+    skill_manifest_jsons: str = "[]",
+    max_candidates: int = 5,
+) -> str:
     """JSON-string wrapper for registry tool registration."""
-    # Parse the outer JSON array
+    # Parse the outer JSON arrays
     json_error = False
     try:
-        manifests = json.loads(plugin_manifest_jsons) if plugin_manifest_jsons else []
+        plugin_manifests = json.loads(plugin_manifest_jsons) if plugin_manifest_jsons else []
     except (json.JSONDecodeError, TypeError):
-        manifests = []
+        plugin_manifests = []
         json_error = True
 
-    if not isinstance(manifests, list):
-        manifests = []
+    if not isinstance(plugin_manifests, list):
+        plugin_manifests = []
+        json_error = True
+
+    try:
+        skill_manifests = json.loads(skill_manifest_jsons) if skill_manifest_jsons else []
+    except (json.JSONDecodeError, TypeError):
+        skill_manifests = []
+        json_error = True
+
+    if not isinstance(skill_manifests, list):
+        skill_manifests = []
         json_error = True
 
     result = route_capability_request(
         goal=goal,
-        plugin_manifest_jsons=manifests,
+        plugin_manifest_jsons=plugin_manifests,
+        skill_manifest_jsons=skill_manifests,
         max_candidates=max_candidates,
     )
 
     if json_error:
         errors = list(result.get("errors", []))
-        errors.append("plugin_manifest_jsons: invalid JSON or not a list")
+        errors.append("manifest_jsons: invalid JSON or not a list")
         result["errors"] = errors
 
     return json.dumps(result, ensure_ascii=False)

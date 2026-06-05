@@ -4,39 +4,45 @@ Status: ready for Codex review
 
 ## Summary
 
-TASK-116: Skill manifest schema and inspection v1. PM review fix applied — secret-like `version` now redacted in both parser and safe output.
+Added 14 deterministic offline eval cases for TASK-118 covering `inspect_skill_manifest` and `route_capability_request` surfaces in `evals/run_evals.py`.
 
-## Changes
+## New Eval Cases
 
-### `mini_agent/skills.py` (new)
-- `SkillManifest` dataclass with 10 fields (name, version, description, domains, capabilities, workflows, deliverables, required_plugins, risk_boundaries, evals)
-- `parse_skill_manifest()` / `parse_skill_manifest_json()` — validate dict/JSON input
-- `inspect_skill_manifest()` / `inspect_skill_manifest_json()` — bounded safe output
-- Secret-like value redaction on `name`, `version`, `description`, and all list items
-- List/string length bounding, unknown field warnings
+### Skill Manifest (7 evals)
+- `eval_skill_manifest_tool_permission` — exact `ToolPermission(category="local", risk="read")`
+- `eval_skill_manifest_valid_bounded` — valid manifest produces bounded safe metadata
+- `eval_skill_manifest_malformed_json` — malformed JSON returns safe bounded error
+- `eval_skill_manifest_non_object` — non-object JSON returns safe bounded error
+- `eval_skill_manifest_invalid_list_fields` — invalid list fields produce bounded warnings
+- `eval_skill_manifest_secret_no_leak` — secret-like values (name, version, description, list items) do not leak via direct or registry inspection; rejected manifests also safe
+- `eval_skill_manifest_read_only_no_mutation` — no durable task/worker/event mutation
 
-### `mini_agent/toolkits/registry_builder.py` (+25 lines)
-- Registered `inspect_skill_manifest` tool with `ToolPermission(category="local", risk="read")`
+### Capability Router (7 evals)
+- `eval_capability_router_tool_permission` — exact `ToolPermission(category="local", risk="read")`
+- `eval_capability_router_valid_routing` — deterministic candidate metadata, risk level, confirmation flag, expected deliverables
+- `eval_capability_router_malformed_outer_json` — malformed outer JSON produces bounded errors
+- `eval_capability_router_malformed_individual_manifest` — malformed individual manifests produce bounded errors
+- `eval_capability_router_secret_no_leak` — secret-like manifest name/version do not leak through routing
+- `eval_capability_router_read_only_no_mutation` — no durable task/worker/event mutation
+- `eval_skill_capability_compatibility` — existing plugin manifest / MCP / durable task eval compatibility
 
-### `tests/test_skills.py` (new)
-- 40 tests covering: valid/invalid parsing, JSON parsing, sentinel no-leak (including `version` sentinel via direct + registry output), read-only no-mutation (durable task/worker/event), registry permission check, constants
+## Diff
 
-## PM Review Fix
-
-- `version` field now checked for `_is_secret_like()` during parsing — rejects as error
-- `manifest_to_safe_dict()` now applies `_safe_str()` to `version`
-- Added `test_version_sentinel_no_leak` (direct) and `test_version_sentinel_no_leak_registry` (via default registry)
-- Added `TestRegistryPermission` verifying exact `ToolPermission(category="local", risk="read")` on default registry
+```text
+ evals/run_evals.py | 239 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 239 insertions(+)
+```
 
 ## Tests
 
-```
-python3 -m unittest tests.test_skills tests.test_mini_agent → 166 passed, 0 failed
-python3 evals/run_evals.py → 436 passed, 0 failed
-git diff --check → clean
+```text
+python3 evals/run_evals.py                       450 passed, 0 failed
+python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent  242 tests OK
+git diff --check                                  clean
 ```
 
 ## Notes
 
+- No runtime modules changed.
+- No edits to `designs/`, `CODEX_TERMINAL_HANDOFF.md`, `A_TASK.md`, or `A_DONE.md`.
 - No commit or push performed.
-- `registry_builder.py` edit is tightly scoped (25 lines).

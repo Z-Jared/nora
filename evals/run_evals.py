@@ -511,6 +511,21 @@ def main() -> int:
         EvalCase("plugin_manifest_read_only_no_mutation", eval_plugin_manifest_read_only_no_mutation),
         EvalCase("plugin_manifest_no_plugin_execution", eval_plugin_manifest_no_plugin_execution),
         EvalCase("plugin_manifest_compatibility", eval_plugin_manifest_compatibility),
+        # TASK-118: Skill manifest and capability routing evals
+        EvalCase("skill_manifest_tool_permission", eval_skill_manifest_tool_permission),
+        EvalCase("skill_manifest_valid_bounded", eval_skill_manifest_valid_bounded),
+        EvalCase("skill_manifest_malformed_json", eval_skill_manifest_malformed_json),
+        EvalCase("skill_manifest_non_object", eval_skill_manifest_non_object),
+        EvalCase("skill_manifest_invalid_list_fields", eval_skill_manifest_invalid_list_fields),
+        EvalCase("skill_manifest_secret_no_leak", eval_skill_manifest_secret_no_leak),
+        EvalCase("skill_manifest_read_only_no_mutation", eval_skill_manifest_read_only_no_mutation),
+        EvalCase("capability_router_tool_permission", eval_capability_router_tool_permission),
+        EvalCase("capability_router_valid_routing", eval_capability_router_valid_routing),
+        EvalCase("capability_router_malformed_outer_json", eval_capability_router_malformed_outer_json),
+        EvalCase("capability_router_malformed_individual_manifest", eval_capability_router_malformed_individual_manifest),
+        EvalCase("capability_router_secret_no_leak", eval_capability_router_secret_no_leak),
+        EvalCase("capability_router_read_only_no_mutation", eval_capability_router_read_only_no_mutation),
+        EvalCase("skill_capability_compatibility", eval_skill_capability_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -18176,6 +18191,402 @@ def eval_plugin_manifest_compatibility():
             # call_mcp_tool still works
             result = call_mcp_tool(registry, "calculate", {"expression": "2+3"})
             assert "5" in str(result), f"unexpected calculate result: {result}"
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-118: Skill manifest and capability routing evals
+# ---------------------------------------------------------------------------
+
+def eval_skill_manifest_tool_permission():
+    """inspect_skill_manifest is registered with ToolPermission(category="local", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "inspect_skill_manifest" in perms, "inspect_skill_manifest not in permissions list"
+            tool_perm = registry._tools.get("inspect_skill_manifest")
+            assert tool_perm is not None, "inspect_skill_manifest not registered"
+            assert tool_perm.permission.category == "local", f"expected local, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_valid_bounded():
+    """Valid skill manifest produces bounded safe metadata."""
+    from mini_agent.skills import inspect_skill_manifest
+    manifest = {
+        "name": "nora-coding",
+        "version": "1.0.0",
+        "description": "Coding skill pack",
+        "domains": ["python", "typescript"],
+        "capabilities": ["refactor", "test"],
+        "workflows": ["tdd", "code-review"],
+        "deliverables": ["code_changes", "test_results"],
+        "required_plugins": ["git-tools"],
+        "risk_boundaries": ["no destructive"],
+        "evals": ["unit-tests"],
+    }
+    result = inspect_skill_manifest(manifest)
+    assert result["valid"] is True, f"expected valid, got errors: {result.get('errors')}"
+    assert result["errors"] == [], f"unexpected errors: {result['errors']}"
+    m = result["manifest"]
+    assert m["name"] == "nora-coding"
+    assert m["version"] == "1.0.0"
+    assert m["description"] == "Coding skill pack"
+    assert len(m["domains"]) == 2
+    assert "python" in m["domains"]
+    assert len(m["capabilities"]) == 2
+    assert len(m["workflows"]) == 2
+    assert len(m["deliverables"]) == 2
+    assert len(m["required_plugins"]) == 1
+    assert len(m["risk_boundaries"]) == 1
+    assert len(m["evals"]) == 1
+    # Bounded: JSON serializable
+    json.dumps(result)
+
+
+def eval_skill_manifest_malformed_json():
+    """Malformed skill manifest JSON returns safe bounded error, never raises."""
+    from mini_agent.skills import inspect_skill_manifest_json
+    result = inspect_skill_manifest_json("{not valid json!!!")
+    assert result["valid"] is False
+    assert len(result["errors"]) > 0
+    assert "invalid JSON" in result["errors"][0]
+
+
+def eval_skill_manifest_non_object():
+    """Non-object skill manifest JSON returns safe bounded error."""
+    from mini_agent.skills import inspect_skill_manifest_json
+    result = inspect_skill_manifest_json('"just a string"')
+    assert result["valid"] is False
+    assert len(result["errors"]) > 0
+
+
+def eval_skill_manifest_invalid_list_fields():
+    """Invalid list fields in skill manifest produce bounded safe warnings."""
+    from mini_agent.skills import inspect_skill_manifest
+    manifest = {
+        "name": "bad-lists",
+        "version": "1.0.0",
+        "domains": "not a list",
+        "capabilities": [42, "valid_cap"],
+        "workflows": ["ok"],
+    }
+    result = inspect_skill_manifest(manifest)
+    # Should still be valid (list issues are warnings, not errors for non-required fields)
+    assert "warnings" in result
+    assert len(result["warnings"]) > 0
+
+
+def eval_skill_manifest_secret_no_leak():
+    """Secret-like skill manifest values do not leak through direct or registry inspection."""
+    from mini_agent.skills import inspect_skill_manifest
+    secret = "sk-SECRET-TOKEN-12345-abcdef"
+
+    # Case 1: secret-like name/version -> manifest rejected, secret not in output
+    manifest_rejected = {
+        "name": secret,
+        "version": secret,
+        "description": f"desc with {secret}",
+        "domains": [secret],
+    }
+    result = inspect_skill_manifest(manifest_rejected)
+    result_str = json.dumps(result)
+    assert secret not in result_str, f"secret leaked in rejected manifest: {result_str}"
+    assert result["valid"] is False
+
+    # Case 2: valid manifest with secret-like list items -> items omitted/redacted
+    manifest_list_secrets = {
+        "name": "safe-name",
+        "version": "1.0.0",
+        "description": secret,
+        "domains": [secret, "normal-domain"],
+        "capabilities": [secret, "normal-cap"],
+        "workflows": [secret],
+        "deliverables": [secret],
+        "required_plugins": [secret],
+        "risk_boundaries": [secret],
+        "evals": [secret],
+    }
+    result2 = inspect_skill_manifest(manifest_list_secrets)
+    result2_str = json.dumps(result2)
+    assert secret not in result2_str, f"secret leaked in list fields: {result2_str}"
+    assert "<redacted>" in result2_str, "expected redacted markers in output"
+    # Valid manifest should be present with safe fields
+    assert result2["valid"] is True
+    m = result2["manifest"]
+    assert m["name"] == "safe-name"
+    assert m["version"] == "1.0.0"
+    assert m["description"] == "<redacted>"
+    assert "normal-domain" in m["domains"]
+    assert "normal-cap" in m["capabilities"]
+
+    # Case 3: test via registry with valid manifest
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            reg_result = registry.call("inspect_skill_manifest", manifest_json=json.dumps(manifest_list_secrets))
+            assert secret not in reg_result, f"secret leaked via registry: {reg_result}"
+            assert "<redacted>" in reg_result, "expected redacted markers in registry output"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_read_only_no_mutation():
+    """Skill manifest inspection does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            manifest = {
+                "name": "read-only-test",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["refactor"],
+            }
+            result = registry.call("inspect_skill_manifest", manifest_json=json.dumps(manifest))
+            parsed = json.loads(result)
+            assert parsed["valid"] is True
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_capability_router_tool_permission():
+    """route_capability_request is registered with ToolPermission(category="local", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "route_capability_request" in perms, "route_capability_request not in permissions list"
+            tool_perm = registry._tools.get("route_capability_request")
+            assert tool_perm is not None, "route_capability_request not registered"
+            assert tool_perm.permission.category == "local", f"expected local, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_capability_router_valid_routing():
+    """Valid plugin manifest routing returns deterministic candidate metadata, risk level, confirmation flag, and expected deliverables."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            manifest = {
+                "name": "code-helper",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["refactor"],
+                "tools": [
+                    {
+                        "name": "refactor_tool",
+                        "description": "Refactor Python code",
+                        "risk": "write",
+                        "requires_confirmation": True,
+                    },
+                ],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="refactor python code",
+                plugin_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            )
+            result = json.loads(result_str)
+            assert "goal_summary" in result
+            assert "risk_level" in result
+            assert "requires_confirmation" in result
+            assert "expected_deliverables" in result
+            assert "candidate_plugins" in result
+            assert len(result["candidate_plugins"]) > 0, "expected at least one candidate"
+            cand = result["candidate_plugins"][0]
+            assert cand["name"] == "code-helper"
+            assert cand["version"] == "1.0.0"
+            assert "python" in cand["matched_domains"]
+            assert "refactor" in cand["matched_capabilities"]
+            assert cand["requires_confirmation"] is True
+            assert cand["risk_level"] in ("low", "medium", "high")
+            # Should be deterministic
+            result2_str = registry.call(
+                "route_capability_request",
+                goal="refactor python code",
+                plugin_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            )
+            assert result_str == result2_str, "routing not deterministic"
+        finally:
+            db.close()
+
+
+def eval_capability_router_malformed_outer_json():
+    """Malformed outer plugin manifest JSON produces bounded safe errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test goal",
+                plugin_manifest_jsons="{not valid json!!!",
+            )
+            result = json.loads(result_str)
+            assert len(result["errors"]) > 0
+            assert any("invalid JSON" in e or "not a list" in e for e in result["errors"])
+        finally:
+            db.close()
+
+
+def eval_capability_router_malformed_individual_manifest():
+    """Malformed individual manifests produce bounded safe errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            bad_manifests = [
+                json.dumps({"name": "bad-manifest"}),  # missing version
+                json.dumps({"version": "1.0.0"}),       # missing name
+                "not json at all",
+            ]
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test goal",
+                plugin_manifest_jsons=json.dumps(bad_manifests),
+            )
+            result = json.loads(result_str)
+            assert len(result["errors"]) > 0
+            # Should still return a valid structure
+            assert "candidate_plugins" in result
+            assert len(result["candidate_plugins"]) == 0
+        finally:
+            db.close()
+
+
+def eval_capability_router_secret_no_leak():
+    """Secret-like plugin manifest name/version do not leak through routing."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            secret = "sk-API-KEY-SECRET-98765"
+            manifest = {
+                "name": secret,
+                "version": secret,
+                "domains": ["python"],
+                "capabilities": ["test"],
+                "tools": [{"name": "t1", "risk": "read"}],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="test python code",
+                plugin_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            )
+            assert secret not in result_str, f"secret leaked via routing: {result_str}"
+        finally:
+            db.close()
+
+
+def eval_capability_router_read_only_no_mutation():
+    """Capability routing does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            manifest = {
+                "name": "read-only-router",
+                "version": "1.0.0",
+                "domains": ["python"],
+                "capabilities": ["build"],
+                "tools": [{"name": "build_tool", "risk": "read"}],
+            }
+            result_str = registry.call(
+                "route_capability_request",
+                goal="build python project",
+                plugin_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            )
+            result = json.loads(result_str)
+            assert "candidate_plugins" in result
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_skill_capability_compatibility():
+    """Existing plugin manifest / MCP / durable task evals still pass after skill/capability evals."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "list_tool_permissions" in perms
+            assert "inspect_plugin_manifest" in perms
+            assert "inspect_skill_manifest" in perms
+            assert "route_capability_request" in perms
+
+            # MCP tools still work
+            tools = registry_to_mcp_tools(registry)
+            assert len(tools) > 0
+            calc = next((t for t in tools if t["name"] == "calculate"), None)
+            assert calc is not None, "calculate missing from MCP tools"
+
+            # call_mcp_tool still works
+            result = call_mcp_tool(registry, "calculate", {"expression": "2+3"})
+            assert "5" in str(result), f"unexpected calculate result: {result}"
+
+            # Plugin manifest inspection still works
+            plugin_manifest = {"name": "compat-plugin", "version": "1.0.0"}
+            plugin_result = registry.call("inspect_plugin_manifest", manifest_json=json.dumps(plugin_manifest))
+            parsed = json.loads(plugin_result)
+            assert parsed["valid"] is True
+
+            # Skill manifest inspection still works
+            skill_manifest = {"name": "compat-skill", "version": "1.0.0"}
+            skill_result = registry.call("inspect_skill_manifest", manifest_json=json.dumps(skill_manifest))
+            parsed = json.loads(skill_result)
+            assert parsed["valid"] is True
+
+            # Capability routing still works
+            route_result = registry.call(
+                "route_capability_request",
+                goal="test compatibility",
+                plugin_manifest_jsons="[]",
+            )
+            parsed = json.loads(route_result)
+            assert "goal_summary" in parsed
         finally:
             db.close()
 

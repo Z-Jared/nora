@@ -713,5 +713,319 @@ class TestRouteCapabilityRequest(unittest.TestCase):
             self.assertEqual(events_before, events_after)
 
 
+# ---------------------------------------------------------------------------
+# Skill-aware capability routing tests (TASK-117)
+# ---------------------------------------------------------------------------
+
+def _coding_skill_manifest():
+    """Helper: a coding skill manifest."""
+    return {
+        "name": "coding-skill",
+        "version": "1.0.0",
+        "description": "Software engineering skill pack",
+        "domains": ["coding", "development"],
+        "capabilities": ["code_review", "refactoring"],
+        "workflows": ["implement_feature", "fix_bug"],
+        "deliverables": ["code_changes", "test_results"],
+        "required_plugins": ["git-tools", "shell-tools"],
+        "risk_boundaries": ["write"],
+    }
+
+
+def _research_skill_manifest():
+    """Helper: a research skill manifest."""
+    return {
+        "name": "research-skill",
+        "version": "2.0.0",
+        "description": "Research and analysis skill pack",
+        "domains": ["research", "analysis"],
+        "capabilities": ["web_search", "document_review"],
+        "workflows": ["gather_information", "summarize_findings"],
+        "deliverables": ["search_results", "documentation"],
+        "required_plugins": ["web-tools"],
+        "risk_boundaries": ["read"],
+    }
+
+
+def _high_risk_skill_manifest():
+    """Helper: a high-risk skill manifest."""
+    return {
+        "name": "deploy-skill",
+        "version": "1.0.0",
+        "description": "Deployment skill pack",
+        "domains": ["deployment"],
+        "capabilities": ["deploy"],
+        "workflows": ["deploy_production"],
+        "deliverables": ["deployment_artifact"],
+        "required_plugins": ["cloud-tools"],
+        "risk_boundaries": ["high", "destructive"],
+    }
+
+
+def _coding_plugin_manifest():
+    """Helper: a coding plugin manifest for TASK-117 tests."""
+    return {
+        "name": "code-plugin",
+        "version": "1.0.0",
+        "tools": [
+            {
+                "name": "code_review",
+                "description": "Review code for quality",
+                "risk": "read",
+                "requires_confirmation": False,
+            }
+        ],
+    }
+
+
+class TestSkillAwareRouting(unittest.TestCase):
+    """Tests for skill-aware capability routing (TASK-117)."""
+
+    def test_skill_routing_finds_match(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="implement a new feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertEqual(len(result["candidate_skills"]), 1)
+        self.assertEqual(result["candidate_skills"][0]["name"], "coding-skill")
+
+    def test_skill_routing_no_match(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="cook dinner",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertEqual(len(result["candidate_skills"]), 0)
+
+    def test_skill_and_plugin_routing_combined(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="code review and implement feature",
+            plugin_manifest_jsons=[json.dumps(_coding_plugin_manifest())],
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertGreaterEqual(len(result["candidate_skills"]), 1)
+        self.assertGreaterEqual(len(result["candidate_plugins"]), 1)
+
+    def test_skill_required_plugins_aggregated(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertIn("git-tools", result["required_plugins"])
+        self.assertIn("shell-tools", result["required_plugins"])
+
+    def test_skill_risk_boundaries_aggregated(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertIn("write", result["risk_boundaries"])
+
+    def test_high_risk_skill_elevates_overall_risk(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="deploy to production",
+            skill_manifest_jsons=[json.dumps(_high_risk_skill_manifest())],
+        )
+        self.assertEqual(result["risk_level"], "high")
+
+    def test_skill_deliverables_in_expected(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertIn("code_changes", result["expected_deliverables"])
+        self.assertIn("test_results", result["expected_deliverables"])
+
+    def test_backwards_compatibility_plugin_only(self):
+        """Calling with only plugin manifests must work exactly as before."""
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="code review",
+            plugin_manifest_jsons=[json.dumps(_coding_manifest())],
+        )
+        self.assertIn("candidate_plugins", result)
+        self.assertIn("candidate_skills", result)
+        self.assertEqual(len(result["candidate_skills"]), 0)
+        self.assertEqual(len(result["candidate_plugins"]), 1)
+
+    def test_backwards_compatibility_no_skill_param(self):
+        """Omitting skill_manifest_jsons entirely must work."""
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(goal="code review")
+        self.assertIn("candidate_skills", result)
+        self.assertEqual(len(result["candidate_skills"]), 0)
+
+    def test_malformed_skill_json_produces_error(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="test",
+            skill_manifest_jsons=["{bad json"],
+        )
+        self.assertTrue(len(result["errors"]) > 0)
+        self.assertTrue(any("skill_manifest" in e or "invalid" in e.lower() for e in result["errors"]))
+
+    def test_malformed_skill_type_produces_error(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="test",
+            skill_manifest_jsons=[123],
+        )
+        self.assertTrue(len(result["errors"]) > 0)
+
+    def test_skill_output_shape(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        skill = result["candidate_skills"][0]
+        for key in ("name", "version", "matched_domains", "matched_capabilities",
+                    "required_plugins", "risk_boundaries", "expected_deliverables"):
+            self.assertIn(key, skill)
+
+    def test_skill_no_secret_leak(self):
+        """Secret-like skill manifest values must not appear in output."""
+        from mini_agent.capability_router import route_capability_request
+        manifest = _coding_skill_manifest()
+        manifest["name"] = "sk-SECRET-SKILL-XYZ"
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        text = json.dumps(result)
+        self.assertNotIn("sk-SECRET-SKILL-XYZ", text)
+
+    def test_skill_secret_version_not_leaked(self):
+        from mini_agent.capability_router import route_capability_request
+        manifest = _coding_skill_manifest()
+        manifest["version"] = "sk-SECRET-VERSION-XYZ"
+        result = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        text = json.dumps(result)
+        self.assertNotIn("sk-SECRET-VERSION-XYZ", text)
+
+    def test_multiple_skills_ranked(self):
+        from mini_agent.capability_router import route_capability_request
+        result = route_capability_request(
+            goal="research and analyze code",
+            skill_manifest_jsons=[
+                json.dumps(_coding_skill_manifest()),
+                json.dumps(_research_skill_manifest()),
+            ],
+        )
+        self.assertGreaterEqual(len(result["candidate_skills"]), 1)
+
+    def test_max_candidates_applies_to_skills(self):
+        from mini_agent.capability_router import route_capability_request
+        skills = []
+        for i in range(10):
+            m = _coding_skill_manifest()
+            m["name"] = f"skill-{i}"
+            m["domains"] = ["coding"]
+            skills.append(json.dumps(m))
+        result = route_capability_request(
+            goal="code review",
+            skill_manifest_jsons=skills,
+            max_candidates=3,
+        )
+        self.assertLessEqual(len(result["candidate_skills"]), 3)
+
+    def test_deterministic_output(self):
+        from mini_agent.capability_router import route_capability_request
+        r1 = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        r2 = route_capability_request(
+            goal="implement feature",
+            skill_manifest_jsons=[json.dumps(_coding_skill_manifest())],
+        )
+        self.assertEqual(r1, r2)
+
+    def test_json_wrapper_with_skills(self):
+        from mini_agent.capability_router import route_capability_request_json
+        result_json = route_capability_request_json(
+            goal="implement feature",
+            skill_manifest_jsons=json.dumps([_coding_skill_manifest()]),
+        )
+        result = json.loads(result_json)
+        self.assertEqual(len(result["candidate_skills"]), 1)
+
+    def test_json_wrapper_malformed_skill_json_returns_error(self):
+        from mini_agent.capability_router import route_capability_request_json
+        result_json = route_capability_request_json(
+            goal="test",
+            skill_manifest_jsons="{bad json",
+        )
+        result = json.loads(result_json)
+        self.assertTrue(len(result["errors"]) > 0)
+
+    def test_registry_tool_has_skill_manifest_jsons_param(self):
+        """The registered tool must accept skill_manifest_jsons."""
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        reg = build_default_registry()
+        tool = reg._tools.get("route_capability_request")
+        self.assertIsNotNone(tool)
+        self.assertIn("skill_manifest_jsons", tool.parameters.get("properties", {}))
+
+    def test_registry_call_with_skills(self):
+        """Registry call with skill_manifest_jsons must work."""
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        reg = build_default_registry()
+        result_json = reg.call(
+            "route_capability_request",
+            goal="implement feature",
+            skill_manifest_jsons=json.dumps([_coding_skill_manifest()]),
+        )
+        result = json.loads(result_json)
+        self.assertEqual(len(result["candidate_skills"]), 1)
+        self.assertEqual(result["candidate_skills"][0]["name"], "coding-skill")
+
+    def test_registry_call_skills_and_plugins_combined(self):
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        reg = build_default_registry()
+        result_json = reg.call(
+            "route_capability_request",
+            goal="code review and implement feature",
+            plugin_manifest_jsons=json.dumps([_coding_manifest()]),
+            skill_manifest_jsons=json.dumps([_coding_skill_manifest()]),
+        )
+        result = json.loads(result_json)
+        self.assertGreaterEqual(len(result["candidate_skills"]), 1)
+        self.assertGreaterEqual(len(result["candidate_plugins"]), 1)
+
+    def test_no_durable_mutation_with_skills(self):
+        """Calling with skill manifests must not mutate durable state."""
+        from mini_agent.toolkits.registry_builder import build_default_registry
+        from mini_agent.database import NoraDB
+        with tempfile.TemporaryDirectory() as td:
+            db = NoraDB(Path(td) / "test.db")
+            reg = build_default_registry(db=db)
+            tasks_before = len(reg.durable_task_store.list_tasks())
+            workers_before = len(reg.durable_worker_store.list_workers())
+            events_before = len(reg.durable_event_store.list_events())
+
+            reg.call(
+                "route_capability_request",
+                goal="implement feature",
+                skill_manifest_jsons=json.dumps([_coding_skill_manifest()]),
+            )
+
+            tasks_after = len(reg.durable_task_store.list_tasks())
+            workers_after = len(reg.durable_worker_store.list_workers())
+            events_after = len(reg.durable_event_store.list_events())
+            self.assertEqual(tasks_before, tasks_after)
+            self.assertEqual(workers_before, workers_after)
+            self.assertEqual(events_before, events_after)
+
+
 if __name__ == "__main__":
     unittest.main()
