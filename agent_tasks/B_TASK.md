@@ -5,58 +5,43 @@ Status: assigned
 
 ## Task
 
-TASK-116: Skill manifest schema and inspection v1.
+TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1.
 
-Implement a minimal read-only skill manifest schema / parser / inspection surface. This is the skill-pack counterpart to plugin manifests: it should let Nora inspect declared skill-pack metadata for domains, capabilities, workflows, deliverables, required plugins, risk boundaries, and eval hooks without loading or executing skill content.
+Add deterministic offline eval coverage for the just-landed TASK-115/TASK-116 surfaces: `inspect_skill_manifest` and `route_capability_request`. This task should prove read-only behavior, safe bounded outputs, secret no-leak, exact permission metadata, and compatibility without changing runtime behavior.
 
 ## Scope
 
 - Work in `.ccb/workspaces/claude-b`.
-- Prefer a small new module such as `mini_agent/skills.py` if no equivalent module exists.
-- Register a read-only registry tool named `inspect_skill_manifest` with `ToolPermission(category="local", risk="read")`.
-- Keep the parser independent from plugin loading and runtime execution.
-- Keep output deterministic, bounded, and safe.
+- Primary target: `evals/run_evals.py`.
+- Do not change runtime modules unless you find a real blocker; if you do, document it clearly in `agent_tasks/B_DONE.md`.
+- Keep evals offline, deterministic, and isolated with temporary local stores where needed.
 - Do not edit `designs/` or `CODEX_TERMINAL_HANDOFF.md`.
 
-## Manifest Fields
+## Required Eval Coverage
 
-Support a v1 JSON/dict manifest with at least:
+Add focused eval cases covering:
 
-- `name` (required, non-empty string)
-- `version` (required, non-empty string)
-- `description` (optional, bounded)
-- `domains` (optional list of strings)
-- `capabilities` (optional list of strings)
-- `workflows` (optional list of strings)
-- `deliverables` (optional list of strings)
-- `required_plugins` (optional list of strings)
-- `risk_boundaries` (optional list of strings)
-- `evals` (optional list of strings)
-
-Unknown additional fields may be ignored or reported as warnings, but raw sensitive values must not leak.
-
-## Requirements
-
-- Provide parser/inspection helpers for dict and JSON string input, similar in spirit to `mini_agent/plugins.py`.
-- Validate required fields and list field types.
-- Normalize or omit malformed optional entries safely.
-- Redact or omit secret-like values in names, lists, warnings, and errors.
-- Bound long descriptions/list items and cap list lengths to keep output small.
-- `inspect_skill_manifest` must be read-only: no durable task/worker/event mutation.
-- Do not load files, import skill modules, execute hooks, call external services, or invoke plugin code.
-- Preserve existing plugin manifest and MCP behavior.
+- `inspect_skill_manifest` registry tool permission is exactly `ToolPermission(category="local", risk="read")`.
+- Valid skill manifest produces bounded safe metadata.
+- Malformed skill manifest JSON / non-object / invalid list fields produce bounded safe errors or warnings.
+- Secret-like skill manifest values do not leak through direct or registry inspection.
+- Skill manifest inspection does not mutate durable tasks, workers, or events.
+- `route_capability_request` registry tool permission is exactly `ToolPermission(category="local", risk="read")`.
+- Valid plugin manifest routing returns deterministic candidate metadata, risk level, confirmation flag, and expected deliverables.
+- Malformed outer plugin manifest JSON and malformed individual manifests produce bounded safe errors.
+- Secret-like plugin manifest name/version do not leak through routing.
+- Capability routing does not mutate durable tasks, workers, or events.
+- Existing plugin manifest / MCP / durable task eval compatibility still passes.
 
 ## Verification
 
-Run these before writing `agent_tasks/B_DONE.md`:
+Run before writing `agent_tasks/B_DONE.md`:
 
 ```bash
-python3 -m unittest tests.test_mini_agent
 python3 evals/run_evals.py
+python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent
 git diff --check
 ```
-
-Add focused unit tests for the new skill manifest parser/inspection surface. If you add tests, include the exact test command in `agent_tasks/B_DONE.md`.
 
 ## Completion
 
@@ -70,6 +55,6 @@ Do not commit or push.
 
 ## Notes
 
-- Claude A is working independently on TASK-115 capability router scaffold. If you both touch `mini_agent/toolkits/registry_builder.py`, keep your edit tightly scoped and document it.
+- Claude A is working independently on TASK-117 skill-aware capability routing bridge. Avoid editing `mini_agent/capability_router.py` unless you uncover a blocker.
 - Do not edit `agent_tasks/A_TASK.md`, `agent_tasks/A_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
 - If task scope conflicts with uncommitted work, stop and write the conflict in `agent_tasks/B_DONE.md`.

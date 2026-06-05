@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-117: Skill-aware capability routing bridge v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-115/TASK-116 ✅
+- 分配: Claude A
+- 目标: 扩展只读 capability router，使其可同时读取 skill manifest metadata 和 plugin manifest metadata，返回候选 skill packs、候选 plugins、required plugins、risk boundaries 和预期交付物；不加载/执行 skill 或 plugin。
+- 验证: `python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6/7；`docs/knowledge/DECISIONS.md` 2026-06-03 skill manifests / capability routing 决策。
+
+### TASK-118: Deterministic eval coverage for skill and capability manifest surfaces v1
+- 优先级: medium
+- 预计: 1-2 小时
+- 依赖: TASK-115/TASK-116 ✅
+- 分配: Claude B
+- 目标: 为当前 skill manifest inspection 和 capability router scaffold 增加 deterministic offline eval 覆盖，证明 read-only、bounded safe output、secret no-leak、permission metadata 和 compatibility；不改 runtime 行为。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_plugins tests.test_skills tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5/6/7/11；最近提交 `f9d8a0d`。
 
 ## 已完成
 
