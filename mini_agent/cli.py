@@ -8,6 +8,21 @@ from mini_agent.session import SessionStore
 from mini_agent.settings import required_env_vars, env_alternatives
 
 
+def _section_header(title: str) -> str:
+    return f"─── {title} ───"
+
+
+def _status_line(label: str, ok: bool) -> str:
+    mark = "✓" if ok else "✗"
+    return f"  {mark} {label}"
+
+
+def _truncate_text(text: str, max_len: int = 120) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
 class MiniAgentCLI:
     def __init__(
         self,
@@ -46,22 +61,28 @@ class MiniAgentCLI:
             "=== Nora 已启动 ===",
             "本地优先，文件/Git/终端/浏览器等高风险工具会先确认。",
             "输入 / 查看命令菜单，输入 exit 或 quit 退出。",
+            "",
         ]
-        # Workspace
+        lines.append(_section_header("Status"))
+        lines.append(_status_line("Nora ready", True))
+        lines.append(_status_line("高风险工具需要确认", True))
+        lines.append("")
+
+        lines.append(_section_header("Workspace"))
         lines.append(f"Workspace: {self.root}")
-        # Branch
         git = GitTools(self.root)
         branch = git.current_branch().strip()
         if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
             lines.append(f"Branch: {branch}")
-        # Provider / model
+        lines.append("")
+
+        lines.append(_section_header("Model"))
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
             lines.append(f"LLM: {provider} / {model}")
         else:
             lines.append("LLM: disabled，本地规则模式")
-        # Key presence (no leak)
         if self.settings:
             provider = getattr(self.settings, "provider", "")
             api_key = getattr(self.settings, "api_key", "")
@@ -70,21 +91,29 @@ class MiniAgentCLI:
             else:
                 env_vars = required_env_vars(provider)
                 lines.append(f"API key: missing (需设置 {', '.join(env_vars)})")
-        # Tool count
+        lines.append("")
+
+        lines.append(_section_header("Tools"))
         try:
-            lines.append(f"Tools: {len(self.registry.to_openai_tools())}")
+            tool_count = len(self.registry.to_openai_tools())
         except AttributeError:
-            pass
-        # Task/backlog summary
+            tool_count = "unknown"
+        lines.append(f"Tools: {tool_count}")
+        lines.append("")
+
         task_summary = self._task_backlog_summary()
         if task_summary:
-            lines.append(task_summary)
-        # Worker state summary
+            lines.append(_section_header("Tasks"))
+            lines.append(f"  {task_summary}")
+            lines.append("")
+
         worker_summary = self._worker_state_summary()
         if worker_summary:
-            lines.append(worker_summary)
-        # Common commands hint
-        lines.append("")
+            lines.append(_section_header("Workers"))
+            lines.append(f"  {worker_summary}")
+            lines.append("")
+
+        lines.append(_section_header("Next"))
         lines.append("下一步: / 打开命令菜单；/wake 查看项目；/setup 检查配置")
         lines.append("常用命令: /wake  /setup  /model  /workers  /status  /test  /help")
         return "\n".join(lines)
@@ -135,6 +164,7 @@ class MiniAgentCLI:
         lines = ["=== Nora Project Wake ===", ""]
 
         # Workspace & branch
+        lines.append(_section_header("Workspace"))
         lines.append(f"Workspace: {self.root}")
         git = GitTools(self.root)
         branch = git.current_branch().strip()
@@ -155,6 +185,7 @@ class MiniAgentCLI:
 
         # Provider / model
         lines.append("")
+        lines.append(_section_header("Model"))
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
@@ -172,6 +203,7 @@ class MiniAgentCLI:
 
         # Project knowledge files
         lines.append("")
+        lines.append(_section_header("Knowledge"))
         knowledge_files = [
             ("PROJECT_WAKEUP.md", "docs/knowledge/PROJECT_WAKEUP.md"),
             ("DECISIONS.md", "docs/knowledge/DECISIONS.md"),
@@ -187,16 +219,17 @@ class MiniAgentCLI:
 
         # Agent tasks
         lines.append("")
+        lines.append(_section_header("Tasks"))
         task_summary = self._task_backlog_summary()
         if task_summary:
-            lines.append(task_summary)
+            lines.append(f"  {task_summary}")
         else:
-            lines.append("Active tasks: none")
+            lines.append("  Active tasks: none")
 
         # Worker state
         worker_summary = self._worker_state_summary()
         if worker_summary:
-            lines.append(worker_summary)
+            lines.append(f"  {worker_summary}")
 
         # Recovery hints if things look wrong
         lines.append("")
@@ -211,6 +244,7 @@ class MiniAgentCLI:
         if not (self.root / "agent_tasks").exists():
             hints.append("agent_tasks/ 目录不存在。请确认在正确的 Nora 项目目录中。")
         if hints:
+            lines.append(_section_header("Recovery"))
             lines.append("提示:")
             for h in hints:
                 lines.append(f"  - {h}")
@@ -234,26 +268,28 @@ class MiniAgentCLI:
         base_url = getattr(self.settings, "base_url", "")
         api_key = getattr(self.settings, "api_key", "")
         timeout = getattr(self.settings, "timeout_seconds", 60)
+        enabled = getattr(self.settings, "is_llm_enabled", False)
 
         lines.append(f"Provider: {provider or '(not set)'}")
         lines.append(f"Model: {model or '(not set)'}")
         lines.append(f"Base URL: {base_url or '(not set)'}")
         lines.append(f"API key: {'configured' if api_key else 'missing'}")
         lines.append(f"Timeout: {timeout}s")
-        lines.append(f"Enabled: {'yes' if getattr(self.settings, 'is_llm_enabled', False) else 'no'}")
+        lines.append(f"Enabled: {'yes' if enabled else 'no'}")
 
         # Diagnostics
         lines.append("")
+        lines.append("Diagnostics:")
         if not provider:
-            lines.append("诊断: LLM_PROVIDER 未设置。")
+            lines.append("  LLM_PROVIDER 未设置。")
         if not api_key:
             env_vars = required_env_vars(provider)
-            lines.append(f"诊断: API key 缺失。需设置 {', '.join(env_vars)}。")
+            lines.append(f"  API key 缺失。需设置: {', '.join(env_vars)}")
             alternatives = env_alternatives(provider)
             for primary, alt in alternatives.items():
-                lines.append(f"  {primary} 也可用 {alt} 替代。")
+                lines.append(f"    {primary} 也可用 {alt} 替代。")
         if not model:
-            lines.append("诊断: LLM_MODEL 未设置，将使用默认模型。")
+            lines.append("  LLM_MODEL 未设置，将使用默认模型。")
 
         # Error recovery hints
         lines.append("")
@@ -273,6 +309,7 @@ class MiniAgentCLI:
             base_url = getattr(self.settings, "base_url", "")
             api_key = getattr(self.settings, "api_key", "")
             timeout = getattr(self.settings, "timeout_seconds", 60)
+            enabled = getattr(self.settings, "is_llm_enabled", False)
 
             lines.append("当前配置:")
             lines.append(f"  Provider: {provider or '(not set)'}")
@@ -280,7 +317,7 @@ class MiniAgentCLI:
             lines.append(f"  Base URL: {base_url or '(not set)'}")
             lines.append(f"  API key: {'configured' if api_key else 'missing'}")
             lines.append(f"  Timeout: {timeout}s")
-            lines.append(f"  Enabled: {'yes' if getattr(self.settings, 'is_llm_enabled', False) else 'no'}")
+            lines.append(f"  Enabled: {'yes' if enabled else 'no'}")
         else:
             lines.append("当前配置: Settings 未加载")
             provider = ""
@@ -370,7 +407,7 @@ class MiniAgentCLI:
                     for tl in task_content.splitlines():
                         tl = tl.strip()
                         if tl.startswith("#") or tl.startswith("TASK-"):
-                            lines.append(f"  Task: {tl[:80]}")
+                            lines.append(f"  Task: {_truncate_text(tl, 80)}")
                             break
                     else:
                         lines.append(f"  Task: (file exists)")
@@ -446,16 +483,23 @@ class MiniAgentCLI:
             multiline = self.read_multiline(text)
             if not multiline:
                 return None
-            self.output_func("⏳ 正在调用模型...")
+            self._model_call_start()
             response = self._format_agent_response(self.agent.run(multiline))
-            self.output_func("✓ 模型响应完成")
+            self._model_call_end()
             return self._append_recovery_hint(response)
         if text.startswith("/"):
             return self.handle_slash_command(text)
-        self.output_func("⏳ 正在调用模型...")
+        self._model_call_start()
         response = self._format_agent_response(self.agent.run(text))
-        self.output_func("✓ 模型响应完成")
+        self._model_call_end()
         return self._append_recovery_hint(response)
+
+    def _model_call_start(self) -> None:
+        self.output_func("✓ 已接收输入")
+        self.output_func("⏳ 正在调用模型...")
+
+    def _model_call_end(self) -> None:
+        self.output_func("✓ 模型响应完成")
 
     def _append_recovery_hint(self, response: str) -> str:
         """Append error recovery hint if response contains common error patterns."""

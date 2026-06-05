@@ -4,21 +4,20 @@ Status: ready for Codex review
 
 ## Summary
 
-Implemented TASK-133: CLI slash launcher and welcome polish v2.
+Implemented TASK-135: CLI terminal UI polish v3.
 
-- Added exact `/` launcher/menu with grouped command sections for Start, Project, Workers, Memory / Tasks / Context, Diagnostics, and Help.
-- Included `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, and `/help` in the launcher.
-- Updated startup banner with a clearer command-menu entry point and next-action hint for `/`, `/wake`, and `/setup`.
-- Preserved workspace, branch, LLM/model/key presence, tool count, active task, and worker summary behavior.
-- Kept `/` as a slash command only: no model call, no response-status noise, no raw JSON.
-- Added focused CLI unit coverage.
+- Startup banner now renders a compact terminal landing panel with `Status`, `Workspace`, `Model`, `Tools`, optional `Tasks`/`Workers`, and `Next` sections.
+- Normal prompt and multiline input now show a deterministic three-step lifecycle: input accepted, model request started, model response complete.
+- Slash commands, blank input, and exit still emit no model-call lifecycle noise.
+- `/wake`, `/model`, `/setup`, and `/workers` readability was tightened without changing backend runtime/provider semantics.
+- PM integration preserved exact core substrings and removed A's elapsed-time suffix to keep CLI output deterministic.
 
 ## Diff
 
 ```text
-mini_agent/cli.py | 47 +++++++++++++++++++++++++++++++++++++++---
-tests/test_cli.py | 61 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
-2 files changed, 105 insertions(+), 3 deletions(-)
+mini_agent/cli.py |  98 ++++++++++++++++++++++++++++++++++++++++---------------
+tests/test_cli.py |  26 ++++++++++++++
+2 files changed, 97 insertions(+), 27 deletions(-)
 ```
 
 ## Tests
@@ -26,12 +25,12 @@ tests/test_cli.py | 61 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ```text
 python3 -m unittest tests.test_cli -> 79 tests OK
 python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent -> 225 tests OK
-python3 evals/run_evals.py -> 518 passed, 0 failed
-git diff --check -- mini_agent/cli.py tests/test_cli.py -> clean
+python3 evals/run_evals.py -> 528 passed, 0 failed
+git diff --check -> clean
 ```
 
 ## Notes
 
-- No push performed by worker.
-- Codex PM manually ported and corrected the TASK-133 increment because Claude A's CCB worktree was stale at `edca78e` and did not include the integrated TASK-131/TASK-132 CLI surface.
-- Known issues: TASK-134 deterministic eval coverage still needs to be implemented by Codex B against the integrated TASK-133 surface.
+- No push performed.
+- Codex PM manually integrated and corrected the TASK-135 increment because Claude A's CCB worktree was based on `1a59fd9` while main had the TASK-135/TASK-136 assignment commit.
+- Known issues: TASK-136 deterministic eval coverage still needs to be implemented by Codex B against this integrated TASK-135 surface.

@@ -319,3 +319,40 @@ Claude B added deterministic offline eval coverage for the integrated TASK-133 s
 ## Verdict
 
 Approved for integration. This closes the CLI slash launcher/welcome implementation + deterministic eval coverage pair for TASK-133/TASK-134.
+
+---
+
+# TASK-135 Review: CLI terminal UI polish v3
+
+**Status: APPROVED**
+
+## Summary
+
+Claude A implemented the requested CLI terminal UI polish direction. Codex PM manually integrated the useful parts onto current `main`, because A's CCB worktree was based on `1a59fd9` while main already had the TASK-135/TASK-136 assignment commit.
+
+## PM Review Fixes
+
+- Removed A's elapsed-time suffix from model completion output. TASK-135 required deterministic UI, so the integrated lifecycle remains fixed: `✓ 已接收输入`, `⏳ 正在调用模型...`, `✓ 模型响应完成`.
+- Kept the original startup `exit`/`quit` hint instead of dropping it.
+- Did not accept A's weakened assertions for `Workspace:`, `LLM:`, and `Tools:`. PM integration adds stricter tests for the new section structure while preserving existing exact core substrings.
+- Did not copy A's overbroad completion-report claims that `/setup` and `/workers` were fully converted to helper-based section layouts; the integrated report describes only the actual mainline changes.
+
+## Coverage
+
+- Startup banner now has compact terminal landing sections: `Status`, `Workspace`, `Model`, `Tools`, optional `Tasks`/`Workers`, and `Next`.
+- Banner preserves workspace, branch, LLM/model/API-key state, tool count, task summary, worker summary, `/` launcher hint, `/wake`, `/setup`, and `exit`/`quit`.
+- Normal prompt and multiline input emit deterministic lifecycle feedback.
+- Slash commands, blank input, and exit do not emit lifecycle noise.
+- `/wake` now has clearer sectioning for workspace, model, knowledge, tasks, and recovery hints.
+- `/model`, `/setup`, and `/workers` retain key safety and readability improvements without changing backend runtime/provider behavior.
+
+## Evidence
+
+- `python3 -m unittest tests.test_cli` → 79 tests OK
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 225 tests OK
+- `python3 evals/run_evals.py` → 528 passed, 0 failed
+- `git diff --check` → clean
+
+## Verdict
+
+Approved for integration. TASK-136 should now add deterministic offline eval coverage against this integrated TASK-135 surface.

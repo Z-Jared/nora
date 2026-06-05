@@ -19,20 +19,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-135: CLI terminal UI polish v3
-- 架构层: Agent OS Dashboard
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-133/TASK-134
-- 分配: Claude A
-- 目标: 优化 Nora CLI 终端 UI，形成更完整的启动 landing panel、模型调用 lifecycle feedback、输出分区/可读性 helper、配置/错误恢复提示 polish，同时保持 plain text、deterministic、无重型 TUI 依赖。
-- 非目标: 不做 Web UI；不做 curses/rich/textual/full-screen TUI；不做 streaming；不改后端 runtime/scheduler/policy/worker/provider 语义；不展示隐藏思考过程。
-- 安全边界: no API key/token/.env/private file/raw prompt/raw tool payload/hidden reasoning leak；slash/blank/exit 无模型状态噪声；保持既有 slash command 兼容。
-- 持久证据: `tests/test_cli.py` focused unit tests；`agent_tasks/A_DONE.md` 完成报告；本任务不新增 durable runtime event。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: 用户 CLI UX 反馈；`mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard。
+暂无
 
 ## 已完成
+
+### TASK-135: CLI terminal UI polish v3 ✅
+- 完成者: Claude A；Codex PM 手动集成并修正 deterministic 输出和测试契约
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_cli` 79 tests OK；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 225 tests OK；`python3 evals/run_evals.py` 528 passed；`git diff --check` OK。
+- 内容: 启动 banner 变成 compact terminal landing panel，包含 `Status`、`Workspace`、`Model`、`Tools`、可选 `Tasks`/`Workers`、`Next` 分区，同时保留 `exit/quit`、workspace、branch、LLM/API-key state、tools count、任务和 worker 摘要；普通 prompt/multiline 增加 deterministic 三段 lifecycle feedback（已接收输入/正在调用模型/模型响应完成）；slash/blank/exit 无 lifecycle 噪声；`/wake`、`/model`、`/setup`、`/workers` 可读性 polish；无 heavy TUI、streaming、hidden reasoning 或 backend runtime 语义变更。
 
 ### TASK-134: CLI slash launcher/welcome deterministic eval coverage ✅
 - 完成者: Claude B；Codex PM 补强 next-action 精确断言和 configured-key eval 的 tempdir `.env` 隔离

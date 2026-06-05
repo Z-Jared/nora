@@ -17,6 +17,12 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertEqual(agent.inputs, ["hello"])
         self.assertIn("Nora 已启动", outputs[0])
         self.assertIn("高风险工具会先确认", outputs[0])
+        self.assertIn("输入 / 查看命令菜单，输入 exit 或 quit 退出。", outputs[0])
+        self.assertIn("─── Status ───", outputs[0])
+        self.assertIn("─── Workspace ───", outputs[0])
+        self.assertIn("─── Model ───", outputs[0])
+        self.assertIn("─── Tools ───", outputs[0])
+        self.assertIn("─── Next ───", outputs[0])
         self.assertIn("Workspace:", outputs[0])
         self.assertIn("Tools:", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
@@ -562,6 +568,10 @@ class CLIWakeCommandTests(unittest.TestCase):
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
             result = cli.handle_slash_command("/wake")
             self.assertIn("Nora Project Wake", result)
+            self.assertIn("─── Workspace ───", result)
+            self.assertIn("─── Model ───", result)
+            self.assertIn("─── Knowledge ───", result)
+            self.assertIn("─── Tasks ───", result)
             self.assertIn("Workspace:", result)
 
     def test_wake_panel_shows_knowledge_files(self):
@@ -771,9 +781,12 @@ class CLIResponseStatusTests(unittest.TestCase):
         cli.run()
 
         status_outputs = [o for o in outputs if "正在调用模型" in o]
+        accepted_outputs = [o for o in outputs if "已接收输入" in o]
         done_outputs = [o for o in outputs if "模型响应完成" in o]
         self.assertTrue(len(status_outputs) >= 1)
+        self.assertTrue(len(accepted_outputs) >= 1)
         self.assertTrue(len(done_outputs) >= 1)
+        self.assertIn("✓ 模型响应完成", done_outputs)
 
     def test_slash_command_no_status_noise(self):
         agent = FakeCLIAgent()
@@ -783,7 +796,9 @@ class CLIResponseStatusTests(unittest.TestCase):
         cli.run()
 
         status_outputs = [o for o in outputs if "正在调用模型" in o]
+        accepted_outputs = [o for o in outputs if "已接收输入" in o]
         self.assertEqual(len(status_outputs), 0)
+        self.assertEqual(len(accepted_outputs), 0)
 
     def test_blank_input_no_status_noise(self):
         agent = FakeCLIAgent()
@@ -793,7 +808,9 @@ class CLIResponseStatusTests(unittest.TestCase):
         cli.run()
 
         status_outputs = [o for o in outputs if "正在调用模型" in o]
+        accepted_outputs = [o for o in outputs if "已接收输入" in o]
         self.assertEqual(len(status_outputs), 0)
+        self.assertEqual(len(accepted_outputs), 0)
 
     def test_exit_no_status_noise(self):
         agent = FakeCLIAgent()
@@ -803,7 +820,9 @@ class CLIResponseStatusTests(unittest.TestCase):
         cli.run()
 
         status_outputs = [o for o in outputs if "正在调用模型" in o]
+        accepted_outputs = [o for o in outputs if "已接收输入" in o]
         self.assertEqual(len(status_outputs), 0)
+        self.assertEqual(len(accepted_outputs), 0)
 
     def test_multiline_input_shows_status(self):
         agent = FakeCLIAgent()
@@ -813,7 +832,9 @@ class CLIResponseStatusTests(unittest.TestCase):
         cli.run()
 
         status_outputs = [o for o in outputs if "正在调用模型" in o]
+        accepted_outputs = [o for o in outputs if "已接收输入" in o]
         self.assertTrue(len(status_outputs) >= 1)
+        self.assertTrue(len(accepted_outputs) >= 1)
 
 
 class CLISlashLauncherTests(unittest.TestCase):
@@ -862,6 +883,11 @@ class CLISlashLauncherTests(unittest.TestCase):
 
             banner = outputs[0]
             self.assertIn("Nora 已启动", banner)
+            self.assertIn("─── Status ───", banner)
+            self.assertIn("─── Workspace ───", banner)
+            self.assertIn("─── Model ───", banner)
+            self.assertIn("─── Tools ───", banner)
+            self.assertIn("─── Next ───", banner)
             self.assertIn("下一步:", banner)
             self.assertIn("/ 打开命令菜单", banner)
             self.assertIn("/wake", banner)
