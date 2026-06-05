@@ -548,6 +548,204 @@ class CLITaskCommandTests(unittest.TestCase):
         self.assertIn("/tasks [n]", result)
         self.assertIn("/durable-tasks", result)
         self.assertIn("/durable-task", result)
+        self.assertIn("/wake", result)
+        self.assertIn("/model", result)
+        self.assertIn("/workers", result)
+
+
+class CLIWakeCommandTests(unittest.TestCase):
+    """Tests for /wake command (TASK-129)."""
+
+    def test_wake_panel_basic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/wake")
+            self.assertIn("Nora Project Wake", result)
+            self.assertIn("Workspace:", result)
+
+    def test_wake_panel_shows_knowledge_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            kb = root / "docs" / "knowledge"
+            kb.mkdir(parents=True)
+            (kb / "PROJECT_WAKEUP.md").write_text("# Wakeup\n")
+            (kb / "DECISIONS.md").write_text("# Decisions\n")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/wake")
+            self.assertIn("✓ PROJECT_WAKEUP.md", result)
+            self.assertIn("✓ DECISIONS.md", result)
+
+    def test_wake_panel_shows_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/wake")
+            self.assertIn("✗", result)
+
+    def test_wake_panel_no_git_repo_hint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/wake")
+            self.assertIn("未在 Git 项目中", result)
+
+    def test_wake_panel_with_git_repo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _init_git_repo(root)
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/wake")
+            self.assertIn("Branch:", result)
+            self.assertNotIn("未在 Git 项目中", result)
+
+
+class CLIModelCommandTests(unittest.TestCase):
+    """Tests for /model command (TASK-129)."""
+
+    def test_model_no_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertIn("Settings 未配置", result)
+            self.assertIn("LLM_PROVIDER", result)
+
+    def test_model_shows_provider_info(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertIn("openai-compatible", result)
+            self.assertIn("gpt-4.1-mini", result)
+
+    def test_model_shows_key_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertIn("API key: missing", result)
+            self.assertIn("ANTHROPIC_API_KEY", result)
+
+    def test_model_shows_key_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini", api_key="sk-test")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertIn("API key: configured", result)
+            self.assertNotIn("sk-test", result)
+
+    def test_model_no_key_leak(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini", api_key="sk-secret123")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertNotIn("sk-secret123", result)
+
+    def test_model_shows_recovery_hints(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            result = cli.handle_slash_command("/model")
+            self.assertIn("401 Unauthorized", result)
+            self.assertIn("连接超时", result)
+
+
+class CLIWorkersCommandTests(unittest.TestCase):
+    """Tests for /workers command (TASK-129)."""
+
+    def test_workers_no_ccb_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            result = cli.handle_slash_command("/workers")
+            self.assertIn("未找到 .ccb/", result)
+
+    def test_workers_shows_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ccb = root / ".ccb" / "workspaces"
+            claude_a = ccb / "claude-a" / "agent_tasks"
+            claude_a.mkdir(parents=True)
+            (claude_a / "A_TASK.md").write_text("# TASK-129: Test task\n", encoding="utf-8")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/workers")
+            self.assertIn("claude-a", result)
+            self.assertIn("TASK-129", result)
+
+    def test_workers_shows_done_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ccb = root / ".ccb" / "workspaces"
+            claude_a = ccb / "claude-a" / "agent_tasks"
+            claude_a.mkdir(parents=True)
+            (claude_a / "A_DONE.md").write_text("Status: ready for review\n", encoding="utf-8")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            result = cli.handle_slash_command("/workers")
+            self.assertIn("ready for PM review", result)
+
+    def test_banner_detects_done_file(self):
+        """banner() worker summary should detect A_DONE.md as done."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ccb = root / ".ccb" / "workspaces"
+            claude_a = ccb / "claude-a" / "agent_tasks"
+            claude_a.mkdir(parents=True)
+            (claude_a / "A_DONE.md").write_text("Status: ready for review\n", encoding="utf-8")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            banner = cli.banner()
+            self.assertIn("claude-a: done", banner)
+
+
+class CLIErrorRecoveryTests(unittest.TestCase):
+    """Tests for error recovery hints (TASK-129)."""
+
+    def test_hint_for_401(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Error: 401 Unauthorized")
+            self.assertIn("API key", hint)
+
+    def test_hint_for_connection_timeout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Connection timeout")
+            self.assertIn("连接超时", hint)
+
+    def test_hint_for_model_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Model not found")
+            self.assertIn("模型不存在", hint)
+
+    def test_hint_for_rate_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Rate limit exceeded")
+            self.assertIn("频率超限", hint)
+
+    def test_hint_for_missing_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Missing API key")
+            self.assertIn("API key", hint)
+
+    def test_hint_for_port_in_use(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Port 8080 already in use")
+            self.assertIn("端口已被占用", hint)
+
+    def test_no_hint_for_normal_response(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            hint = cli._error_recovery_hint("Everything looks good")
+            self.assertEqual(hint, "")
+
+    def test_agent_response_gets_recovery_hint(self):
+        agent = FakeCLIAgent()
+        agent.run = lambda text: "Error: 401 Unauthorized"
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), root=Path("/tmp"))
+        result = cli.handle_input("test")
+        self.assertIn("API key", result)
 
 
 if __name__ == "__main__":

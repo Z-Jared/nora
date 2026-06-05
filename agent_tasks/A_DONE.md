@@ -1,47 +1,37 @@
-# TASK-127: Context compiler local skill catalog bridge v1
+# TASK-129 Completion Report
 
-## Status: DONE (PM review fixes applied)
+Status: ready for Codex review
 
 ## Summary
 
-Bridged TASK-125 local skill manifest discovery into the context compiler. Nora can now compile a task context pack from project-local skill manifest paths without callers first reading manifest files manually.
-
-## PM Review Fixes
-
-### Fix 1: Discovery diagnostics no longer leak raw paths
-- Added `_sanitize_discovery_message()` helper at module level in `context_compiler.py` (line 19)
-- Maps known discovery messages to coarse reason labels without raw paths
-- Applied to all discovery errors/warnings before including in Skill Context Preview
-- Examples: `path not found: .git/hidden.json` → `path not found`; `skipped hidden/denied file: .git/x` → `skipped hidden/denied file`
-
-### Fix 2: Malformed JSON string `skill_manifest_paths` returns bounded error
-- When `skill_manifest_paths` is a non-empty string that fails JSON parsing or parses to non-list, returns bounded diagnostic section: `Discovery errors: skill_manifest_paths must be a JSON list or array of strings`
-- No longer silently ignored; raw input string not echoed
+Implemented CLI wake/setup/status UX v1: `/wake`, `/model`, `/workers` commands, improved startup banner, and error recovery hints.
 
 ## Changes
 
-### `mini_agent/context_compiler.py`
-- Added `import json` for JSON parsing
-- Added `_sanitize_discovery_message()` module-level helper (line 19)
-- Extended `ContextCompiler.compile()` with `skill_manifest_paths` parameter
-- Added `_combine_skill_manifests()` helper with sanitized diagnostics
-- Updated `_skill_context_section()` to surface sanitized discovery diagnostics
-- Added malformed `skill_manifest_paths` detection with bounded error section
+### `mini_agent/cli.py`
+- **`/wake`**: Reads project context from `docs/knowledge/PROJECT_WAKEUP.md`, `DECISIONS.md`, `CHAT_INDEX.md`, `AGENTS.md`, git status, and `agent_tasks/BACKLOG.md`. Outputs a concise project wake panel. Shows recovery guidance for missing files or non-project directories.
+- **Startup banner**: Now shows workspace, branch, provider/model, API key presence (without leaking), task/backlog summary, worker state summary, and common commands hint.
+- **`/model`**: Shows current provider/model/base URL/key presence. Diagnoses missing provider/model/key with concrete next steps. Includes error recovery hints for common failures.
+- **`/workers`**: Shows Claude A/B / CCB worker status from `.ccb/` project files. Includes current tasks and whether A_DONE/B_DONE appear ready for PM review. Handles missing `.ccb` or task files gracefully.
+- **Error recovery hints**: Added `_error_recovery_hint()` for common provider/config failures (401/unauthorized, missing key, port in use, connection timeout, unsupported provider, model not found, rate limit, quota/billing). Hints are appended to agent responses automatically.
+- **Bug fix (PM review)**: `_worker_state_summary()` used `agent.split('-')[0].upper()` which gave `CLAUDE_DONE.md` instead of `A_DONE.md`. Fixed to `agent.split('-')[-1].upper()`.
+- **Cleanup (PM review)**: Removed unused top-level `import json` and `import os` (both only used in local imports or not at all).
 
-### `mini_agent/toolkits/register_developer.py`
-- Added `skill_manifest_paths` parameter to `compile_context_pack` registry schema
-
-### `tests/test_context_compiler.py`
-- `ContextCompilerLocalSkillCatalogTests` class with 15 tests covering:
-  - Valid manifests, directory discovery, registry integration, combination with manual manifests
-  - Path safety: traversal, hidden/denied, missing paths — all sanitized, no raw path leak
-  - Malformed JSON string paths: bounded error section, no raw input echo
-  - Secret-like values, budget enforcement, compatibility
+### `tests/test_cli.py`
+- **`CLIWakeCommandTests`**: 5 tests for `/wake` (basic, knowledge files, missing files, no-git hint, with git).
+- **`CLIModelCommandTests`**: 6 tests for `/model` (no settings, provider info, key missing, key configured, no leak, recovery hints).
+- **`CLIWorkersCommandTests`**: 4 tests for `/workers` (no .ccb, shows status, shows done status, banner detects done file).
+- **`CLIErrorRecoveryTests`**: 8 tests for error recovery hints (401, timeout, model not found, rate limit, missing key, port in use, no hint for normal, agent response integration).
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent → 333 tests OK
-python3 evals/run_evals.py → 487 passed, 0 failed
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent → 207 tests OK
+python3 evals/run_evals.py → 497 passed, 0 failed
 git diff --check → clean
 ```
+
+## Notes
+
+- No push performed.
+- No edits to `evals/run_evals.py`, `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.

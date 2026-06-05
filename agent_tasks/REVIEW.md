@@ -101,3 +101,38 @@ Implementation is clean, well-tested, and properly sanitized. All PM review fixe
 ## Findings
 
 No blocking issues. Evals are deterministic, substantively assertive, and cover all TASK-128 requirements.
+
+---
+
+# TASK-129 Review: CLI wake/setup/status UX v1
+
+**Status: APPROVED**
+
+## Summary
+
+Claude A implemented the first CLI workbench UX pass: `/wake`, `/model`, `/workers`, a richer startup banner, and common error recovery hints. PM initial review found one blocking startup worker-summary bug; Claude A fixed it and added a focused regression test.
+
+## PM Fix Verified
+
+- `_worker_state_summary()` now resolves worker DONE files with `agent.split("-")[-1].upper()`, so `claude-a` maps to `A_DONE.md` and `claude-b` maps to `B_DONE.md`.
+- `tests.test_cli.CLIWorkersCommandTests.test_banner_detects_done_file` covers startup/banner detection of `.ccb/workspaces/claude-a/agent_tasks/A_DONE.md`.
+- PM manual probe returned `Workers: claude-a: done, claude-b: no done file`.
+
+## Coverage
+
+- `/wake`: project wake panel, knowledge-file presence, missing-file recovery, non-git recovery.
+- `/model`: provider/model/base URL/key presence diagnostics without key leakage.
+- `/workers`: missing `.ccb`, task display, DONE-ready status, startup worker summary.
+- Error recovery: 401, timeout, model not found, rate limit, missing key, port in use, normal response no hint, agent response hint append.
+- Help text includes the new CLI workbench commands.
+
+## Evidence
+
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 207 tests OK
+- `python3 evals/run_evals.py` → 497 passed, 0 failed
+- `git diff --check` → clean
+- PM targeted check: `python3 -m unittest tests.test_cli.CLIWorkersCommandTests.test_banner_detects_done_file` → OK
+
+## Verdict
+
+Approved for integration. TASK-130 remains open because the current B eval patch was authored before TASK-129 was integrated and does not yet cover `/wake`, `/model`, or `/workers`.

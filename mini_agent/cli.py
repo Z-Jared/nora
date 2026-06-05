@@ -45,17 +45,317 @@ class MiniAgentCLI:
         lines = [
             "Nora 已启动。本地优先，文件/Git/终端/浏览器等高风险工具会先确认。",
             "输入 /help 查看命令，输入 exit 或 quit 退出。",
-            f"Workspace: {self.root}",
         ]
+        # Workspace
+        lines.append(f"Workspace: {self.root}")
+        # Branch
+        git = GitTools(self.root)
+        branch = git.current_branch().strip()
+        if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
+            lines.append(f"Branch: {branch}")
+        # Provider / model
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
-            lines.append(f"LLM: {self.settings.provider} / {self.settings.model}")
+            provider = getattr(self.settings, "provider", "")
+            model = getattr(self.settings, "model", "")
+            lines.append(f"LLM: {provider} / {model}")
         else:
             lines.append("LLM: disabled，本地规则模式")
+        # Key presence (no leak)
+        if self.settings:
+            provider = getattr(self.settings, "provider", "")
+            api_key = getattr(self.settings, "api_key", "")
+            if api_key:
+                lines.append(f"API key: configured ({provider})")
+            else:
+                env_vars = required_env_vars(provider)
+                lines.append(f"API key: missing (需设置 {', '.join(env_vars)})")
+        # Tool count
         try:
             lines.append(f"Tools: {len(self.registry.to_openai_tools())}")
         except AttributeError:
             pass
+        # Task/backlog summary
+        task_summary = self._task_backlog_summary()
+        if task_summary:
+            lines.append(task_summary)
+        # Worker state summary
+        worker_summary = self._worker_state_summary()
+        if worker_summary:
+            lines.append(worker_summary)
+        # Common commands hint
+        lines.append("")
+        lines.append("常用命令: /wake  /model  /workers  /status  /test  /help")
         return "\n".join(lines)
+
+    def _task_backlog_summary(self) -> str:
+        """Read agent_tasks/BACKLOG.md and return a short summary line."""
+        backlog_path = self.root / "agent_tasks" / "BACKLOG.md"
+        if not backlog_path.exists():
+            return ""
+        try:
+            text = backlog_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        in_progress = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("### TASK-") and "✅" not in stripped:
+                in_progress.append(stripped.lstrip("# ").split(":")[0].strip())
+        if in_progress:
+            return f"Active tasks: {', '.join(in_progress[:3])}"
+        return ""
+
+    def _worker_state_summary(self) -> str:
+        """Read .ccb/ worker status files and return a short summary."""
+        ccb_path = self.root / ".ccb"
+        if not ccb_path.exists():
+            return ""
+        lines = []
+        for agent in ("claude-a", "claude-b"):
+            done_path = ccb_path / "workspaces" / agent / "agent_tasks" / f"{agent.split('-')[-1].upper()}_DONE.md"
+            if done_path.exists():
+                try:
+                    content = done_path.read_text(encoding="utf-8")[:200]
+                    if "ready for review" in content.lower() or "done" in content.lower()[:50]:
+                        lines.append(f"{agent}: done")
+                    else:
+                        lines.append(f"{agent}: working")
+                except OSError:
+                    lines.append(f"{agent}: unknown")
+            else:
+                lines.append(f"{agent}: no done file")
+        if lines:
+            return "Workers: " + ", ".join(lines)
+        return ""
+
+    def _wake_panel(self) -> str:
+        """Read project context files and output a concise wake panel."""
+        lines = ["=== Nora Project Wake ===", ""]
+
+        # Workspace & branch
+        lines.append(f"Workspace: {self.root}")
+        git = GitTools(self.root)
+        branch = git.current_branch().strip()
+        if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
+            lines.append(f"Branch: {branch}")
+        else:
+            lines.append("Branch: (not in git repo)")
+
+        # Git status (brief)
+        status = git.status()
+        if status and not status.startswith(("Git 命令失败", "Git 命令超时", "没有 Git 输出")):
+            status_lines = [l for l in status.splitlines() if l.strip()][:5]
+            if status_lines:
+                lines.append("")
+                lines.append("Git status:")
+                for sl in status_lines:
+                    lines.append(f"  {sl}")
+
+        # Provider / model
+        lines.append("")
+        if self.settings and getattr(self.settings, "is_llm_enabled", False):
+            provider = getattr(self.settings, "provider", "")
+            model = getattr(self.settings, "model", "")
+            api_key = getattr(self.settings, "api_key", "")
+            lines.append(f"Provider: {provider}")
+            lines.append(f"Model: {model}")
+            lines.append(f"API key: {'configured' if api_key else 'missing'}")
+        else:
+            lines.append("Provider: disabled (本地规则模式)")
+            if self.settings:
+                provider = getattr(self.settings, "provider", "")
+                if provider:
+                    env_vars = required_env_vars(provider)
+                    lines.append(f"需设置: {', '.join(env_vars)}")
+
+        # Project knowledge files
+        lines.append("")
+        knowledge_files = [
+            ("PROJECT_WAKEUP.md", "docs/knowledge/PROJECT_WAKEUP.md"),
+            ("DECISIONS.md", "docs/knowledge/DECISIONS.md"),
+            ("CHAT_INDEX.md", "docs/knowledge/CHAT_INDEX.md"),
+            ("AGENTS.md", "AGENTS.md"),
+        ]
+        for label, relpath in knowledge_files:
+            fpath = self.root / relpath
+            if fpath.exists():
+                lines.append(f"  ✓ {label}")
+            else:
+                lines.append(f"  ✗ {label} (missing)")
+
+        # Agent tasks
+        lines.append("")
+        task_summary = self._task_backlog_summary()
+        if task_summary:
+            lines.append(task_summary)
+        else:
+            lines.append("Active tasks: none")
+
+        # Worker state
+        worker_summary = self._worker_state_summary()
+        if worker_summary:
+            lines.append(worker_summary)
+
+        # Recovery hints if things look wrong
+        lines.append("")
+        hints = []
+        if not (self.root / ".git").exists():
+            hints.append("未在 Git 项目中。请 cd 到 Nora 项目目录后重新启动。")
+        if self.settings and not getattr(self.settings, "api_key", ""):
+            provider = getattr(self.settings, "provider", "")
+            if provider:
+                env_vars = required_env_vars(provider)
+                hints.append(f"模型未配置。请在 .env 中设置 {', '.join(env_vars)}。")
+        if not (self.root / "agent_tasks").exists():
+            hints.append("agent_tasks/ 目录不存在。请确认在正确的 Nora 项目目录中。")
+        if hints:
+            lines.append("提示:")
+            for h in hints:
+                lines.append(f"  - {h}")
+
+        return "\n".join(lines)
+
+    def _model_info(self) -> str:
+        """Show current provider/model/base URL/key presence without leaking key values."""
+        lines = ["=== Nora Model Configuration ===", ""]
+        if not self.settings:
+            lines.append("Settings 未配置。")
+            lines.append("")
+            lines.append("如需模型能力，请在 .env 中设置:")
+            lines.append("  LLM_PROVIDER=openai-compatible")
+            lines.append("  LLM_API_KEY=your-key")
+            lines.append("  LLM_MODEL=gpt-4.1-mini")
+            return "\n".join(lines)
+
+        provider = getattr(self.settings, "provider", "")
+        model = getattr(self.settings, "model", "")
+        base_url = getattr(self.settings, "base_url", "")
+        api_key = getattr(self.settings, "api_key", "")
+        timeout = getattr(self.settings, "timeout_seconds", 60)
+
+        lines.append(f"Provider: {provider or '(not set)'}")
+        lines.append(f"Model: {model or '(not set)'}")
+        lines.append(f"Base URL: {base_url or '(not set)'}")
+        lines.append(f"API key: {'configured' if api_key else 'missing'}")
+        lines.append(f"Timeout: {timeout}s")
+        lines.append(f"Enabled: {'yes' if getattr(self.settings, 'is_llm_enabled', False) else 'no'}")
+
+        # Diagnostics
+        lines.append("")
+        if not provider:
+            lines.append("诊断: LLM_PROVIDER 未设置。")
+        if not api_key:
+            env_vars = required_env_vars(provider)
+            lines.append(f"诊断: API key 缺失。需设置 {', '.join(env_vars)}。")
+            alternatives = env_alternatives(provider)
+            for primary, alt in alternatives.items():
+                lines.append(f"  {primary} 也可用 {alt} 替代。")
+        if not model:
+            lines.append("诊断: LLM_MODEL 未设置，将使用默认模型。")
+
+        # Error recovery hints
+        lines.append("")
+        lines.append("常见问题:")
+        lines.append("  401 Unauthorized → API key 无效或过期，请检查 .env")
+        lines.append("  连接超时 → 检查网络或 base URL 是否正确")
+        lines.append("  模型不存在 → 检查模型名称拼写和 provider 匹配")
+        return "\n".join(lines)
+
+    def _workers_status(self) -> str:
+        """Show Claude A/B / CCB worker status from project files."""
+        lines = ["=== Nora Worker Status ===", ""]
+
+        ccb_path = self.root / ".ccb"
+        if not ccb_path.exists():
+            lines.append("未找到 .ccb/ 目录。Worker 状态不可用。")
+            lines.append("")
+            lines.append("这可能意味着:")
+            lines.append("  - 不在 Nora CCB 项目目录中")
+            lines.append("  - Worker 尚未初始化")
+            return "\n".join(lines)
+
+        # Check each worker
+        for agent in ("claude-a", "claude-b"):
+            workspace = ccb_path / "workspaces" / agent
+            lines.append(f"--- {agent} ---")
+
+            if not workspace.exists():
+                lines.append(f"  Workspace: 不存在")
+                lines.append("")
+                continue
+
+            lines.append(f"  Workspace: {workspace}")
+
+            # Task file
+            task_letter = agent.split("-")[-1].upper()
+            task_path = workspace / "agent_tasks" / f"{task_letter}_TASK.md"
+            done_path = workspace / "agent_tasks" / f"{task_letter}_DONE.md"
+
+            if task_path.exists():
+                try:
+                    task_content = task_path.read_text(encoding="utf-8")[:300]
+                    # Extract first heading or task line
+                    for tl in task_content.splitlines():
+                        tl = tl.strip()
+                        if tl.startswith("#") or tl.startswith("TASK-"):
+                            lines.append(f"  Task: {tl[:80]}")
+                            break
+                    else:
+                        lines.append(f"  Task: (file exists)")
+                except OSError:
+                    lines.append(f"  Task: (read error)")
+            else:
+                lines.append(f"  Task: 无任务文件")
+
+            # Done file
+            if done_path.exists():
+                try:
+                    done_content = done_path.read_text(encoding="utf-8")[:300]
+                    if "ready for review" in done_content.lower():
+                        lines.append(f"  Done: ✓ ready for PM review")
+                    elif "done" in done_content.lower()[:50]:
+                        lines.append(f"  Done: ✓ completed")
+                    else:
+                        lines.append(f"  Done: (file exists)")
+                except OSError:
+                    lines.append(f"  Done: (read error)")
+            else:
+                lines.append(f"  Done: 未完成")
+
+            lines.append("")
+
+        # PM inbox hint
+        pm_inbox = self.root / "agent_tasks" / "PM_INBOX.md"
+        if pm_inbox.exists():
+            lines.append(f"PM inbox: {pm_inbox}")
+
+        return "\n".join(lines)
+
+    def _error_recovery_hint(self, error_text: str) -> str:
+        """Return user-readable suggestions for common provider/config failures."""
+        error_lower = error_text.lower()
+
+        if "401" in error_text or "unauthorized" in error_lower:
+            return "提示: API key 可能无效或过期。请检查 .env 中的 API key 是否正确。"
+        if "403" in error_text or "forbidden" in error_lower:
+            return "提示: API key 可能没有访问权限。请检查 key 的权限范围。"
+        if "missing" in error_lower and "key" in error_lower:
+            return "提示: 缺少 API key。请在 .env 中设置对应的 API key。"
+        if "missing" in error_lower and "api" in error_lower:
+            return "提示: 缺少 API key。请在 .env 中设置对应的 API key。"
+        if "port" in error_lower and ("in use" in error_lower or "already" in error_lower):
+            return "提示: 端口已被占用。请关闭占用该端口的进程或使用其他端口。"
+        if "connection" in error_lower or "timeout" in error_lower:
+            return "提示: 连接超时。请检查网络连接或 base URL 是否正确。"
+        if "model" in error_lower and ("not found" in error_lower or "does not exist" in error_lower):
+            return "提示: 模型不存在。请检查模型名称和 provider 是否匹配。"
+        if "unsupported" in error_lower and "provider" in error_lower:
+            return "提示: 不支持的 provider。请检查 LLM_PROVIDER 设置。"
+        if "rate" in error_lower and "limit" in error_lower:
+            return "提示: API 调用频率超限。请稍后重试。"
+        if "quota" in error_lower or "billing" in error_lower:
+            return "提示: API 配额或计费问题。请检查账户余额和使用限制。"
+        return ""
 
     def prompt(self) -> str:
         branch = GitTools(self.root).current_branch().strip()
@@ -74,10 +374,19 @@ class MiniAgentCLI:
             multiline = self.read_multiline(text)
             if not multiline:
                 return None
-            return self._format_agent_response(self.agent.run(multiline))
+            response = self._format_agent_response(self.agent.run(multiline))
+            return self._append_recovery_hint(response)
         if text.startswith("/"):
             return self.handle_slash_command(text)
-        return self._format_agent_response(self.agent.run(text))
+        response = self._format_agent_response(self.agent.run(text))
+        return self._append_recovery_hint(response)
+
+    def _append_recovery_hint(self, response: str) -> str:
+        """Append error recovery hint if response contains common error patterns."""
+        hint = self._error_recovery_hint(response)
+        if hint:
+            return f"{response}\n\n{hint}"
+        return response
 
     def read_multiline(self, first_line: str = "") -> str:
         lines = []
@@ -103,6 +412,12 @@ class MiniAgentCLI:
 
         if command == "/help":
             return self._help()
+        if command == "/wake":
+            return self._wake_panel()
+        if command == "/model":
+            return self._model_info()
+        if command == "/workers":
+            return self._workers_status()
         if command == "/tools":
             return self.registry.describe()
         if command == "/permissions":
@@ -428,12 +743,18 @@ class MiniAgentCLI:
                 "Nora 命令帮助",
                 "",
                 "推荐开始:",
+                "  /wake - 项目状态面板（新窗口推荐）",
+                "  /model - 查看当前模型配置和诊断",
+                "  /workers - 查看 worker 状态",
                 "  /status - 查看当前 Git 状态",
                 "  /tools - 查看可用工具",
                 "  /auto 3 总结 README 并说明项目能力",
                 "",
                 "状态与工具:",
                 "  /help - 查看命令帮助",
+                "  /wake - 项目状态面板",
+                "  /model - 模型配置和诊断",
+                "  /workers - worker 状态",
                 "  /tools - 查看工具列表",
                 "  /permissions - 查看工具权限",
                 "  /doctor - 检查 workspace、Git、LLM、工具数量和 PATH",

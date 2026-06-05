@@ -8,15 +8,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-129: CLI wake/setup/status UX v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-128
-- 分配: Claude A
-- 目标: 把 Nora CLI 从“脚本式命令集合”推进到可日常使用的项目工作台入口，新增 `/wake`、`/model`、`/workers`，改善启动页、项目状态、模型诊断和常见错误恢复提示。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: 用户 CLI UX 方向；`mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/PROJECT_WAKEUP.md`；`agent_tasks/BACKLOG.md`
-
 ### TASK-130: CLI UX smoke/eval coverage
 - 优先级: high
 - 预计: 1-2 小时
@@ -27,6 +18,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 参考: 用户 CLI UX 方向；`evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
 
 ## 已完成
+
+### TASK-129: CLI wake/setup/status UX v1 ✅
+- 完成者: Claude A；按 PM 初审反馈修复启动页 worker DONE 文件识别 bug 并补回归测试
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 207 tests OK；`python3 evals/run_evals.py` 497 passed；`git diff --check` OK；PM 手动 probe 确认 banner 可识别 `.ccb/workspaces/claude-a/agent_tasks/A_DONE.md`。
+- 内容: 改善 Nora CLI workbench 入口体验，新增 `/wake` 项目唤醒面板、`/model` 模型配置/密钥状态诊断、`/workers` CCB worker 状态面板；启动页新增 workspace、branch、provider/model、API key presence、task/backlog summary、worker summary 和常用命令；agent 响应自动附加常见 provider/config 错误恢复提示；不泄漏 API key 或 secret；保持 deterministic/offline tests。
 
 ### TASK-128: Deterministic eval coverage for context compiler local skill catalog bridge v1 ✅
 - 完成者: Claude B；按 PM 初审反馈移除弱断言并补强 read-only / registry root-binding 覆盖
