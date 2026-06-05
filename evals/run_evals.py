@@ -536,6 +536,15 @@ def main() -> int:
         EvalCase("skill_aware_routing_secret_no_leak", eval_skill_aware_routing_secret_no_leak),
         EvalCase("skill_aware_routing_no_mutation", eval_skill_aware_routing_no_mutation),
         EvalCase("skill_aware_routing_plugin_only_compatibility", eval_skill_aware_routing_plugin_only_compatibility),
+        EvalCase("skill_manifest_catalog_tool_permission", eval_skill_manifest_catalog_tool_permission),
+        EvalCase("skill_manifest_catalog_valid_summary", eval_skill_manifest_catalog_valid_summary),
+        EvalCase("skill_manifest_catalog_bounds", eval_skill_manifest_catalog_bounds),
+        EvalCase("skill_manifest_catalog_malformed_outer_json", eval_skill_manifest_catalog_malformed_outer_json),
+        EvalCase("skill_manifest_catalog_malformed_individual", eval_skill_manifest_catalog_malformed_individual),
+        EvalCase("skill_manifest_catalog_non_list_input", eval_skill_manifest_catalog_non_list_input),
+        EvalCase("skill_manifest_catalog_secret_no_leak", eval_skill_manifest_catalog_secret_no_leak),
+        EvalCase("skill_manifest_catalog_read_only", eval_skill_manifest_catalog_read_only),
+        EvalCase("skill_manifest_catalog_compatibility", eval_skill_manifest_catalog_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -18887,6 +18896,326 @@ def eval_skill_aware_routing_plugin_only_compatibility():
                 plugin_manifest_jsons=json.dumps([json.dumps(plugin)]),
             )
             assert result_str == result2_str, "plugin-only routing not deterministic"
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
+# ---------------------------------------------------------------------------
+
+def _make_skill_manifest(name="test-skill", version="1.0.0", domains=None, capabilities=None,
+                          workflows=None, deliverables=None, required_plugins=None,
+                          risk_boundaries=None, evals_list=None):
+    """Helper to build a valid skill manifest dict."""
+    manifest = {"name": name, "version": version}
+    if domains:
+        manifest["domains"] = domains
+    if capabilities:
+        manifest["capabilities"] = capabilities
+    if workflows:
+        manifest["workflows"] = workflows
+    if deliverables:
+        manifest["deliverables"] = deliverables
+    if required_plugins:
+        manifest["required_plugins"] = required_plugins
+    if risk_boundaries:
+        manifest["risk_boundaries"] = risk_boundaries
+    if evals_list:
+        manifest["evals"] = evals_list
+    return manifest
+
+
+def eval_skill_manifest_catalog_tool_permission():
+    """summarize_skill_manifests is registered with ToolPermission(category="local", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "summarize_skill_manifests" in perms, "summarize_skill_manifests not in permissions list"
+            tool_perm = registry._tools.get("summarize_skill_manifests")
+            assert tool_perm is not None, "summarize_skill_manifests not registered"
+            assert tool_perm.permission.category == "local", f"expected local, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_valid_summary():
+    """Valid catalog summary: valid_count, bounded skills, sorted/deduplicated aggregate fields."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            m1 = _make_skill_manifest(
+                name="skill-a", version="1.0.0",
+                domains=["python", "typescript"], capabilities=["refactor"],
+                deliverables=["code_changes"], required_plugins=["git-tools"],
+            )
+            m2 = _make_skill_manifest(
+                name="skill-b", version="2.0.0",
+                domains=["python", "go"], capabilities=["test", "refactor"],
+                workflows=["tdd"], required_plugins=["git-tools", "linter"],
+            )
+            result_str = registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m1), json.dumps(m2)]),
+            )
+            result = json.loads(result_str)
+            assert result["valid_count"] == 2, f"expected 2 valid, got {result['valid_count']}"
+            assert result["invalid_count"] == 0, f"expected 0 invalid, got {result['invalid_count']}"
+            assert len(result["skills"]) == 2
+
+            # Sorted/deduplicated aggregates
+            assert result["domains"] == sorted(set(result["domains"])), f"domains not sorted/deduped: {result['domains']}"
+            assert "python" in result["domains"]
+            assert "typescript" in result["domains"]
+            assert "go" in result["domains"]
+
+            assert result["capabilities"] == sorted(set(result["capabilities"])), f"caps not sorted/deduped: {result['capabilities']}"
+            assert "refactor" in result["capabilities"]
+            assert "test" in result["capabilities"]
+
+            assert result["workflows"] == sorted(set(result["workflows"])), f"workflows not sorted/deduped: {result['workflows']}"
+            assert "tdd" in result["workflows"]
+
+            assert result["deliverables"] == sorted(set(result["deliverables"])), f"deliverables not sorted/deduped: {result['deliverables']}"
+            assert "code_changes" in result["deliverables"]
+
+            assert result["required_plugins"] == sorted(set(result["required_plugins"])), f"plugins not sorted/deduped: {result['required_plugins']}"
+            assert "git-tools" in result["required_plugins"]
+            assert "linter" in result["required_plugins"]
+
+            # Deterministic
+            result2_str = registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m1), json.dumps(m2)]),
+            )
+            assert result_str == result2_str, "catalog summary not deterministic"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_bounds():
+    """max_skills bounds: default, explicit, high clamp, zero/low clamp."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            manifests = [_make_skill_manifest(name=f"skill-{i}", version="1.0.0") for i in range(5)]
+
+            # Default max_skills=20 processes all 5
+            result_default = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in manifests]),
+            ))
+            assert result_default["valid_count"] == 5
+
+            # Explicit max_skills=2
+            result_explicit = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in manifests]),
+                max_skills=2,
+            ))
+            assert result_explicit["valid_count"] == 2, f"expected 2, got {result_explicit['valid_count']}"
+
+            # High value clamp to 50: use 60 manifests to prove upper bound
+            many_manifests = [_make_skill_manifest(name=f"clamp-{i}", version="1.0.0") for i in range(60)]
+            result_high = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in many_manifests]),
+                max_skills=999,
+            ))
+            assert result_high["valid_count"] == 50, f"expected 50 (clamped from 999 with 60 inputs), got {result_high['valid_count']}"
+            assert len(result_high["skills"]) == 50, f"expected 50 skills, got {len(result_high['skills'])}"
+
+            # Zero clamp to 1
+            result_zero = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in manifests]),
+                max_skills=0,
+            ))
+            assert result_zero["valid_count"] == 1, f"expected 1 (clamped from 0), got {result_zero['valid_count']}"
+
+            # Negative clamp to 1
+            result_neg = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in manifests]),
+                max_skills=-5,
+            ))
+            assert result_neg["valid_count"] == 1, f"expected 1 (clamped from -5), got {result_neg['valid_count']}"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_malformed_outer_json():
+    """Malformed outer JSON returns bounded safe errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            result = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons="{not valid json!!!",
+            ))
+            assert result["valid_count"] == 0
+            assert result["invalid_count"] == 0
+            assert len(result["errors"]) > 0
+            assert "invalid JSON" in result["errors"][0] or "must be a list" in result["errors"][0]
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_malformed_individual():
+    """Malformed individual manifests produce bounded safe errors, not exceptions."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            good = _make_skill_manifest(name="good-skill", version="1.0.0")
+            bad_json = "{not valid!!!"
+            no_name = {"version": "1.0.0"}  # missing required name
+            result = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(good), bad_json, json.dumps(no_name)]),
+            ))
+            assert result["valid_count"] == 1, f"expected 1 valid, got {result['valid_count']}"
+            assert result["invalid_count"] == 2, f"expected 2 invalid, got {result['invalid_count']}"
+            assert len(result["errors"]) > 0
+            assert len(result["skills"]) == 1
+            assert result["skills"][0]["name"] == "good-skill"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_non_list_input():
+    """Non-list input returns bounded safe error."""
+    from mini_agent.skills import summarize_skill_manifests
+    result = summarize_skill_manifests("not a list")
+    assert result["valid_count"] == 0
+    assert result["invalid_count"] == 0
+    assert len(result["errors"]) > 0
+    assert "must be a list" in result["errors"][0]
+
+    result2 = summarize_skill_manifests(42)
+    assert result2["valid_count"] == 0
+    assert "must be a list" in result2["errors"][0]
+
+
+def eval_skill_manifest_catalog_secret_no_leak():
+    """Secret-like name/version/list fields are absent or redacted in output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Manifest with secret-like name/version: should be invalid, not leaked
+            secret_name_manifest = _make_skill_manifest(
+                name="sk-SECRET-KEY-abc123",
+                version="api_key_TOKEN_123",
+                domains=["safe-domain"],
+            )
+            result1 = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(secret_name_manifest)]),
+            ))
+            result1_str = json.dumps(result1)
+            assert result1["valid_count"] == 0, "secret-name manifest should be invalid"
+            assert "sk-SECRET-KEY-abc123" not in result1_str, "raw secret name leaked"
+            assert "api_key_TOKEN_123" not in result1_str, "raw secret version leaked"
+
+            # Manifest with valid name/version but secret-like list items
+            secret_list_manifest = _make_skill_manifest(
+                name="valid-skill",
+                version="1.0.0",
+                domains=["Bearer secret123", "safe-domain"],
+                capabilities=["password_leak", "safe-cap"],
+                required_plugins=["credential_steal", "good-plugin"],
+            )
+            result2 = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(secret_list_manifest)]),
+            ))
+            result2_str = json.dumps(result2)
+            # Secret-like list items must be omitted
+            assert "Bearer secret123" not in result2_str, "raw secret domain leaked"
+            assert "password_leak" not in result2_str, "raw secret capability leaked"
+            assert "credential_steal" not in result2_str, "raw secret plugin leaked"
+            # Safe values should still be present
+            assert "safe-domain" in result2_str, "safe domain missing"
+            assert "safe-cap" in result2_str, "safe capability missing"
+            assert "good-plugin" in result2_str, "safe plugin missing"
+            # Warnings should mention secret-like items
+            assert any("secret" in w.lower() for w in result2.get("warnings", [])), "no secret warning"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_read_only():
+    """summarize_skill_manifests does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            m = _make_skill_manifest(name="read-only-test", version="1.0.0")
+            registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            )
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_skill_manifest_catalog_compatibility():
+    """inspect_skill_manifest, route_capability_request, and existing skill/capability evals still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            m = _make_skill_manifest(name="compat-skill", version="1.0.0", domains=["python"])
+
+            # summarize_skill_manifests works
+            catalog = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            ))
+            assert catalog["valid_count"] == 1
+
+            # inspect_skill_manifest still works
+            from mini_agent.skills import inspect_skill_manifest
+            inspect_result = inspect_skill_manifest(m)
+            assert inspect_result["valid"] is True
+            assert inspect_result["manifest"]["name"] == "compat-skill"
+
+            # route_capability_request still works
+            route_result = json.loads(registry.call(
+                "route_capability_request",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            ))
+            assert "candidate_skills" in route_result
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "summarize_skill_manifests" in perms
+            assert "inspect_skill_manifest" in perms
+            assert "route_capability_request" in perms
         finally:
             db.close()
 

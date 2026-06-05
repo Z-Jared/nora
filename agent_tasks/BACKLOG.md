@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-121: Skill context preview surface v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-119 ✅
-- 分配: Claude A
-- 目标: 增加只读 skill context preview surface，根据用户 goal 和一组 skill manifest metadata 选择相关 skill，并生成 bounded/untrusted context hints（domains/capabilities/workflows/deliverables/required_plugins/risk_boundaries/evals），用于后续 context compiler 引入 skill metadata；不安装、加载或执行 skill 内容。
-- 验证: `python3 -m unittest tests.test_skills tests.test_context_memory tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6 skill registry/context compiler；最近提交 `09ebf80`。
-
-### TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
-- 优先级: medium
-- 预计: 1-2 小时
-- 依赖: TASK-119 ✅
-- 分配: Claude B
-- 目标: 为 `summarize_skill_manifests` / registry `summarize_skill_manifests` 增加 deterministic offline eval 覆盖，证明 catalog aggregation、bounds/clamp、malformed input、secret no-leak、read-only no-mutation、permission 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6 skill registry；最近提交 `09ebf80`。
+暂无
 
 ## 已完成
+
+### TASK-121: Skill context preview surface v1 ✅
+- 完成者: Claude A；按 PM 初审反馈修复 malformed/non-list JSON 静默返回、输入扫描无界、bad `max_skills` 抛错/静默 fallback 三类问题。
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_skills tests.test_context_memory tests.test_mini_agent` 284 tests OK；`python3 evals/run_evals.py` 459 passed；`git diff --check` OK；PM bad `max_skills` no-leak/warning probe OK。
+- 内容: 新增只读 `preview_skill_context` / registry `preview_skill_context` surface，根据用户 goal 和 skill manifest metadata 选择相关 skill 并返回 bounded/untrusted context hints；输出包含 matched domains/capabilities、workflows、deliverables、required_plugins、risk_boundaries、evals 和 untrusted framing；不加载、不安装、不执行 skill 内容，不 mutation durable task/worker/event；支持 input scan cap 50、`max_skills` 1-20 clamp、bad `max_skills` bounded warning、malformed input safe errors、secret-like no-leak，并保持 inspect/summarize/route compatibility。
+
+### TASK-122: Deterministic eval coverage for skill manifest catalog summary v1 ✅
+- 完成者: Claude B；按 PM 初审反馈修复 high-clamp eval，使 `max_skills=999` 使用 60 个 manifests 并断言 clamp 到 50。
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 468 passed；`python3 -m unittest tests.test_skills tests.test_mini_agent` 200 tests OK；`git diff --check` OK。
+- 内容: 为 `summarize_skill_manifests` / registry `summarize_skill_manifests` 增加 9 个 deterministic offline eval，覆盖 exact local/read permission、有效 catalog summary、sorted/deduplicated aggregates、default/explicit/high/zero/negative bounds、malformed outer/individual/non-list input bounded errors、secret no-leak、durable task/worker/event read-only no-mutation，以及 inspect/route/list_tool_permissions compatibility；无 runtime 变更。
 
 ### TASK-120: Deterministic eval coverage for skill-aware capability routing v1 ✅
 - 完成者: Claude B

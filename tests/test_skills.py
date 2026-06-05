@@ -680,5 +680,399 @@ class TestSummarizeSkillManifestsCompatibility(unittest.TestCase):
         self.assertEqual(result["manifest"]["name"], "ins-skill")
 
 
+# ---------------------------------------------------------------------------
+# preview_skill_context tests (TASK-121)
+# ---------------------------------------------------------------------------
+
+from mini_agent.skills import preview_skill_context, preview_skill_context_json
+
+
+class TestPreviewSkillContextValid(unittest.TestCase):
+
+    def test_empty_goal(self):
+        result = preview_skill_context("")
+        self.assertEqual(result["selected_count"], 0)
+        self.assertIn("errors", result)
+        self.assertTrue(any("missing goal" in e for e in result["errors"]))
+
+    def test_none_skill_manifests(self):
+        result = preview_skill_context("write code", None)
+        self.assertEqual(result["selected_count"], 0)
+        self.assertEqual(result["context_sections"], [])
+
+    def test_empty_skill_manifests(self):
+        result = preview_skill_context("write code", [])
+        self.assertEqual(result["selected_count"], 0)
+
+    def test_relevant_skill_selected(self):
+        manifest = _valid_manifest_dict(
+            name="coding-skill",
+            domains=["coding"],
+            capabilities=["search"],
+        )
+        result = preview_skill_context("help me with coding search", [manifest])
+        self.assertEqual(result["selected_count"], 1)
+        self.assertEqual(result["context_sections"][0]["skill"], "coding-skill")
+        self.assertIn("coding", result["context_sections"][0]["matched_domains"])
+        self.assertIn("search", result["context_sections"][0]["matched_capabilities"])
+
+    def test_irrelevant_skill_skipped(self):
+        manifest = _valid_manifest_dict(
+            name="cooking-skill",
+            domains=["cooking"],
+            capabilities=["recipe"],
+            workflows=["meal-prep"],
+            deliverables=["recipe-card"],
+        )
+        result = preview_skill_context("write code", [manifest])
+        self.assertEqual(result["selected_count"], 0)
+
+    def test_multiple_skills_deterministic_and_bounded(self):
+        m1 = _valid_manifest_dict(name="alpha", domains=["coding"])
+        m2 = _valid_manifest_dict(name="beta", domains=["coding"])
+        m3 = _valid_manifest_dict(name="gamma", domains=["coding"])
+        result = preview_skill_context("coding help", [m1, m2, m3], max_skills=2)
+        self.assertEqual(result["selected_count"], 2)
+        # Deterministic order (by score desc, then name)
+        names = [s["skill"] for s in result["context_sections"]]
+        self.assertEqual(names, sorted(names)[:2])
+
+    def test_max_skills_bounded(self):
+        manifests = [_valid_manifest_dict(name=f"s{i}", domains=["coding"]) for i in range(25)]
+        result = preview_skill_context("coding", manifests, max_skills=100)
+        # Clamped to 20
+        self.assertLessEqual(result["selected_count"], 20)
+
+    def test_untrusted_framing_present(self):
+        result = preview_skill_context("write code")
+        self.assertIn("untrusted_framing", result)
+        self.assertIn("UNTRUSTED", result["untrusted_framing"])
+        self.assertIn("not instructions", result["untrusted_framing"].lower())
+
+    def test_goal_bounded(self):
+        long_goal = "x" * 3000
+        result = preview_skill_context(long_goal)
+        self.assertLessEqual(len(result["goal"]), 103)  # 100 + "..."
+
+    def test_aggregate_required_plugins(self):
+        m1 = _valid_manifest_dict(name="s1", required_plugins=["git", "docker"])
+        m2 = _valid_manifest_dict(name="s2", required_plugins=["git", "k8s"])
+        result = preview_skill_context("coding", [m1, m2])
+        self.assertIn("docker", result["required_plugins"])
+        self.assertIn("git", result["required_plugins"])
+        self.assertIn("k8s", result["required_plugins"])
+        # Sorted
+        self.assertEqual(result["required_plugins"], sorted(result["required_plugins"]))
+
+    def test_aggregate_risk_boundaries(self):
+        m1 = _valid_manifest_dict(name="s1", risk_boundaries=["no-shell", "no-network"])
+        m2 = _valid_manifest_dict(name="s2", risk_boundaries=["no-shell", "no-deploy"])
+        result = preview_skill_context("coding", [m1, m2])
+        self.assertIn("no-deploy", result["risk_boundaries"])
+        self.assertIn("no-network", result["risk_boundaries"])
+        self.assertIn("no-shell", result["risk_boundaries"])
+
+
+class TestPreviewSkillContextMetadata(unittest.TestCase):
+
+    def test_context_section_fields(self):
+        manifest = _valid_manifest_dict(
+            name="test-skill",
+            version="1.0",
+            domains=["coding"],
+            capabilities=["search"],
+            workflows=["code-review"],
+            deliverables=["report"],
+            required_plugins=["git"],
+            risk_boundaries=["no-shell"],
+            evals=["eval1"],
+        )
+        result = preview_skill_context("coding search", [manifest])
+        section = result["context_sections"][0]
+        self.assertEqual(section["skill"], "test-skill")
+        self.assertEqual(section["version"], "1.0")
+        self.assertIn("coding", section["matched_domains"])
+        self.assertIn("search", section["matched_capabilities"])
+        self.assertEqual(section["workflows"], ["code-review"])
+        self.assertEqual(section["deliverables"], ["report"])
+        self.assertEqual(section["required_plugins"], ["git"])
+        self.assertEqual(section["risk_boundaries"], ["no-shell"])
+        self.assertEqual(section["evals"], ["eval1"])
+
+
+class TestPreviewSkillContextErrors(unittest.TestCase):
+
+    def test_non_list_skill_manifests(self):
+        result = preview_skill_context("code", "not a list")
+        self.assertEqual(result["selected_count"], 0)
+        self.assertTrue(any("must be a list" in e for e in result["errors"]))
+
+    def test_malformed_json_string(self):
+        result = preview_skill_context("code", ["{bad json"])
+        self.assertEqual(result["invalid_count"], 1)
+        self.assertTrue(any("invalid JSON" in e for e in result["errors"]))
+
+    def test_non_string_non_dict_entry(self):
+        result = preview_skill_context("code", [123, True, None])
+        self.assertEqual(result["invalid_count"], 3)
+
+    def test_missing_required_fields(self):
+        result = preview_skill_context("code", [{"name": "p"}])
+        self.assertEqual(result["invalid_count"], 1)
+
+    def test_mixed_valid_and_invalid(self):
+        valid = _valid_manifest_dict(name="good", domains=["coding"])
+        invalid = {"name": "bad"}
+        result = preview_skill_context("coding", [valid, invalid])
+        self.assertEqual(result["selected_count"], 1)
+        self.assertEqual(result["invalid_count"], 1)
+
+    def test_large_invalid_input_bounded(self):
+        """A large list of invalid manifests must not produce unbounded errors."""
+        huge = [{"name": "bad"} for _ in range(200)]
+        result = preview_skill_context("coding", huge)
+        # Input should be capped; errors/warnings must be bounded
+        self.assertLessEqual(len(result["errors"]), 60)
+        self.assertLessEqual(len(result["warnings"]), 60)
+        # Should indicate truncation
+        self.assertTrue(any("truncated" in w for w in result["warnings"]))
+
+    def test_bad_max_skills_string(self):
+        """Non-numeric max_skills must not raise; should warn and fallback."""
+        manifest = _valid_manifest_dict(domains=["coding"])
+        result = preview_skill_context("coding", [manifest], max_skills="bad")
+        self.assertEqual(result["selected_count"], 1)
+        self.assertTrue(any("invalid max_skills" in w for w in result["warnings"]))
+        self.assertNotIn("bad", json.dumps(result))
+
+    def test_bad_max_skills_none(self):
+        """None max_skills must not raise; should warn and fallback."""
+        manifest = _valid_manifest_dict(domains=["coding"])
+        result = preview_skill_context("coding", [manifest], max_skills=None)
+        self.assertEqual(result["selected_count"], 1)
+        self.assertTrue(any("invalid max_skills" in w for w in result["warnings"]))
+
+    def test_bad_max_skills_float_string(self):
+        """Float-string max_skills must not raise; should warn and fallback."""
+        manifest = _valid_manifest_dict(domains=["coding"])
+        result = preview_skill_context("coding", [manifest], max_skills="3.5")
+        self.assertEqual(result["selected_count"], 1)
+        self.assertTrue(any("invalid max_skills" in w for w in result["warnings"]))
+
+
+class TestPreviewSkillContextSafety(unittest.TestCase):
+    """Secret-like values must never appear in preview output."""
+
+    SECRET = "sk-TASK121-SECRET-SENTINEL"
+
+    def _assert_no_sentinel(self, result):
+        text = json.dumps(result)
+        self.assertNotIn(self.SECRET, text, "sentinel leaked in preview output")
+
+    def test_goal_sentinel_no_leak(self):
+        self._assert_no_sentinel(preview_skill_context(self.SECRET))
+
+    def test_name_sentinel_no_leak(self):
+        data = _valid_manifest_dict(name=self.SECRET, domains=["coding"])
+        self._assert_no_sentinel(preview_skill_context("coding", [data]))
+
+    def test_version_sentinel_no_leak(self):
+        data = _valid_manifest_dict(version=self.SECRET, domains=["coding"])
+        self._assert_no_sentinel(preview_skill_context("coding", [data]))
+
+    def test_domains_sentinel_no_leak(self):
+        data = _valid_manifest_dict(domains=[self.SECRET])
+        self._assert_no_sentinel(preview_skill_context(self.SECRET, [data]))
+
+    def test_capabilities_sentinel_no_leak(self):
+        data = _valid_manifest_dict(capabilities=[self.SECRET])
+        self._assert_no_sentinel(preview_skill_context(self.SECRET, [data]))
+
+    def test_all_fields_sentinel_no_leak(self):
+        data = _valid_manifest_dict(
+            name=self.SECRET,
+            version=self.SECRET,
+            description=self.SECRET,
+            domains=[self.SECRET],
+            capabilities=[self.SECRET],
+            workflows=[self.SECRET],
+            deliverables=[self.SECRET],
+            required_plugins=[self.SECRET],
+            risk_boundaries=[self.SECRET],
+            evals=[self.SECRET],
+        )
+        # Make goal match the sentinel so skill is selected
+        self._assert_no_sentinel(preview_skill_context(self.SECRET, [data]))
+
+    def test_malformed_entry_no_echo(self):
+        raw = '{"very long secret content": "should not appear"}'
+        result = preview_skill_context("code", [raw])
+        for err in result["errors"]:
+            self.assertLess(len(err), 200)
+
+
+class TestPreviewSkillContextReadOnly(unittest.TestCase):
+    """preview_skill_context must be read-only: no durable mutation."""
+
+    def test_no_mutation_via_registry(self):
+        from mini_agent.registry import ToolRegistry
+        from mini_agent.durable_tasks import DurableTaskStore
+        from mini_agent.durable_workers import DurableWorkerStore
+        from mini_agent.durable_events import DurableEventStore
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "test.db"
+            reg = ToolRegistry()
+            dts = DurableTaskStore(db_path)
+            dws = DurableWorkerStore(db_path)
+            des = DurableEventStore(db_path)
+            reg.durable_task_store = dts
+            reg.durable_worker_store = dws
+            reg.durable_event_store = des
+
+            def _handler(goal: str = "", skill_manifest_jsons: str = "[]", max_skills: int = 5) -> str:
+                result = preview_skill_context_json(goal, skill_manifest_jsons, max_skills=max_skills)
+                return json.dumps(result, ensure_ascii=False, indent=2)
+
+            reg.register(
+                "preview_skill_context", "test", _handler,
+                parameters={"type": "object", "properties": {}},
+            )
+
+            tasks_before = dts.list_tasks()
+            workers_before = dws.list_workers()
+            events_before = des.list_events()
+
+            text = json.dumps([_valid_manifest_dict(domains=["coding"])])
+            result = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=text)
+            parsed = json.loads(result)
+            self.assertEqual(parsed["selected_count"], 1)
+
+            tasks_after = dts.list_tasks()
+            workers_after = dws.list_workers()
+            events_after = des.list_events()
+            self.assertEqual(len(tasks_after), len(tasks_before))
+            self.assertEqual(len(workers_after), len(workers_before))
+            self.assertEqual(len(events_after), len(events_before))
+
+
+class TestPreviewSkillContextRegistry(unittest.TestCase):
+
+    def test_registry_tool_registered(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        tool = reg._tools.get("preview_skill_context")
+        self.assertIsNotNone(tool, "preview_skill_context not registered")
+
+    def test_registry_permission_exact(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        tool = reg._tools.get("preview_skill_context")
+        self.assertEqual(tool.permission.category, "local")
+        self.assertEqual(tool.permission.risk, "read")
+
+    def test_registry_wrapper_honors_max_skills(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        manifests = [_valid_manifest_dict(name=f"s{i}", domains=["coding"]) for i in range(10)]
+        text = json.dumps(manifests)
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=text, max_skills=3)
+        result = json.loads(result_str)
+        self.assertEqual(result["selected_count"], 3)
+
+    def test_registry_wrapper_json_handling(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        text = json.dumps([_valid_manifest_dict(domains=["coding"])])
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=text)
+        result = json.loads(result_str)
+        self.assertEqual(result["selected_count"], 1)
+
+    def test_registry_wrapper_malformed_json(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons="{bad")
+        result = json.loads(result_str)
+        # Must report error, not silently return clean result
+        self.assertTrue(any("invalid JSON" in e for e in result["errors"]))
+
+    def test_registry_wrapper_non_list_json(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons='"just a string"')
+        result = json.loads(result_str)
+        self.assertTrue(any("must be a list" in e for e in result["errors"]))
+
+    def test_registry_wrapper_unsupported_type(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=123)
+        result = json.loads(result_str)
+        self.assertTrue(any("must be a JSON string or list" in e for e in result["errors"]))
+
+    def test_registry_wrapper_bad_max_skills(self):
+        """Registry must not raise on non-int max_skills; should warn."""
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        text = json.dumps([_valid_manifest_dict(domains=["coding"])])
+        result_str = reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=text, max_skills="bad")
+        result = json.loads(result_str)
+        self.assertEqual(result["selected_count"], 1)
+        self.assertTrue(any("invalid max_skills" in w for w in result["warnings"]))
+        self.assertNotIn("bad", json.dumps(result))
+
+    def test_registry_wrapper_empty(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("preview_skill_context", goal="coding")
+        result = json.loads(result_str)
+        self.assertEqual(result["selected_count"], 0)
+
+
+class TestPreviewSkillContextCompatibility(unittest.TestCase):
+    """Compatibility with inspect, summarize, and route_capability_request."""
+
+    def test_inspect_still_works(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        text = json.dumps(_valid_manifest_dict())
+        result_str = reg.call("inspect_skill_manifest", manifest_json=text)
+        result = json.loads(result_str)
+        self.assertTrue(result["valid"])
+
+    def test_summarize_still_works(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        text = json.dumps([_valid_manifest_dict()])
+        result_str = reg.call("summarize_skill_manifests", skill_manifest_jsons=text)
+        result = json.loads(result_str)
+        self.assertEqual(result["valid_count"], 1)
+
+    def test_route_capability_still_works(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        skill_text = json.dumps([_valid_manifest_dict(domains=["coding"])])
+        result_str = reg.call(
+            "route_capability_request",
+            goal="coding",
+            skill_manifest_jsons=skill_text,
+        )
+        result = json.loads(result_str)
+        self.assertIn("candidate_skills", result)
+
+    def test_preview_does_not_affect_inspect(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        # Call preview first
+        skill_text = json.dumps([_valid_manifest_dict(name="prev-skill", domains=["coding"])])
+        reg.call("preview_skill_context", goal="coding", skill_manifest_jsons=skill_text)
+        # Then inspect should still work
+        ins_text = json.dumps(_valid_manifest_dict(name="ins-skill"))
+        result_str = reg.call("inspect_skill_manifest", manifest_json=ins_text)
+        result = json.loads(result_str)
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["manifest"]["name"], "ins-skill")
+
+
 if __name__ == "__main__":
     unittest.main()

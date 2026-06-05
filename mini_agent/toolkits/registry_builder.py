@@ -4744,6 +4744,43 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Skill context preview (TASK-121) ---
+
+    from mini_agent.skills import preview_skill_context_json
+
+    def _preview_skill_context_handler(
+        goal: str = "",
+        skill_manifest_jsons: str = "[]",
+        max_skills: int = 5,
+    ) -> str:
+        result = preview_skill_context_json(goal, skill_manifest_jsons, max_skills=max_skills)
+        return _json.dumps(result, ensure_ascii=False, indent=2)
+
+    registry.register(
+        "preview_skill_context",
+        "预览 skill context hints：根据 goal 和 skill manifest 元数据选择相关 skill，返回 bounded context hints。只读，不加载 skill 内容。",
+        _preview_skill_context_handler,
+        parameters={
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "用户目标描述",
+                },
+                "skill_manifest_jsons": {
+                    "type": "string",
+                    "description": 'JSON 字符串，包含 skill manifest JSON 字符串数组或 manifest 对象数组',
+                },
+                "max_skills": {
+                    "type": "integer",
+                    "description": "最多选择的 skill 数量，默认 5，上限 20",
+                },
+            },
+            "required": ["goal"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
     # --- Runtime policy hook evaluator (TASK-101) ---
 
     _POLICY_VERSION = "v1"
