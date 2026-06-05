@@ -4,27 +4,27 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+暂无
+
+## 进行中
+
 ### TASK-134: CLI slash launcher/welcome deterministic eval coverage
 - 优先级: high
 - 预计: 1-2 小时
 - 依赖: TASK-133 implementation surface
 - 分配: Claude B after TASK-133 integration
+- 状态: ready to dispatch after TASK-133 commit
 - 目标: 为 TASK-133 增加 deterministic offline eval，覆盖 exact `/` launcher/menu、启动 welcome next-action hint、命令分组、no model-call/no status noise、missing-key/configured-key safe banner、no raw JSON、no secret/hidden reasoning leak。
 - 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
 - 参考: `evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
 
-## 进行中
-
-### TASK-133: CLI slash launcher and welcome polish v2
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-131/TASK-132
-- 分配: Claude A
-- 目标: 实现 exact `/` slash launcher/menu，按 Start/Project/Workers/Memory/Help 等分组展示常用命令；优化启动 banner/welcome，让新终端有清晰 next action hint，并保留 workspace/branch/model/key/tools/tasks/workers 信息；保持 plain text、deterministic、no raw JSON/no secret/no hidden reasoning。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: 用户 CLI UX 反馈；`mini_agent/cli.py`；`tests/test_cli.py`
-
 ## 已完成
+
+### TASK-133: CLI slash launcher and welcome polish v2 ✅
+- 完成者: Claude A；Codex PM 因 A CCB worktree 落后在 `edca78e`，手动移植并修正 TASK-133 增量到当前主线，保留 `/setup` 和 TASK-131/TASK-132 已集成表面
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_cli` 79 tests OK；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 225 tests OK；`python3 evals/run_evals.py` 518 passed；`git diff --check -- mini_agent/cli.py tests/test_cli.py` OK。
+- 内容: 新增 exact `/` slash launcher/menu，按 Start/Project/Workers/Memory/Diagnostics/Help 分组展示常用命令并包含 `/setup`；启动 banner 增加 `/`、`/wake`、`/setup` next-action hint，同时保留 workspace/branch/model/key/tools/tasks/workers 信息；`/` 不调用模型、不输出状态噪声、不产生 raw JSON；新增 focused CLI unit tests。
 
 ### TASK-132: CLI setup/status UX deterministic eval coverage ✅
 - 完成者: Claude B；Codex PM 补强 missing-key 断言并修正完成报告

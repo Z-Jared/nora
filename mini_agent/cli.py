@@ -43,8 +43,9 @@ class MiniAgentCLI:
 
     def banner(self) -> str:
         lines = [
-            "Nora 已启动。本地优先，文件/Git/终端/浏览器等高风险工具会先确认。",
-            "输入 /help 查看命令，输入 exit 或 quit 退出。",
+            "=== Nora 已启动 ===",
+            "本地优先，文件/Git/终端/浏览器等高风险工具会先确认。",
+            "输入 / 查看命令菜单，输入 exit 或 quit 退出。",
         ]
         # Workspace
         lines.append(f"Workspace: {self.root}")
@@ -84,6 +85,7 @@ class MiniAgentCLI:
             lines.append(worker_summary)
         # Common commands hint
         lines.append("")
+        lines.append("下一步: / 打开命令菜单；/wake 查看项目；/setup 检查配置")
         lines.append("常用命令: /wake  /setup  /model  /workers  /status  /test  /help")
         return "\n".join(lines)
 
@@ -484,6 +486,8 @@ class MiniAgentCLI:
         command = parts[0]
         args = parts[1:]
 
+        if command == "/":
+            return self._slash_menu()
         if command == "/help":
             return self._help()
         if command == "/wake":
@@ -748,7 +752,44 @@ class MiniAgentCLI:
             import json
             return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
 
-        return f"未知命令: {command}\n输入 /help 查看可用命令。"
+        return f"未知命令: {command}\n输入 / 查看命令菜单，或输入 /help 查看完整帮助。"
+
+    def _slash_menu(self) -> str:
+        """Show a compact command launcher for exact '/' input."""
+        return "\n".join(
+            [
+                "Nora 命令菜单",
+                "",
+                "Start",
+                "  /wake       项目状态面板",
+                "  /setup      配置检查与排查指南",
+                "  /model      当前模型配置和诊断",
+                "",
+                "Project",
+                "  /status     当前 Git 状态",
+                "  /diff       查看 Git diff",
+                "  /test       运行项目测试",
+                "  /tools      查看可用工具",
+                "",
+                "Workers",
+                "  /workers    查看 Claude/CCB worker 状态",
+                "",
+                "Memory / Tasks / Context",
+                "  /task       当前任务",
+                "  /tasks      Durable tasks",
+                "  /dashboard  Durable task 状态概览",
+                "  /context    最近上下文摘要",
+                "",
+                "Diagnostics",
+                "  /doctor     检查 workspace、Git、LLM、工具和 PATH",
+                "  /logs       查看工具日志",
+                "  /audit      工具调用安全审计摘要",
+                "",
+                "Help",
+                "  /help       完整命令帮助",
+                "  exit        退出 Nora",
+            ]
+        )
 
     def doctor(self) -> str:
         lines = [

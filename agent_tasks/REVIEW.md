@@ -245,3 +245,38 @@ Claude B added deterministic offline eval coverage for the integrated TASK-131 C
 ## Verdict
 
 Approved for integration. This closes the CLI setup/status UX implementation + deterministic eval coverage pair for TASK-131/TASK-132.
+
+---
+
+# TASK-133 Review: CLI slash launcher and welcome polish v2
+
+**Status: APPROVED**
+
+## Summary
+
+Claude A implemented the requested slash launcher and welcome polish direction, but its CCB worktree was stale at `edca78e` and did not include the integrated TASK-131/TASK-132 CLI surface. Codex PM manually ported the TASK-133 increment onto current main, preserved `/setup` and response-status behavior, and avoided unrelated stale diff.
+
+## Findings
+
+- PM integration fix: A's original launcher omitted `/setup`, despite TASK-133 requiring `/`, `/wake`, and `/setup` as startup next actions. The integrated version includes `/setup` in both the launcher and banner next-action hint.
+- PM scope fix: A's original patch added prefix dispatch/suggestion behavior (`/stat` → `/status`) that was not required for TASK-133. The integrated version keeps the scope to exact `/` launcher behavior.
+
+## Coverage
+
+- Exact `/` returns a grouped command launcher/menu.
+- Launcher includes Start, Project, Workers, Memory / Tasks / Context, Diagnostics, and Help groups.
+- Launcher includes `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, and `/help`.
+- `/` does not call `agent.run(...)` and does not emit model-call status lines.
+- Banner adds a next-action hint for `/`, `/wake`, and `/setup` while preserving workspace, LLM, tools, active task, and worker summary behavior.
+- Unknown slash commands now point users to `/` and `/help`.
+
+## Evidence
+
+- `python3 -m unittest tests.test_cli` → 79 tests OK
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 225 tests OK
+- `python3 evals/run_evals.py` → 518 passed, 0 failed
+- `git diff --check -- mini_agent/cli.py tests/test_cli.py` → clean
+
+## Verdict
+
+Approved for integration. TASK-134 remains open for deterministic eval coverage against the integrated TASK-133 surface.

@@ -816,6 +816,67 @@ class CLIResponseStatusTests(unittest.TestCase):
         self.assertTrue(len(status_outputs) >= 1)
 
 
+class CLISlashLauncherTests(unittest.TestCase):
+    """Tests for exact / slash launcher/menu (TASK-133)."""
+
+    def test_exact_slash_shows_grouped_menu(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        result = cli.handle_slash_command("/")
+        self.assertIn("Nora 命令菜单", result)
+        for heading in ["Start", "Project", "Workers", "Memory / Tasks / Context", "Diagnostics", "Help"]:
+            self.assertIn(heading, result)
+        for command in ["/wake", "/setup", "/model", "/workers", "/status", "/test", "/help"]:
+            self.assertIn(command, result)
+
+    def test_exact_slash_is_plain_text_not_json(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        result = cli.handle_slash_command("/")
+        self.assertFalse(result.lstrip().startswith("{"))
+        self.assertFalse(result.lstrip().startswith("["))
+
+    def test_exact_slash_no_agent_call_or_status_noise(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["/", "exit"]), output_func=outputs.append)
+
+        cli.run()
+
+        self.assertEqual(agent.inputs, [])
+        joined = "\n".join(outputs)
+        self.assertIn("Nora 命令菜单", joined)
+        self.assertNotIn("正在调用模型", joined)
+        self.assertNotIn("模型响应完成", joined)
+
+    def test_banner_shows_next_action_and_preserves_core_info(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outputs = []
+            cli = MiniAgentCLI(
+                FakeCLIAgent(),
+                FakeCLIRegistry(),
+                root=Path(tmpdir),
+                input_func=_fake_input(["exit"]),
+                output_func=outputs.append,
+            )
+
+            cli.run()
+
+            banner = outputs[0]
+            self.assertIn("Nora 已启动", banner)
+            self.assertIn("下一步:", banner)
+            self.assertIn("/ 打开命令菜单", banner)
+            self.assertIn("/wake", banner)
+            self.assertIn("/setup", banner)
+            self.assertIn("Workspace:", banner)
+            self.assertIn("LLM:", banner)
+            self.assertIn("Tools:", banner)
+
+    def test_unknown_slash_points_to_launcher(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        result = cli.handle_slash_command("/does-not-exist")
+        self.assertIn("未知命令", result)
+        self.assertIn("输入 / 查看命令菜单", result)
+
+
 class CLIErrorRecoveryTests(unittest.TestCase):
     """Tests for error recovery hints (TASK-129)."""
 
