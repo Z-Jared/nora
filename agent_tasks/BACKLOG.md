@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-125: Local skill manifest catalog discovery v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-123/TASK-124
+- 分配: Claude A
+- 目标: 增加只读 local skill manifest catalog discovery surface，从项目本地安全路径发现 skill manifest metadata，输出 bounded safe catalog summary，不加载/执行/安装 skill 内容。
+- 验证: `python3 -m unittest tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`mini_agent/skills.py`；`mini_agent/toolkits/registry_builder.py`
+
+### TASK-126: Deterministic eval coverage for local skill manifest catalog discovery v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-125
+- 分配: Claude B
+- 目标: 为 TASK-125 local skill manifest catalog discovery 增加 deterministic offline eval，覆盖注册权限、有效发现、目录排序、边界、路径安全、malformed input、secret no-leak、read-only 和兼容性。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/skills.py`
 
 ## 已完成
 
