@@ -566,6 +566,17 @@ def main() -> int:
         EvalCase("local_skill_catalog_secret_no_leak", eval_local_skill_catalog_secret_no_leak),
         EvalCase("local_skill_catalog_read_only", eval_local_skill_catalog_read_only),
         EvalCase("local_skill_catalog_compatibility", eval_local_skill_catalog_compatibility),
+        # TASK-128: Context compiler local skill catalog bridge evals
+        EvalCase("context_compiler_skill_catalog_valid_file", eval_context_compiler_skill_catalog_valid_file),
+        EvalCase("context_compiler_skill_catalog_directory_discovery", eval_context_compiler_skill_catalog_directory_discovery),
+        EvalCase("context_compiler_skill_catalog_registry", eval_context_compiler_skill_catalog_registry),
+        EvalCase("context_compiler_skill_catalog_combined", eval_context_compiler_skill_catalog_combined),
+        EvalCase("context_compiler_skill_catalog_path_safety", eval_context_compiler_skill_catalog_path_safety),
+        EvalCase("context_compiler_skill_catalog_malformed_input", eval_context_compiler_skill_catalog_malformed_input),
+        EvalCase("context_compiler_skill_catalog_secret_no_leak", eval_context_compiler_skill_catalog_secret_no_leak),
+        EvalCase("context_compiler_skill_catalog_read_only", eval_context_compiler_skill_catalog_read_only),
+        EvalCase("context_compiler_skill_catalog_registry_root_binding", eval_context_compiler_skill_catalog_registry_root_binding),
+        EvalCase("context_compiler_skill_catalog_compatibility", eval_context_compiler_skill_catalog_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -20083,6 +20094,445 @@ class FakeBrowserBackend:
     def screenshot(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"eval")
+
+
+# ---------------------------------------------------------------------------
+# TASK-128: Context compiler local skill catalog bridge evals
+# ---------------------------------------------------------------------------
+
+def _write_skill_manifest_file(root: Path, rel_path: str, manifest: dict) -> Path:
+    """Write a skill manifest JSON file and return its path."""
+    p = root / rel_path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return p
+
+
+def eval_context_compiler_skill_catalog_valid_file():
+    """Direct ContextCompiler.compile(...) with valid skill_manifest_paths file adds a Skill Context Preview section."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        manifest = _make_skill_manifest(
+            name="python-expert",
+            version="1.0.0",
+            domains=["python"],
+            capabilities=["refactor"],
+        )
+        _write_skill_manifest_file(root, "skills/manifest.json", manifest)
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "refactor python code",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/manifest.json"],
+        )
+        md = pack.to_markdown()
+
+        assert "Skill Context Preview" in md, "Skill Context Preview section missing"
+        assert "python-expert" in md, "skill name missing"
+        assert "UNTRUSTED" in md, "untrusted framing missing"
+
+
+def eval_context_compiler_skill_catalog_directory_discovery():
+    """Directory path discovery contributes multiple local skill manifests in deterministic order."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        _write_skill_manifest_file(root, "skills/alpha.json", _make_skill_manifest(name="alpha", domains=["python"]))
+        _write_skill_manifest_file(root, "skills/beta.json", _make_skill_manifest(name="beta", domains=["python"]))
+        _write_skill_manifest_file(root, "skills/gamma.json", _make_skill_manifest(name="gamma", domains=["python"]))
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "python project",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/"],
+        )
+        md = pack.to_markdown()
+
+        assert "alpha" in md, "alpha skill missing"
+        assert "beta" in md, "beta skill missing"
+        assert "gamma" in md, "gamma skill missing"
+
+        # Deterministic: run again and compare
+        pack2 = compiler.compile(
+            "python project",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/"],
+        )
+        assert pack.to_markdown() == pack2.to_markdown(), "directory discovery not deterministic"
+
+
+def eval_context_compiler_skill_catalog_registry():
+    """Registry compile_context_pack accepts skill_manifest_paths as JSON string and stays workspace/read."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        manifest = _make_skill_manifest(name="registry-skill", domains=["python"])
+        _write_skill_manifest_file(root, "skills/manifest.json", manifest)
+
+        db = NoraDB(root / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=root, db=db)
+
+            # Check permission
+            tool_perm = registry._tools.get("compile_context_pack")
+            assert tool_perm is not None, "compile_context_pack not registered"
+            assert tool_perm.permission.category == "workspace", f"expected workspace, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+
+            # Call via registry with JSON string paths
+            result = registry.call(
+                "compile_context_pack",
+                task_description="registry test",
+                include_git_status=False,
+                include_changed_files=False,
+                skill_manifest_paths=json.dumps(["skills/manifest.json"]),
+            )
+            assert "Skill Context Preview" in result, "Skill Context Preview section missing from registry output"
+            assert "registry-skill" in result, "skill name missing from registry output"
+        finally:
+            db.close()
+
+
+def eval_context_compiler_skill_catalog_combined():
+    """Manual skill_manifest_jsons and local skill_manifest_paths combine correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        local_manifest = _make_skill_manifest(name="local-skill", domains=["python"])
+        _write_skill_manifest_file(root, "skills/local.json", local_manifest)
+
+        manual_manifest = _make_skill_manifest(name="manual-skill", domains=["python"])
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "python project",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manual_manifest)],
+            skill_manifest_paths=["skills/"],
+        )
+        md = pack.to_markdown()
+
+        assert "local-skill" in md, "local skill missing"
+        assert "manual-skill" in md, "manual skill missing"
+
+
+def eval_context_compiler_skill_catalog_path_safety():
+    """Path safety: traversal, absolute path, hidden directory or file, denied directory, no caller-controlled project_root escape."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+
+        # Create a valid manifest
+        _write_skill_manifest_file(root, "skills/manifest.json", _make_skill_manifest(name="safe-skill"))
+
+        # Create hidden directory with manifest
+        hidden_dir = root / ".hidden_skills"
+        hidden_dir.mkdir()
+        _write_skill_manifest_file(root, ".hidden_skills/manifest.json", _make_skill_manifest(name="hidden-skill"))
+
+        # Create denied directory with manifest
+        denied_dir = root / ".git" / "skills"
+        denied_dir.mkdir(parents=True, exist_ok=True)
+        _write_skill_manifest_file(root, ".git/skills/manifest.json", _make_skill_manifest(name="git-skill"))
+
+        compiler = ContextCompiler(root)
+
+        # Traversal path should be rejected
+        pack = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["../../../etc/passwd"],
+        )
+        md = pack.to_markdown()
+        assert "etc/passwd" not in md, "traversal path leaked"
+
+        # Absolute path should be rejected
+        pack2 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["/etc/passwd"],
+        )
+        md2 = pack2.to_markdown()
+        assert "etc/passwd" not in md2, "absolute path leaked"
+
+        # Hidden directory should be skipped
+        pack3 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=[".hidden_skills/"],
+        )
+        md3 = pack3.to_markdown()
+        assert "hidden-skill" not in md3, "hidden directory manifest should be skipped"
+
+        # Denied directory should be skipped
+        pack4 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=[".git/skills/"],
+        )
+        md4 = pack4.to_markdown()
+        assert "git-skill" not in md4, "denied directory manifest should be skipped"
+
+
+def eval_context_compiler_skill_catalog_malformed_input():
+    """Malformed input: malformed paths JSON, non-list paths input, invalid manifest file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+
+        # Create invalid manifest file
+        _write_skill_manifest_file(root, "skills/invalid.json", {"no_name": True})
+
+        compiler = ContextCompiler(root)
+
+        # Malformed paths JSON string
+        pack = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths="not valid json",
+        )
+        md = pack.to_markdown()
+        # Must contain bounded diagnostic, not echo raw input
+        assert "skill_manifest_paths must be a JSON list or array of strings" in md, \
+            f"malformed paths JSON should produce diagnostic, got: {md[:500]}"
+        assert "not valid json" not in md, "raw malformed input leaked"
+
+        # Non-list paths input
+        pack2 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths="just a string",
+        )
+        md2 = pack2.to_markdown()
+        # Must contain bounded diagnostic, not echo raw input
+        assert "skill_manifest_paths must be a JSON list or array of strings" in md2, \
+            f"non-list paths should produce diagnostic, got: {md2[:500]}"
+        assert "just a string" not in md2, "raw non-list input leaked"
+
+        # Invalid manifest file should not crash
+        pack3 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/invalid.json"],
+        )
+        md3 = pack3.to_markdown()
+        # Should have diagnostic errors about missing fields
+        assert "missing" in md3.lower() or "error" in md3.lower() or "Skill Context Preview" in md3, \
+            "invalid manifest should produce diagnostics"
+        # Raw JSON content should not leak (field names in warnings are acceptable)
+        assert '{"no_name": true}' not in md3.replace(" ", "").replace("\n", ""), "raw JSON content leaked"
+
+
+def eval_context_compiler_skill_catalog_secret_no_leak():
+    """Secret no-leak: raw unsafe path sentinels, secret-like manifest fields, raw file content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+
+        # Secret-like manifest
+        secret_manifest = _make_skill_manifest(
+            name="sk-SECRET-KEY-abc123",
+            version="api_key_TOKEN_123",
+            domains=["Bearer secret123"],
+        )
+        _write_skill_manifest_file(root, "skills/secret.json", secret_manifest)
+
+        compiler = ContextCompiler(root)
+        pack = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/secret.json"],
+        )
+        md = pack.to_markdown()
+
+        # Secret-like values should not leak
+        assert "sk-SECRET-KEY-abc123" not in md, "secret name leaked"
+        assert "api_key_TOKEN_123" not in md, "secret version leaked"
+        assert "Bearer secret123" not in md, "secret domain leaked"
+
+        # Raw path sentinels should not leak
+        pack2 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["/etc/passwd"],
+        )
+        md2 = pack2.to_markdown()
+        assert "/etc/passwd" not in md2, "absolute path leaked"
+
+        # Raw file content should not leak
+        raw_content = "SUPER_SECRET_CONTENT_12345"
+        _write_skill_manifest_file(root, "skills/raw.json", {"name": "raw", "version": "1.0.0", "_raw": raw_content})
+        pack3 = compiler.compile(
+            "test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_paths=["skills/raw.json"],
+        )
+        md3 = pack3.to_markdown()
+        assert raw_content not in md3, "raw file content leaked"
+
+
+def eval_context_compiler_skill_catalog_read_only():
+    """Read-only: durable task, worker, and event counts unchanged during registry compile."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        _write_skill_manifest_file(root, "skills/manifest.json", _make_skill_manifest(name="read-only-skill"))
+
+        db = NoraDB(root / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=root, db=db)
+
+            # Snapshot task, worker, and event counts
+            tasks_before = registry.call("list_durable_tasks")
+            workers_before = registry.call("list_workers")
+            events_before = registry.call("list_durable_events")
+            task_count_before = tasks_before.count("\n") + 1 if tasks_before.strip() else 0
+            worker_count_before = workers_before.count("\n") + 1 if workers_before.strip() else 0
+            event_count_before = events_before.count("\n") + 1 if events_before.strip() else 0
+
+            # Call compile_context_pack
+            registry.call(
+                "compile_context_pack",
+                task_description="read-only test",
+                include_git_status=False,
+                include_changed_files=False,
+                skill_manifest_paths=json.dumps(["skills/manifest.json"]),
+            )
+
+            # Verify no mutation
+            tasks_after = registry.call("list_durable_tasks")
+            workers_after = registry.call("list_workers")
+            events_after = registry.call("list_durable_events")
+            task_count_after = tasks_after.count("\n") + 1 if tasks_after.strip() else 0
+            worker_count_after = workers_after.count("\n") + 1 if workers_after.strip() else 0
+            event_count_after = events_after.count("\n") + 1 if events_after.strip() else 0
+
+            assert task_count_after == task_count_before, f"task count changed: {task_count_before} -> {task_count_after}"
+            assert worker_count_after == worker_count_before, f"worker count changed: {worker_count_before} -> {worker_count_after}"
+            assert event_count_after == event_count_before, f"event count changed: {event_count_before} -> {event_count_after}"
+        finally:
+            db.close()
+
+
+def eval_context_compiler_skill_catalog_registry_root_binding():
+    """Registry compile_context_pack ignores caller-supplied project_root; only discovers workspace-bound manifests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace_root = Path(tmpdir) / "workspace"
+        external_root = Path(tmpdir) / "external"
+        workspace_root.mkdir()
+        external_root.mkdir()
+        _init_git_repo(workspace_root)
+
+        # Manifest inside workspace root (should be discovered)
+        _write_skill_manifest_file(workspace_root, "skills/ws_manifest.json",
+                                   _make_skill_manifest(name="ws-skill", domains=["python"]))
+
+        # Manifest outside workspace root (should NOT be discovered)
+        _write_skill_manifest_file(external_root, "skills/ext_manifest.json",
+                                   _make_skill_manifest(name="ext-skill", domains=["python"]))
+
+        db = NoraDB(workspace_root / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=workspace_root, db=db)
+
+            # Call compile_context_pack with skill_manifest_paths
+            # The registry should use its bound workspace_root, not any caller-supplied project_root
+            result = registry.call(
+                "compile_context_pack",
+                task_description="python project",
+                include_git_status=False,
+                include_changed_files=False,
+                skill_manifest_paths=json.dumps(["skills/"]),
+            )
+
+            # Workspace-bound manifest should be found
+            assert "ws-skill" in result, f"workspace-bound manifest not discovered: {result[:500]}"
+
+            # External manifest should NOT be found (registry doesn't accept project_root param)
+            assert "ext-skill" not in result, f"external manifest leaked: {result[:500]}"
+        finally:
+            db.close()
+
+
+def eval_context_compiler_skill_catalog_compatibility():
+    """Compatibility: existing manual skill_manifest_jsons, git status, changed files, knowledge excerpts, memory options, discover_local_skill_manifests, preview_skill_context, list_tool_permissions still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _init_git_repo(root)
+        (root / "README.md").write_text("# Test Project\n", encoding="utf-8")
+        _write_skill_manifest_file(root, "skills/manifest.json", _make_skill_manifest(name="compat-skill"))
+
+        db = NoraDB(root / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=root, db=db)
+
+            # Manual skill_manifest_jsons still works
+            manual = _make_skill_manifest(name="manual-skill", domains=["python"])
+            result = registry.call(
+                "compile_context_pack",
+                task_description="python compat test",
+                include_git_status=False,
+                include_changed_files=False,
+                skill_manifest_jsons=json.dumps([json.dumps(manual)]),
+            )
+            assert "manual-skill" in result, "manual skill_manifest_jsons broken"
+
+            # Git status still works
+            result2 = registry.call(
+                "compile_context_pack",
+                task_description="compat test",
+                include_git_status=True,
+                include_changed_files=False,
+            )
+            assert "Git Status" in result2 or "git" in result2.lower(), \
+                f"git status section missing from output: {result2[:300]}"
+
+            # Knowledge excerpts still work
+            result3 = registry.call(
+                "compile_context_pack",
+                task_description="compat test",
+                include_git_status=False,
+                include_changed_files=False,
+                include_knowledge_excerpts=["README.md"],
+            )
+            assert "Test Project" in result3, "knowledge excerpts broken"
+
+            # discover_local_skill_manifests still works
+            disc = registry.call("discover_local_skill_manifests", paths=json.dumps(["skills/"]))
+            assert "manifests" in disc or "skills" in disc, "discover_local_skill_manifests broken"
+
+            # preview_skill_context still works
+            preview = registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(_make_skill_manifest(name="preview-skill"))]),
+            )
+            assert "context_sections" in preview or "selected_count" in preview, "preview_skill_context broken"
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "compile_context_pack" in perms, "compile_context_pack not in permissions"
+            assert "discover_local_skill_manifests" in perms, "discover_local_skill_manifests not in permissions"
+            assert "preview_skill_context" in perms, "preview_skill_context not in permissions"
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

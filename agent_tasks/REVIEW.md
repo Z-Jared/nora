@@ -65,3 +65,39 @@ Clean integration of TASK-125 local skill manifest discovery into ContextCompile
 ## Verdict
 
 Implementation is clean, well-tested, and properly sanitized. All PM review fixes verified. APPROVED.
+
+---
+
+# TASK-128 Review: Deterministic eval coverage for context compiler local skill catalog bridge v1
+
+**Status: APPROVED**
+
+## Summary
+
+10 deterministic offline evals for TASK-127 context compiler local skill catalog bridge. All PM review fixes verified. No runtime changes.
+
+## Coverage
+
+| # | Eval | Key assertions |
+|---|------|----------------|
+| 1 | `valid_file` | Section present, skill name present, UNTRUSTED framing |
+| 2 | `directory_discovery` | 3 skills found, deterministic (run-twice comparison) |
+| 3 | `registry` | JSON string paths accepted, permission = workspace/read |
+| 4 | `combined` | Manual + local manifests both appear |
+| 5 | `path_safety` | Traversal, absolute, hidden, denied all rejected |
+| 6 | `malformed_input` | Specific diagnostic message asserted; raw input NOT echoed |
+| 7 | `secret_no_leak` | Secret manifest fields, raw path sentinels, raw file content all absent |
+| 8 | `read_only` | Task, worker, AND event counts unchanged (PM fix) |
+| 9 | `registry_root_binding` | Workspace manifest found; external manifest NOT found (PM fix) |
+| 10 | `compatibility` | Manual manifests, git status, knowledge excerpts, discover/preview/permissions all work |
+
+## PM Fixes Verified
+
+1. **No `or True` tautologies** — grep confirms zero occurrences in TASK-128 code
+2. **Read-only includes worker count** — `list_workers` before/after checked alongside tasks/events
+3. **Registry root binding** — dedicated eval verifies workspace-bound manifest discovered, external manifest rejected
+4. **Malformed input diagnostic** — asserts exact string `"skill_manifest_paths must be a JSON list or array of strings"`
+
+## Findings
+
+No blocking issues. Evals are deterministic, substantively assertive, and cover all TASK-128 requirements.

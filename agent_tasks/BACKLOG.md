@@ -8,16 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-128: Deterministic eval coverage for context compiler local skill catalog bridge v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-127
-- 分配: Claude B
-- 目标: 为 TASK-127 增加 deterministic offline eval，覆盖 direct/compiler + registry compile_context_pack 的本地 skill manifest path 发现、排序、路径安全、malformed input、secret no-leak、read-only 和 compatibility。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/context_compiler.py`
+暂无
 
 ## 已完成
+
+### TASK-128: Deterministic eval coverage for context compiler local skill catalog bridge v1 ✅
+- 完成者: Claude B；按 PM 初审反馈移除弱断言并补强 read-only / registry root-binding 覆盖
+- Reviewer: CCB reviewer (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 497 passed；`python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent` 333 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-127 `compile_context_pack` local skill catalog bridge 增加 10 个 deterministic offline eval，覆盖 direct compiler 和 registry 路径的有效文件、目录发现与 deterministic ordering、registry `workspace/read` permission、manual + local manifest 合并、traversal/absolute/hidden/denied path safety、malformed `skill_manifest_paths` bounded diagnostics/no raw echo、secret/file/path no-leak、durable task/worker/event read-only no-mutation、workspace-root-bound discovery，以及 existing manual manifest、git status、knowledge excerpt、discover/preview/permission surfaces compatibility；无 runtime 行为变更。
 
 ### TASK-127: Context compiler local skill catalog bridge v1 ✅
 - 完成者: Claude A；按 PM 初审反馈补强 discovery diagnostics sanitization 和 malformed `skill_manifest_paths` bounded error
