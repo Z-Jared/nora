@@ -1,3 +1,4 @@
+import json
 import subprocess
 import tempfile
 import unittest
@@ -390,6 +391,216 @@ class ContextCompilerNoGitTests(unittest.TestCase):
             self.assertIsInstance(pack, ContextPack)
             titles = [s.title for s in pack.sections]
             self.assertIn("Knowledge: README.md", titles)
+
+
+class ContextCompilerSkillContextTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.root = Path(self.tmpdir)
+        self.compiler = ContextCompiler(self.root)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_manifest(self, name="test-skill", version="1.0", domains=None, capabilities=None,
+                       workflows=None, deliverables=None, required_plugins=None,
+                       risk_boundaries=None, evals=None):
+        m = {
+            "name": name,
+            "version": version,
+        }
+        if domains:
+            m["domains"] = domains
+        if capabilities:
+            m["capabilities"] = capabilities
+        if workflows:
+            m["workflows"] = workflows
+        if deliverables:
+            m["deliverables"] = deliverables
+        if required_plugins:
+            m["required_plugins"] = required_plugins
+        if risk_boundaries:
+            m["risk_boundaries"] = risk_boundaries
+        if evals:
+            m["evals"] = evals
+        return m
+
+    def test_no_skill_manifests_keeps_existing_behavior(self):
+        pack = self.compiler.compile(
+            "test task",
+            include_git_status=False,
+            include_changed_files=False,
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("Skill Context Preview", titles)
+
+    def test_valid_relevant_skill_adds_section(self):
+        manifest = self._make_manifest(
+            name="coding-skill",
+            domains=["coding", "python"],
+            capabilities=["testing", "debugging"],
+            workflows=["tdd"],
+            deliverables=["test_results"],
+        )
+        pack = self.compiler.compile(
+            "help me with python coding",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Skill Context Preview", titles)
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("coding-skill", section.content)
+        self.assertIn("UNTRUSTED", section.content)
+        self.assertIn("read-only", section.content)
+
+    def test_json_string_skill_manifests_add_section(self):
+        manifest = self._make_manifest(
+            name="json-string-skill",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=json.dumps([json.dumps(manifest)]),
+        )
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("json-string-skill", section.content)
+
+    def test_irrelevant_skill_no_content(self):
+        manifest = self._make_manifest(
+            name="cooking-skill",
+            domains=["cooking", "recipes"],
+            capabilities=["baking"],
+        )
+        pack = self.compiler.compile(
+            "help me write python tests",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertNotIn("Skill Context Preview", titles)
+
+    def test_malformed_manifest_produces_error_section(self):
+        pack = self.compiler.compile(
+            "test task",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=["not valid json{{{"],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Skill Context Preview", titles)
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("Errors", section.content)
+
+    def test_malformed_outer_json_string_produces_safe_error_section(self):
+        raw = "not valid json{{{ sk-super-secret-key-12345"
+        pack = self.compiler.compile(
+            "test task",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=raw,
+        )
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        self.assertIn("Errors", section.content)
+        self.assertIn("invalid JSON", section.content)
+        self.assertNotIn(raw, section.content)
+        self.assertNotIn("sk-super-secret-key-12345", section.content)
+
+    def test_secret_like_values_not_leaked(self):
+        manifest = self._make_manifest(
+            name="sk-super-secret-key-12345",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        md = pack.to_markdown()
+        self.assertNotIn("sk-super-secret-key-12345", md)
+
+    def test_max_skills_honored(self):
+        manifests = []
+        for i in range(10):
+            manifests.append(json.dumps(self._make_manifest(
+                name=f"skill-{i}",
+                domains=["coding"],
+                capabilities=["testing"],
+            )))
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=manifests,
+            skill_context_max_skills=2,
+        )
+        section = next(s for s in pack.sections if s.title == "Skill Context Preview")
+        # Should have at most 2 skill headers (### skill-X)
+        header_count = section.content.count("### ")
+        self.assertLessEqual(header_count, 2)
+
+    def test_section_respects_budget(self):
+        big_manifest = self._make_manifest(
+            name="big-skill",
+            domains=["coding"] * 50,
+            capabilities=["testing"] * 50,
+            workflows=["tdd"] * 50,
+            deliverables=["report"] * 50,
+        )
+        compiler = ContextCompiler(self.root, max_chars=300)
+        pack = compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(big_manifest)],
+        )
+        total = sum(len(s.content) for s in pack.sections)
+        self.assertLessEqual(total, 400)
+
+    def test_registry_compile_context_pack_accepts_skill_params(self):
+        registry = build_default_registry(workspace_root=self.root)
+        manifest = self._make_manifest(
+            name="test-skill",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        result = registry.call(
+            "compile_context_pack",
+            task_description="coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            skill_manifest_jsons=[json.dumps(manifest)],
+            skill_context_max_skills=3,
+        )
+        self.assertIsInstance(result, str)
+        self.assertIn("Skill Context Preview", result)
+        self.assertIn("test-skill", result)
+
+    def test_skill_context_with_other_sections(self):
+        (self.root / "README.md").write_text("# Test Project\n", encoding="utf-8")
+        manifest = self._make_manifest(
+            name="test-skill",
+            domains=["coding"],
+            capabilities=["testing"],
+        )
+        pack = self.compiler.compile(
+            "coding test",
+            include_git_status=False,
+            include_changed_files=False,
+            include_knowledge_excerpts=["README.md"],
+            skill_manifest_jsons=[json.dumps(manifest)],
+        )
+        titles = [s.title for s in pack.sections]
+        self.assertIn("Knowledge: README.md", titles)
+        self.assertIn("Skill Context Preview", titles)
 
 
 if __name__ == "__main__":

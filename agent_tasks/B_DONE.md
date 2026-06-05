@@ -1,44 +1,36 @@
-# Claude B Done
+# B Done
 
-## TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
+## TASK-124: Deterministic eval coverage for skill context preview v1
 
-**Status:** completed
-**Date:** 2026-06-04
+Status: **completed**
 
 ### Summary
 
-Added 9 deterministic offline eval cases for `summarize_skill_manifests` in `evals/run_evals.py`, covering:
+Added 9 deterministic offline eval cases for `preview_skill_context` / registry `preview_skill_context` in `evals/run_evals.py`.
 
-1. **Tool registration and exact permission** — `ToolPermission(category="local", risk="read")`
-2. **Valid catalog summary** — `valid_count`, bounded `skills`, sorted/deduplicated `domains`/`capabilities`/`workflows`/`deliverables`/`required_plugins`/`risk_boundaries`/`evals`; deterministic output
-3. **Bounds** — default `max_skills=20`, explicit `max_skills=2`, high value (999) clamps to 50, zero/negative clamp to 1
-4. **Malformed input** — malformed outer JSON, malformed individual manifest, non-list input (string and int); all return bounded safe errors
-5. **Secret no-leak** — secret-like `name`/`version` produce invalid manifest without leaking raw values; secret-like list items (`domains`, `capabilities`, `required_plugins`) are omitted with warnings; safe values preserved
-6. **Read-only** — durable task, worker, and event counts unchanged after `summarize_skill_manifests` call
-7. **Compatibility** — `inspect_skill_manifest`, `route_capability_request`, and `list_tool_permissions` still work alongside the new tool
+### Changes
 
-### Files Changed
+**`evals/run_evals.py`** — added 9 eval functions + 9 EvalCase registrations:
 
-- `evals/run_evals.py` — added 9 new eval functions (`eval_skill_manifest_catalog_*`) and helper `_make_skill_manifest()`; registered in `cases` list
+1. **`eval_skill_context_preview_tool_permission`** — verifies `ToolPermission(category="local", risk="read")`.
+2. **`eval_skill_context_preview_valid`** — valid preview: relevant skill selected, bounded context sections, required plugins, risk boundaries, eval hints, untrusted framing, deterministic output.
+3. **`eval_skill_context_preview_stable_ordering`** — multiple matching skills have stable ordering by score descending, then name.
+4. **`eval_skill_context_preview_max_skills`** — default (5), explicit, high clamp (20), zero/negative/bad clamp.
+5. **`eval_skill_context_preview_malformed_input`** — malformed outer JSON, non-list JSON, unsupported input type, invalid individual manifest entries.
+6. **`eval_skill_context_preview_large_input`** — input scan cap (50) with truncation warning.
+7. **`eval_skill_context_preview_secret_no_leak`** — secret-like goal, name, domains, capabilities, workflows, deliverables, required_plugins, risk_boundaries, evals do not leak raw sentinel values.
+8. **`eval_skill_context_preview_read_only`** — durable task, worker, and event counts unchanged.
+9. **`eval_skill_context_preview_compatibility`** — `inspect_skill_manifest`, `summarize_skill_manifests`, `route_capability_request`, and `list_tool_permissions` still work.
 
-### PM Review Fix
+### Verification
 
-Fixed `eval_skill_manifest_catalog_bounds` high-clamp test: now uses 60 valid manifests and asserts `valid_count == 50` and `len(skills) == 50` when `max_skills=999`, proving the upper clamp actually works. Previously only tested with 5 manifests which couldn't distinguish clamping from processing all inputs.
-
-### Verification (post-fix)
-
-```bash
-python3 evals/run_evals.py
-# 468 passed, 0 failed
-
-python3 -m unittest tests.test_skills tests.test_mini_agent
-# 200 tests OK
-
-git diff --check
-# clean
+```
+python3 evals/run_evals.py           → 477 passed, 0 failed
+python3 -m unittest tests.test_skills tests.test_mini_agent → 242 tests OK
+git diff --check                     → clean
 ```
 
 ### Notes
 
-- No runtime changes required; `summarize_skill_manifests` already implements correct behavior including `max_skills` clamping and secret-like filtering.
-- No conflicts with Claude A's work.
+- No runtime changes; eval-only.
+- No bugs found in TASK-121 implementation.

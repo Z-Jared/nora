@@ -623,6 +623,17 @@ def register_developer_tools(
                         "type": "integer",
                         "description": "结构化记忆最多返回几条，默认 3",
                     },
+                    "skill_manifest_jsons": {
+                        "oneOf": [
+                            {"type": "array", "items": {}},
+                            {"type": "string"},
+                        ],
+                        "description": "skill manifest JSON 字符串，或 JSON 字符串/对象数组，用于预览 skill context",
+                    },
+                    "skill_context_max_skills": {
+                        "type": "integer",
+                        "description": "skill context 最多返回几个 skill，默认 5，最大 20",
+                    },
                 },
                 "required": ["task_description"],
             },

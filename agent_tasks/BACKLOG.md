@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-123: Skill context compiler preview bridge v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-121
-- 分配: Claude A
-- 目标: 把只读 `preview_skill_context` metadata preview 接入 `ContextCompiler` / `compile_context_pack`，让 context pack 可选包含 bounded/untrusted skill context section。
-- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 3 / Priority 6；`mini_agent/context_compiler.py`；`mini_agent/skills.py`
-
-### TASK-124: Deterministic eval coverage for skill context preview v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-121
-- 分配: Claude B
-- 目标: 为 `preview_skill_context` / registry `preview_skill_context` 增加 deterministic offline eval，覆盖权限、选择、边界、安全、只读和兼容性。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/skills.py`
+暂无
 
 ## 已完成
+
+### TASK-124: Deterministic eval coverage for skill context preview v1 ✅
+- 完成者: Claude B
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 477 passed；`python3 -m unittest tests.test_skills tests.test_mini_agent` 242 tests OK；合并后 `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent` 287 tests OK；`git diff --check` OK。
+- 内容: 为 `preview_skill_context` / registry `preview_skill_context` 增加 9 个 deterministic offline eval，覆盖 exact `local/read` permission、有效 skill context preview、stable ordering、`max_skills` 默认/显式/high/zero/negative/bad bounds、malformed outer/non-list/unsupported/individual input、大输入 scan cap、secret no-leak、durable task/worker/event read-only no-mutation，以及 inspect/summarize/route/list_tool_permissions compatibility；无 runtime 变更。
+
+### TASK-123: Skill context compiler preview bridge v1 ✅
+- 完成者: Claude A；Codex PM 补强 JSON string/list input 兼容
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent` 287 tests OK；`python3 evals/run_evals.py` 477 passed；`git diff --check` OK。
+- 内容: 扩展 `ContextCompiler.compile(...)` 和 registry `compile_context_pack`，允许 context pack 可选包含 bounded/untrusted `Skill Context Preview` section；桥接复用 TASK-121 `preview_skill_context_json(...)`，只使用 skill manifest metadata，不加载/安装/执行 skill 内容，不外呼，不 mutation durable task/worker/event/memory/trace；支持 list 或 JSON string manifest input、`skill_context_max_skills`、普通 context budget/truncation、safe malformed error section 和 secret-like no-leak。
 
 ### TASK-121: Skill context preview surface v1 ✅
 - 完成者: Claude A；按 PM 初审反馈修复 malformed/non-list JSON 静默返回、输入扫描无界、bad `max_skills` 抛错/静默 fallback 三类问题。

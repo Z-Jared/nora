@@ -545,6 +545,16 @@ def main() -> int:
         EvalCase("skill_manifest_catalog_secret_no_leak", eval_skill_manifest_catalog_secret_no_leak),
         EvalCase("skill_manifest_catalog_read_only", eval_skill_manifest_catalog_read_only),
         EvalCase("skill_manifest_catalog_compatibility", eval_skill_manifest_catalog_compatibility),
+        # TASK-124: Skill context preview evals
+        EvalCase("skill_context_preview_tool_permission", eval_skill_context_preview_tool_permission),
+        EvalCase("skill_context_preview_valid", eval_skill_context_preview_valid),
+        EvalCase("skill_context_preview_stable_ordering", eval_skill_context_preview_stable_ordering),
+        EvalCase("skill_context_preview_max_skills", eval_skill_context_preview_max_skills),
+        EvalCase("skill_context_preview_malformed_input", eval_skill_context_preview_malformed_input),
+        EvalCase("skill_context_preview_large_input", eval_skill_context_preview_large_input),
+        EvalCase("skill_context_preview_secret_no_leak", eval_skill_context_preview_secret_no_leak),
+        EvalCase("skill_context_preview_read_only", eval_skill_context_preview_read_only),
+        EvalCase("skill_context_preview_compatibility", eval_skill_context_preview_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -19215,6 +19225,390 @@ def eval_skill_manifest_catalog_compatibility():
             perms = registry.call("list_tool_permissions")
             assert "summarize_skill_manifests" in perms
             assert "inspect_skill_manifest" in perms
+            assert "route_capability_request" in perms
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-124: Deterministic eval coverage for skill context preview v1
+# ---------------------------------------------------------------------------
+
+def eval_skill_context_preview_tool_permission():
+    """preview_skill_context is registered with ToolPermission(category="local", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "preview_skill_context" in perms, "preview_skill_context not in permissions list"
+            tool_perm = registry._tools.get("preview_skill_context")
+            assert tool_perm is not None, "preview_skill_context not registered"
+            assert tool_perm.permission.category == "local", f"expected local, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_valid():
+    """Valid skill context preview: relevant skill selected, bounded context sections, required plugins, risk boundaries, eval hints, untrusted framing."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            m = _make_skill_manifest(
+                name="python-expert",
+                version="2.0.0",
+                domains=["python", "web"],
+                capabilities=["refactor", "test"],
+                workflows=["tdd"],
+                deliverables=["code_changes", "test_results"],
+                required_plugins=["git-tools", "linter"],
+                risk_boundaries=["no-deploy", "no-external"],
+                evals_list=["unit-tests", "integration-tests"],
+            )
+            result_str = registry.call(
+                "preview_skill_context",
+                goal="refactor python web application",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            )
+            result = json.loads(result_str)
+
+            # Basic structure
+            assert result["selected_count"] == 1, f"expected 1 selected, got {result['selected_count']}"
+            assert result["invalid_count"] == 0
+            assert len(result["context_sections"]) == 1
+            assert result["goal"] != ""
+            assert "UNTRUSTED" in result["untrusted_framing"]
+
+            # Context section content
+            section = result["context_sections"][0]
+            assert section["skill"] == "python-expert"
+            assert section["version"] == "2.0.0"
+            assert "python" in section["matched_domains"]
+            assert "refactor" in section["matched_capabilities"]
+            assert "tdd" in section["workflows"]
+            assert "code_changes" in section["deliverables"]
+            assert "git-tools" in section["required_plugins"]
+            assert "no-deploy" in section["risk_boundaries"]
+            assert "unit-tests" in section["evals"]
+
+            # Top-level aggregates
+            assert "git-tools" in result["required_plugins"]
+            assert "linter" in result["required_plugins"]
+            assert "no-deploy" in result["risk_boundaries"]
+            assert "no-external" in result["risk_boundaries"]
+
+            # Deterministic
+            result2_str = registry.call(
+                "preview_skill_context",
+                goal="refactor python web application",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            )
+            assert result_str == result2_str, "preview_skill_context not deterministic"
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_stable_ordering():
+    """Multiple matching skills have stable ordering by score descending, then name."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            # Two skills with different relevance to goal
+            m1 = _make_skill_manifest(name="alpha-skill", version="1.0.0", domains=["python"], capabilities=["test"])
+            m2 = _make_skill_manifest(name="beta-skill", version="1.0.0", domains=["python", "web"], capabilities=["test", "refactor"])
+            result_str = registry.call(
+                "preview_skill_context",
+                goal="test python web app",
+                skill_manifest_jsons=json.dumps([json.dumps(m1), json.dumps(m2)]),
+            )
+            result = json.loads(result_str)
+            assert result["selected_count"] == 2
+            # beta-skill should rank higher due to more keyword overlap
+            assert result["context_sections"][0]["skill"] == "beta-skill"
+            assert result["context_sections"][1]["skill"] == "alpha-skill"
+
+            # Deterministic ordering
+            result2_str = registry.call(
+                "preview_skill_context",
+                goal="test python web app",
+                skill_manifest_jsons=json.dumps([json.dumps(m1), json.dumps(m2)]),
+            )
+            assert result_str == result2_str
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_max_skills():
+    """max_skills is honored: default, explicit, high clamp, zero/negative/bad clamp."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            # 10 matching skills
+            manifests = [_make_skill_manifest(name=f"skill-{i}", version="1.0.0", domains=["python"]) for i in range(10)]
+            manifests_json = json.dumps([json.dumps(m) for m in manifests])
+
+            # Default max_skills=5
+            result_default = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+            ))
+            assert result_default["selected_count"] <= 5, f"default should cap at 5, got {result_default['selected_count']}"
+
+            # Explicit max_skills=2
+            result_explicit = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+                max_skills=2,
+            ))
+            assert result_explicit["selected_count"] <= 2, f"explicit max_skills=2, got {result_explicit['selected_count']}"
+
+            # High clamp to 20
+            result_high = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+                max_skills=999,
+            ))
+            assert result_high["selected_count"] <= 20, f"high clamp should cap at 20, got {result_high['selected_count']}"
+
+            # Zero clamp to 1
+            result_zero = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+                max_skills=0,
+            ))
+            assert result_zero["selected_count"] <= 1, f"zero clamp should cap at 1, got {result_zero['selected_count']}"
+
+            # Negative clamp to 1
+            result_neg = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+                max_skills=-5,
+            ))
+            assert result_neg["selected_count"] <= 1, f"negative clamp should cap at 1, got {result_neg['selected_count']}"
+
+            # Bad max_skills (non-integer string)
+            result_bad = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=manifests_json,
+                max_skills="not-a-number",
+            ))
+            assert result_bad["selected_count"] <= 5, f"bad max_skills should fallback to 5, got {result_bad['selected_count']}"
+            assert any("invalid max_skills" in w for w in result_bad.get("warnings", [])), "should warn about invalid max_skills"
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_malformed_input():
+    """Malformed input: outer JSON, non-list, unsupported type, invalid individual entries."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Malformed outer JSON
+            result1 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="test goal",
+                skill_manifest_jsons="{not valid json",
+            ))
+            assert len(result1["errors"]) > 0
+            assert any("invalid JSON" in e for e in result1["errors"])
+
+            # Non-list JSON
+            result2 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="test goal",
+                skill_manifest_jsons='"just a string"',
+            ))
+            assert any("must be a list" in e for e in result2["errors"])
+
+            # Non-list, non-string input
+            result3 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="test goal",
+                skill_manifest_jsons=12345,
+            ))
+            assert any("must be a JSON string or list" in e for e in result3["errors"])
+
+            # Invalid individual manifest entry (unsupported type)
+            result4 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="test goal",
+                skill_manifest_jsons=json.dumps([42, True]),
+            ))
+            assert result4["invalid_count"] >= 1
+            assert any("must be a JSON string or object" in e for e in result4["errors"])
+
+            # Invalid individual manifest (missing required fields)
+            result5 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="test goal",
+                skill_manifest_jsons=json.dumps([json.dumps({"name": "", "version": ""})]),
+            ))
+            assert result5["invalid_count"] >= 1
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_large_input():
+    """Input scan cap/truncation warning keeps errors and warnings bounded."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            # Create 60 manifests (exceeds _MAX_INPUT_SCAN=50)
+            many_manifests = [_make_skill_manifest(name=f"skill-{i}", version="1.0.0", domains=["python"]) for i in range(60)]
+            result = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m) for m in many_manifests]),
+            ))
+            # Should warn about truncation
+            assert any("truncated" in w for w in result.get("warnings", [])), "should warn about input truncation"
+            # selected_count should be bounded
+            assert result["selected_count"] <= 20
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_secret_no_leak():
+    """Secret-like goal, name, version, domains, capabilities, etc. do not leak raw sentinel values."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Secret-like goal
+            result1 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="sk-SECRET-KEY-abcdef12345",
+                skill_manifest_jsons=json.dumps([json.dumps(_make_skill_manifest(domains=["test"]))]),
+            ))
+            result1_str = json.dumps(result1)
+            assert "sk-SECRET-KEY-abcdef12345" not in result1_str, "secret-like goal leaked"
+
+            # Secret-like manifest name/version
+            m_secret = _make_skill_manifest(name="sk-SECRET-KEY-abcdef12345", version="1.0.0", domains=["python"])
+            result2 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m_secret)]),
+            ))
+            result2_str = json.dumps(result2)
+            assert "sk-SECRET-KEY-abcdef12345" not in result2_str, "secret-like name leaked"
+
+            # Secret-like domains/capabilities/etc.
+            m_fields = _make_skill_manifest(
+                name="safe-skill",
+                version="1.0.0",
+                domains=["sk-SECRET-DOMAIN-abcdef"],
+                capabilities=["sk-SECRET-CAP-abcdef"],
+                workflows=["sk-SECRET-WORKFLOW-abcdef"],
+                deliverables=["sk-SECRET-DELIVERABLE-abcdef"],
+                required_plugins=["sk-SECRET-PLUGIN-abcdef"],
+                risk_boundaries=["sk-SECRET-RISK-abcdef"],
+                evals_list=["sk-SECRET-EVAL-abcdef"],
+            )
+            result3 = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m_fields)]),
+            ))
+            result3_str = json.dumps(result3)
+            assert "sk-SECRET-DOMAIN-abcdef" not in result3_str, "secret-like domain leaked"
+            assert "sk-SECRET-CAP-abcdef" not in result3_str, "secret-like capability leaked"
+            assert "sk-SECRET-WORKFLOW-abcdef" not in result3_str, "secret-like workflow leaked"
+            assert "sk-SECRET-DELIVERABLE-abcdef" not in result3_str, "secret-like deliverable leaked"
+            assert "sk-SECRET-PLUGIN-abcdef" not in result3_str, "secret-like plugin leaked"
+            assert "sk-SECRET-RISK-abcdef" not in result3_str, "secret-like risk leaked"
+            assert "sk-SECRET-EVAL-abcdef" not in result3_str, "secret-like eval leaked"
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_read_only():
+    """preview_skill_context does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            m = _make_skill_manifest(name="read-only-test", version="1.0.0", domains=["python"])
+            registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            )
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_skill_context_preview_compatibility():
+    """inspect_skill_manifest, summarize_skill_manifests, route_capability_request, and list_tool_permissions still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            m = _make_skill_manifest(name="compat-skill", version="1.0.0", domains=["python"])
+
+            # preview_skill_context works
+            preview = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            ))
+            assert preview["selected_count"] >= 1
+
+            # inspect_skill_manifest still works
+            from mini_agent.skills import inspect_skill_manifest
+            inspect_result = inspect_skill_manifest(m)
+            assert inspect_result["valid"] is True
+            assert inspect_result["manifest"]["name"] == "compat-skill"
+
+            # summarize_skill_manifests still works
+            catalog = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            ))
+            assert catalog["valid_count"] == 1
+
+            # route_capability_request still works
+            route_result = json.loads(registry.call(
+                "route_capability_request",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(m)]),
+            ))
+            assert "candidate_skills" in route_result
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "preview_skill_context" in perms
+            assert "inspect_skill_manifest" in perms
+            assert "summarize_skill_manifests" in perms
             assert "route_capability_request" in perms
         finally:
             db.close()
