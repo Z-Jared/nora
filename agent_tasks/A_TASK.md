@@ -1,18 +1,19 @@
-# TASK-127: Context compiler local skill catalog bridge v1
+# TASK-129: CLI wake/setup/status UX v1
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Codex PM assigned you TASK-127 after TASK-125/TASK-126 landed locally.
+Nora is shifting this iteration from backend runtime accumulation to CLI front-end usability. The goal is to make the CLI feel like a daily project workbench rather than a bag of scripts.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/CHAT_INDEX.md`
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
 - `agent_tasks/BACKLOG.md`
+- `mini_agent/cli.py`
+- `tests/test_cli.py`
 
 ## Worktree Safety
 
@@ -22,68 +23,68 @@ Before editing, run:
 git status --short --branch
 ```
 
-If your worktree is dirty before you edit, stop and write the conflict in `agent_tasks/A_DONE.md`. Do not stack TASK-127 on stale TASK-125 work.
+If your worktree is dirty before you edit, stop and write the conflict in `agent_tasks/A_DONE.md`.
 
 ## Goal
 
-Bridge TASK-125 local skill manifest discovery into the context compiler. Nora should be able to compile a task context pack from project-local skill manifest paths without callers first reading manifest files manually.
+Improve CLI wake/setup/status UX v1:
 
-This advances Skill Pack Runtime by letting local skill catalogs contribute scoped, untrusted context hints through the existing context compiler path.
+1. `/wake`
+   - Read project context from `docs/knowledge/PROJECT_WAKEUP.md`, `docs/knowledge/DECISIONS.md`, `docs/knowledge/CHAT_INDEX.md`, `AGENTS.md`, git status, and `agent_tasks/BACKLOG.md`.
+   - Output a concise project wake panel suitable for a fresh CLI session.
+   - If files are missing or the user starts outside a Nora project, return clear recovery guidance.
 
-## Requirements
+2. Startup page
+   - On CLI start, show workspace, branch, provider/model, whether required key material appears configured, current task/backlog summary, worker state summary if available, and common commands.
+   - Keep output compact and deterministic for tests.
 
-- Extend `ContextCompiler.compile(...)` with optional local skill manifest path input, likely `skill_manifest_paths`.
-- Accept project-relative file or directory paths as either:
-  - a list of strings for direct Python calls
-  - a JSON string path list for registry calls
-- Use TASK-125 `discover_local_skill_manifests_json(...)` or equivalent existing helper.
-- Bind discovery to `self.root`; do not expose or trust caller-supplied `project_root`.
-- Feed discovered safe manifest metadata into the existing skill context preview section.
-- Preserve existing `skill_manifest_jsons` behavior. If both manual manifests and local paths are supplied, combine them deterministically.
-- Include bounded safe discovery warnings/errors in the Skill Context Preview section when local discovery has warnings/errors.
-- Keep all output framed as untrusted/read-only skill metadata hints.
-- Do not load, import, install, enable, disable, or execute skill code.
-- Do not call network or mutate durable task/worker/event/memory/trace state.
-- Update registry `compile_context_pack` schema to expose the local path input, but not `project_root`.
-- Keep existing context compiler behavior unchanged when no skill manifests or paths are supplied.
+3. `/model`
+   - Show current provider/model/base URL/key presence without leaking key values.
+   - Diagnose missing provider/model/key and give concrete next steps.
+   - `/setup` can remain future work, but help text should point to it as upcoming or provide config-file/env guidance.
 
-## Suggested Files
+4. `/workers`
+   - Show Claude A/B / CCB worker status from project files where available.
+   - Include current tasks and whether A_DONE/B_DONE appear ready for PM review.
+   - Handle missing `.ccb` or task files gracefully.
 
-- `mini_agent/context_compiler.py`
-- `mini_agent/toolkits/register_developer.py`
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_context_compiler.py`
+5. Error recovery hints
+   - Add user-readable suggestions for common provider/config failures such as 401/unauthorized, missing `.env`, missing API key, port already in use, unsupported provider, and provider/model mismatch.
+   - Do not leak secrets.
+
+## Scope
+
+Primary files:
+- `mini_agent/cli.py`
+- `tests/test_cli.py`
+
+Possible supporting files only if needed:
+- `mini_agent/config.py`
+- `mini_agent/settings.py`
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
-- `evals/run_evals.py` — Claude B owns TASK-128.
+- `evals/run_evals.py` — Claude B owns TASK-130 smoke/eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 
-## Tests
+## UX Constraints
 
-Add focused tests in `tests/test_context_compiler.py`.
-
-Cover at least:
-- no `skill_manifest_paths` keeps existing behavior
-- valid local manifest file path adds Skill Context Preview
-- valid local directory path discovers multiple manifests in deterministic order
-- registry `compile_context_pack` accepts `skill_manifest_paths` JSON string
-- manual `skill_manifest_jsons` and local `skill_manifest_paths` combine without duplicate unsafe behavior
-- malformed path input returns bounded safe error section
-- traversal/absolute/hidden/denied path inputs do not leak raw unsafe content
-- secret-like manifest values do not leak
-- context budget still applies to discovered skill context
-- compatibility with existing git/status/file/memory parameters
+- Keep CLI output readable in a terminal.
+- Prefer Markdown-ish plain text sections.
+- Never print raw API keys, tokens, `.env` values, full secrets, or private file contents.
+- Keep behavior deterministic and offline for tests.
+- Do not add a heavy dependency or framework.
+- Do not broaden backend runtime behavior.
 
 ## Required Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```

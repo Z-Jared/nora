@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-129: CLI wake/setup/status UX v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-128
+- 分配: Claude A
+- 目标: 把 Nora CLI 从“脚本式命令集合”推进到可日常使用的项目工作台入口，新增 `/wake`、`/model`、`/workers`，改善启动页、项目状态、模型诊断和常见错误恢复提示。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: 用户 CLI UX 方向；`mini_agent/cli.py`；`tests/test_cli.py`；`docs/knowledge/PROJECT_WAKEUP.md`；`agent_tasks/BACKLOG.md`
+
+### TASK-130: CLI UX smoke/eval coverage
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-129 implementation surface
+- 分配: Claude B
+- 目标: 为 CLI UX 增加 deterministic smoke/eval coverage，覆盖无模型、有模型、错误 key、非项目目录启动、`/wake`、`/model`、`/workers`、Markdown 输出和错误恢复提示；不要扩展后端 runtime。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
+- 参考: 用户 CLI UX 方向；`evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
 
 ## 已完成
 
