@@ -51,6 +51,7 @@ def build_agent(root: Path = None):
         rag_chunk_size=config.rag.chunk_size,
         rag_chunk_overlap=config.rag.chunk_overlap,
         db=db,
+        settings=settings,
     )
     plugin_names = load_plugins(registry, root / "plugins")
     if plugin_names:

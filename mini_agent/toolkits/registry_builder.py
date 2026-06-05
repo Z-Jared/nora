@@ -17,6 +17,7 @@ from mini_agent.rag import ProjectRAG
 from mini_agent.registry import ToolPermission, ToolRegistry
 from mini_agent.repair_loop import RepairLoop
 from mini_agent.shell import ShellRunner
+from mini_agent.settings import LLMSettings
 from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
 from mini_agent.toolkits.browser import BrowserBackend, BrowserTools
@@ -76,6 +77,7 @@ def build_default_registry(
     rag_chunk_size: int = 80,
     rag_chunk_overlap: int = 20,
     db: Optional[NoraDB] = None,
+    settings: Optional[LLMSettings] = None,
 ) -> ToolRegistry:
     root = workspace_root or Path.cwd()
     notes = NotesStore(notes_path or Path("data/notes.txt"))
@@ -5665,6 +5667,60 @@ def build_default_registry(
                 },
             },
             "required": ["goal"],
+        },
+        permission=ToolPermission(category="local", risk="read"),
+    )
+
+    # --- Model Router Inspection (TASK-137) ---
+
+    from mini_agent.model_router import inspect_model_routing_json
+
+    def _inspect_model_routing(
+        task_type: str = "",
+        risk_level: str = "",
+        context_tokens: int = 0,
+        requires_tools: bool = False,
+        requires_review: bool = False,
+    ) -> str:
+        if settings is None:
+            return inspect_model_routing_json(settings=None)
+        return inspect_model_routing_json(
+            settings=settings,
+            task_type=task_type,
+            risk_level=risk_level,
+            context_tokens=context_tokens,
+            requires_tools=requires_tools,
+            requires_review=requires_review,
+        )
+
+    registry.register(
+        "inspect_model_routing",
+        "检查模型路由决策：返回当前配置下的 provider/model 选择、路由类型、能力提示和原因标签。只读，不调用网络或执行模型。",
+        _inspect_model_routing,
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_type": {
+                    "type": "string",
+                    "description": "任务类型，如 code, review, test, research, chat 等",
+                },
+                "risk_level": {
+                    "type": "string",
+                    "description": "风险级别: low, medium, high, critical",
+                },
+                "context_tokens": {
+                    "type": "integer",
+                    "description": "上下文 token 数量",
+                },
+                "requires_tools": {
+                    "type": "boolean",
+                    "description": "是否需要工具调用能力",
+                },
+                "requires_review": {
+                    "type": "boolean",
+                    "description": "是否需要 review 门控",
+                },
+            },
         },
         permission=ToolPermission(category="local", risk="read"),
     )

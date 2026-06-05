@@ -1,36 +1,42 @@
-# Codex A Completion Report
+# Claude A Completion Report
 
 Status: ready for Codex review
 
 ## Summary
 
-Implemented TASK-135: CLI terminal UI polish v3.
+Implemented TASK-137: Minimal model routing inspection scaffold v1.
 
-- Startup banner now renders a compact terminal landing panel with `Status`, `Workspace`, `Model`, `Tools`, optional `Tasks`/`Workers`, and `Next` sections.
-- Normal prompt and multiline input now show a deterministic three-step lifecycle: input accepted, model request started, model response complete.
-- Slash commands, blank input, and exit still emit no model-call lifecycle noise.
-- `/wake`, `/model`, `/setup`, and `/workers` readability was tightened without changing backend runtime/provider semantics.
-- PM integration preserved exact core substrings and removed A's elapsed-time suffix to keep CLI output deterministic.
+- Added `mini_agent/model_router.py` with pure, read-only routing inspection logic
+- Registered `inspect_model_routing` tool with `ToolPermission(category="local", risk="read")`
+- Added `settings` parameter to `build_default_registry()` to support LLM settings injection
+- 177 unit tests pass; 537 evals pass; `git diff --check` clean
 
 ## Diff
 
 ```text
-mini_agent/cli.py |  98 ++++++++++++++++++++++++++++++++++++++++---------------
-tests/test_cli.py |  26 ++++++++++++++
-2 files changed, 97 insertions(+), 27 deletions(-)
+mini_agent/model_router.py            | 208 ++++++++++++++++++++
+mini_agent/toolkits/registry_builder.py|  50 +++-
+tests/test_model_router.py            | 186 ++++++++++++++++
+3 files changed, 444 insertions(+)
 ```
 
 ## Tests
 
 ```text
-python3 -m unittest tests.test_cli -> 79 tests OK
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent -> 225 tests OK
-python3 evals/run_evals.py -> 528 passed, 0 failed
-git diff --check -> clean
+python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent
+Ran 177 tests in 3.037s — OK
+
+python3 evals/run_evals.py
+537 passed, 0 failed
+
+git diff --check
+(clean)
 ```
 
 ## Notes
 
-- No push performed.
-- Codex PM manually integrated and corrected the TASK-135 increment because Claude A's CCB worktree was based on `1a59fd9` while main had the TASK-135/TASK-136 assignment commit.
-- Known issues: TASK-136 deterministic eval coverage still needs to be implemented by Codex B against this integrated TASK-135 surface.
+- No commit or push performed.
+- `evals/run_evals.py` not edited (Claude B owns TASK-138).
+- No edits to `agent_tasks/B_TASK.md`, `B_DONE.md`, `CODEX_TERMINAL_HANDOFF.md`, or `designs/`.
+- No network calls, no durable event/task/worker mutation, no file writes.
+- `build_default_registry` now auto-loads settings when not provided (backward compatible).
