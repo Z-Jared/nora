@@ -1074,5 +1074,269 @@ class TestPreviewSkillContextCompatibility(unittest.TestCase):
         self.assertEqual(result["manifest"]["name"], "ins-skill")
 
 
+# ---------------------------------------------------------------------------
+# Local skill manifest catalog discovery tests (TASK-125)
+# ---------------------------------------------------------------------------
+
+class TestDiscoverLocalSkillManifests(unittest.TestCase):
+    """Tests for discover_local_skill_manifests."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.root = Path(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_manifest(self, rel_path: str, data=None):
+        """Write a manifest file and return its path."""
+        if data is None:
+            data = _valid_manifest_dict()
+        path = self.root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return str(path)
+
+    def _discover(self, paths, **kwargs):
+        from mini_agent.skills import discover_local_skill_manifests
+        return discover_local_skill_manifests(paths=paths, project_root=str(self.root), **kwargs)
+
+    # --- Missing / empty path ---
+
+    def test_empty_paths_returns_empty(self):
+        result = self._discover([])
+        self.assertEqual(result["discovered_count"], 0)
+        self.assertEqual(result["valid_count"], 0)
+
+    def test_none_paths_returns_empty(self):
+        result = self._discover(None)
+        self.assertEqual(result["discovered_count"], 0)
+
+    def test_missing_path_returns_warning(self):
+        result = self._discover(["nonexistent.json"])
+        self.assertTrue(any("not found" in w for w in result["warnings"]))
+
+    # --- Valid manifest file ---
+
+    def test_valid_manifest_file_discovered(self):
+        self._write_manifest("skill.json")
+        result = self._discover(["skill.json"])
+        self.assertEqual(result["valid_count"], 1)
+        self.assertEqual(result["discovered_count"], 1)
+        self.assertEqual(len(result["manifests"]), 1)
+        self.assertEqual(result["manifests"][0]["name"], "test-skill")
+
+    def test_manifest_path_in_output(self):
+        self._write_manifest("skills/my-skill.json")
+        result = self._discover(["skills/my-skill.json"])
+        self.assertIn("skills/my-skill.json", result["manifests"][0]["_path"])
+
+    # --- Directory scan ---
+
+    def test_directory_scan_discovers_multiple(self):
+        self._write_manifest("skills/a.json", _valid_manifest_dict(name="skill-a"))
+        self._write_manifest("skills/b.json", _valid_manifest_dict(name="skill-b"))
+        self._write_manifest("skills/c.json", _valid_manifest_dict(name="skill-c"))
+        result = self._discover(["skills/"])
+        self.assertEqual(result["valid_count"], 3)
+        # Stable sorted order
+        names = [m["name"] for m in result["manifests"]]
+        self.assertEqual(names, sorted(names))
+
+    def test_directory_scan_nested(self):
+        self._write_manifest("skills/sub/deep.json", _valid_manifest_dict(name="deep-skill"))
+        result = self._discover(["skills/"])
+        self.assertEqual(result["valid_count"], 1)
+
+    def test_directory_scan_max_depth(self):
+        # Create deeply nested structure
+        for i in range(10):
+            self._write_manifest(f"skills/{'d/' * i}skill{i}.json", _valid_manifest_dict(name=f"s{i}"))
+        result = self._discover(["skills/"])
+        # Should still find some but respect depth limit
+        self.assertGreater(result["valid_count"], 0)
+
+    # --- Bounds ---
+
+    def test_max_files_bounded(self):
+        for i in range(30):
+            self._write_manifest(f"skills/s{i}.json", _valid_manifest_dict(name=f"s{i}"))
+        result = self._discover(["skills/"], max_files=5)
+        self.assertLessEqual(result["discovered_count"], 5)
+
+    def test_max_files_clamped(self):
+        result = self._discover([], max_files=999)
+        # Should not crash, just clamp
+
+    def test_max_file_size_bounded(self):
+        big_data = _valid_manifest_dict(description="x" * 100000)
+        self._write_manifest("big.json", big_data)
+        result = self._discover(["big.json"], max_file_bytes=1024)
+        self.assertEqual(result["valid_count"], 0)
+        self.assertTrue(any("too large" in w for w in result["warnings"]))
+
+    def test_empty_file_skipped(self):
+        (self.root / "empty.json").write_text("")
+        result = self._discover(["empty.json"])
+        self.assertEqual(result["valid_count"], 0)
+        self.assertTrue(any("empty" in w for w in result["warnings"]))
+
+    # --- Rejection: traversal, absolute, hidden, denied, non-JSON ---
+
+    def test_traversal_rejected(self):
+        result = self._discover(["../../../etc/passwd"])
+        self.assertTrue(any("traversal" in e for e in result["errors"]))
+
+    def test_absolute_path_rejected(self):
+        result = self._discover(["/etc/passwd"])
+        self.assertTrue(any("absolute" in e for e in result["errors"]))
+
+    def test_hidden_file_skipped(self):
+        self._write_manifest(".hidden.json")
+        result = self._discover([".hidden.json"])
+        # Hidden files at root level are rejected by _is_safe_relative_path or skipped
+        self.assertEqual(result["valid_count"], 0)
+
+    def test_denied_directory_skipped(self):
+        self._write_manifest(".git/hooks/skill.json")
+        result = self._discover([".git/"])
+        self.assertEqual(result["valid_count"], 0)
+        self.assertTrue(any("denied" in w.lower() or "hidden" in w.lower() for w in result["warnings"]))
+
+    def test_file_under_denied_directory_skipped(self):
+        self._write_manifest("skills/.git/skill.json")
+        result = self._discover(["skills/.git/skill.json"])
+        self.assertEqual(result["valid_count"], 0)
+        self.assertTrue(any("denied" in w.lower() or "hidden" in w.lower() for w in result["warnings"]))
+
+    def test_non_json_file_skipped(self):
+        (self.root / "skill.txt").write_text("not json")
+        result = self._discover(["skill.txt"])
+        self.assertEqual(result["valid_count"], 0)
+        self.assertTrue(any("non-JSON" in w for w in result["warnings"]))
+
+    # --- Malformed JSON ---
+
+    def test_malformed_json_returns_error(self):
+        (self.root / "bad.json").write_text("{invalid json")
+        result = self._discover(["bad.json"])
+        self.assertEqual(result["invalid_count"], 1)
+        self.assertTrue(any("invalid JSON" in e for e in result["errors"]))
+
+    def test_invalid_manifest_returns_error(self):
+        (self.root / "invalid.json").write_text('{"no_name": true}')
+        result = self._discover(["invalid.json"])
+        self.assertEqual(result["invalid_count"], 1)
+
+    def test_secret_like_name_redacted(self):
+        self._write_manifest("s.json", _valid_manifest_dict(name="sk-super-secret-key"))
+        result = self._discover(["s.json"])
+        output = json.dumps(result)
+        self.assertNotIn("sk-super-secret-key", output)
+
+    def test_secret_like_path_rejected(self):
+        result = self._discover(["sk-TOKEN-ABC/manifest.json"])
+        self.assertTrue(any("secret" in e.lower() for e in result["errors"]))
+
+    # --- Aggregate fields ---
+
+    def test_aggregate_domains(self):
+        self._write_manifest("a.json", _valid_manifest_dict(name="a", domains=["coding", "python"]))
+        self._write_manifest("b.json", _valid_manifest_dict(name="b", domains=["coding", "testing"]))
+        result = self._discover(["a.json", "b.json"])
+        self.assertIn("coding", result["domains"])
+        self.assertIn("python", result["domains"])
+        self.assertIn("testing", result["domains"])
+
+    # --- Registry tool ---
+
+    def test_registry_tool_registered(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("discover_local_skill_manifests", paths="[]")
+        result = json.loads(result_str)
+        self.assertIn("discovered_count", result)
+
+    def test_registry_tool_returns_json_string(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        result_str = reg.call("discover_local_skill_manifests", paths="[]")
+        self.assertIsInstance(result_str, str)
+        result = json.loads(result_str)
+        self.assertIsInstance(result, dict)
+
+    def test_registry_tool_permission(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry()
+        perm = reg.permission_for("discover_local_skill_manifests")
+        self.assertIsNotNone(perm)
+        self.assertEqual(perm.category, "workspace")
+        self.assertEqual(perm.risk, "read")
+
+    def test_registry_tool_with_real_files(self):
+        from mini_agent.toolkits import build_default_registry
+        self._write_manifest("skill.json")
+        reg = build_default_registry(workspace_root=self.root)
+        result_str = reg.call(
+            "discover_local_skill_manifests",
+            paths=json.dumps(["skill.json"]),
+        )
+        result = json.loads(result_str)
+        self.assertEqual(result["valid_count"], 1)
+
+    def test_registry_tool_rejects_project_root_argument(self):
+        from mini_agent.toolkits import build_default_registry
+        other = Path(tempfile.mkdtemp())
+        try:
+            other_manifest = other / "outside.json"
+            other_manifest.write_text(json.dumps(_valid_manifest_dict(name="outside-skill")), encoding="utf-8")
+            reg = build_default_registry(workspace_root=self.root)
+            with self.assertRaises(TypeError):
+                reg.call(
+                    "discover_local_skill_manifests",
+                    paths=json.dumps(["outside.json"]),
+                    project_root=str(other),
+                )
+        finally:
+            import shutil
+            shutil.rmtree(other, ignore_errors=True)
+
+    # --- Read-only: no mutation ---
+
+    def test_no_durable_task_mutation(self):
+        """Discover should not create or modify any files outside the read path."""
+        self._write_manifest("skill.json")
+        # Record file count before
+        files_before = set(str(p) for p in self.root.rglob("*") if p.is_file())
+        from mini_agent.skills import discover_local_skill_manifests
+        discover_local_skill_manifests(paths=["skill.json"], project_root=str(self.root))
+        files_after = set(str(p) for p in self.root.rglob("*") if p.is_file())
+        # Only the manifest file should exist, no new files created
+        self.assertEqual(files_before, files_after)
+
+    # --- Compatibility ---
+
+    def test_inspect_still_works_after_discover(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry(workspace_root=self.root)
+        self._write_manifest("skill.json")
+        reg.call("discover_local_skill_manifests", paths=json.dumps(["skill.json"]))
+        ins_text = json.dumps(_valid_manifest_dict(name="compat-skill"))
+        result_str = reg.call("inspect_skill_manifest", manifest_json=ins_text)
+        result = json.loads(result_str)
+        self.assertTrue(result["valid"])
+
+    def test_summarize_still_works_after_discover(self):
+        from mini_agent.toolkits import build_default_registry
+        reg = build_default_registry(workspace_root=self.root)
+        self._write_manifest("skill.json")
+        reg.call("discover_local_skill_manifests", paths=json.dumps(["skill.json"]))
+        sum_text = json.dumps([_valid_manifest_dict()])
+        result_str = reg.call("summarize_skill_manifests", skill_manifest_jsons=sum_text)
+        result = json.loads(result_str)
+        self.assertEqual(result["valid_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

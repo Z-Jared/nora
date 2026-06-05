@@ -4781,6 +4781,48 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Local skill manifest catalog discovery (TASK-125) ---
+
+    from mini_agent.skills import discover_local_skill_manifests_json
+
+    def _discover_local_skill_manifests_handler(
+        paths: str = "[]",
+        max_files: int = 20,
+        max_file_bytes: int = 65536,
+    ) -> str:
+        result = discover_local_skill_manifests_json(
+            paths=paths,
+            max_files=max_files,
+            max_file_bytes=max_file_bytes,
+            project_root=str(root),
+        )
+        return _json.dumps(result, ensure_ascii=False, indent=2)
+
+    registry.register(
+        "discover_local_skill_manifests",
+        "从本地项目路径发现并汇总 skill manifest 文件。只读，不加载 skill 内容，不执行代码。",
+        _discover_local_skill_manifests_handler,
+        parameters={
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "string",
+                    "description": 'JSON 字符串，包含项目相对路径数组（文件或目录），例如 \'["skills/", "manifest.json"]\'',
+                },
+                "max_files": {
+                    "type": "integer",
+                    "description": "最多扫描的 manifest 文件数量，默认 20，上限 50",
+                },
+                "max_file_bytes": {
+                    "type": "integer",
+                    "description": "单个 manifest 文件最大字节数，默认 65536，上限 65536",
+                },
+            },
+            "required": [],
+        },
+        permission=ToolPermission(category="workspace", risk="read"),
+    )
+
     # --- Runtime policy hook evaluator (TASK-101) ---
 
     _POLICY_VERSION = "v1"

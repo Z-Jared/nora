@@ -8,25 +8,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-125: Local skill manifest catalog discovery v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-123/TASK-124
-- 分配: Claude A
-- 目标: 增加只读 local skill manifest catalog discovery surface，从项目本地安全路径发现 skill manifest metadata，输出 bounded safe catalog summary，不加载/执行/安装 skill 内容。
-- 验证: `python3 -m unittest tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 6；`mini_agent/skills.py`；`mini_agent/toolkits/registry_builder.py`
-
-### TASK-126: Deterministic eval coverage for local skill manifest catalog discovery v1
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-125
-- 分配: Claude B
-- 目标: 为 TASK-125 local skill manifest catalog discovery 增加 deterministic offline eval，覆盖注册权限、有效发现、目录排序、边界、路径安全、malformed input、secret no-leak、read-only 和兼容性。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`
-- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/skills.py`
+暂无
 
 ## 已完成
+
+### TASK-126: Deterministic eval coverage for local skill manifest catalog discovery v1 ✅
+- 完成者: Claude B；Codex PM 补强 registry root binding eval
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 487 passed；`python3 -m unittest tests.test_skills tests.test_mini_agent` 273 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-125 `discover_local_skill_manifests` 增加 10 个 deterministic offline eval，覆盖 exact `workspace/read` permission、有效 manifest 文件发现、目录递归与路径排序、`max_files` / `max_file_bytes` / non-JSON 边界、traversal/absolute/hidden/denied path safety、registry workspace root binding、malformed JSON/invalid manifest/unsupported input、secret no-leak、durable task/worker/event read-only no-mutation，以及 inspect/summarize/preview/route/context compiler/list_tool_permissions compatibility。
+
+### TASK-125: Local skill manifest catalog discovery v1 ✅
+- 完成者: Claude A；Claude B eval 发现 denied directory direct path bug；Codex PM 补强 hidden/denied parent path check 与 registry root binding
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 -m unittest tests.test_skills tests.test_mini_agent` 273 tests OK；`python3 evals/run_evals.py` 487 passed；`git diff --check` OK。
+- 内容: 新增只读 `discover_local_skill_manifests` / registry `discover_local_skill_manifests` surface，从 workspace-bound 项目相对路径发现 skill manifest metadata；支持文件/目录输入、稳定排序、最多 50 个 manifest、单文件 64KB、递归深度限制、跳过 hidden/denied directories 和 non-JSON 文件；拒绝 traversal、absolute、unsafe char、secret-like path；复用 skill manifest parser/safe dict/aggregate summary，不加载、不安装、不执行 skill 内容，不 mutation durable state；registry 工具权限为 `ToolPermission(category="workspace", risk="read")`，并忽略调用方传入的 `project_root`。
 
 ### TASK-124: Deterministic eval coverage for skill context preview v1 ✅
 - 完成者: Claude B

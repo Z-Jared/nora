@@ -555,6 +555,17 @@ def main() -> int:
         EvalCase("skill_context_preview_secret_no_leak", eval_skill_context_preview_secret_no_leak),
         EvalCase("skill_context_preview_read_only", eval_skill_context_preview_read_only),
         EvalCase("skill_context_preview_compatibility", eval_skill_context_preview_compatibility),
+        # TASK-126: Local skill manifest catalog discovery evals
+        EvalCase("local_skill_catalog_tool_permission", eval_local_skill_catalog_tool_permission),
+        EvalCase("local_skill_catalog_valid_manifest", eval_local_skill_catalog_valid_manifest),
+        EvalCase("local_skill_catalog_directory_discovery", eval_local_skill_catalog_directory_discovery),
+        EvalCase("local_skill_catalog_bounds", eval_local_skill_catalog_bounds),
+        EvalCase("local_skill_catalog_path_safety", eval_local_skill_catalog_path_safety),
+        EvalCase("local_skill_catalog_registry_root_bound", eval_local_skill_catalog_registry_root_bound),
+        EvalCase("local_skill_catalog_malformed_input", eval_local_skill_catalog_malformed_input),
+        EvalCase("local_skill_catalog_secret_no_leak", eval_local_skill_catalog_secret_no_leak),
+        EvalCase("local_skill_catalog_read_only", eval_local_skill_catalog_read_only),
+        EvalCase("local_skill_catalog_compatibility", eval_local_skill_catalog_compatibility),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -19610,6 +19621,418 @@ def eval_skill_context_preview_compatibility():
             assert "inspect_skill_manifest" in perms
             assert "summarize_skill_manifests" in perms
             assert "route_capability_request" in perms
+        finally:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-126: Deterministic eval coverage for local skill manifest catalog discovery v1
+# ---------------------------------------------------------------------------
+
+def eval_local_skill_catalog_tool_permission():
+    """discover_local_skill_manifests is registered with ToolPermission(category="workspace", risk="read")."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            perms = registry.call("list_tool_permissions")
+            assert "discover_local_skill_manifests" in perms, "discover_local_skill_manifests not in permissions list"
+            tool_perm = registry._tools.get("discover_local_skill_manifests")
+            assert tool_perm is not None, "discover_local_skill_manifests not registered"
+            assert tool_perm.permission.category == "workspace", f"expected workspace, got {tool_perm.permission.category}"
+            assert tool_perm.permission.risk == "read", f"expected read, got {tool_perm.permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_valid_manifest():
+    """Valid manifest file discovery returns correct summary with bounded metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Create a valid manifest file
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+            manifest = _make_skill_manifest(
+                name="test-skill",
+                version="1.0.0",
+                domains=["python"],
+                capabilities=["refactor"],
+            )
+            manifest_path = skills_dir / "test-skill.json"
+            manifest_path.write_text(json.dumps(manifest))
+
+            result = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/test-skill.json"]),
+            ))
+
+            assert result["discovered_count"] == 1, f"expected 1 discovered, got {result['discovered_count']}"
+            assert result["valid_count"] == 1, f"expected 1 valid, got {result['valid_count']}"
+            assert result["invalid_count"] == 0, f"expected 0 invalid, got {result['invalid_count']}"
+            assert len(result["manifests"]) == 1
+            assert result["manifests"][0]["name"] == "test-skill"
+            assert "python" in result["domains"]
+            assert "refactor" in result["capabilities"]
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_directory_discovery():
+    """Directory discovery with multiple manifests in deterministic sorted order."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Create multiple manifest files
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+
+            for name, version in [("z-skill", "1.0.0"), ("a-skill", "2.0.0"), ("m-skill", "0.1.0")]:
+                manifest = _make_skill_manifest(name=name, version=version, domains=["python"])
+                (skills_dir / f"{name}.json").write_text(json.dumps(manifest))
+
+            result = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/"]),
+            ))
+
+            assert result["discovered_count"] == 3, f"expected 3 discovered, got {result['discovered_count']}"
+            assert result["valid_count"] == 3, f"expected 3 valid, got {result['valid_count']}"
+            assert len(result["manifests"]) == 3
+
+            # Verify deterministic sorted order by path
+            paths = [m["_path"] for m in result["manifests"]]
+            assert paths == sorted(paths), f"manifests not in sorted order: {paths}"
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_bounds():
+    """Bounds: max scanned files, max file size, ignored non-JSON files."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+
+            # Create 5 valid manifests
+            for i in range(5):
+                manifest = _make_skill_manifest(name=f"skill-{i}", version="1.0.0")
+                (skills_dir / f"skill-{i}.json").write_text(json.dumps(manifest))
+
+            # Create a non-JSON file
+            (skills_dir / "readme.txt").write_text("not a manifest")
+
+            # Test max_files bound
+            result = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/"]),
+                max_files=2,
+            ))
+            assert result["discovered_count"] <= 2, f"max_files not honored: {result['discovered_count']}"
+
+            # Test max_file_bytes bound
+            big_manifest = _make_skill_manifest(name="big-skill", version="1.0.0")
+            big_manifest["description"] = "x" * 100000  # Make it very large
+            big_path = skills_dir / "big.json"
+            big_path.write_text(json.dumps(big_manifest))
+
+            result2 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/big.json"]),
+                max_file_bytes=1024,
+            ))
+            assert result2["valid_count"] == 0, "oversized file should be skipped"
+            assert any("too large" in w for w in result2["warnings"]), "no size warning"
+
+            # Non-JSON files should be ignored
+            result3 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/readme.txt"]),
+            ))
+            assert result3["discovered_count"] == 0, "non-JSON file should be ignored"
+            assert any("non-JSON" in w for w in result3["warnings"]), "no non-JSON warning"
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_path_safety():
+    """Path safety: traversal, absolute path, hidden path, denied directories."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            # Create a manifest in a hidden directory (for directory scanning test)
+            hidden_dir = Path(tmpdir) / "skills" / ".hidden_subdir"
+            hidden_dir.mkdir(parents=True)
+            hidden_manifest = _make_skill_manifest(name="hidden-skill", version="1.0.0")
+            (hidden_dir / "hidden.json").write_text(json.dumps(hidden_manifest))
+
+            # Create a manifest in the skills dir with different name
+            skills_dir = Path(tmpdir) / "skills"
+            visible_manifest = _make_skill_manifest(name="visible-skill", version="1.0.0")
+            (skills_dir / "visible.json").write_text(json.dumps(visible_manifest))
+
+            # Create a manifest in a denied directory
+            denied_dir = Path(tmpdir) / ".git"
+            denied_dir.mkdir(exist_ok=True)
+            (denied_dir / "denied.json").write_text(json.dumps(hidden_manifest))
+
+            # Test traversal rejection
+            result = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["../../../etc/passwd"]),
+            ))
+            assert any("traversal" in e.lower() or "rejected" in e.lower() or "escapes" in e.lower() for e in result["errors"]), f"traversal not rejected: {result['errors']}"
+
+            # Test absolute path rejection
+            result2 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["/etc/passwd"]),
+            ))
+            assert any("absolute" in e.lower() or "rejected" in e.lower() for e in result2["errors"]), f"absolute path not rejected: {result2['errors']}"
+
+            # Test hidden subdirectory skipping during directory scan
+            result3 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/"]),
+            ))
+            # visible.json should be found, but .hidden_subdir/hidden.json should be skipped
+            assert result3["valid_count"] == 1, f"expected 1 valid (visible only), got {result3['valid_count']}"
+            found_names = [m["name"] for m in result3["manifests"]]
+            assert "hidden-skill" not in found_names, "hidden directory manifest should be skipped"
+            assert "visible-skill" in found_names, "visible manifest should be found"
+
+            # Test denied directory skipping
+            result4 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps([".git/"]),
+            ))
+            assert result4["valid_count"] == 0, "denied directory should be skipped"
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_registry_root_bound():
+    """Registry discovery rejects caller-supplied project_root and stays bound to workspace_root."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory() as otherdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            try:
+                registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+                other_manifest = _make_skill_manifest(name="outside-skill", version="1.0.0", domains=["python"])
+                (Path(otherdir) / "outside.json").write_text(json.dumps(other_manifest), encoding="utf-8")
+
+                params = registry._tools["discover_local_skill_manifests"].parameters
+                assert "project_root" not in params["properties"], "project_root leaked into registry schema"
+                try:
+                    registry.call(
+                        "discover_local_skill_manifests",
+                        paths=json.dumps(["outside.json"]),
+                        project_root=otherdir,
+                    )
+                except TypeError:
+                    pass
+                else:
+                    raise AssertionError("caller-supplied project_root should be rejected")
+            finally:
+                db.close()
+
+
+def eval_local_skill_catalog_malformed_input():
+    """Malformed input: malformed JSON file, invalid manifest fields, unsupported path argument type."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+
+            # Malformed JSON file
+            (skills_dir / "bad.json").write_text("{invalid json content")
+
+            # Invalid manifest (missing required fields)
+            (skills_dir / "invalid.json").write_text(json.dumps({"name": "test"}))
+
+            # Test malformed JSON
+            result = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/bad.json"]),
+            ))
+            assert result["valid_count"] == 0
+            assert result["invalid_count"] >= 1
+            assert len(result["errors"]) > 0, "no errors for malformed JSON"
+
+            # Test invalid manifest
+            result2 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/invalid.json"]),
+            ))
+            assert result2["valid_count"] == 0
+            assert result2["invalid_count"] >= 1
+
+            # Test unsupported path argument type
+            result3 = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths="not a list",
+            ))
+            assert len(result3["errors"]) > 0
+            assert "invalid JSON" in result3["errors"][0] or "must be a list" in result3["errors"][0]
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_secret_no_leak():
+    """Secret-like manifest fields and unsafe path sentinels do not leak."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+
+            # Manifest with secret-like fields
+            manifest = _make_skill_manifest(
+                name="sk-SECRET-KEY-abc123",
+                version="api_key_TOKEN_123",
+                domains=["Bearer secret123", "safe-domain"],
+                capabilities=["password_leak", "safe-cap"],
+            )
+            (skills_dir / "secret.json").write_text(json.dumps(manifest))
+
+            result_str = registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/secret.json"]),
+            )
+            result = json.loads(result_str)
+
+            # Secret-like values should not leak
+            assert "sk-SECRET-KEY-abc123" not in result_str, "raw secret name leaked"
+            assert "api_key_TOKEN_123" not in result_str, "raw secret version leaked"
+            assert "Bearer secret123" not in result_str, "raw secret domain leaked"
+            assert "password_leak" not in result_str, "raw secret capability leaked"
+
+            # Raw file content should not leak
+            assert "SECRET" not in result_str or "redacted" in result_str.lower()
+
+            # Unsafe path sentinels should not leak
+            result2_str = registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["../../../etc/passwd"]),
+            )
+            assert "etc/passwd" not in result2_str or "rejected" in result2_str.lower() or "traversal" in result2_str.lower()
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_read_only():
+    """discover_local_skill_manifests does not mutate durable tasks, workers, or events."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+            ts = registry.durable_task_store
+            ws = registry.durable_worker_store
+            es = registry.durable_event_store
+
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+            manifest = _make_skill_manifest(name="read-only-test", version="1.0.0")
+            (skills_dir / "test.json").write_text(json.dumps(manifest))
+
+            tasks_before = ts.list_tasks()
+            workers_before = ws.list_workers()
+            events_before = es.list_events()
+
+            registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/"]),
+            )
+
+            tasks_after = ts.list_tasks()
+            workers_after = ws.list_workers()
+            events_after = es.list_events()
+            assert len(tasks_after) == len(tasks_before), f"tasks mutated: {len(tasks_before)} -> {len(tasks_after)}"
+            assert len(workers_after) == len(workers_before), f"workers mutated: {len(workers_before)} -> {len(workers_after)}"
+            assert len(events_after) == len(events_before), f"events mutated: {len(events_before)} -> {len(events_after)}"
+        finally:
+            db.close()
+
+
+def eval_local_skill_catalog_compatibility():
+    """inspect_skill_manifest, summarize_skill_manifests, preview_skill_context, route_capability_request, compile_context_pack, and list_tool_permissions still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        try:
+            registry = build_default_registry(workspace_root=Path(tmpdir), db=db)
+
+            skills_dir = Path(tmpdir) / "skills"
+            skills_dir.mkdir()
+            manifest = _make_skill_manifest(name="compat-skill", version="1.0.0", domains=["python"])
+            (skills_dir / "compat.json").write_text(json.dumps(manifest))
+
+            # discover_local_skill_manifests works
+            discovery = json.loads(registry.call(
+                "discover_local_skill_manifests",
+                paths=json.dumps(["skills/"]),
+            ))
+            assert discovery["valid_count"] == 1
+
+            # inspect_skill_manifest still works
+            from mini_agent.skills import inspect_skill_manifest
+            inspect_result = inspect_skill_manifest(manifest)
+            assert inspect_result["valid"] is True
+            assert inspect_result["manifest"]["name"] == "compat-skill"
+
+            # summarize_skill_manifests still works
+            catalog = json.loads(registry.call(
+                "summarize_skill_manifests",
+                skill_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            ))
+            assert catalog["valid_count"] == 1
+
+            # preview_skill_context still works
+            preview = json.loads(registry.call(
+                "preview_skill_context",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            ))
+            assert "selected_count" in preview
+
+            # route_capability_request still works
+            route_result = json.loads(registry.call(
+                "route_capability_request",
+                goal="python project",
+                skill_manifest_jsons=json.dumps([json.dumps(manifest)]),
+            ))
+            assert "candidate_skills" in route_result
+
+            # compile_context_pack still works (returns text, not JSON)
+            context = registry.call(
+                "compile_context_pack",
+                task_description="python project",
+            )
+            assert isinstance(context, str), "compile_context_pack should return string"
+            assert len(context) > 0, "compile_context_pack returned empty"
+
+            # list_tool_permissions still works
+            perms = registry.call("list_tool_permissions")
+            assert "discover_local_skill_manifests" in perms
+            assert "inspect_skill_manifest" in perms
+            assert "summarize_skill_manifests" in perms
+            assert "preview_skill_context" in perms
+            assert "route_capability_request" in perms
+            assert "compile_context_pack" in perms
         finally:
             db.close()
 

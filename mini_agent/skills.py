@@ -9,7 +9,10 @@ Mirrors the structure of mini_agent.plugins plugin manifest surface.
 from __future__ import annotations
 
 import json
+import os
+import re as _re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -688,6 +691,356 @@ def preview_skill_context_json(
         manifests_list = []
 
     result = preview_skill_context(goal, skill_manifest_jsons=manifests_list, max_skills=max_skills)
+
+    if parse_error:
+        result["errors"] = list(result.get("errors", [])) + [parse_error]
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Local skill manifest catalog discovery (TASK-125)
+# ---------------------------------------------------------------------------
+
+MAX_DISCOVER_FILES = 50
+MAX_DISCOVER_FILE_BYTES = 64 * 1024  # 64 KB
+MAX_PATH_LENGTH = 512
+
+_DENIED_DIRS = frozenset({
+    ".git", "__pycache__", ".pytest_cache", "node_modules",
+    ".venv", "venv", ".env", "dist", "build", ".tox", ".mypy_cache",
+})
+
+_HIDDEN_PREFIX = "."
+
+_SKILL_MANIFEST_EXTENSIONS = frozenset({".json", ".json5"})
+
+
+def _is_safe_relative_path(path_str: str) -> tuple[bool, str]:
+    """Validate that a path is a safe project-relative path.
+
+    Returns (is_safe, error_message).
+    """
+    if not isinstance(path_str, str):
+        return False, "path must be a string"
+
+    path_str = path_str.strip()
+    if not path_str:
+        return False, "empty or missing path"
+
+    if len(path_str) > MAX_PATH_LENGTH:
+        return False, "path too long"
+
+    # Reject absolute paths
+    if os.path.isabs(path_str):
+        return False, "absolute path not allowed"
+
+    # Reject path traversal
+    normalized = os.path.normpath(path_str)
+    if normalized.startswith("..") or "/../" in normalized or normalized == "..":
+        return False, "path traversal not allowed"
+
+    # Reject shell metacharacters and dangerous patterns
+    _UNSAFE_PATH = _re.compile(r'[`$;|&<>{}()\[\]!#~]')
+    if _UNSAFE_PATH.search(path_str):
+        return False, "unsafe characters in path"
+
+    # Reject secret-like paths
+    if _is_secret_like(path_str):
+        return False, "path looks secret-like"
+
+    return True, ""
+
+
+def _is_hidden_or_denied(entry_name: str, entry_path: str) -> bool:
+    """Check if a directory entry should be skipped."""
+    if entry_name.startswith(_HIDDEN_PREFIX):
+        return True
+    if entry_name in _DENIED_DIRS:
+        return True
+    return False
+
+
+def _has_hidden_or_denied_part(path: Path, root: Path) -> bool:
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    return any(_is_hidden_or_denied(part, "") for part in rel_parts)
+
+
+def discover_local_skill_manifests(
+    paths: list[str] | None = None,
+    max_files: int = 20,
+    max_file_bytes: int = MAX_DISCOVER_FILE_BYTES,
+    project_root: str | None = None,
+) -> dict[str, Any]:
+    """Discover and summarize skill manifests from local project paths.
+
+    Pure read-only: no module loading, no execution, no state mutation.
+    Accepts file paths and directory paths (project-relative).
+    Returns bounded safe discovery results.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Clamp max_files
+    try:
+        max_files = max(1, min(int(max_files), MAX_DISCOVER_FILES))
+    except (TypeError, ValueError):
+        max_files = 20
+        warnings.append("invalid max_files; using default")
+
+    # Clamp max_file_bytes
+    try:
+        max_file_bytes = max(1024, min(int(max_file_bytes), MAX_DISCOVER_FILE_BYTES))
+    except (TypeError, ValueError):
+        max_file_bytes = MAX_DISCOVER_FILE_BYTES
+        warnings.append("invalid max_file_bytes; using default")
+
+    if paths is None:
+        paths = []
+
+    if not isinstance(paths, list):
+        return {
+            "discovered_count": 0,
+            "valid_count": 0,
+            "invalid_count": 0,
+            "manifests": [],
+            "domains": [],
+            "capabilities": [],
+            "workflows": [],
+            "deliverables": [],
+            "required_plugins": [],
+            "risk_boundaries": [],
+            "evals": [],
+            "warnings": [],
+            "errors": ["paths must be a list"],
+        }
+
+    # Determine project root
+    if project_root is not None:
+        root = Path(project_root).resolve()
+    else:
+        root = Path.cwd().resolve()
+
+    # Collect manifest file paths
+    manifest_files: list[Path] = []
+    seen_paths: set[str] = set()
+
+    for raw_path in paths[:MAX_DISCOVER_FILES * 2]:  # bound input scan
+        if not isinstance(raw_path, str):
+            errors.append("path entry must be a string")
+            continue
+
+        safe, err = _is_safe_relative_path(raw_path)
+        if not safe:
+            errors.append(f"rejected path: {err}")
+            continue
+
+        resolved = (root / raw_path).resolve()
+
+        # Ensure resolved path is under root
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            errors.append("resolved path escapes project root")
+            continue
+
+        if not resolved.exists():
+            warnings.append(f"path not found: {raw_path}")
+            continue
+
+        if resolved.is_file():
+            if _has_hidden_or_denied_part(resolved, root):
+                warnings.append(f"skipped hidden/denied file: {raw_path}")
+                continue
+            if resolved.suffix not in _SKILL_MANIFEST_EXTENSIONS:
+                warnings.append(f"skipped non-JSON file: {raw_path}")
+                continue
+            path_key = str(resolved)
+            if path_key not in seen_paths:
+                seen_paths.add(path_key)
+                manifest_files.append(resolved)
+        elif resolved.is_dir():
+            # Check if directory itself is hidden or denied
+            if _has_hidden_or_denied_part(resolved, root):
+                warnings.append(f"skipped hidden/denied directory: {raw_path}")
+                continue
+            # Scan directory recursively with bounds
+            _scan_directory(resolved, root, manifest_files, seen_paths, warnings, errors)
+        else:
+            warnings.append(f"unsupported path type: {raw_path}")
+
+        if len(manifest_files) >= max_files:
+            break
+
+    # Cap to max_files
+    manifest_files = manifest_files[:max_files]
+
+    # Parse and summarize each manifest file
+    valid_count = 0
+    invalid_count = 0
+    manifests_out: list[dict[str, Any]] = []
+
+    all_domains: list[list[str]] = []
+    all_capabilities: list[list[str]] = []
+    all_workflows: list[list[str]] = []
+    all_deliverables: list[list[str]] = []
+    all_required_plugins: list[list[str]] = []
+    all_risk_boundaries: list[list[str]] = []
+    all_evals: list[list[str]] = []
+
+    for manifest_path in manifest_files:
+        rel_path = str(manifest_path.relative_to(root))
+
+        # Check file size
+        try:
+            file_size = manifest_path.stat().st_size
+        except OSError:
+            warnings.append(f"cannot stat file: {rel_path}")
+            invalid_count += 1
+            continue
+
+        if file_size > max_file_bytes:
+            warnings.append(f"file too large, skipped: {rel_path}")
+            invalid_count += 1
+            continue
+
+        if file_size == 0:
+            warnings.append(f"empty file, skipped: {rel_path}")
+            invalid_count += 1
+            continue
+
+        # Read file content
+        try:
+            content = manifest_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            warnings.append(f"cannot read file: {rel_path}")
+            invalid_count += 1
+            continue
+
+        # Parse manifest
+        result = parse_skill_manifest_json(content)
+
+        for w in result.warnings:
+            warnings.append(f"[{rel_path}] {w}")
+        for e in result.errors:
+            errors.append(f"[{rel_path}] {e}")
+
+        if not result.valid or result.manifest is None:
+            invalid_count += 1
+            continue
+
+        valid_count += 1
+        m = result.manifest
+        safe = manifest_to_safe_dict(m)
+        safe["_path"] = rel_path
+        manifests_out.append(safe)
+
+        all_domains.append(list(m.domains))
+        all_capabilities.append(list(m.capabilities))
+        all_workflows.append(list(m.workflows))
+        all_deliverables.append(list(m.deliverables))
+        all_required_plugins.append(list(m.required_plugins))
+        all_risk_boundaries.append(list(m.risk_boundaries))
+        all_evals.append(list(m.evals))
+
+    return {
+        "discovered_count": len(manifest_files),
+        "valid_count": valid_count,
+        "invalid_count": invalid_count,
+        "manifests": manifests_out,
+        "domains": _merge_unique_sorted(all_domains),
+        "capabilities": _merge_unique_sorted(all_capabilities),
+        "workflows": _merge_unique_sorted(all_workflows),
+        "deliverables": _merge_unique_sorted(all_deliverables),
+        "required_plugins": _merge_unique_sorted(all_required_plugins),
+        "risk_boundaries": _merge_unique_sorted(all_risk_boundaries),
+        "evals": _merge_unique_sorted(all_evals),
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def _scan_directory(
+    dir_path: Path,
+    root: Path,
+    manifest_files: list[Path],
+    seen_paths: set[str],
+    warnings: list[str],
+    errors: list[str],
+    depth: int = 0,
+) -> None:
+    """Recursively scan a directory for manifest files with bounds."""
+    if depth > 5:  # max recursion depth
+        warnings.append(f"max directory depth reached, skipping: {dir_path.relative_to(root)}")
+        return
+
+    if len(manifest_files) >= MAX_DISCOVER_FILES:
+        return
+
+    try:
+        entries = sorted(os.scandir(dir_path), key=lambda e: e.name)
+    except OSError:
+        warnings.append(f"cannot scan directory: {dir_path.relative_to(root)}")
+        return
+
+    for entry in entries:
+        if len(manifest_files) >= MAX_DISCOVER_FILES:
+            break
+
+        entry_name = entry.name
+        if _is_hidden_or_denied(entry_name, entry.path):
+            continue
+
+        if entry.is_file(follow_symlinks=False):
+            if Path(entry_name).suffix in _SKILL_MANIFEST_EXTENSIONS:
+                path_key = entry.path
+                if path_key not in seen_paths:
+                    seen_paths.add(path_key)
+                    manifest_files.append(Path(entry.path))
+        elif entry.is_dir(follow_symlinks=False):
+            _scan_directory(Path(entry.path), root, manifest_files, seen_paths, warnings, errors, depth + 1)
+
+
+def discover_local_skill_manifests_json(
+    paths: Any = None,
+    max_files: int = 20,
+    max_file_bytes: int = MAX_DISCOVER_FILE_BYTES,
+    project_root: str | None = None,
+) -> dict[str, Any]:
+    """JSON-safe wrapper for discover_local_skill_manifests.
+
+    Accepts paths as a JSON string or list. Returns bounded safe result.
+    Never raises on malformed input.
+    """
+    parse_error = None
+    if paths is None:
+        paths_list = []
+    elif isinstance(paths, str):
+        try:
+            parsed = json.loads(paths)
+            if not isinstance(parsed, list):
+                parse_error = "paths must be a list"
+                paths_list = []
+            else:
+                paths_list = parsed
+        except (json.JSONDecodeError, TypeError):
+            parse_error = "invalid JSON in paths"
+            paths_list = []
+    elif isinstance(paths, list):
+        paths_list = paths
+    else:
+        parse_error = "paths must be a JSON string or list"
+        paths_list = []
+
+    result = discover_local_skill_manifests(
+        paths=paths_list,
+        max_files=max_files,
+        max_file_bytes=max_file_bytes,
+        project_root=project_root,
+    )
 
     if parse_error:
         result["errors"] = list(result.get("errors", [])) + [parse_error]

@@ -1,4 +1,4 @@
-# CCB Review — TASK-123/TASK-124: Skill context compiler preview bridge
+# CCB Review — TASK-125/TASK-126: Local skill manifest catalog discovery
 
 **Status: APPROVED**
 
@@ -6,13 +6,16 @@
 
 No blocking findings remain.
 
-PM review found one consistency gap before approval: the compiler bridge initially called `preview_skill_context(...)` directly, so it only naturally supported list input, while the registry-facing skill surfaces also support JSON string input. PM fixed this by switching the bridge to `preview_skill_context_json(...)`, updating the schema to accept array or string, and adding JSON-string/malformed-outer-JSON compiler tests.
+PM review found and fixed two safety gaps before approval:
+
+- Direct file paths under hidden or denied parent directories could bypass the recursive scanner's skip logic. PM added parent-part validation for direct files and directories.
+- Registry callers could supply `project_root` as an extra argument even though it was not advertised in the schema. PM bound registry discovery to `build_default_registry(workspace_root=...)`, removed `project_root` from exposed parameters, and added a root-binding eval.
 
 ## Scope Reviewed
 
-- `mini_agent/context_compiler.py`
-- `mini_agent/toolkits/register_developer.py`
-- `tests/test_context_compiler.py`
+- `mini_agent/skills.py`
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_skills.py`
 - `evals/run_evals.py`
 - `agent_tasks/A_DONE.md`
 - `agent_tasks/B_DONE.md`
@@ -23,44 +26,47 @@ PM review found one consistency gap before approval: the compiler bridge initial
 
 ## Review Notes
 
-TASK-123 bridges TASK-121's read-only `preview_skill_context` metadata preview into `ContextCompiler` and registry `compile_context_pack`.
+TASK-125 adds `discover_local_skill_manifests` as a bounded, read-only workspace catalog surface for local skill manifest metadata.
 
 The implementation:
 
-- preserves existing context compiler behavior when no skill manifests are supplied
-- adds an explicit `Skill Context Preview [skill manifest metadata]` section only when skill metadata is provided
-- marks the section as untrusted/read-only metadata, not executable instructions
-- reuses existing skill preview parsing/safety logic instead of duplicating parser behavior
-- supports JSON string or list manifest input
-- keeps the section on the normal context budget/truncation path
-- avoids skill loading, skill installation, plugin execution, external calls, and durable state mutation
+- accepts project-relative file and directory paths
+- rejects traversal, absolute paths, unsafe path characters, and secret-like paths
+- skips hidden or denied directories, including direct paths and parent path parts
+- scans directories in stable sorted order with caps on file count, recursion depth, and file size
+- reuses existing skill manifest parsing and safe output logic
+- returns only bounded safe metadata and aggregate catalog fields
+- does not load, install, import, or execute skill contents
+- does not mutate durable task, worker, event, memory, or trace state
+- registers as `ToolPermission(category="workspace", risk="read")`
+- keeps existing inspect, summarize, preview, route, context compiler, and permission listing behavior compatible
 
-TASK-124 adds deterministic offline eval coverage for the existing `preview_skill_context` surface:
+TASK-126 adds deterministic offline eval coverage for the same surface:
 
-- exact `ToolPermission(category="local", risk="read")`
-- valid preview shape, selected skills, required plugins, risk boundaries, eval hints, and untrusted framing
-- stable ordering and `max_skills` bounds
-- malformed input and large input safety
-- secret no-leak across goal and manifest fields
-- durable task/worker/event read-only behavior
-- compatibility with inspect, summarize, route, and permission listing surfaces
+- exact registry permission
+- valid manifest discovery
+- deterministic directory discovery
+- bounds and non-JSON behavior
+- traversal, absolute, hidden, denied, and root-binding path safety
+- malformed input handling
+- secret no-leak
+- durable store read-only behavior
+- compatibility with existing skill and context surfaces
 
 ## Verification
 
 ```text
-python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent
-Ran 287 tests in 11.503s — OK
-
 python3 -m unittest tests.test_skills tests.test_mini_agent
-Ran 242 tests in 2.559s — OK
+Ran 273 tests in 6.345s
+OK
 
 python3 evals/run_evals.py
-477 passed, 0 failed
+487 passed, 0 failed
 
 git diff --check
-clean
+OK
 ```
 
 ## Decision
 
-Approved for local integration. TASK-123 and TASK-124 complete the skill context preview bridge and deterministic preview eval slice.
+Approved for local integration. TASK-125 and TASK-126 complete the local skill manifest discovery slice and its deterministic eval coverage.
