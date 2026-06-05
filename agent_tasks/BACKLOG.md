@@ -8,17 +8,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-132: CLI setup/status UX deterministic eval coverage
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-131 implementation surface
-- 分配: Claude B
-- 状态: waiting for TASK-131 commit on main; B should resume after PM dispatch
-- 目标: 为 TASK-131 增加 deterministic offline eval，覆盖 `/setup`/`/config` provider/env guidance、no secret leak、401/missing-key/provider-model mismatch guidance、普通 prompt 状态输出、slash/blank/exit 无状态噪声、plain-text/no raw JSON。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
-- 参考: `evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
-
 ## 已完成
+
+### TASK-132: CLI setup/status UX deterministic eval coverage ✅
+- 完成者: Claude B；Codex PM 补强 missing-key 断言并修正完成报告
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 518 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 220 tests OK；`git diff --check` OK。
+- 内容: 为 TASK-131 CLI setup/status UX 增加 10 个 deterministic offline eval，覆盖 `/setup` provider/model/base URL/API-key presence、openai-compatible/anthropic/gemini env keys、安全 placeholder/no secret leak、401/missing-key/provider-model mismatch guidance、`/config` alias、普通 prompt 状态输出、slash/blank/exit 无状态噪声、hidden reasoning/no raw JSON/no API key leak；无 runtime 行为变更。
 
 ### TASK-131: CLI setup/config and response-status UX v1 ✅
 - 完成者: Claude A；Codex PM 因 A CCB worktree 落后在 `67a1145`，手动移植 TASK-131 增量到当前主线，避免带入已合并的 TASK-129 旧 diff

@@ -208,3 +208,40 @@ Claude A implemented the requested CLI setup/config guidance and deterministic r
 ## Verdict
 
 Approved for integration. TASK-132 remains open and should now be rerun by Codex B against the integrated TASK-131 surface.
+
+---
+
+# TASK-132 Review: CLI setup/status UX deterministic eval coverage
+
+**Status: APPROVED**
+
+## Summary
+
+Claude B added deterministic offline eval coverage for the integrated TASK-131 CLI setup/config and response-status surface. Codex PM manually integrated the eval patch, strengthened the missing-key assertion, and corrected the completion report count from 11 to 10 eval cases.
+
+## Coverage
+
+- `/setup` shows provider/model/base URL/API-key presence.
+- `/setup` lists openai-compatible, anthropic, and gemini env keys.
+- Placeholder setup guidance uses safe placeholder text and does not leak configured fake secrets.
+- Error guidance covers `401 Unauthorized`, exact `API key 缺失`, required `LLM_API_KEY`, and provider/model mismatch.
+- `/config` returns the same output as `/setup`.
+- Normal prompt emits deterministic model-call status lines.
+- Slash commands, blank input, and exit do not emit model-call status noise.
+- Status/setup/config output avoids chain-of-thought markers, hidden-reasoning markers, raw JSON, and API key leakage.
+
+## PM Review Notes
+
+- No runtime files were modified.
+- Grep found no new `or True` or tautological TASK-132 assertions.
+- PM strengthened `eval_cli_setup_guidance_for_errors()` to require exact missing-key text instead of a broad `or` condition.
+
+## Evidence
+
+- `python3 evals/run_evals.py` → 518 passed, 0 failed
+- `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` → 220 tests OK
+- `git diff --check` → clean
+
+## Verdict
+
+Approved for integration. This closes the CLI setup/status UX implementation + deterministic eval coverage pair for TASK-131/TASK-132.

@@ -77,6 +77,17 @@ def main() -> int:
         EvalCase("cli_workers_no_ccb", eval_cli_workers_no_ccb),
         EvalCase("cli_error_recovery_hint", eval_cli_error_recovery_hint),
         EvalCase("cli_markdown_no_raw_json", eval_cli_markdown_no_raw_json),
+        # TASK-132: CLI setup/status UX deterministic eval coverage
+        EvalCase("cli_setup_guidance_shows_provider_info", eval_cli_setup_guidance_shows_provider_info),
+        EvalCase("cli_setup_provider_env_keys", eval_cli_setup_provider_env_keys),
+        EvalCase("cli_setup_placeholder_no_secret_leak", eval_cli_setup_placeholder_no_secret_leak),
+        EvalCase("cli_setup_guidance_for_errors", eval_cli_setup_guidance_for_errors),
+        EvalCase("cli_config_is_alias_for_setup", eval_cli_config_is_alias_for_setup),
+        EvalCase("cli_response_status_normal_prompt", eval_cli_response_status_normal_prompt),
+        EvalCase("cli_response_status_slash_no_noise", eval_cli_response_status_slash_no_noise),
+        EvalCase("cli_response_status_blank_exit_no_noise", eval_cli_response_status_blank_exit_no_noise),
+        EvalCase("cli_response_status_no_hidden_reasoning", eval_cli_response_status_no_hidden_reasoning),
+        EvalCase("cli_setup_config_no_raw_json", eval_cli_setup_config_no_raw_json),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -920,6 +931,154 @@ def eval_cli_markdown_no_raw_json():
 
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
         for cmd in ["/wake", "/model", "/workers", "/help", "/doctor"]:
+            result = cli.handle_slash_command(cmd)
+            assert not result.lstrip().startswith("{"), f"{cmd} returned raw JSON: {result[:100]}"
+            assert not result.lstrip().startswith("["), f"{cmd} returned raw JSON array: {result[:100]}"
+
+
+# --- TASK-132: CLI setup/status UX deterministic eval coverage ---
+
+def eval_cli_setup_guidance_shows_provider_info():
+    """Setup/config shows provider/model/base URL/API-key presence."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-test-abc",
+            "LLM_MODEL": "gpt-4.1-mini",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
+        }, env_path=Path(tmpdir) / ".env")
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+        result = cli.handle_slash_command("/setup")
+        assert "openai-compatible" in result, f"missing provider: {result}"
+        assert "gpt-4.1-mini" in result, f"missing model: {result}"
+        assert "api.openai.com" in result, f"missing base url: {result}"
+        assert "configured" in result, f"missing key presence: {result}"
+
+
+def eval_cli_setup_provider_env_keys():
+    """Setup shows provider-specific env keys for openai-compatible, anthropic, and gemini."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
+        result = cli.handle_slash_command("/setup")
+        assert "LLM_API_KEY" in result, f"missing LLM_API_KEY: {result}"
+        assert "LLM_MODEL" in result, f"missing LLM_MODEL: {result}"
+        assert "OPENAI_API_KEY" in result, f"missing OPENAI_API_KEY alternative: {result}"
+        assert "ANTHROPIC_API_KEY" in result, f"missing ANTHROPIC_API_KEY: {result}"
+        assert "ANTHROPIC_MODEL" in result, f"missing ANTHROPIC_MODEL: {result}"
+        assert "ANTHROPIC_BASE_URL" in result, f"missing ANTHROPIC_BASE_URL: {result}"
+        assert "GEMINI_API_KEY" in result, f"missing GEMINI_API_KEY: {result}"
+        assert "GEMINI_MODEL" in result, f"missing GEMINI_MODEL: {result}"
+        assert "GEMINI_BASE_URL" in result, f"missing GEMINI_BASE_URL: {result}"
+
+
+def eval_cli_setup_placeholder_no_secret_leak():
+    """Setup placeholder snippets use your-key and never leak real/fake secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-fake-secret-value-12345",
+            "LLM_MODEL": "gpt-4.1-mini",
+        }, env_path=Path(tmpdir) / ".env")
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+        result = cli.handle_slash_command("/setup")
+        assert "sk-fake-secret-value-12345" not in result, "fake secret leaked in setup output"
+        assert "your-key" in result, f"missing placeholder: {result}"
+
+
+def eval_cli_setup_guidance_for_errors():
+    """Setup shows 401, missing-key, and provider/model mismatch guidance."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_MODEL": "gpt-4.1-mini",
+        }, env_path=Path(tmpdir) / ".env")
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+        result = cli.handle_slash_command("/setup")
+        assert "401 Unauthorized" in result, f"missing 401 guidance: {result}"
+        assert "API key 缺失" in result, f"missing exact missing-key guidance: {result}"
+        assert "LLM_API_KEY" in result, f"missing required key name: {result}"
+        assert "provider/model 不匹配" in result, f"missing mismatch guidance: {result}"
+
+
+def eval_cli_config_is_alias_for_setup():
+    """/config returns identical output to /setup."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-x",
+            "LLM_MODEL": "gpt-4",
+        }, env_path=Path(tmpdir) / ".env")
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+        setup_out = cli.handle_slash_command("/setup")
+        config_out = cli.handle_slash_command("/config")
+        assert setup_out == config_out, "/config is not identical to /setup"
+
+
+def eval_cli_response_status_normal_prompt():
+    """Normal prompt emits deterministic model-call status lines before/after agent.run."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
+    cli.run()
+    status_outputs = [o for o in outputs if "正在调用模型" in o]
+    done_outputs = [o for o in outputs if "模型响应完成" in o]
+    assert len(status_outputs) >= 1, f"no start status line: {outputs}"
+    assert len(done_outputs) >= 1, f"no done status line: {outputs}"
+
+
+def eval_cli_response_status_slash_no_noise():
+    """Slash commands do not emit model-call status lines."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["/help", "exit"]), output_func=outputs.append)
+    cli.run()
+    status_outputs = [o for o in outputs if "正在调用模型" in o]
+    assert len(status_outputs) == 0, f"slash command triggered status: {status_outputs}"
+
+
+def eval_cli_response_status_blank_exit_no_noise():
+    """Blank input and exit do not emit model-call status lines."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["", "   ", "exit"]), output_func=outputs.append)
+    cli.run()
+    status_outputs = [o for o in outputs if "正在调用模型" in o]
+    assert len(status_outputs) == 0, f"blank/exit triggered status: {status_outputs}"
+
+
+def eval_cli_response_status_no_hidden_reasoning():
+    """Status/setup/config output does not reveal chain-of-thought, hidden reasoning, raw JSON, or API keys."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-secret-reasoning-999",
+            "LLM_MODEL": "gpt-4.1-mini",
+        }, env_path=Path(tmpdir) / ".env")
+        outputs = []
+        agent = FakeCLIAgent()
+        cli = MiniAgentCLI(
+            agent,
+            FakeCLIRegistry(),
+            settings=settings,
+            root=Path(tmpdir),
+            input_func=_fake_input(["explain yourself", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        full = "\n".join(outputs)
+        assert "sk-secret-reasoning-999" not in full, "API key leaked in output"
+        for marker in ["chain_of_thought", "hidden_reasoning", "internal_reasoning", "thinking:", "<thinking>"]:
+            assert marker not in full.lower(), f"hidden reasoning marker found: {marker}"
+        for output in outputs:
+            if "正在调用模型" in output or "模型响应完成" in output:
+                assert len(output) < 200, f"status line too long: {output}"
+
+
+def eval_cli_setup_config_no_raw_json():
+    """Setup/config output is plain text/Markdown, not raw JSON."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
+        for cmd in ["/setup", "/config"]:
             result = cli.handle_slash_command(cmd)
             assert not result.lstrip().startswith("{"), f"{cmd} returned raw JSON: {result[:100]}"
             assert not result.lstrip().startswith("["), f"{cmd} returned raw JSON array: {result[:100]}"
