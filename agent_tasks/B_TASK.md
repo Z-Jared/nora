@@ -1,28 +1,28 @@
-# TASK-138: Minimal model routing deterministic eval coverage
+# TASK-140: CLI UI v2 deterministic eval coverage
 
 You are Codex B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Codex A owns TASK-137: a read-only minimal model routing inspection scaffold. You own deterministic offline eval coverage after TASK-137 is integrated by Codex PM.
+Codex A owns TASK-139: lightweight CLI UI v2 for Nora's default terminal surface. You own deterministic offline eval coverage after TASK-139 is integrated by Codex PM.
 
-Architecture layer:
-- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` section 9, Model Router.
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 11, model routing.
+The intended CLI direction:
+- Minimal `> ` prompt instead of `Nora(main)>`.
+- Compact startup banner.
+- Single subtle input status line: `model: ...   local-first   / for commands`.
+- No intelligence/speed/routing in default status line; those belong in `/model`.
+- No fullscreen TUI, no always-visible three-column dashboard.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/A_TASK.md`
-- `mini_agent/model_router.py` if present
-- `mini_agent/settings.py`
-- `mini_agent/providers/factory.py`
-- `mini_agent/toolkits/registry_builder.py`
+- `mini_agent/cli.py`
+- `tests/test_cli.py`
 - `evals/run_evals.py`
 
 ## Worktree Safety
@@ -37,32 +37,37 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline eval coverage for the minimal model routing scaffold.
+Add deterministic offline eval coverage for TASK-139 after PM integrates it.
 
 Coverage requirements:
 
-1. Default route
-   - Configured OpenAI-compatible settings select the configured provider/model.
-   - Output includes stable policy/version and reason labels.
-   - Output does not leak the fake API key.
+1. Minimal prompt
+   - CLI prompt is exactly or effectively `> `.
+   - Prompt output does not include `Nora(main)>`, branch, workspace, provider, or model.
 
-2. Provider support
-   - Anthropic and Gemini settings produce safe selected provider/model metadata.
-   - Unknown provider produces a bounded unsupported-provider result.
-   - Missing API key produces a disabled/not-ready route rather than a crash.
+2. Compact startup banner
+   - Banner remains deterministic and contains required useful substrings:
+     - `Nora 已启动`
+     - `Workspace:`
+     - `LLM:`
+     - `Tools:`
+     - `API key`
+     - `/wake`, `/setup`, `/model`, `/workers`
+   - Banner is compact and not a section-heavy dashboard.
+   - No API key leak.
 
-3. Routing hints
-   - Task type, risk level, context token, tool requirement, and review requirement hints are normalized or safely bounded.
-   - High-risk/review/long-context hints add deterministic reason labels.
-   - No raw prompt/task goal content is echoed.
+3. Input status line
+   - Status line contains `model:`, current model or disabled state, `local-first`, and `/ for commands`.
+   - Status line does not contain intelligence/speed/routing labels.
+   - Status line does not leak API key, raw prompt, hidden reasoning, or raw payloads.
 
-4. Registry tool
-   - `inspect_model_routing` is registered with `local/read` permission.
-   - Calling it does not mutate durable tasks, workers, events, memory, files, or traces.
-   - It does not call the network or build a live LLM client.
+4. Lifecycle feedback
+   - Normal prompt and multiline still emit deterministic lifecycle feedback.
+   - Lifecycle output is compact.
+   - Slash commands, blank input, and exit do not emit lifecycle noise.
 
 5. Compatibility
-   - Existing provider factory behavior remains intact for `openai-compatible`, `anthropic`, and `gemini`.
+   - `/`, `/setup`, `/model`, `/workers`, `/wake`, and `/help` remain plain text/Markdown, not raw JSON.
    - Existing CLI/provider/config evals continue to pass.
 
 ## Scope
@@ -71,11 +76,10 @@ Primary files:
 - `evals/run_evals.py`
 - `agent_tasks/B_DONE.md`
 
-Only touch tests/runtime files if a tiny import/helper fix is necessary after TASK-137 integration. If TASK-137 surface is not yet present in your worktree, do not implement it yourself. Instead write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-137 integration` and list the exact missing surface.
+Only touch `tests/test_cli.py` if a tiny helper is absolutely needed.
 
 Do not edit:
-- `mini_agent/model_router.py` unless PM explicitly asks after TASK-137 integration.
-- `mini_agent/toolkits/registry_builder.py` unless PM explicitly asks after TASK-137 integration.
+- `mini_agent/cli.py` unless PM explicitly asks after TASK-139 integration.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -84,8 +88,8 @@ Do not edit:
 ## Coverage Quality Requirements
 
 - No `or True`, tautological assertions, or broad substring-only pass conditions.
-- Use tempdir-isolated roots and explicit env/settings objects where needed so local `.env` cannot affect evals.
-- Assert exact or meaningfully specific substrings/fields.
+- Use tempdir-isolated roots and explicit settings/env objects where needed.
+- Assert exact or meaningfully specific substrings.
 - Assert secrets/API keys are not leaked.
 - Do not call network, LLMs, external services, or CCB commands from evals.
 
@@ -95,11 +99,11 @@ Run:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-137 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
+If TASK-139 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
 
 ## Completion Report
 

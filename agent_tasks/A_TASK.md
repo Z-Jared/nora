@@ -1,28 +1,30 @@
-# TASK-137: Minimal model routing inspection scaffold v1
+# TASK-139: CLI UI v2 lightweight terminal surface
 
 You are Codex A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora has OpenAI-compatible, Anthropic, and Gemini provider adapters, but no model router yet. The architecture contract says model routing should start as a minimal explainable layer before real provider orchestration.
+The user wants Nora's default CLI to feel closer to modern terminal coding assistants like Claude Code and Codex, but **not** a complex dashboard. The agreed direction:
 
-Architecture layer:
-- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` section 9, Model Router.
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 11, model routing.
+- Default prompt should be `>` rather than `Nora(main)>`.
+- Agent replies stay above the input prompt.
+- The default CLI remains plain terminal output, not fullscreen TUI.
+- A subtle status line near the input should show only model/local-first/command hint.
+- Intelligence/speed/routing controls stay inside `/model`, not in the default prompt/status line.
+- Workers/tasks/trace/permissions stay on slash commands, not as always-visible side panels.
+
+Reference image generated during PM discussion:
+- `/Users/mac/.codex/generated_images/019e77d1-89fc-7b61-955e-257bc11c0091/ig_09ae02644c868c6b016a2302d28dcc8197935c3a503026ea8d.png`
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
-- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
-- `mini_agent/settings.py`
-- `mini_agent/providers/factory.py`
-- `mini_agent/registry.py`
-- `mini_agent/toolkits/registry_builder.py`
-- relevant provider/tests files before editing
+- `mini_agent/cli.py`
+- `tests/test_cli.py`
 
 ## Worktree Safety
 
@@ -36,57 +38,51 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add a read-only, deterministic model routing inspection scaffold. This is the first small slice of a future model router. It must explain what model Nora would use and why, without changing actual model execution behavior.
+Implement a lightweight CLI UI v2 in the existing plain terminal CLI.
 
 Required behavior:
 
-1. Core router module
-   - Add a focused module, likely `mini_agent/model_router.py`.
-   - Provide a pure function that accepts current `LLMSettings` plus optional routing hints such as:
-     - `task_type`
-     - `risk_level`
-     - `context_tokens`
-     - `requires_tools`
-     - `requires_review`
-   - Return safe structured metadata:
-     - selected provider/model from current settings
-     - route type/policy version
-     - normalized task type and risk level
-     - reason labels, not raw user prompts
-     - capability hints for the selected provider/model
-     - fallback availability as safe booleans/names only
-     - warnings/errors for disabled or unsupported provider
-   - Do not include API keys, raw prompts, raw task goals, environment values, hidden reasoning, or file contents.
+1. Minimal prompt
+   - Replace `Nora(main)> ` / `Nora> ` prompt with a minimal `> ` prompt.
+   - Branch/workspace/model must not be repeated in every input prompt.
+   - Multiline continuation may remain `... ` unless you can improve it safely.
 
-2. Registry tool
-   - Register a read-only tool such as `inspect_model_routing`.
-   - Permission must be `ToolPermission(category="local", risk="read")`.
-   - The tool must not call the network or create an LLM client.
-   - The tool must not mutate durable tasks, workers, events, memory, files, or traces.
-   - Output may be JSON, but it must be bounded and safe.
+2. Compact startup banner
+   - Reduce startup banner from section-heavy panel to a compact 8-12 line startup surface.
+   - Keep exact useful substrings required by existing tests/evals where practical: `Nora 已启动`, `Workspace:`, `LLM:`, `Tools:`, `API key`, `/wake`, `/setup`, `/model`, `/workers`.
+   - Show workspace, branch if available, model/provider, API-key presence, tools count, and next-action hint.
+   - Avoid always-visible task/worker/check panels in default banner unless one concise line is enough.
 
-3. Provider compatibility
-   - Keep `build_llm_client(...)` behavior unchanged.
-   - Support current providers: `openai-compatible`, `anthropic`, `gemini`.
-   - Unknown provider should return a safe unsupported-provider routing result instead of leaking config.
-   - Disabled/missing API key should be represented as disabled/not ready, not as an exception.
+3. Lightweight input status line
+   - Add a helper such as `_input_status_line()` that returns a single subtle line containing:
+     - `model: <model-or-disabled>`
+     - `local-first`
+     - `/ for commands`
+   - Do not show intelligence/speed/routing in the default status line.
+   - Make this line available near input in plain CLI by printing it after the banner and after each agent response, or by including it in a compact footer. Keep deterministic tests possible.
 
-4. Unit tests
-   - Add focused unit tests for the router and registry tool.
-   - Cover default configured route, missing API key, unsupported provider, task/risk/context hints, no secret leak, registry permission, and no mutation.
+4. Quieter lifecycle feedback
+   - Keep deterministic lifecycle feedback, but make it less noisy and closer to:
+     - `✓ received`
+     - `⏳ thinking`
+     - `✓ ready`
+   - It is acceptable to retain Chinese if tests require it, but the UI should feel compact.
+   - Slash commands, blank input, and exit must not emit lifecycle noise.
+   - No hidden reasoning or chain-of-thought.
+
+5. Slash command/menu alignment
+   - Keep exact `/` launcher behavior.
+   - Optionally tighten labels so the menu feels like a command palette, but do not make a fullscreen TUI.
 
 ## Scope
 
 Primary files:
-- `mini_agent/model_router.py`
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_model_router.py` or the most appropriate existing test file
+- `mini_agent/cli.py`
+- `tests/test_cli.py`
 - `agent_tasks/A_DONE.md`
 
-Only touch provider files if needed for a tiny compatibility helper. Do not change live model call semantics.
-
 Do not edit:
-- `evals/run_evals.py` — Codex B owns TASK-138 eval coverage after TASK-137 is integrated.
+- `evals/run_evals.py` — Codex B owns TASK-140 eval coverage after TASK-139 is integrated.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -94,36 +90,28 @@ Do not edit:
 
 ## Non-Goals
 
-- No real automatic provider switching.
-- No cost API, latency measurement, benchmarking, retry policy, or network calls.
-- No trace/event recording yet.
-- No UI changes.
-- No prompt classification or hidden reasoning.
-- No broad provider refactor.
+- No curses/rich/textual/fullscreen TUI.
+- No actual fixed-bottom input box; plain CLI cannot guarantee that without TUI.
+- No web UI redesign.
+- No model routing behavior changes.
+- No intelligence/speed default status display.
+- No hidden reasoning display.
 
 ## Safety Boundaries
 
-- Never print API keys, tokens, `.env` values, private file contents, hidden reasoning, raw prompts, raw task goals, raw tool payloads, or raw shell output.
-- Keep all output deterministic and bounded.
-- Read-only tool means no durable event/task/worker/memory/file mutation.
-
-## Durable Evidence
-
-- Unit tests for router behavior and registry permission.
-- Completion report in `agent_tasks/A_DONE.md`.
-- No durable runtime event changes in this task.
+- Never print API keys, tokens, `.env` values, private file contents, raw prompts, hidden reasoning, or raw tool payloads.
+- Keep CLI output deterministic for tests/evals.
+- Preserve slash command compatibility.
 
 ## Required Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
-
-If you choose not to create `tests/test_model_router.py`, replace that command with the exact focused test module you used and explain why in `A_DONE.md`.
 
 ## Completion Report
 

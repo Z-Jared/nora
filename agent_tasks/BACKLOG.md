@@ -8,7 +8,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-139: CLI UI v2 lightweight terminal surface
+- Owner: Codex A
+- Goal: Make the default CLI lighter and closer to modern terminal coding assistants: minimal `> ` prompt, compact startup banner, single model/local-first status line, quieter lifecycle feedback, no fullscreen TUI and no dashboard.
+- Scope: `mini_agent/cli.py`, `tests/test_cli.py`, `agent_tasks/A_DONE.md`.
+
+### TASK-140: CLI UI v2 deterministic eval coverage
+- Owner: Codex B
+- Goal: After TASK-139 integration, add deterministic offline eval coverage for prompt simplification, compact banner, model/local-first status line, no intelligence/speed/routing in default status, lifecycle compatibility, and slash command compatibility.
+- Scope: `evals/run_evals.py`, `agent_tasks/B_DONE.md`.
+- Dependency: Wait for TASK-139 integration; do not implement runtime surface in B.
 
 ## 已完成
 
