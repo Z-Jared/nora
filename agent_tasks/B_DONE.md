@@ -4,32 +4,30 @@ Status: ready for Codex review
 
 ## Summary
 
-Added deterministic offline eval coverage for TASK-131 CLI setup/config and response-status UX.
+Added deterministic offline eval coverage for TASK-133 CLI slash launcher/menu and startup welcome polish.
 
-- Added 10 eval cases for `/setup`/`/config` provider diagnostics, provider env keys, placeholder/no-secret behavior, error guidance, alias behavior, status lines, no-status cases, hidden-reasoning safety, and no raw JSON.
-- Codex PM strengthened the missing-key guidance eval to require exact `API key 缺失` and `LLM_API_KEY` output.
+- Added 10 eval cases for exact `/` launcher menu structure, required commands, no model-call noise, no raw JSON, banner next-action hints, core info preservation, missing/configured key safety, hidden-reasoning marker absence, and secret/raw JSON leak prevention.
+- Codex PM strengthened the banner next-action assertion to require exact `/ 打开命令菜单`, `/wake`, and `/setup` hints.
+- Codex PM added explicit tempdir `env_path` isolation to configured-key evals so local `.env` cannot affect results.
 - No runtime implementation files were changed.
 
 ## Diff
 
 ```text
-agent_tasks/BACKLOG.md |  16 ++---
-agent_tasks/B_DONE.md  |  45 ++++++--------
-agent_tasks/REVIEW.md  |  37 ++++++++++++
-evals/run_evals.py     | 159 +++++++++++++++++++++++++++++++++++++++++++++++++
-4 files changed, 219 insertions(+), 38 deletions(-)
+evals/run_evals.py | 218 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+1 file changed, 218 insertions(+)
 ```
 
 ## Tests
 
 ```text
-python3 evals/run_evals.py -> 518 passed, 0 failed
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent -> 220 tests OK
-git diff --check -> clean
+python3 evals/run_evals.py -> 528 passed, 0 failed
+python3 -m unittest tests.test_cli -> 79 tests OK
+git diff --check -- evals/run_evals.py -> clean
 ```
 
 ## Notes
 
 - No push performed by worker.
-- Worktree synced to main commit `8861366` before eval work.
-- Known issues: none for TASK-132.
+- Worktree synced to main commit `abce218` before eval work.
+- Known issues: none for TASK-134.

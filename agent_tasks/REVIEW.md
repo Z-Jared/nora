@@ -280,3 +280,42 @@ Claude A implemented the requested slash launcher and welcome polish direction, 
 ## Verdict
 
 Approved for integration. TASK-134 remains open for deterministic eval coverage against the integrated TASK-133 surface.
+
+---
+
+# TASK-134 Review: CLI slash launcher/welcome deterministic eval coverage
+
+**Status: APPROVED**
+
+## Summary
+
+Claude B added deterministic offline eval coverage for the integrated TASK-133 slash launcher and startup welcome polish. Codex PM manually integrated the eval patch and strengthened two areas: exact next-action assertions and tempdir-isolated configured-key settings.
+
+## Coverage
+
+- Exact `/` returns the launcher/menu.
+- Launcher contains Start, Project, Workers, Memory / Tasks / Context, Diagnostics, and Help groups.
+- Launcher includes `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, and `/help`.
+- `/` does not call the agent/model and does not emit model-call status lines.
+- Launcher output is not raw JSON.
+- Banner includes exact next-action hints for `/`, `/wake`, and `/setup`.
+- Banner preserves workspace, LLM/model/key presence, and tools count.
+- Missing-key and configured-key banner states are safe and do not leak fake secrets.
+- Slash/welcome output does not contain hidden-reasoning markers.
+
+## PM Review Notes
+
+- No runtime files were modified.
+- PM replaced a broad `or` assertion in `eval_banner_next_action_hint()` with exact required substrings.
+- PM added explicit `env_path=root / ".env"` to configured-key evals so local project `.env` cannot affect results.
+- Grep found no new `or True` or tautological TASK-134 assertions.
+
+## Evidence
+
+- `python3 evals/run_evals.py` → 528 passed, 0 failed
+- `python3 -m unittest tests.test_cli` → 79 tests OK
+- `git diff --check -- evals/run_evals.py` → clean
+
+## Verdict
+
+Approved for integration. This closes the CLI slash launcher/welcome implementation + deterministic eval coverage pair for TASK-133/TASK-134.

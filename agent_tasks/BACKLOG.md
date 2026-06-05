@@ -8,17 +8,13 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-134: CLI slash launcher/welcome deterministic eval coverage
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-133 implementation surface
-- 分配: Claude B after TASK-133 integration
-- 状态: ready to dispatch after TASK-133 commit
-- 目标: 为 TASK-133 增加 deterministic offline eval，覆盖 exact `/` launcher/menu、启动 welcome next-action hint、命令分组、no model-call/no status noise、missing-key/configured-key safe banner、no raw JSON、no secret/hidden reasoning leak。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
-- 参考: `evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
-
 ## 已完成
+
+### TASK-134: CLI slash launcher/welcome deterministic eval coverage ✅
+- 完成者: Claude B；Codex PM 补强 next-action 精确断言和 configured-key eval 的 tempdir `.env` 隔离
+- Reviewer: Codex PM (`agent_tasks/REVIEW.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 528 passed；`python3 -m unittest tests.test_cli` 79 tests OK；`git diff --check -- evals/run_evals.py` OK。
+- 内容: 为 TASK-133 CLI slash launcher/welcome 增加 10 个 deterministic offline eval，覆盖 exact `/` menu 结构、必备命令、no model-call/no status noise、no raw JSON、banner next-action hint、核心信息保留、missing/configured key 安全、hidden reasoning marker absence、secret/raw JSON leak prevention；无 runtime 行为变更。
 
 ### TASK-133: CLI slash launcher and welcome polish v2 ✅
 - 完成者: Claude A；Codex PM 因 A CCB worktree 落后在 `edca78e`，手动移植并修正 TASK-133 增量到当前主线，保留 `/setup` 和 TASK-131/TASK-132 已集成表面

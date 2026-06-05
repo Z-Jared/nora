@@ -88,6 +88,17 @@ def main() -> int:
         EvalCase("cli_response_status_blank_exit_no_noise", eval_cli_response_status_blank_exit_no_noise),
         EvalCase("cli_response_status_no_hidden_reasoning", eval_cli_response_status_no_hidden_reasoning),
         EvalCase("cli_setup_config_no_raw_json", eval_cli_setup_config_no_raw_json),
+        # TASK-134: CLI slash launcher/welcome deterministic eval coverage
+        EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
+        EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
+        EvalCase("slash_launcher_no_model_call", eval_slash_launcher_no_model_call),
+        EvalCase("slash_launcher_no_raw_json", eval_slash_launcher_no_raw_json),
+        EvalCase("banner_next_action_hint", eval_banner_next_action_hint),
+        EvalCase("banner_preserves_core_info", eval_banner_preserves_core_info),
+        EvalCase("banner_missing_key_safe", eval_banner_missing_key_safe),
+        EvalCase("banner_configured_key_no_leak", eval_banner_configured_key_no_leak),
+        EvalCase("no_chain_of_thought_markers", eval_no_chain_of_thought_markers),
+        EvalCase("no_secret_or_raw_json_leak", eval_no_secret_or_raw_json_leak),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -1082,6 +1093,213 @@ def eval_cli_setup_config_no_raw_json():
             result = cli.handle_slash_command(cmd)
             assert not result.lstrip().startswith("{"), f"{cmd} returned raw JSON: {result[:100]}"
             assert not result.lstrip().startswith("["), f"{cmd} returned raw JSON array: {result[:100]}"
+
+
+# --- TASK-134: CLI slash launcher/welcome deterministic eval coverage ---
+
+def eval_slash_launcher_returns_menu():
+    """Exact '/' returns a command launcher/menu with grouped structure."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        result = cli.handle_slash_command("/")
+        assert "Nora 命令菜单" in result, f"missing menu title: {result[:200]}"
+        for heading in ["Start", "Project", "Workers", "Memory / Tasks / Context", "Diagnostics", "Help"]:
+            assert heading in result, f"missing menu group {heading}: {result[:300]}"
+
+
+def eval_slash_launcher_includes_required_commands():
+    """Menu includes /wake, /setup, /model, /workers, /status, /test, /help."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        result = cli.handle_slash_command("/")
+        for command in ["/wake", "/setup", "/model", "/workers", "/status", "/test", "/help"]:
+            assert command in result, f"missing {command} in menu: {result[:300]}"
+
+
+def eval_slash_launcher_no_model_call():
+    """Exact '/' does not trigger model-call status lines or model execution."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(
+            agent,
+            FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["/", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        assert agent.inputs == [], f"agent was called with: {agent.inputs}"
+        full = "\n".join(outputs)
+        assert "正在调用模型" not in full, f"model-call status leaked: {full[:300]}"
+        assert "模型响应完成" not in full, f"model-call status leaked: {full[:300]}"
+
+
+def eval_slash_launcher_no_raw_json():
+    """Launcher output is plain text/Markdown, not raw JSON."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        result = cli.handle_slash_command("/")
+        assert not result.lstrip().startswith("{"), f"launcher returned raw JSON: {result[:100]}"
+        assert not result.lstrip().startswith("["), f"launcher returned raw JSON array: {result[:100]}"
+
+
+def eval_banner_next_action_hint():
+    """Banner includes exact next-action hint for /, /wake, and /setup."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "下一步:" in banner, f"missing next-action label: {banner[:300]}"
+        assert "/ 打开命令菜单" in banner, f"missing slash launcher hint: {banner[:300]}"
+        assert "/wake" in banner, f"missing /wake hint in banner: {banner[:300]}"
+        assert "/setup" in banner, f"missing /setup hint in banner: {banner[:300]}"
+
+
+def eval_banner_preserves_core_info():
+    """Banner preserves workspace, provider/model/key presence, and tools count."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-test-key",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "Workspace:" in banner, f"missing workspace: {banner[:300]}"
+        assert "LLM:" in banner, f"missing LLM info: {banner[:300]}"
+        assert "gpt-4.1-mini" in banner, f"missing model: {banner[:300]}"
+        assert "API key: configured" in banner, f"missing key presence: {banner[:300]}"
+        assert "Tools:" in banner, f"missing tools count: {banner[:300]}"
+
+
+def eval_banner_missing_key_safe():
+    """Missing-key state is explicit and safe."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(env_path=root / ".missing.env", environ={})
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "API key: missing" in banner, f"missing key indication: {banner[:300]}"
+        assert "sk-test" not in banner, f"fake key leaked: {banner[:300]}"
+
+
+def eval_banner_configured_key_no_leak():
+    """Configured-key state does not leak fake secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-super-secret-fake-key-12345",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "sk-super-secret-fake-key-12345" not in banner, "secret key leaked in banner"
+        assert "API key: configured" in banner, f"missing configured indication: {banner[:300]}"
+
+
+def eval_no_chain_of_thought_markers():
+    """No chain-of-thought or hidden-reasoning markers in slash/welcome output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-test-key",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["/", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        full_output = "\n".join(outputs).lower()
+        for marker in ["<thinking>", "</thinking>", "chain_of_thought", "hidden_reasoning", "internal_reasoning"]:
+            assert marker not in full_output, f"CoT marker found: {marker}"
+
+
+def eval_no_secret_or_raw_json_leak():
+    """No API key, token, .env secret, or raw JSON leakage in slash/welcome output."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-leak-test-key-98765",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["/", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        for output in outputs:
+            assert "sk-leak-test-key-98765" not in output, f"secret leaked: {output[:100]}"
+            assert not output.lstrip().startswith("{"), f"raw JSON: {output[:100]}"
+            assert not output.lstrip().startswith("["), f"raw JSON array: {output[:100]}"
 
 
 def eval_notes_round_trip():
