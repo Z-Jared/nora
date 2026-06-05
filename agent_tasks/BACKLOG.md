@@ -8,14 +8,15 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-138: Minimal model routing deterministic eval coverage
-- Owner: Codex B
-- Architecture layer: Eval And Review System / Model Router
-- Goal: Add deterministic offline evals for TASK-137 covering default provider/model route, Anthropic/Gemini/unknown/missing-key behavior, routing hints, no secret/raw prompt leak, registry permission, no mutation, and provider factory compatibility.
-- Scope: `evals/run_evals.py`, `agent_tasks/B_DONE.md`.
-- Dependency: TASK-137 integrated; do not implement runtime surface in B.
+暂无
 
 ## 已完成
+
+### TASK-138: Minimal model routing deterministic eval coverage ✅
+- 完成者: Claude B；Codex PM 修正完成报告中的 eval 数量（实际为 21 个）。
+- Reviewer: Codex PM (`agent_tasks/REVIEW_TASK_138.md`) APPROVED
+- 验证: `python3 evals/run_evals.py` 558 passed；`python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent` 178 tests OK；`git diff --check` OK。
+- 内容: 为 `inspect_model_routing` 增加 21 个 deterministic offline eval，覆盖 openai-compatible/anthropic/gemini 默认路由、unsupported provider bounded no-echo、missing key disabled route、task/risk/long-context/tool/review hints、invalid context tokens、raw prompt/API key no-leak、capability metadata、registry `local/read` permission、registry no durable task/worker/event mutation、settings injection、no-settings safe error、provider factory compatibility、unknown task/risk defaults 和 stable fallback provider；无 runtime 变更。
 
 ### TASK-137: Minimal model routing inspection scaffold v1 ✅
 - 完成者: Claude A；Codex PM 手动集成并修正 registry settings 注入、unsupported provider bounded no-echo、fallback provider deterministic ordering 和 temp DB no-mutation test。

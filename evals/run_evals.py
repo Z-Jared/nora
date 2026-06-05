@@ -31,7 +31,7 @@ from mini_agent.providers.openai_compatible import OpenAICompatibleClient
 from mini_agent.rag import ProjectRAG
 from mini_agent.repair_loop import RepairLoop
 from mini_agent.shell import ShellRunner
-from mini_agent.settings import load_settings
+from mini_agent.settings import load_settings, LLMSettings
 from mini_agent.symbols import PythonSymbolIndex
 from mini_agent.task_runner import TaskManager
 from mini_agent.tool_results import ToolResultStore
@@ -621,6 +621,28 @@ def main() -> int:
         EvalCase("context_compiler_skill_catalog_read_only", eval_context_compiler_skill_catalog_read_only),
         EvalCase("context_compiler_skill_catalog_registry_root_binding", eval_context_compiler_skill_catalog_registry_root_binding),
         EvalCase("context_compiler_skill_catalog_compatibility", eval_context_compiler_skill_catalog_compatibility),
+        # TASK-138: Minimal model routing deterministic eval coverage
+        EvalCase("model_routing_default_openai", eval_model_routing_default_openai),
+        EvalCase("model_routing_anthropic", eval_model_routing_anthropic),
+        EvalCase("model_routing_gemini", eval_model_routing_gemini),
+        EvalCase("model_routing_unsupported_provider", eval_model_routing_unsupported_provider),
+        EvalCase("model_routing_missing_api_key", eval_model_routing_missing_api_key),
+        EvalCase("model_routing_task_type_hint", eval_model_routing_task_type_hint),
+        EvalCase("model_routing_risk_level_hint", eval_model_routing_risk_level_hint),
+        EvalCase("model_routing_long_context_hint", eval_model_routing_long_context_hint),
+        EvalCase("model_routing_tool_and_review_hints", eval_model_routing_tool_and_review_hints),
+        EvalCase("model_routing_invalid_context_tokens_bounded", eval_model_routing_invalid_context_tokens_bounded),
+        EvalCase("model_routing_no_raw_prompt_leak", eval_model_routing_no_raw_prompt_leak),
+        EvalCase("model_routing_capabilities_present", eval_model_routing_capabilities_present),
+        EvalCase("model_routing_registry_tool_permission", eval_model_routing_registry_tool_permission),
+        EvalCase("model_routing_registry_no_mutation", eval_model_routing_registry_no_mutation),
+        EvalCase("model_routing_registry_with_settings", eval_model_routing_registry_with_settings),
+        EvalCase("model_routing_registry_no_settings", eval_model_routing_registry_no_settings),
+        EvalCase("model_routing_registry_with_hints", eval_model_routing_registry_with_hints),
+        EvalCase("model_routing_provider_factory_compatibility", eval_model_routing_provider_factory_compatibility),
+        EvalCase("model_routing_unknown_task_type_defaults", eval_model_routing_unknown_task_type_defaults),
+        EvalCase("model_routing_unknown_risk_defaults", eval_model_routing_unknown_risk_defaults),
+        EvalCase("model_routing_fallback_available", eval_model_routing_fallback_available),
     ]
     if os.environ.get("EVAL_USE_LLM") == "1":
         cases.extend(
@@ -21405,6 +21427,295 @@ def eval_context_compiler_skill_catalog_compatibility():
             assert "preview_skill_context" in perms, "preview_skill_context not in permissions"
         finally:
             db.close()
+
+
+# ---------------------------------------------------------------------------
+# TASK-138: Minimal model routing deterministic eval coverage
+# ---------------------------------------------------------------------------
+
+def eval_model_routing_default_openai():
+    """Configured OpenAI-compatible settings select the configured provider/model with policy/version and reason labels; no API key leak."""
+    from mini_agent.model_router import inspect_model_routing, POLICY_VERSION
+    settings = LLMSettings(
+        provider="openai-compatible",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-fake-test-key-12345",
+        model="gpt-4.1-mini",
+    )
+    result = inspect_model_routing(settings)
+    assert result["selected_provider"] == "openai-compatible", f"wrong provider: {result['selected_provider']}"
+    assert result["selected_model"] == "gpt-4.1-mini", f"wrong model: {result['selected_model']}"
+    assert result["is_llm_enabled"] is True
+    assert result["policy_version"] == POLICY_VERSION
+    assert "provider_configured" in result["reason_labels"]
+    result_text = json.dumps(result)
+    assert "sk-fake-test-key-12345" not in result_text, "API key leaked in routing output"
+
+
+def eval_model_routing_anthropic():
+    """Anthropic settings produce safe selected provider/model metadata."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(
+        provider="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        api_key="sk-ant-fake",
+        model="claude-sonnet-4-5",
+    )
+    result = inspect_model_routing(settings)
+    assert result["selected_provider"] == "anthropic"
+    assert result["selected_model"] == "claude-sonnet-4-5"
+    assert result["is_llm_enabled"] is True
+    assert result["capabilities"]["provider_known"] is True
+    assert "sk-ant-fake" not in json.dumps(result)
+
+
+def eval_model_routing_gemini():
+    """Gemini settings produce safe selected provider/model metadata."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(
+        provider="gemini",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        api_key="fake-gemini-key",
+        model="gemini-2.5-pro",
+    )
+    result = inspect_model_routing(settings)
+    assert result["selected_provider"] == "gemini"
+    assert result["selected_model"] == "gemini-2.5-pro"
+    assert result["is_llm_enabled"] is True
+    assert result["capabilities"]["provider_known"] is True
+    assert "fake-gemini-key" not in json.dumps(result)
+
+
+def eval_model_routing_unsupported_provider():
+    """Unknown provider produces bounded unsupported-provider result; no raw provider name leak."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(
+        provider="custom-secret-provider",
+        base_url="http://x",
+        api_key="sk-leaked-key",
+        model="secret-model-name",
+    )
+    result = inspect_model_routing(settings)
+    result_text = json.dumps(result)
+    assert result["selected_provider"] == "unsupported"
+    assert result["selected_model"] == ""
+    assert result["is_llm_enabled"] is False
+    assert "unsupported_provider" in result["errors"]
+    assert "unsupported_provider" in result["warnings"]
+    assert "custom-secret-provider" not in result_text
+    assert "secret-model-name" not in result_text
+    assert "sk-leaked-key" not in result_text
+
+
+def eval_model_routing_missing_api_key():
+    """Missing API key produces disabled/not-ready route rather than a crash."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(
+        provider="openai-compatible",
+        base_url="https://api.openai.com/v1",
+        api_key="",
+        model="gpt-4.1-mini",
+    )
+    result = inspect_model_routing(settings)
+    assert result["is_llm_enabled"] is False
+    assert "provider_disabled" in result["reason_labels"]
+    assert "provider_disabled_or_not_fully_configured" in result["warnings"]
+    assert result["selected_provider"] == "openai-compatible"
+
+
+def eval_model_routing_task_type_hint():
+    """Task type hint is normalized and adds deterministic reason label."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="anthropic", base_url="https://api.anthropic.com", api_key="k", model="claude")
+    result = inspect_model_routing(settings, task_type="review")
+    assert result["task_type"] == "code_review"
+    assert "task_type:code_review" in result["reason_labels"]
+
+
+def eval_model_routing_risk_level_hint():
+    """High-risk hint adds deterministic reason label and route type."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="gemini", base_url="https://api.google.com", api_key="k", model="gemini")
+    result = inspect_model_routing(settings, risk_level="high")
+    assert result["risk_level"] == "high"
+    assert "risk_level:high" in result["reason_labels"]
+    assert result["route_type"] == "high_risk"
+
+
+def eval_model_routing_long_context_hint():
+    """Context tokens > 100k produces long_context route type and reason label."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings, context_tokens=150_000)
+    assert result["route_type"] == "long_context"
+    assert "long_context" in result["reason_labels"]
+
+
+def eval_model_routing_tool_and_review_hints():
+    """Tool and review hints produce correct route types and reason labels."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+
+    r1 = inspect_model_routing(settings, requires_tools=True)
+    assert r1["route_type"] == "tool_use"
+    assert "requires_tools" in r1["reason_labels"]
+
+    r2 = inspect_model_routing(settings, requires_review=True)
+    assert r2["route_type"] == "review_required"
+    assert "requires_review" in r2["reason_labels"]
+
+
+def eval_model_routing_invalid_context_tokens_bounded():
+    """Invalid context_tokens is bounded safely with warning."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings, context_tokens=-1)
+    assert result["route_type"] == "standard"
+    assert "invalid_context_tokens_defaulted" in result["warnings"]
+
+
+def eval_model_routing_no_raw_prompt_leak():
+    """Raw task type / prompt content is not echoed in output."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(
+        provider="openai-compatible",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-super-secret-key-12345",
+        model="gpt-4.1-mini",
+    )
+    result = inspect_model_routing(settings, task_type="secret-password-leak")
+    result_text = json.dumps(result)
+    assert "sk-super-secret-key-12345" not in result_text
+    assert "api_key" not in result_text.lower()
+    assert "secret-password-leak" not in result_text
+
+
+def eval_model_routing_capabilities_present():
+    """Capabilities dict includes expected fields."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings)
+    caps = result["capabilities"]
+    assert "supports_tools" in caps
+    assert "supports_vision" in caps
+    assert "max_context_hint" in caps
+    assert "provider_known" in caps
+
+
+def eval_model_routing_registry_tool_permission():
+    """inspect_model_routing is registered with local/read permission."""
+    from mini_agent.toolkits import build_default_registry
+    reg = build_default_registry()
+    tool = reg._tools.get("inspect_model_routing")
+    assert tool is not None, "inspect_model_routing not registered"
+    assert tool.permission.category == "local"
+    assert tool.permission.risk == "read"
+    assert not tool.permission.requires_confirmation
+
+
+def eval_model_routing_registry_no_mutation():
+    """Calling inspect_model_routing via registry does not mutate durable tasks, workers, events, memory, files, or traces."""
+    from mini_agent.toolkits import build_default_registry
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        db = NoraDB(root / "nora.db")
+        settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+        reg = build_default_registry(workspace_root=root, db=db, settings=settings)
+        events_before = len(reg.event_store.list_events())
+        tasks_before = reg.durable_task_store.list_tasks()
+        workers_before = reg.durable_worker_store.list_workers()
+
+        reg.call("inspect_model_routing", task_type="test")
+
+        events_after = len(reg.event_store.list_events())
+        assert events_before == events_after, f"events mutated: {events_before} -> {events_after}"
+        assert reg.durable_task_store.list_tasks() == tasks_before
+        assert reg.durable_worker_store.list_workers() == workers_before
+
+
+def eval_model_routing_registry_with_settings():
+    """Registry tool uses injected settings without secret leak."""
+    from mini_agent.toolkits import build_default_registry
+    settings = LLMSettings(
+        provider="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        api_key="sk-not-real-registry",
+        model="claude-sonnet-4-5",
+    )
+    reg = build_default_registry(settings=settings)
+    result = reg.call("inspect_model_routing")
+    parsed = json.loads(result)
+    assert parsed["selected_provider"] == "anthropic"
+    assert parsed["selected_model"] == "claude-sonnet-4-5"
+    assert "sk-not-real-registry" not in result
+
+
+def eval_model_routing_registry_no_settings():
+    """Registry tool without settings returns safe error."""
+    from mini_agent.toolkits import build_default_registry
+    reg = build_default_registry()
+    result = reg.call("inspect_model_routing")
+    parsed = json.loads(result)
+    assert parsed["route_type"] == "error"
+    assert "invalid_settings" in parsed["errors"]
+
+
+def eval_model_routing_registry_with_hints():
+    """Registry tool passes hints correctly."""
+    from mini_agent.toolkits import build_default_registry
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    reg = build_default_registry(settings=settings)
+    result = reg.call("inspect_model_routing", task_type="code", risk_level="high")
+    parsed = json.loads(result)
+    assert parsed["task_type"] == "code_generation"
+    assert parsed["risk_level"] == "high"
+    assert parsed["route_type"] == "high_risk"
+
+
+def eval_model_routing_provider_factory_compatibility():
+    """Existing provider factory behavior remains intact after model router integration."""
+    from mini_agent.providers.factory import build_llm_client
+    from mini_agent.settings import LLMSettings
+
+    # openai-compatible
+    s1 = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    c1 = build_llm_client(s1)
+    assert isinstance(c1, OpenAICompatibleClient)
+
+    # anthropic
+    s2 = LLMSettings(provider="anthropic", base_url="http://x", api_key="k", model="m")
+    c2 = build_llm_client(s2)
+    assert isinstance(c2, AnthropicClient)
+
+    # gemini
+    s3 = LLMSettings(provider="gemini", base_url="http://x", api_key="k", model="m")
+    c3 = build_llm_client(s3)
+    assert isinstance(c3, GeminiClient)
+
+
+def eval_model_routing_unknown_task_type_defaults():
+    """Unknown task type defaults to 'general'."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings, task_type="bogus-unknown-type")
+    assert result["task_type"] == "general"
+
+
+def eval_model_routing_unknown_risk_defaults():
+    """Unknown risk level defaults to 'low'."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings, risk_level="bogus-extreme")
+    assert result["risk_level"] == "low"
+
+
+def eval_model_routing_fallback_available():
+    """Fallback provider is available for supported providers."""
+    from mini_agent.model_router import inspect_model_routing
+    settings = LLMSettings(provider="openai-compatible", base_url="http://x", api_key="k", model="m")
+    result = inspect_model_routing(settings)
+    assert result["fallback_available"] is True
+    assert result["fallback_provider"] == "anthropic"
 
 
 if __name__ == "__main__":
