@@ -1,21 +1,28 @@
-# TASK-136: CLI terminal UI polish deterministic eval coverage
+# TASK-138: Minimal model routing deterministic eval coverage
 
-You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
+You are Codex B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-135 implementation for terminal UI polish: startup landing panel, model-call lifecycle feedback, output formatting consistency, and clearer config/error recovery text. You own deterministic offline eval coverage after TASK-135 is integrated by Codex PM.
+Codex A owns TASK-137: a read-only minimal model routing inspection scaffold. You own deterministic offline eval coverage after TASK-137 is integrated by Codex PM.
+
+Architecture layer:
+- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` section 9, Model Router.
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 11, model routing.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/A_TASK.md`
-- `mini_agent/cli.py`
-- `tests/test_cli.py`
+- `mini_agent/model_router.py` if present
+- `mini_agent/settings.py`
+- `mini_agent/providers/factory.py`
+- `mini_agent/toolkits/registry_builder.py`
 - `evals/run_evals.py`
 
 ## Worktree Safety
@@ -30,23 +37,33 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline eval coverage for TASK-135 after PM integrates it:
+Add deterministic offline eval coverage for the minimal model routing scaffold.
 
-1. Startup landing panel
-   - Banner has clear deterministic sections for identity/status, workspace/branch, model/API-key state, and next actions.
-   - Banner preserves existing workspace, model/provider, key presence, tools count, task/worker state when present.
-   - Missing-key and configured-key states are safe and do not leak fake secrets.
+Coverage requirements:
 
-2. Response lifecycle feedback
-   - Normal prompt emits deterministic lifecycle feedback.
-   - Multiline prompt emits deterministic lifecycle feedback.
-   - Slash commands, blank input, and exit emit no model-call lifecycle noise.
-   - Lifecycle output does not reveal hidden reasoning or chain-of-thought.
+1. Default route
+   - Configured OpenAI-compatible settings select the configured provider/model.
+   - Output includes stable policy/version and reason labels.
+   - Output does not leak the fake API key.
 
-3. Output readability and recovery safety
-   - `/`, `/setup`, `/model`, `/workers`, and `/help` remain plain text/Markdown and not raw JSON.
-   - Config/error recovery output still includes useful exact guidance substrings: `/setup`, `API key`, `401 Unauthorized`, `provider/model 不匹配`.
-   - No API key, token, `.env` secret, hidden reasoning, raw prompt, or raw tool payload leakage.
+2. Provider support
+   - Anthropic and Gemini settings produce safe selected provider/model metadata.
+   - Unknown provider produces a bounded unsupported-provider result.
+   - Missing API key produces a disabled/not-ready route rather than a crash.
+
+3. Routing hints
+   - Task type, risk level, context token, tool requirement, and review requirement hints are normalized or safely bounded.
+   - High-risk/review/long-context hints add deterministic reason labels.
+   - No raw prompt/task goal content is echoed.
+
+4. Registry tool
+   - `inspect_model_routing` is registered with `local/read` permission.
+   - Calling it does not mutate durable tasks, workers, events, memory, files, or traces.
+   - It does not call the network or build a live LLM client.
+
+5. Compatibility
+   - Existing provider factory behavior remains intact for `openai-compatible`, `anthropic`, and `gemini`.
+   - Existing CLI/provider/config evals continue to pass.
 
 ## Scope
 
@@ -54,12 +71,11 @@ Primary files:
 - `evals/run_evals.py`
 - `agent_tasks/B_DONE.md`
 
-Only touch `tests/test_cli.py` if a tiny helper is absolutely needed.
-
-Avoid editing runtime implementation files. If TASK-135 surface is not yet present in your worktree, do not implement it yourself. Instead write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-135 integration` and list the exact missing surface.
+Only touch tests/runtime files if a tiny import/helper fix is necessary after TASK-137 integration. If TASK-137 surface is not yet present in your worktree, do not implement it yourself. Instead write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-137 integration` and list the exact missing surface.
 
 Do not edit:
-- `mini_agent/cli.py` unless PM explicitly asks after TASK-135 integration.
+- `mini_agent/model_router.py` unless PM explicitly asks after TASK-137 integration.
+- `mini_agent/toolkits/registry_builder.py` unless PM explicitly asks after TASK-137 integration.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -67,9 +83,9 @@ Do not edit:
 
 ## Coverage Quality Requirements
 
-- No `or True`, tautological assertions, or overly broad pass conditions.
-- Use tempdir-isolated roots and explicit `env_path` where needed so local `.env` cannot affect evals.
-- Assert exact or meaningfully specific substrings.
+- No `or True`, tautological assertions, or broad substring-only pass conditions.
+- Use tempdir-isolated roots and explicit env/settings objects where needed so local `.env` cannot affect evals.
+- Assert exact or meaningfully specific substrings/fields.
 - Assert secrets/API keys are not leaked.
 - Do not call network, LLMs, external services, or CCB commands from evals.
 
@@ -79,11 +95,11 @@ Run:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-135 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
+If TASK-137 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
 
 ## Completion Report
 

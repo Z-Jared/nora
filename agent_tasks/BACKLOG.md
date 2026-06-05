@@ -8,7 +8,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-137: Minimal model routing inspection scaffold v1
+- Owner: Codex A
+- Architecture layer: Model Router
+- Goal: Add a read-only, deterministic model routing inspection scaffold and registry tool that explains selected provider/model, route hints, reason labels, fallback availability, and unsupported/disabled-provider status without changing live model execution behavior.
+- Scope: `mini_agent/model_router.py`, `mini_agent/toolkits/registry_builder.py`, focused unit tests, `agent_tasks/A_DONE.md`.
+- Non-goals: no automatic provider switching, no network calls, no cost/latency benchmarking, no trace/event writes, no UI changes.
+
+### TASK-138: Minimal model routing deterministic eval coverage
+- Owner: Codex B
+- Architecture layer: Eval And Review System / Model Router
+- Goal: Add deterministic offline evals for TASK-137 covering default provider/model route, Anthropic/Gemini/unknown/missing-key behavior, routing hints, no secret/raw prompt leak, registry permission, no mutation, and provider factory compatibility.
+- Scope: `evals/run_evals.py`, `agent_tasks/B_DONE.md`.
+- Dependency: Wait for TASK-137 integration; do not implement runtime surface in B.
 
 ## 已完成
 

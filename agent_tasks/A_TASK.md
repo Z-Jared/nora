@@ -1,20 +1,28 @@
-# TASK-135: CLI terminal UI polish v3
+# TASK-137: Minimal model routing inspection scaffold v1
 
-You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
+You are Codex A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora's CLI now has `/wake`, `/setup`, `/config`, `/model`, `/workers`, deterministic model-call status lines, a startup banner, and exact `/` command launcher. The user still feels the terminal UI is rough: replies appear abruptly, startup lacks a polished terminal landing surface, configuration/errors need clearer treatment, and the CLI should feel closer to Claude/Codex terminal ergonomics without adding a heavy TUI framework.
+Nora has OpenAI-compatible, Anthropic, and Gemini provider adapters, but no model router yet. The architecture contract says model routing should start as a minimal explainable layer before real provider orchestration.
+
+Architecture layer:
+- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` section 9, Model Router.
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 11, model routing.
 
 Read first:
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
+- `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
-- `mini_agent/cli.py`
-- `tests/test_cli.py`
+- `mini_agent/settings.py`
+- `mini_agent/providers/factory.py`
+- `mini_agent/registry.py`
+- `mini_agent/toolkits/registry_builder.py`
+- relevant provider/tests files before editing
 
 ## Worktree Safety
 
@@ -28,45 +36,57 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Improve the terminal UI polish without changing backend runtime semantics:
+Add a read-only, deterministic model routing inspection scaffold. This is the first small slice of a future model router. It must explain what model Nora would use and why, without changing actual model execution behavior.
 
-1. Startup landing panel
-   - Make `banner()` look like a compact terminal landing panel with clear sections:
-     - identity/status
-     - workspace/branch
-     - model/API-key state
-     - worker/task state if available
-     - next actions
-   - Keep it plain text/Markdown and deterministic.
-   - Avoid noisy ASCII art or raw ANSI styling.
-   - Keep all existing information and no secret leakage.
+Required behavior:
 
-2. Response lifecycle feedback
-   - Replace the current bare status lines with a small deterministic lifecycle:
-     - user prompt accepted / model request started / response ready, or equivalent concise lines.
-   - Normal prompt and multiline should show lifecycle feedback.
-   - Slash commands, blank input, and exit must not show model-call lifecycle noise.
-   - Do not reveal hidden reasoning or chain-of-thought.
-   - Do not add streaming, async, curses, rich, textual, or other heavy dependencies.
+1. Core router module
+   - Add a focused module, likely `mini_agent/model_router.py`.
+   - Provide a pure function that accepts current `LLMSettings` plus optional routing hints such as:
+     - `task_type`
+     - `risk_level`
+     - `context_tokens`
+     - `requires_tools`
+     - `requires_review`
+   - Return safe structured metadata:
+     - selected provider/model from current settings
+     - route type/policy version
+     - normalized task type and risk level
+     - reason labels, not raw user prompts
+     - capability hints for the selected provider/model
+     - fallback availability as safe booleans/names only
+     - warnings/errors for disabled or unsupported provider
+   - Do not include API keys, raw prompts, raw task goals, environment values, hidden reasoning, or file contents.
 
-3. Output readability helpers
-   - Add small formatting helpers if useful, such as section headers/separators used consistently by banner, `/`, `/setup`, `/model`, `/workers`, and recovery hints.
-   - Keep output compact and scannable on narrow terminals.
-   - Avoid raw JSON for user-facing CLI surfaces except existing commands that intentionally inspect structured durable task/trace data.
+2. Registry tool
+   - Register a read-only tool such as `inspect_model_routing`.
+   - Permission must be `ToolPermission(category="local", risk="read")`.
+   - The tool must not call the network or create an LLM client.
+   - The tool must not mutate durable tasks, workers, events, memory, files, or traces.
+   - Output may be JSON, but it must be bounded and safe.
 
-4. Error/config recovery polish
-   - Make provider/API-key/model mismatch recovery hints easier to scan.
-   - Keep exact useful substrings already covered by tests/evals, including `/setup`, `API key`, `401 Unauthorized`, `provider/model 不匹配`, and no secret leak.
+3. Provider compatibility
+   - Keep `build_llm_client(...)` behavior unchanged.
+   - Support current providers: `openai-compatible`, `anthropic`, `gemini`.
+   - Unknown provider should return a safe unsupported-provider routing result instead of leaking config.
+   - Disabled/missing API key should be represented as disabled/not ready, not as an exception.
+
+4. Unit tests
+   - Add focused unit tests for the router and registry tool.
+   - Cover default configured route, missing API key, unsupported provider, task/risk/context hints, no secret leak, registry permission, and no mutation.
 
 ## Scope
 
 Primary files:
-- `mini_agent/cli.py`
-- `tests/test_cli.py`
+- `mini_agent/model_router.py`
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_model_router.py` or the most appropriate existing test file
 - `agent_tasks/A_DONE.md`
 
+Only touch provider files if needed for a tiny compatibility helper. Do not change live model call semantics.
+
 Do not edit:
-- `evals/run_evals.py` — Codex B will own TASK-136 eval coverage after TASK-135 is integrated.
+- `evals/run_evals.py` — Codex B owns TASK-138 eval coverage after TASK-137 is integrated.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -74,21 +94,22 @@ Do not edit:
 
 ## Non-Goals
 
-- No web UI redesign.
-- No curses/rich/textual/full-screen TUI.
-- No model streaming transport.
-- No backend runtime, scheduler, policy, worker, memory, or provider semantic changes.
-- No hidden reasoning display.
+- No real automatic provider switching.
+- No cost API, latency measurement, benchmarking, retry policy, or network calls.
+- No trace/event recording yet.
+- No UI changes.
+- No prompt classification or hidden reasoning.
+- No broad provider refactor.
 
 ## Safety Boundaries
 
-- Never print API keys, tokens, `.env` values, private file contents, hidden reasoning, raw prompts, or raw tool payloads.
-- Keep terminal UI deterministic for tests.
-- Preserve existing slash command compatibility and prior CLI eval expectations.
+- Never print API keys, tokens, `.env` values, private file contents, hidden reasoning, raw prompts, raw task goals, raw tool payloads, or raw shell output.
+- Keep all output deterministic and bounded.
+- Read-only tool means no durable event/task/worker/memory/file mutation.
 
 ## Durable Evidence
 
-- Unit tests in `tests/test_cli.py`.
+- Unit tests for router behavior and registry permission.
 - Completion report in `agent_tasks/A_DONE.md`.
 - No durable runtime event changes in this task.
 
@@ -97,10 +118,12 @@ Do not edit:
 Run:
 
 ```bash
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
 ```
+
+If you choose not to create `tests/test_model_router.py`, replace that command with the exact focused test module you used and explain why in `A_DONE.md`.
 
 ## Completion Report
 
