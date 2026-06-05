@@ -1,10 +1,10 @@
-# TASK-122: Deterministic eval coverage for skill manifest catalog summary v1
+# TASK-124: Deterministic eval coverage for skill context preview v1
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Codex PM assigned you TASK-122 after TASK-119 landed in `09ebf80`.
+Codex PM assigned you TASK-124 after TASK-121/TASK-122 landed in `cde4b3f`.
 
 Read first:
 - `AGENTS.md`
@@ -16,7 +16,7 @@ Read first:
 
 ## Goal
 
-Add deterministic offline eval coverage for the TASK-119 skill manifest catalog summary surface.
+Add deterministic offline eval coverage for the TASK-121 skill context preview surface.
 
 Primary target: `evals/run_evals.py`.
 
@@ -24,29 +24,32 @@ Do not change runtime behavior unless an eval reveals a real bug; if so, keep th
 
 ## Required Coverage
 
-Add eval cases for direct or registry use of `summarize_skill_manifests` / `summarize_skill_manifests` registry tool.
+Add eval cases for direct or registry use of `preview_skill_context` / registry `preview_skill_context`.
 
 Cover at least:
 
 1. Tool registration and exact permission:
    - `ToolPermission(category="local", risk="read")`
-2. Valid catalog summary:
-   - `valid_count`, bounded `skills`, sorted/deduplicated domains/capabilities/workflows/deliverables/required_plugins/risk_boundaries/evals
-3. Bounds:
-   - default max behavior or explicit `max_skills`
-   - high values clamp to the upper bound
-   - zero/low values clamp safely
+2. Valid skill context preview:
+   - relevant skill is selected from goal/manifest metadata
+   - output includes bounded context sections, required plugins, risk boundaries, eval hints, and untrusted/read-only framing
+3. Determinism and bounds:
+   - multiple matching skills have stable ordering
+   - `max_skills` is honored
+   - high, zero, negative, and bad `max_skills` values are bounded safely
 4. Malformed input:
    - malformed outer JSON
-   - malformed individual manifest
-   - non-list input
-5. Secret no-leak:
-   - secret-like name/version/list fields are absent or redacted
-   - raw malformed secret content is not echoed
-6. Read-only:
+   - non-list JSON
+   - unsupported input type
+   - invalid individual manifest entries
+5. Large input:
+   - input scan cap/truncation warning keeps errors and warnings bounded
+6. Secret no-leak:
+   - secret-like goal, name, version, malformed input, domains, capabilities, workflows, deliverables, required_plugins, risk_boundaries, and evals do not leak raw sentinel values
+7. Read-only:
    - durable task, worker, and event counts unchanged
-7. Compatibility:
-   - `inspect_skill_manifest`, `route_capability_request`, and existing skill/capability evals still pass with the new evals present
+8. Compatibility:
+   - `inspect_skill_manifest`, `summarize_skill_manifests`, `route_capability_request`, and `list_tool_permissions` still work with the new evals present
 
 ## Constraints
 

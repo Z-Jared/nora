@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-123: Skill context compiler preview bridge v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-121
+- 分配: Claude A
+- 目标: 把只读 `preview_skill_context` metadata preview 接入 `ContextCompiler` / `compile_context_pack`，让 context pack 可选包含 bounded/untrusted skill context section。
+- 验证: `python3 -m unittest tests.test_context_compiler tests.test_skills tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 3 / Priority 6；`mini_agent/context_compiler.py`；`mini_agent/skills.py`
+
+### TASK-124: Deterministic eval coverage for skill context preview v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-121
+- 分配: Claude B
+- 目标: 为 `preview_skill_context` / registry `preview_skill_context` 增加 deterministic offline eval，覆盖权限、选择、边界、安全、只读和兼容性。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_skills tests.test_mini_agent`；`git diff --check`
+- 参考: `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` Priority 5 / Priority 6；`evals/run_evals.py`；`mini_agent/skills.py`
 
 ## 已完成
 
