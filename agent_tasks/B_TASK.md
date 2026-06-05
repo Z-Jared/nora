@@ -1,10 +1,10 @@
-# TASK-130: CLI UX smoke/eval coverage
+# TASK-132: CLI setup/status UX deterministic eval coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-This iteration shifts Nora from backend runtime accumulation to CLI front-end usability. Claude A owns TASK-129 implementation. You own deterministic smoke/eval coverage for that CLI UX surface.
+Claude A owns TASK-131 implementation for `/setup`/`/config` guidance and response status output. You own deterministic eval coverage for that user-facing CLI UX surface.
 
 Read first:
 - `AGENTS.md`
@@ -29,30 +29,39 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic CLI UX smoke/eval coverage for the new user-facing CLI workbench surfaces:
+Add deterministic eval coverage for TASK-131:
 
-1. no-model / missing-key startup diagnostics
-2. configured provider/model startup diagnostics without leaking keys
-3. bad/unauthorized key error recovery hint
-4. non-project directory startup or `/wake` recovery guidance
-5. `/wake` project panel content
-6. `/model` provider/model/key-safe diagnostics
-7. `/workers` CCB A/B/task/DONE status summary
-8. Markdown/plain-text structure for CLI output
+1. `/setup` or `/config` guidance
+   - Covers provider/model/base URL/key presence.
+   - Covers provider-specific env keys for openai-compatible, anthropic, and gemini.
+   - Verifies placeholder snippets do not leak real or fake secret values.
+   - Verifies guidance for missing key / 401 / provider-model mismatch.
+
+2. Response status output
+   - Normal prompt emits deterministic status lines before and/or after `agent.run(...)`.
+   - Slash commands do not emit model-call status lines.
+   - Blank input and exit do not emit model-call status lines.
+   - Status output does not reveal hidden reasoning or chain-of-thought.
+
+3. Output structure and safety
+   - Setup/config/status surfaces remain plain text/Markdown and not raw JSON.
+   - No API key or secret leakage.
+   - Evals remain offline and deterministic.
 
 ## Scope
 
 Primary files:
 - `evals/run_evals.py`
-- `tests/test_cli.py` only if focused unit coverage is needed
 - `agent_tasks/B_DONE.md`
 
-Avoid editing runtime implementation files. If TASK-129 surface is not yet present in your worktree, do not implement it yourself. Instead:
+Only touch `tests/test_cli.py` if a very small focused helper is needed.
+
+Avoid editing runtime implementation files. If TASK-131 surface is not yet present in your worktree, do not implement it yourself. Instead:
 - Add coverage only where it can run against the current code without runtime changes, or
-- Write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-129 integration` and list the exact missing surface.
+- Write `agent_tasks/B_DONE.md` with `Status: blocked/waiting for TASK-131 integration` and list the exact missing surface.
 
 Do not edit:
-- `mini_agent/cli.py` unless PM explicitly asks after TASK-129 integration.
+- `mini_agent/cli.py` unless PM explicitly asks after TASK-131 integration.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -61,9 +70,8 @@ Do not edit:
 ## Coverage Quality Requirements
 
 - No `or True`, tautological assertions, or overly broad pass conditions.
-- Evals must be deterministic and offline.
-- Use tempdir-isolated project roots when simulating project/non-project startup.
-- Assert exact or meaningfully specific substrings for `/wake`, `/model`, `/workers`, startup page, and recovery hints.
+- Use tempdir-isolated roots and explicit `env_path` where needed so local `.env` cannot affect evals.
+- Assert exact or meaningfully specific substrings.
 - Assert secrets/API keys are not leaked.
 - Do not call network, LLMs, external services, or CCB commands from evals.
 
@@ -77,7 +85,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-129 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
+If TASK-131 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
 
 ## Completion Report
 

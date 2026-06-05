@@ -8,7 +8,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-暂无
+### TASK-131: CLI setup/config and response-status UX v1
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-129/TASK-130
+- 分配: Claude A
+- 目标: 增加只读 `/setup`/`/config` 配置引导，展示 provider/model/base URL/key presence、安全 `.env` 示例和常见配置错误恢复；为普通 prompt 增加 deterministic 响应状态输出，让 CLI 不再像突然冒出回复。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`
+- 参考: 用户 CLI UX 反馈；`mini_agent/cli.py`；`mini_agent/settings.py`；`tests/test_cli.py`
+
+### TASK-132: CLI setup/status UX deterministic eval coverage
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-131 implementation surface
+- 分配: Claude B
+- 目标: 为 TASK-131 增加 deterministic offline eval，覆盖 `/setup`/`/config` provider/env guidance、no secret leak、401/missing-key/provider-model mismatch guidance、普通 prompt 状态输出、slash/blank/exit 无状态噪声、plain-text/no raw JSON。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`
+- 参考: `evals/run_evals.py`；`tests/test_cli.py`；`mini_agent/cli.py`
 
 ## 已完成
 
