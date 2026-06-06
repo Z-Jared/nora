@@ -1,20 +1,17 @@
-# TASK-146: Startup header and working indicator deterministic eval coverage
+# TASK-148: /model and /setup compact surface deterministic eval coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-145: a Claude Code-like startup header with a small Nora robot ASCII icon on the left and compact status text on the right, plus Codex-like safe working feedback while normal prompts are being processed. Your job is deterministic offline eval coverage after TASK-145 is visible in your worktree or after PM asks you to rebase/integrate.
+Claude A owns TASK-147: compact Claude Code-like `/model` and `/setup` surfaces. Nora's current default terminal direction is restrained and text-first:
 
-Target UX:
+- startup header is compact
+- prompt is exactly `> `
+- working indicator is `Working...` / `Done.`
+- slash commands are plain text and do not call the model
 
-- Startup header resembles Claude Code's compact first screen: small icon left, product/model/path right.
-- Product line includes `Nora Code`.
-- Model line shows provider/model when configured or local/disabled state when not configured.
-- Workspace path is visible.
-- No old Chinese welcome sentence, no dashboard panel, no section-heavy banner.
-- Normal prompts show safe working/progress feedback while Nora is processing, without exposing hidden reasoning.
-- Prompt remains `> ` and input status remains compact.
+Your job is deterministic offline eval coverage after TASK-147 is visible in your worktree or after PM asks you to rebase/integrate.
 
 Read first:
 
@@ -42,41 +39,30 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic eval coverage for TASK-145 and update narrow startup-banner eval expectations.
+Add deterministic eval coverage for TASK-147 and update narrow `/model`/`/setup` eval expectations.
 
 Coverage requirements:
 
-1. Claude-like startup header shape
-   - Banner includes `Nora Code`.
-   - Banner includes a small robot/icon marker on the left side of the first few lines.
-   - Banner includes model state and workspace path.
-   - Header is compact and bounded, not a long welcome panel.
+1. `/model` compact contract
+   - Shows provider, model, base URL, API-key presence, timeout, and enabled state.
+   - Keeps missing-key, missing-provider, 401, and provider/model mismatch recovery hints.
+   - Keeps provider-specific env names and alternatives.
+   - Does not include `===`, `───`, table/card/box/dashboard style, or raw JSON.
 
-2. Old banner regression guards
-   - No `Nora 已启动`.
-   - No section headers such as `Status`, `Workspace`, `Model`, `Tools`, `Next` as standalone panel sections.
-   - No `===`, `───`, boxed-panel/table/card style.
-   - No verbose command menu inside startup banner.
+2. `/setup` compact contract
+   - Keeps openai-compatible, anthropic, and gemini setup keys.
+   - Keeps common recovery hints in bounded form.
+   - No `=== Nora Setup / Config ===`.
+   - No secret leak and no raw `.env` echo.
 
-3. Configured and disabled model states
-   - Configured provider/model appears without leaking actual API key.
-   - Disabled/local state remains understandable and short.
-   - Missing key / API-key presence is represented safely.
+3. Slash compatibility
+   - `/config` remains an alias for `/setup`.
+   - `/model` and `/setup` do not call the fake agent.
+   - `/model` and `/setup` do not emit `Working...` or `Done.`
+   - Existing `/`, `/help`, `/wake`, `/workers` evals remain compatible.
 
-4. Worker summary and compatibility
-   - Existing `.ccb` DONE summary coverage should still pass or be updated to the new compact wording.
-   - Prompt remains exactly `> `.
-   - Startup banner does not call fake agent and does not emit model-call lifecycle text.
-   - Slash command evals remain compatible.
-
-5. Codex-like working display
-   - Normal prompt and multiline prompt runs emit a compact work-state line before the final response.
-   - Slash commands, blank input, `exit`, and `quit` do not emit work-state lines.
-   - Work-state lines are bounded and deterministic.
-   - Work-state lines do not echo the raw prompt or hidden reasoning.
-
-6. Safety
-   - No API key, raw `.env`, raw prompt, hidden reasoning, raw tool payload, or raw file content leak.
+4. Safety
+   - No API key, token, raw prompt, hidden reasoning, raw tool payload, or raw file content leak.
    - No network, LLM, external service, or CCB command calls from evals.
 
 ## Scope
@@ -84,12 +70,12 @@ Coverage requirements:
 Primary files:
 
 - `evals/run_evals.py`
-- `tests/test_cli.py` only if necessary for focused startup assertions
+- `tests/test_cli.py` only if necessary for focused startup/slash assertions
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
 
-- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-145.
+- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-147.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -101,7 +87,7 @@ Do not edit:
 
 ## Coverage Quality Requirements
 
-- No `or True`, tautological assertions, or broad substring-only pass conditions.
+- No tautological assertions.
 - Use tempdir-isolated roots and explicit settings/env/fake agent objects.
 - Assert exact or meaningfully specific substrings.
 - Assert secrets/API keys/raw prompts are not leaked.
@@ -117,7 +103,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-145 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
+If TASK-147 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
 
 ## Completion Report
 

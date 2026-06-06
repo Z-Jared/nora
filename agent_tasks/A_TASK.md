@@ -1,27 +1,17 @@
-# TASK-145: Claude Code-like startup header and working indicator
+# TASK-147: Compact /model and /setup terminal surfaces v5
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora's terminal UX is being tightened toward Claude Code-like restraint:
+Nora's default terminal surface is now intentionally close to Claude Code:
 
-- Prompt is exactly `> `.
-- Normal replies render without `Agent:`.
-- Lifecycle feedback is `received`, `thinking`, `ready`.
-- Input hint is a single line: `model: ... | local-first | / for commands`.
-- Slash pages are now compact plain-text surfaces.
+- startup header is compact and monochrome: Nora robot + `Nora Code` + model/API/path
+- prompt is exactly `> `
+- normal model calls show `Working...` then `Done.`
+- slash commands stay compact and do not emit working status
 
-The next startup gap is the banner. The user provided a Claude Code screenshot where startup information sits beside a small pixel icon:
-
-- left: small mascot/icon
-- right: product name/version, model/effort/billing state, current path
-- below: only short warnings when needed
-- bottom: minimal prompt/input surface
-
-For Nora, implement the same structure with a small robot ASCII icon and compact information next to it. Keep it monochrome/plain text and avoid a dashboard or welcome panel.
-
-The user also wants Codex-like visibility while Nora is thinking/working. This must be a safe progress display only: show stages such as received/working/ready or bounded tool/action summaries, but never hidden reasoning, chain-of-thought, raw prompts, raw tool payloads, or secrets.
+The next UX gap is configuration surfaces. `/model` is close but still reads like a capitalized diagnostic block. `/setup` still starts with `=== Nora Setup / Config ===` and prints a large configuration wall. The user wants intelligence/speed/model details hidden behind `/model`, but that page should still feel like Claude Code: text-first, short, readable, no dashboard.
 
 Read first:
 
@@ -47,43 +37,33 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Replace the current startup `banner()` with a Claude Code-like startup header, and update ordinary model-call feedback to a Codex-like safe working indicator.
+Make `/model` and `/setup` compact Claude Code-like terminal surfaces while preserving all useful recovery information.
 
 Required behavior:
 
-1. Header layout
-   - Use a small Nora robot ASCII icon on the left and information on the right.
-   - Keep the header compact: target 3-6 non-empty lines, plus optional short warning lines.
-   - The first information line must identify the product, e.g. `Nora Code`.
-   - The next line should show model state: configured provider/model when enabled, or local/disabled state when not enabled.
-   - Another line should show the current workspace path.
-   - Information must visually sit beside the icon, not below a separate logo block.
+1. `/model`
+   - Keep provider, model, base URL, API-key presence, timeout, and enabled state.
+   - Prefer lowercase compact labels such as `provider:`, `model:`, `base URL:`, `API key:`, `timeout:`, `enabled:`.
+   - Keep short recovery hints for missing key, missing provider, `401 Unauthorized`, and provider/model mismatch.
+   - Preserve provider-specific env hints from `required_env_vars(...)` and `env_alternatives(...)`.
+   - Do not include section bars, tables, boxes, or dashboard wording.
 
-2. Keep Claude-like restraint
-   - Remove the old `Nora 已启动 — 本地优先，高风险工具会先确认。` welcome sentence.
-   - Do not add section headers such as `Status`, `Workspace`, `Model`, `Tools`, `Next`.
-   - Do not add `===`, `───`, boxed panels, tables, cards, or dashboard-style blocks.
-   - Do not add color dependencies, curses, rich, textual, or fullscreen UI.
+2. `/setup`
+   - Remove `=== Nora Setup / Config ===`.
+   - Keep enough setup guidance for openai-compatible, anthropic, and gemini users.
+   - Keep common recovery hints, but shorten wording where possible.
+   - It may be longer than `/model`, but should be visibly plain text and scannable.
+   - Avoid standalone dashboard-like section headers. If grouping is needed, use short lowercase labels such as `current`, `env`, `recovery`.
 
-3. Preserve useful status
-   - Preserve model/provider and API-key presence without printing secret values.
-   - Preserve workspace path.
-   - Preserve worker summary only if it can remain short; do not turn the startup header into `/workers`.
-   - Preserve command discoverability as one short hint line if needed, but keep the bottom input area minimal.
-   - Keep `_input_status_line()` behavior unless a focused test adjustment is necessary.
+3. Compatibility
+   - `/model` and `/setup` must not call the model.
+   - Slash commands, blank input, `exit`, and `quit` must not emit `Working...` or `Done.`
+   - Keep `/config` as an alias for `/setup`.
+   - Do not change provider loading, model routing, LLM calls, API key reading, or worker/runtime behavior.
 
-4. Safety and compatibility
-   - Startup banner must not call the model.
-   - Startup banner must not emit `received`, `thinking`, or `ready`.
-   - No API key, token, `.env` value, raw prompt, hidden reasoning, raw tool payload, or raw file content leak.
-   - Slash commands and existing CLI command semantics must continue working.
-
-5. Codex-like working display
-   - When a normal prompt or multiline prompt calls the agent/model, show a compact visible work state before the response, e.g. `• Working` or another short Claude/Codex-like line.
-   - Preserve a clear completion state after the response if the current CLI contract expects one.
-   - Do not show working status for slash commands, blank input, `exit`, or `quit`.
-   - Do not reveal hidden reasoning, raw prompt text, raw model payloads, raw tool payloads, API keys, `.env` values, or private file contents.
-   - Keep output deterministic for tests; do not implement live streaming unless it is already supported by existing abstractions.
+4. Safety
+   - Never print API key values, tokens, raw `.env`, raw prompt, hidden reasoning, raw tool payload, or raw file content.
+   - Outputs must be deterministic, plain text, and ANSI-safe.
 
 ## Scope
 
@@ -95,7 +75,7 @@ Primary files:
 
 Do not edit:
 
-- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-146 eval coverage.
+- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-148 eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -107,14 +87,11 @@ Do not edit:
 
 ## Non-Goals
 
-- No animation in this task.
-- No chain-of-thought or hidden reasoning display.
-- No live streaming implementation unless it is a trivial wrapper around existing deterministic status output.
-- No web UI redesign.
-- No icon/favicon/package-data changes.
-- No model routing behavior changes.
-- No worker runtime behavior changes.
-- No Git/tool/durable task command semantics changes.
+- No fullscreen TUI, animation, streaming, colors, rich/textual/curses dependency, or UI framework.
+- No hidden reasoning display.
+- No Web UI redesign.
+- No model router behavior changes.
+- No runtime/worker/plugin/tool semantic changes.
 
 ## Required Verification
 
@@ -126,7 +103,7 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If existing evals fail only because TASK-146 has not yet updated expected startup banner output, report the exact failing eval names and still make unit tests pass.
+If existing evals fail only because TASK-148 has not yet updated expected `/model` or `/setup` output, report exact failing eval names and still make unit tests pass.
 
 ## Completion Report
 

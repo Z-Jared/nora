@@ -4,6 +4,30 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-147: Compact /model and /setup terminal surfaces v5
+- 架构层: Agent OS Dashboard / Model Router
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-145/TASK-146
+- 目标: 将 `/model` 和 `/setup` 收敛为 Claude Code-like 的单调、紧凑配置表面：`/model` 只显示当前 provider/model/base URL/API-key presence/enabled/timeout 和短恢复提示；`/setup` 保留必要 env 示例与恢复说明，但去掉 `===`、大段面板感标题和过长配置墙，避免默认终端体验显得像 dashboard。
+- 非目标: 不改模型 provider loading、routing 行为、LLM 调用、API key 读取逻辑、Web UI、图标资产、worker/runtime 语义、MCP/tool/plugin 行为；不新增 TUI/动画/颜色依赖。
+- 安全边界: 不泄漏 API key、token、`.env` 原值、raw prompt、hidden reasoning、raw tool payload；输出必须 deterministic、plain text、ANSI-safe；`/model` 和 `/setup` 必须继续不调用模型、不写 durable state。
+- 持久证据: 更新 `tests/test_cli.py` 中 `/model`/`/setup` 输出契约；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `mini_agent/cli.py` `_model_info()` / `_setup_info()`；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard 和 Model Router；用户要求智能/速度/配置隐藏在 `/model`，默认界面保持 Claude Code-like 克制。
+
+### TASK-148: /model and /setup compact surface deterministic eval coverage
+- 架构层: Eval/Review System
+- 优先级: high
+- 预计: 1 小时
+- 依赖: 等待 TASK-147 runtime/test 变更可见后补充/调整 eval
+- 目标: 为 TASK-147 增加 deterministic offline eval，锁住 `/model` 和 `/setup` 的 compact/plain-text 契约：无 `===`/`───`/table/card/dashboard、配置状态和恢复提示完整、provider-specific env hints 保留、no secret leak、slash 命令不触发 model working status。
+- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做 runtime/Web/UI asset/模型路由变更。
+- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload/raw `.env` leak；保持 deterministic/offline。
+- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
+- 参考: TASK-147；`evals/run_evals.py` existing `cli_model_*`、`cli_setup_*`、`slash_model_v4_compact` cases。
+
 ## 进行中
 
 ## 已完成
