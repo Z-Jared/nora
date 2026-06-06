@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mini_agent.cli import INPUT_SEPARATOR, MiniAgentCLI
+from mini_agent.cli import MiniAgentCLI
 
 
 class MiniAgentCLITests(unittest.TestCase):
@@ -19,8 +19,7 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("Workspace:", outputs[0])
         self.assertIn("LLM:", outputs[0])
         self.assertIn("Tools:", outputs[0])
-        self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
-        self.assertTrue(any(INPUT_SEPARATOR in output for output in outputs))
+        self.assertTrue(any("reply: hello" in output for output in outputs))
         self.assertTrue(any("model:" in output and "/ for commands" in output for output in outputs))
         self.assertFalse(any("运行报告:" in output for output in outputs))
         self.assertFalse(any("工具: fake_tool(ok)" in output for output in outputs))
@@ -139,7 +138,7 @@ class MiniAgentCLITests(unittest.TestCase):
         result = cli.handle_slash_command("/auto 3 inspect project")
 
         self.assertEqual(agent.autonomous_calls, [("inspect project", 3)])
-        self.assertIn("Agent: auto reply: inspect project / 3", result)
+        self.assertIn("auto reply: inspect project / 3", result)
 
     def test_task_history_commands_call_registry(self):
         registry = FakeCLIRegistry()
@@ -193,15 +192,14 @@ class MiniAgentCLITests(unittest.TestCase):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
         self.assertEqual(cli.prompt(), "> ")
 
-    def test_input_footer_separates_prompt_area(self):
+    def test_input_status_line_shows_model_info(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
 
-        footer = cli._input_footer()
+        status = cli._input_status_line()
 
-        self.assertEqual(footer.count(INPUT_SEPARATOR), 2)
-        self.assertIn("model:", footer)
-        self.assertIn("/ for commands", footer)
-        self.assertNotIn("Workspace:", footer)
+        self.assertIn("model:", status)
+        self.assertIn("/ for commands", status)
+        self.assertNotIn("Workspace:", status)
 
     def test_disabled_banner_shows_api_key_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -791,70 +789,60 @@ class CLISetupCommandTests(unittest.TestCase):
 
 
 class CLIResponseStatusTests(unittest.TestCase):
-    """Tests for response status lines (TASK-131)."""
+    """Tests for response lifecycle lines (TASK-141)."""
 
-    def test_model_call_shows_status_lines(self):
+    def test_model_call_shows_lifecycle_lines(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        status_outputs = [o for o in outputs if "正在调用模型" in o]
-        accepted_outputs = [o for o in outputs if "已接收输入" in o]
-        done_outputs = [o for o in outputs if "模型响应完成" in o]
-        self.assertTrue(len(status_outputs) >= 1)
-        self.assertTrue(len(accepted_outputs) >= 1)
-        self.assertTrue(len(done_outputs) >= 1)
-        self.assertIn("✓ 模型响应完成", done_outputs)
+        self.assertIn("received", outputs)
+        self.assertIn("thinking", outputs)
+        self.assertIn("ready", outputs)
 
-    def test_slash_command_no_status_noise(self):
+    def test_slash_command_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["/help", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        status_outputs = [o for o in outputs if "正在调用模型" in o]
-        accepted_outputs = [o for o in outputs if "已接收输入" in o]
-        self.assertEqual(len(status_outputs), 0)
-        self.assertEqual(len(accepted_outputs), 0)
+        self.assertNotIn("received", outputs)
+        self.assertNotIn("thinking", outputs)
+        self.assertNotIn("ready", outputs)
 
-    def test_blank_input_no_status_noise(self):
+    def test_blank_input_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["", "   ", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        status_outputs = [o for o in outputs if "正在调用模型" in o]
-        accepted_outputs = [o for o in outputs if "已接收输入" in o]
-        self.assertEqual(len(status_outputs), 0)
-        self.assertEqual(len(accepted_outputs), 0)
+        self.assertNotIn("received", outputs)
+        self.assertNotIn("thinking", outputs)
 
-    def test_exit_no_status_noise(self):
+    def test_exit_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["exit"]), output_func=outputs.append)
 
         cli.run()
 
-        status_outputs = [o for o in outputs if "正在调用模型" in o]
-        accepted_outputs = [o for o in outputs if "已接收输入" in o]
-        self.assertEqual(len(status_outputs), 0)
-        self.assertEqual(len(accepted_outputs), 0)
+        self.assertNotIn("received", outputs)
+        self.assertNotIn("thinking", outputs)
 
-    def test_multiline_input_shows_status(self):
+    def test_multiline_input_shows_lifecycle(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["<<<", "line1", ">>>", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        status_outputs = [o for o in outputs if "正在调用模型" in o]
-        accepted_outputs = [o for o in outputs if "已接收输入" in o]
-        self.assertTrue(len(status_outputs) >= 1)
-        self.assertTrue(len(accepted_outputs) >= 1)
+        self.assertIn("received", outputs)
+        self.assertIn("thinking", outputs)
+        self.assertIn("ready", outputs)
 
 
 class CLISlashLauncherTests(unittest.TestCase):
@@ -885,8 +873,8 @@ class CLISlashLauncherTests(unittest.TestCase):
         self.assertEqual(agent.inputs, [])
         joined = "\n".join(outputs)
         self.assertIn("Nora 命令菜单", joined)
-        self.assertNotIn("正在调用模型", joined)
-        self.assertNotIn("模型响应完成", joined)
+        self.assertNotIn("thinking", joined)
+        self.assertNotIn("ready", joined)
 
     def test_banner_shows_next_action_and_preserves_core_info(self):
         with tempfile.TemporaryDirectory() as tmpdir:

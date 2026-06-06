@@ -23,6 +23,7 @@ def _truncate_text(text: str, max_len: int = 120) -> str:
     return text[: max_len - 3] + "..."
 
 
+# Deprecated: kept for eval compatibility; no longer used in CLI output.
 INPUT_SEPARATOR = "─" * 52
 
 
@@ -48,7 +49,7 @@ class MiniAgentCLI:
 
     def run(self) -> None:
         self.output_func(self.banner())
-        self.output_func(self._input_footer())
+        self.output_func(self._input_status_line())
         while not self.should_exit:
             try:
                 user_input = self.input_func(self.prompt()).strip()
@@ -59,7 +60,7 @@ class MiniAgentCLI:
             result = self.handle_input(user_input)
             if result:
                 self.output_func(result)
-                self.output_func(self._input_footer())
+                self.output_func(self._input_status_line())
 
     def banner(self) -> str:
         lines = [
@@ -104,10 +105,6 @@ class MiniAgentCLI:
         else:
             model_str = "disabled"
         return f"  model: {model_str} | local-first | / for commands"
-
-    def _input_footer(self) -> str:
-        """Return the compact input area chrome shown before the prompt."""
-        return "\n".join([INPUT_SEPARATOR, self._input_status_line(), INPUT_SEPARATOR])
 
     def _task_backlog_summary(self) -> str:
         """Read agent_tasks/BACKLOG.md and return a short summary line."""
@@ -483,11 +480,11 @@ class MiniAgentCLI:
         return self._append_recovery_hint(response)
 
     def _model_call_start(self) -> None:
-        self.output_func("✓ 已接收输入")
-        self.output_func("⏳ 正在调用模型...")
+        self.output_func("received")
+        self.output_func("thinking")
 
     def _model_call_end(self) -> None:
-        self.output_func("✓ 模型响应完成")
+        self.output_func("ready")
 
     def _append_recovery_hint(self, response: str) -> str:
         """Append error recovery hint if response contains common error patterns."""
@@ -877,10 +874,7 @@ class MiniAgentCLI:
             return f"参数错误: {name} 必须是整数。"
 
     def _format_agent_response(self, response: str) -> str:
-        if "\n" not in response:
-            return f"Agent: {response}"
-        first, rest = response.split("\n", 1)
-        return f"Agent: {first}\n{rest}"
+        return response
 
     def _help(self) -> str:
         return "\n".join(
