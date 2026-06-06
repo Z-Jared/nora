@@ -153,6 +153,14 @@ class MiniAgent:
 
         try:
             if self.llm and hasattr(self.llm, "chat"):
+                if not self._should_use_tools(text):
+                    try:
+                        answer = self._call_model_chat_only(text)
+                        yield from _collect(self._emit_answer(text, answer))
+                        return
+                    except LLMError as error:
+                        yield from _collect(self._emit_blocked(text, f"模型调用失败: {error}"))
+                        return
                 try:
                     yield from _collect(self._emit_answer(text, self._run_with_llm_tools_events(text)))
                     return
@@ -257,6 +265,27 @@ class MiniAgent:
             return True
         return False
 
+    def _should_use_tools(self, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        tool_keywords = (
+            "文件", "目录", "项目", "仓库", "代码", "测试", "运行", "执行", "命令",
+            "git", "diff", "commit", "branch", "status", "日志", "搜索", "网页",
+            "浏览器", "读取", "查看", "修改", "写入", "创建", "删除", "修复", "诊断",
+            "分析这个", "打开", "列出", "总结 readme", "typeScript", "typescript",
+            "前端结构", "后端", "数据库", "worker", "task",
+        )
+        casual_patterns = (
+            "你好", "您好", "哈喽", "hello", "hi", "嗨", "早上好", "晚上好",
+            "你可以干嘛", "你能干嘛", "你会什么", "介绍一下", "你是谁",
+            "在吗", "谢谢", "谢了",
+        )
+        if any(pattern in lowered for pattern in casual_patterns):
+            return False
+        return True
+
     def _emit_blocked(self, user_input: str, error_msg: str) -> Generator[dict, None, None]:
         yield {"type": "delta", "content": error_msg}
         self._finish_turn(user_input, error_msg, status="blocked", failure=error_msg)
@@ -332,6 +361,13 @@ class MiniAgent:
                 provider_model=provider_model,
             )
             raise
+
+    def _call_model_chat_only(self, text: str) -> str:
+        messages = self._messages_for_user_input(text, user_content=text, include_context=False)
+        response = self._call_model(messages, tools=[])
+        if response.tool_calls:
+            return response.content or self._help_message()
+        return response.content or self._help_message()
 
     def _run_with_llm_tools_events(self, text: str) -> Generator[dict, None, None]:
         messages = self._messages_for_user_input(text)
@@ -581,12 +617,17 @@ class MiniAgent:
             raise LLMError("Tool call loop exceeded max rounds.")
         return response.content or self._help_message()
 
-    def _messages_for_user_input(self, text: str, user_content: Optional[str] = None) -> list[dict]:
+    def _messages_for_user_input(
+        self,
+        text: str,
+        user_content: Optional[str] = None,
+        include_context: bool = True,
+    ) -> list[dict]:
         messages = self.memory.messages()
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         content = user_content or text
-        if self.context_system:
+        if include_context and self.context_system:
             context_pack = self.context_system.context_pack(text)
             if context_pack:
                 messages.append({"role": "system", "content": context_pack})

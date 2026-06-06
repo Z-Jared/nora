@@ -2872,7 +2872,7 @@ def eval_context_system_injects_auto_context():
         llm = FakeContextAwareLLM()
         agent = MiniAgent(build_default_registry(workspace_root=root), llm=llm, context_system=context_system)
 
-        result = agent.run("How do context packs work?")
+        result = agent.run("How do project context packs work?")
 
     assert result == "saw automatic context", result
     assert len(llm.calls) == 1
@@ -4662,7 +4662,7 @@ def eval_model_call_event_failure_isolation():
         assert "survived" in result, f"chat path failed: {result}"
 
         # 2. run_events stream survives broken event store
-        events_list = list(agent.run_events("hello again"))
+        events_list = list(agent.run_events("查看项目状态"))
         assert len(events_list) > 0, "run_events should produce events despite broken store"
 
         # 3. streaming path survives broken event store

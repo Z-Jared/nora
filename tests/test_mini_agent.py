@@ -401,6 +401,62 @@ class MiniAgentTests(unittest.TestCase):
 
         self.assertEqual(agent.run("hello"), "ok")
 
+    def test_casual_chat_does_not_expose_tools_or_context(self):
+        class FakeContextSystem:
+            def __init__(self):
+                self.queries = []
+
+            def context_pack(self, query):
+                self.queries.append(query)
+                return "项目上下文"
+
+        class ToolHungryLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                if tools:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(call_id="call_1", name="run_shell_command", arguments={"command": "ls"})],
+                    )
+                return LLMResponse(content="你好，有什么需要？")
+
+        context_system = FakeContextSystem()
+        llm = ToolHungryLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, context_system=context_system)
+
+        self.assertEqual(agent.run("你好"), "你好，有什么需要？")
+        self.assertEqual(context_system.queries, [])
+        self.assertEqual(llm.calls[0]["tools"], [])
+        self.assertEqual(agent.last_run_report.tool_calls, [])
+
+    def test_project_request_still_exposes_tools_and_context(self):
+        class FakeContextSystem:
+            def __init__(self):
+                self.queries = []
+
+            def context_pack(self, query):
+                self.queries.append(query)
+                return "项目上下文"
+
+        class InspectingLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, tools=None):
+                self.calls.append({"messages": list(messages), "tools": tools})
+                return LLMResponse(content="ok")
+
+        context_system = FakeContextSystem()
+        llm = InspectingLLM()
+        agent = MiniAgent(build_default_registry(), llm=llm, context_system=context_system)
+
+        self.assertEqual(agent.run("查看项目结构"), "ok")
+        self.assertEqual(context_system.queries, ["查看项目结构"])
+        self.assertTrue(llm.calls[0]["tools"])
+
     def test_system_prompt_included_as_first_system_message(self):
         class FakeToolCallingLLM:
             def __init__(self):
@@ -2259,7 +2315,7 @@ class RunEventsTests(unittest.TestCase):
                 yield "is 2"
 
         agent = MiniAgent(build_default_registry(), llm=FakeStreamingToolLLM())
-        events = list(agent.run_events("计算 1+1"))
+        events = list(agent.run_events("查看项目状态"))
 
         types = [e["type"] for e in events]
         self.assertIn("tool_call_start", types)
@@ -2289,7 +2345,7 @@ class RunEventsTests(unittest.TestCase):
                 yield
 
         agent = MiniAgent(build_default_registry(), llm=FakeBrokenStreamToolLLM())
-        events = list(agent.run_events("hello world"))
+        events = list(agent.run_events("查看项目状态"))
 
         types = [e["type"] for e in events]
         self.assertIn("tool_call_start", types)
@@ -2324,7 +2380,7 @@ class RunEventsTests(unittest.TestCase):
                 yield
 
         agent = MiniAgent(build_default_registry(), llm=FakeBrokenStreamToolLLM())
-        result = agent.run("hello world")
+        result = agent.run("查看项目状态")
 
         self.assertIn("stream failed", result)
         self.assertEqual(agent.last_run_report.status, "blocked")
