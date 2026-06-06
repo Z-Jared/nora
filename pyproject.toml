@@ -24,4 +24,4 @@ mcp = ["mcp>=1.0"]
 packages = ["mini_agent", "mini_agent.providers", "mini_agent.toolkits"]
 
 [tool.setuptools.package-data]
-mini_agent = ["static/*.html"]
+mini_agent = ["static/*.html", "static/*.svg"]
