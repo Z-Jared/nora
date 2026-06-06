@@ -4,7 +4,29 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-暂无
+### TASK-145: Claude Code-like startup header with Nora robot
+- 架构层: Agent OS Dashboard
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-143/TASK-144
+- 目标: 将 CLI 启动 banner 改成 Claude Code-like 的紧凑启动头：左侧小型 Nora 机器人 ASCII 图标，右侧 2-3 行显示 `Nora Code`、模型/本地状态/API-key presence、当前 workspace 路径；警告或恢复提示另起短行，底部仍保持 `> ` 输入框和单行 model status。
+- 非目标: 不做 fullscreen TUI、网页卡片、复杂动画、彩色图标、Web UI redesign、favicon/icon asset 变更、模型路由行为变更、worker/runtime 后端语义变更、slash command 语义变更。
+- 安全边界: 不泄漏 API key、token、`.env` 值、raw prompt、hidden reasoning、raw tool payload；启动头必须 plain text/ANSI-safe；非交互测试输出 deterministic；不编辑 `CODEX_TERMINAL_HANDOFF.md`、`designs/`、`assets/`、`mini_agent/static/`、package metadata。
+- 持久证据: 启动头输出契约通过 `tests/test_cli.py` 固化；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog/review。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: 用户截图中 Claude Code 启动头：左侧小图标、右侧 `Claude Code`/model/API usage/path；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard；`mini_agent/cli.py` `banner()`。
+
+### TASK-146: Startup header deterministic eval coverage
+- 架构层: Eval/Review System
+- 优先级: high
+- 预计: 1 小时
+- 依赖: 等待 TASK-145 runtime/test 变更可见后补充/调整 eval
+- 目标: 为 TASK-145 增加 deterministic offline eval，锁住 Claude Code-like 启动头：左侧 Nora robot ASCII、右侧 compact identity/model/workspace lines、无旧中文欢迎语/面板/重分隔线、无 secret leak、无 lifecycle/model call 噪声。
+- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做 runtime/Web/UI asset 变更；不做动画实现。
+- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload leak；不读取或回显 raw `.env` 内容。
+- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog/review。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
+- 参考: TASK-145；`evals/run_evals.py` existing `cli_startup_banner_*` and `banner_*` cases；用户 Claude Code 启动头截图。
 
 ## 进行中
 
