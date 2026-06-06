@@ -1,17 +1,17 @@
-# TASK-147: Compact /model and /setup terminal surfaces v5
+# TASK-149: Compact error recovery and doctor surfaces v6
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora's default terminal surface is now intentionally close to Claude Code:
+Nora's terminal UI has been tightened toward Claude Code-like restraint:
 
-- startup header is compact and monochrome: Nora robot + `Nora Code` + model/API/path
+- startup header is compact and monochrome
 - prompt is exactly `> `
 - normal model calls show `Working...` then `Done.`
-- slash commands stay compact and do not emit working status
+- `/model` and `/setup` are compact plain-text configuration surfaces
 
-The next UX gap is configuration surfaces. `/model` is close but still reads like a capitalized diagnostic block. `/setup` still starts with `=== Nora Setup / Config ===` and prints a large configuration wall. The user wants intelligence/speed/model details hidden behind `/model`, but that page should still feel like Claude Code: text-first, short, readable, no dashboard.
+The next inconsistency is error/recovery text. `_error_recovery_hint()` still returns long Chinese `提示:` lines, unknown slash still returns Chinese menu guidance, and `/doctor` suggestions mix English labels with long Chinese sentences. These are user-visible terminal surfaces, so they should match the compact style.
 
 Read first:
 
@@ -37,33 +37,32 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Make `/model` and `/setup` compact Claude Code-like terminal surfaces while preserving all useful recovery information.
+Make error recovery, unknown slash, and `/doctor` outputs compact Claude Code-like terminal surfaces.
 
 Required behavior:
 
-1. `/model`
-   - Keep provider, model, base URL, API-key presence, timeout, and enabled state.
-   - Prefer lowercase compact labels such as `provider:`, `model:`, `base URL:`, `API key:`, `timeout:`, `enabled:`.
-   - Keep short recovery hints for missing key, missing provider, `401 Unauthorized`, and provider/model mismatch.
+1. Error recovery hints
+   - Replace long Chinese `提示:` strings with short English hints.
+   - Preserve detection for 401/unauthorized, 403/forbidden, missing API key, port in use, connection/timeout, model not found, unsupported provider, rate limit, quota/billing.
+   - Keep hints practical and short, e.g. `hint: check API key in .env`.
+   - Never echo raw error text inside the hint.
+
+2. Unknown slash command
+   - Keep it short and plain text.
+   - Remove Chinese `输入 / 查看命令菜单...`.
+   - Preserve guidance to use `/` or `/help`.
+
+3. `/doctor`
+   - Keep `Nora doctor`, workspace, git, llm, tools, data path, logs path, nora command.
+   - Convert suggestions to short English bullets.
    - Preserve provider-specific env hints from `required_env_vars(...)` and `env_alternatives(...)`.
-   - Do not include section bars, tables, boxes, or dashboard wording.
+   - Do not print API key values or raw `.env` contents.
+   - Keep lowercase/plain labels where practical; no tables, boxes, `===`, or section bars.
 
-2. `/setup`
-   - Remove `=== Nora Setup / Config ===`.
-   - Keep enough setup guidance for openai-compatible, anthropic, and gemini users.
-   - Keep common recovery hints, but shorten wording where possible.
-   - It may be longer than `/model`, but should be visibly plain text and scannable.
-   - Avoid standalone dashboard-like section headers. If grouping is needed, use short lowercase labels such as `current`, `env`, `recovery`.
-
-3. Compatibility
-   - `/model` and `/setup` must not call the model.
+4. Compatibility
+   - `/doctor`, unknown slash, and recovery hint paths must not call the model.
    - Slash commands, blank input, `exit`, and `quit` must not emit `Working...` or `Done.`
-   - Keep `/config` as an alias for `/setup`.
-   - Do not change provider loading, model routing, LLM calls, API key reading, or worker/runtime behavior.
-
-4. Safety
-   - Never print API key values, tokens, raw `.env`, raw prompt, hidden reasoning, raw tool payload, or raw file content.
-   - Outputs must be deterministic, plain text, and ANSI-safe.
+   - Do not change model calls, provider loading, model routing, tools, worker/runtime behavior, or Web UI.
 
 ## Scope
 
@@ -75,7 +74,7 @@ Primary files:
 
 Do not edit:
 
-- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-148 eval coverage.
+- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-150 eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -90,7 +89,7 @@ Do not edit:
 - No fullscreen TUI, animation, streaming, colors, rich/textual/curses dependency, or UI framework.
 - No hidden reasoning display.
 - No Web UI redesign.
-- No model router behavior changes.
+- No model router/provider behavior changes.
 - No runtime/worker/plugin/tool semantic changes.
 
 ## Required Verification
@@ -103,7 +102,7 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If existing evals fail only because TASK-148 has not yet updated expected `/model` or `/setup` output, report exact failing eval names and still make unit tests pass.
+If existing evals fail only because TASK-150 has not yet updated expected recovery/doctor output, report exact failing eval names and still make unit tests pass.
 
 ## Completion Report
 
