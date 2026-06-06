@@ -1,17 +1,18 @@
-# TASK-149: Compact error recovery and doctor surfaces v6
+# TASK-151: Final CLI terminal copy consistency sweep
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora's terminal UI has been tightened toward Claude Code-like restraint:
+This is the final implementation sweep for the Nora CLI terminal redesign line. The target is stable, restrained, Claude Code-like terminal UX:
 
-- startup header is compact and monochrome
-- prompt is exactly `> `
-- normal model calls show `Working...` then `Done.`
-- `/model` and `/setup` are compact plain-text configuration surfaces
+- compact startup header with Nora robot and `Nora Code`
+- prompt exactly `> `
+- normal model calls show `Working...` / `Done.`
+- slash commands are compact plain text and do not call the model
+- `/model`, `/setup`, recovery hints, unknown slash, and `/doctor` have been compacted
 
-The next inconsistency is error/recovery text. `_error_recovery_hint()` still returns long Chinese `提示:` lines, unknown slash still returns Chinese menu guidance, and `/doctor` suggestions mix English labels with long Chinese sentences. These are user-visible terminal surfaces, so they should match the compact style.
+This task is not another redesign. It is a final consistency pass over user-visible CLI copy in `mini_agent/cli.py`.
 
 Read first:
 
@@ -37,32 +38,38 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Make error recovery, unknown slash, and `/doctor` outputs compact Claude Code-like terminal surfaces.
+Run a final CLI copy consistency sweep and make only narrow fixes.
 
-Required behavior:
+Check these CLI surfaces:
 
-1. Error recovery hints
-   - Replace long Chinese `提示:` strings with short English hints.
-   - Preserve detection for 401/unauthorized, 403/forbidden, missing API key, port in use, connection/timeout, model not found, unsupported provider, rate limit, quota/billing.
-   - Keep hints practical and short, e.g. `hint: check API key in .env`.
-   - Never echo raw error text inside the hint.
+- startup `banner()`
+- `_input_status_line()`
+- `_wake_panel()`
+- `_model_info()`
+- `_setup_info()`
+- `_workers_status()`
+- `_error_recovery_hint()` / `_append_recovery_hint()`
+- unknown slash return
+- `_slash_menu()`
+- `doctor()`
+- `_help()`
 
-2. Unknown slash command
-   - Keep it short and plain text.
-   - Remove Chinese `输入 / 查看命令菜单...`.
-   - Preserve guidance to use `/` or `/help`.
+Fix only clear inconsistencies:
 
-3. `/doctor`
-   - Keep `Nora doctor`, workspace, git, llm, tools, data path, logs path, nora command.
-   - Convert suggestions to short English bullets.
-   - Preserve provider-specific env hints from `required_env_vars(...)` and `env_alternatives(...)`.
-   - Do not print API key values or raw `.env` contents.
-   - Keep lowercase/plain labels where practical; no tables, boxes, `===`, or section bars.
+- old panel markers: `===`, `───`, boxed/table/card style in default/slash surfaces
+- old Chinese long guidance in user-facing CLI output
+- old startup/welcome copy such as `Nora 已启动`
+- old config labels such as `Provider:`, `Model:`, `Base URL:`, `Timeout:`, `Enabled:` where the compact lower-case style now applies
+- accidental hidden-reasoning/status wording such as `thinking`, `received`, `ready`, `Agent:` in default CLI surfaces
+- duplicated or overly long recovery/help lines
 
-4. Compatibility
-   - `/doctor`, unknown slash, and recovery hint paths must not call the model.
-   - Slash commands, blank input, `exit`, and `quit` must not emit `Working...` or `Done.`
-   - Do not change model calls, provider loading, model routing, tools, worker/runtime behavior, or Web UI.
+Keep intentionally useful strings:
+
+- `Workspace:` and `Branch:` in `/wake` if existing tests require them and the output remains compact
+- `Nora doctor`
+- `API key`
+- `Working...` and `Done.` for normal/multiline model calls only
+- technical words inside non-user-facing comments/tests are fine
 
 ## Scope
 
@@ -74,7 +81,7 @@ Primary files:
 
 Do not edit:
 
-- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-150 eval coverage.
+- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-152 eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -86,11 +93,13 @@ Do not edit:
 
 ## Non-Goals
 
+- No new commands.
 - No fullscreen TUI, animation, streaming, colors, rich/textual/curses dependency, or UI framework.
 - No hidden reasoning display.
 - No Web UI redesign.
 - No model router/provider behavior changes.
 - No runtime/worker/plugin/tool semantic changes.
+- Do not clean non-CLI JSON/API errors unless directly surfaced by `MiniAgentCLI`.
 
 ## Required Verification
 
@@ -100,13 +109,14 @@ Run:
 python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 python3 evals/run_evals.py
 git diff --check
+rg -n "===|───|提示:|未知命令|输入 / 查看命令菜单|Nora 已启动|Provider:|Model:|Base URL:|Timeout:|Enabled:|Agent:" mini_agent/cli.py tests/test_cli.py evals/run_evals.py
 ```
 
-If existing evals fail only because TASK-150 has not yet updated expected recovery/doctor output, report exact failing eval names and still make unit tests pass.
+If existing evals fail only because TASK-152 has not yet updated expected copy, report exact failing eval names and still make unit tests pass.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results and known issues.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the `rg` scan summary.
 
 Then notify Codex PM:
 

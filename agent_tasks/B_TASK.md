@@ -1,17 +1,19 @@
-# TASK-150: Error recovery and doctor deterministic eval coverage
+# TASK-152: Final terminal UX regression eval sweep
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-149: compact Claude Code-like recovery, unknown slash, and `/doctor` surfaces. Current default terminal direction:
+Claude A owns TASK-151: the final copy consistency sweep for Nora's CLI terminal redesign. Your job is to add deterministic regression evals that lock the final terminal UX contract.
 
-- startup header is compact
-- prompt is exactly `> `
-- working indicator is `Working...` / `Done.`
-- `/model` and `/setup` are compact plain-text surfaces
+Current target:
 
-Your job is deterministic offline eval coverage after TASK-149 is visible in your worktree or after PM asks you to rebase/integrate.
+- startup header compact, no old welcome/panel
+- prompt exactly `> `
+- normal/multiline model calls emit `Working...` / `Done.`
+- slash commands do not emit lifecycle noise
+- `/model`, `/setup`, recovery, unknown slash, `/doctor`, `/wake`, `/help`, `/workers` are compact plain text
+- no secret/raw prompt/hidden reasoning leak
 
 Read first:
 
@@ -39,38 +41,39 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic eval coverage for TASK-149 and update narrow recovery/doctor eval expectations.
+Add a final deterministic terminal UX regression eval suite.
 
 Coverage requirements:
 
-1. Recovery hints
-   - 401, 403, missing key, timeout, model not found, unsupported provider, rate limit, quota/billing, and port-in-use each produce a short practical hint.
-   - No old Chinese long hints and no `提示:`.
-   - No raw error echo, raw prompt, or secret leak.
+1. Global surface scan
+   - Build representative outputs for startup, `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/doctor`, unknown slash, normal prompt, multiline prompt.
+   - Assert no old panel markers: `===`, `───`, boxed/table/card markers.
+   - Assert no old CLI copy: `Nora 已启动`, `提示:`, `未知命令`, `输入 / 查看命令菜单`, `Provider:`, `Model:`, `Base URL:`, `Timeout:`, `Enabled:`, `Agent:`.
+   - Allow intentional `Workspace:`/`Branch:` in `/wake` only if still present.
 
-2. Unknown slash
-   - Gives short `/` or `/help` guidance.
-   - No old Chinese `输入 / 查看命令菜单`.
-   - Does not call fake agent and does not emit `Working...` / `Done.`
+2. Lifecycle contract
+   - Normal and multiline prompt include `Working...` then `Done.`
+   - Slash commands, unknown slash, blank input, exit/quit do not include `Working...` or `Done.`
 
-3. `/doctor`
-   - Shows workspace, git, llm, tools, data path, logs path, nora command.
-   - Keeps provider-specific env hints for disabled LLM.
-   - Uses compact English suggestions.
-   - No secret leak, no raw `.env`, no section bars or dashboard formatting.
-   - Does not call fake agent and does not emit `Working...` / `Done.`
+3. Safety
+   - Startup, slash surfaces, doctor, recovery hints, normal prompt, and multiline prompt do not leak API keys, raw prompts in status lines, hidden reasoning markers, raw JSON payloads, or raw `.env` contents.
+
+4. Bounds
+   - Startup header remains compact.
+   - Unknown slash and recovery hints remain short.
+   - `/doctor` and `/setup` stay plain text, not dashboard/table output.
 
 ## Scope
 
 Primary files:
 
 - `evals/run_evals.py`
-- `tests/test_cli.py` only if necessary for focused recovery/doctor assertions
+- `tests/test_cli.py` only if necessary for focused CLI assertions
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
 
-- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-149.
+- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-151.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
@@ -98,7 +101,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-149 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
+If TASK-151 is not integrated into your worktree yet and required checks cannot pass without runtime changes, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
 
 ## Completion Report
 
