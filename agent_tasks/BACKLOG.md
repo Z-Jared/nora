@@ -6,6 +6,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-153: Nora TTY raw terminal interaction layer v1
+- 架构层: Agent OS Dashboard / Policy Hook Kernel integration
+- 优先级: high
+- 预计: 1-2h
+- 依赖: none
+- Worker: Claude A
+- 目标: Add a real TTY interactive terminal frontend for Nora so the default manual `nora` experience has bottom-owned input, slash completion before Enter, arrow-key command selection, compact transient thinking status, and non-noisy bottom toolbar metadata.
+- 非目标: No fullscreen dashboard, no Web UI redesign, no model/provider/runtime semantic changes, no hidden reasoning display, no removal of safety confirmations, no broad CLI copy rewrite.
+- 安全边界: Preserve non-TTY fallback exactly enough for pipes/tests; do not auto-approve tools; no API-key/raw prompt/hidden reasoning leak in toolbar/status/completions.
+- 持久证据: Focused unit tests for mode selection and interactive helpers; DONE report with real/manual verification notes if TTY cannot be automated fully.
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`; targeted new tests; `git diff --check`; manual `nora` smoke when possible.
+- 参考: Pencil design `pencil-new.pen` node `kdiWB` (`Nora CLI TUI Raw Terminal Mock v2`); `mini_agent/app.py`; `mini_agent/cli.py`; `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard and Policy Hook Kernel sections.
+
+### TASK-154: TTY permissions selector and regression coverage
+- 架构层: Policy Hook Kernel / Eval Review System / Agent OS Dashboard
+- 优先级: high
+- 预计: 1-2h
+- 依赖: TASK-153 for full green integration; can prepare test/eval scaffolding in parallel.
+- Worker: Claude B
+- 目标: Add deterministic regression coverage for the TTY/raw terminal contract and implement or integrate the selectable permission UX if TASK-153 exposes the hook point.
+- 非目标: No backend permission bypass, no auto-approval, no Web UI redesign, no unrelated eval churn, no broad runtime refactor.
+- 安全边界: Approval choices must remain explicit; y/n fallback must remain for non-TTY; tests must prove no raw API key, raw prompt, hidden reasoning, or raw `.env` leak.
+- 持久证据: Unit tests/evals covering TTY mode selection, slash command completion metadata, fallback behavior, permission choice labels, and lifecycle noise boundaries.
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`; `git diff --check`.
+- 参考: Pencil design `pencil-new.pen` node `kdiWB`; `mini_agent/registry.py`; `mini_agent/tools_common.py`; `mini_agent/app.py`; `mini_agent/cli.py`.
+
 ## 已完成
 
 ### TASK-152: Final terminal UX regression eval sweep ✅

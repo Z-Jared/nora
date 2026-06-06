@@ -1,19 +1,22 @@
-# TASK-152: Final terminal UX regression eval sweep
+# TASK-154: TTY permissions selector and regression coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-151: the final copy consistency sweep for Nora's CLI terminal redesign. Your job is to add deterministic regression evals that lock the final terminal UX contract.
+The user reported three remaining real terminal UX gaps:
 
-Current target:
+- `/` does not wake a command picker before Enter
+- permissions still ask for manual `y/N` input instead of selectable options
+- status/model information should live near the prompt, not as repeated printed footer text
 
-- startup header compact, no old welcome/panel
-- prompt exactly `> `
-- normal/multiline model calls emit `Working...` / `Done.`
-- slash commands do not emit lifecycle noise
-- `/model`, `/setup`, recovery, unknown slash, `/doctor`, `/wake`, `/help`, `/workers` are compact plain text
-- no secret/raw prompt/hidden reasoning leak
+Claude A owns TASK-153: the new TTY/raw terminal frontend. Your task is to make the behavior testable and cover the permission-selector side without bypassing safety.
+
+Pencil design reference:
+
+- File: `pencil-new.pen`
+- Node: `kdiWB`
+- Name: `Nora CLI TUI Raw Terminal Mock v2`
 
 Read first:
 
@@ -24,7 +27,10 @@ Read first:
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/A_TASK.md`
+- `mini_agent/app.py`
 - `mini_agent/cli.py`
+- `mini_agent/registry.py`
+- `mini_agent/tools_common.py`
 - `tests/test_cli.py`
 - `evals/run_evals.py`
 
@@ -41,57 +47,66 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add a final deterministic terminal UX regression eval suite.
+Add deterministic coverage for Nora's TTY/raw terminal contract and, where the hook point is available, implement or integrate selectable permission confirmation.
 
-Coverage requirements:
+Required coverage:
 
-1. Global surface scan
-   - Build representative outputs for startup, `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/doctor`, unknown slash, normal prompt, multiline prompt.
-   - Assert no old panel markers: `===`, `───`, boxed/table/card markers.
-   - Assert no old CLI copy: `Nora 已启动`, `提示:`, `未知命令`, `输入 / 查看命令菜单`, `Provider:`, `Model:`, `Base URL:`, `Timeout:`, `Enabled:`, `Agent:`.
-   - Allow intentional `Workspace:`/`Branch:` in `/wake` only if still present.
+1. Mode selection
+   - TTY mode chooses the interactive frontend.
+   - non-TTY/redirected stdin chooses legacy `MiniAgentCLI`.
+   - legacy pipes remain deterministic.
 
-2. Lifecycle contract
-   - Normal and multiline prompt include `Working...` then `Done.`
-   - Slash commands, unknown slash, blank input, exit/quit do not include `Working...` or `Done.`
+2. Slash command metadata
+   - command completion source includes `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/permissions`, `/doctor`, `/status`, `/test`, `/tools`, `/exit`
+   - command descriptions are short and do not leak config/secrets
 
-3. Safety
-   - Startup, slash surfaces, doctor, recovery hints, normal prompt, and multiline prompt do not leak API keys, raw prompts in status lines, hidden reasoning markers, raw JSON payloads, or raw `.env` contents.
+3. Permission UX
+   - TTY permission prompt exposes selectable labels:
+     - `Allow once`
+     - `Deny`
+     - optionally `Always allow this tool this session` if implemented
+   - non-TTY fallback still supports existing `y/N` behavior
+   - tests must prove denied approval still blocks the tool call
+   - do not add auto-approval
 
-4. Bounds
-   - Startup header remains compact.
-   - Unknown slash and recovery hints remain short.
-   - `/doctor` and `/setup` stay plain text, not dashboard/table output.
+4. Status/lifecycle
+   - TTY mode does not append repeated model footer lines after every response
+   - TTY thinking/status does not expose hidden reasoning or raw prompts
+   - legacy non-TTY lifecycle remains compatible with existing evals unless PM integrates a deliberate contract update
+
+5. Safety
+   - no API key, raw `.env`, raw prompt status line, hidden reasoning marker, or raw JSON payload leaks in completion labels, toolbar/status helpers, permission prompts, or eval surfaces
 
 ## Scope
 
 Primary files:
 
+- `tests/test_cli.py`
 - `evals/run_evals.py`
-- `tests/test_cli.py` only if necessary for focused CLI assertions
+- `mini_agent/registry.py` / `mini_agent/tools_common.py` only if needed for a clean confirmation hook
+- `mini_agent/interactive_cli.py` only if created by TASK-153 and you need narrow integration tests
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
 
-- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-151.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
 - `mini_agent/static/`
-- `pyproject.toml`
-- `setup.py`
 
-## Coverage Quality Requirements
+## Coordination
 
-- No tautological assertions.
-- Use tempdir-isolated roots and explicit settings/env/fake agent objects.
-- Assert exact or meaningfully specific substrings.
-- Assert secrets/API keys/raw prompts are not leaked.
-- Keep evals deterministic/offline.
+TASK-154 depends on TASK-153 for full green integration. If your worktree does not contain the interactive frontend yet:
 
-## Required Verification
+- prepare tests/evals around stable helper APIs if possible
+- avoid inventing a conflicting frontend
+- clearly report any dependency/blocker in `agent_tasks/B_DONE.md`
+
+If you can implement the permission selector independently, keep it behind an injectable confirmation function so Claude A's frontend can call it without changing backend permission semantics.
+
+## Verification
 
 Run:
 
@@ -101,11 +116,11 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-151 is not integrated into your worktree yet and required checks cannot pass without runtime changes, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
+If full evals cannot pass because TASK-153 is not integrated in your worktree, run the most relevant targeted tests and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results and known issues.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-153 was present in your worktree.
 
 Then notify Codex PM:
 

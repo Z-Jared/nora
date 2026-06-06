@@ -1,18 +1,23 @@
-# TASK-151: Final CLI terminal copy consistency sweep
+# TASK-153: Nora TTY raw terminal interaction layer v1
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-This is the final implementation sweep for the Nora CLI terminal redesign line. The target is stable, restrained, Claude Code-like terminal UX:
+The recent CLI UX work only polished printed output. The user has now explicitly asked for the real terminal interaction layer:
 
-- compact startup header with Nora robot and `Nora Code`
-- prompt exactly `> `
-- normal model calls show `Working...` / `Done.`
-- slash commands are compact plain text and do not call the model
-- `/model`, `/setup`, recovery hints, unknown slash, and `/doctor` have been compacted
+- input should behave like Claude Code/Codex and stay owned by the bottom prompt area in manual TTY use
+- typing `/` should open commands before pressing Enter
+- command options must support up/down selection and Tab completion
+- model/cwd/status belongs near the prompt, not printed after every reply
+- thinking/status should be visible while the model works, without exposing hidden reasoning
+- non-TTY scripts and tests must keep the existing `input()`/`print()` path
 
-This task is not another redesign. It is a final consistency pass over user-visible CLI copy in `mini_agent/cli.py`.
+Pencil design reference:
+
+- File: `pencil-new.pen`
+- Node: `kdiWB`
+- Name: `Nora CLI TUI Raw Terminal Mock v2`
 
 Read first:
 
@@ -22,8 +27,10 @@ Read first:
 - `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
 - `docs/knowledge/CHAT_INDEX.md`
 - `agent_tasks/BACKLOG.md`
+- `mini_agent/app.py`
 - `mini_agent/cli.py`
-- `tests/test_cli.py`
+- `mini_agent/registry.py`
+- `pyproject.toml`
 
 ## Worktree Safety
 
@@ -38,85 +45,93 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Run a final CLI copy consistency sweep and make only narrow fixes.
+Add a first real TTY/raw terminal frontend layer for manual `nora` sessions.
 
-Check these CLI surfaces:
+Expected architecture:
 
-- startup `banner()`
-- `_input_status_line()`
-- `_wake_panel()`
-- `_model_info()`
-- `_setup_info()`
-- `_workers_status()`
-- `_error_recovery_hint()` / `_append_recovery_hint()`
-- unknown slash return
-- `_slash_menu()`
-- `doctor()`
-- `_help()`
+- Keep `MiniAgentCLI` as the legacy non-TTY fallback and as the core slash-command handler.
+- Add a new focused module, likely `mini_agent/interactive_cli.py`.
+- In `mini_agent/app.py`, choose:
+  - TTY stdin/stdout: new interactive frontend
+  - non-TTY, redirected stdin, tests, pipes: existing `MiniAgentCLI.run()`
+- Use `prompt_toolkit` or an equivalent small terminal library if needed. If you add a dependency, update both `pyproject.toml` and `setup.py` if setup metadata requires it.
 
-Fix only clear inconsistencies:
+Required TTY behavior:
 
-- old panel markers: `===`, `───`, boxed/table/card style in default/slash surfaces
-- old Chinese long guidance in user-facing CLI output
-- old startup/welcome copy such as `Nora 已启动`
-- old config labels such as `Provider:`, `Model:`, `Base URL:`, `Timeout:`, `Enabled:` where the compact lower-case style now applies
-- accidental hidden-reasoning/status wording such as `thinking`, `received`, `ready`, `Agent:` in default CLI surfaces
-- duplicated or overly long recovery/help lines
+1. Prompt and toolbar
+   - prompt text stays visually minimal: `> `
+   - bottom toolbar shows compact status such as model/cwd/local-first
+   - toolbar/status is not appended to chat history after every response
 
-Keep intentionally useful strings:
+2. Slash command launcher
+   - typing `/` opens command completions before Enter
+   - command list should come from one registry/helper, not hard-coded in multiple unrelated places
+   - include at least `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/permissions`, `/doctor`, `/status`, `/test`, `/tools`, `/exit`
+   - up/down selection and Tab completion should work through the terminal library
 
-- `Workspace:` and `Branch:` in `/wake` if existing tests require them and the output remains compact
-- `Nora doctor`
-- `API key`
-- `Working...` and `Done.` for normal/multiline model calls only
-- technical words inside non-user-facing comments/tests are fine
+3. Thinking/status
+   - while `agent.run(...)` is executing, show a compact transient status such as `Working...` or `Thinking...`
+   - do not print repeated lifecycle noise into the transcript in TTY mode
+   - do not expose hidden reasoning, raw prompts, raw tool payloads, or secrets
+
+4. Fallback compatibility
+   - `printf '/model\nexit\n' | nora` must still use the existing legacy CLI path
+   - existing CLI unit tests that instantiate `MiniAgentCLI` should keep working
+   - do not remove `Working...` / `Done.` from legacy non-TTY behavior unless tests are intentionally updated by PM
 
 ## Scope
 
 Primary files:
 
-- `mini_agent/cli.py`
+- `mini_agent/interactive_cli.py` or similarly named new module
+- `mini_agent/app.py`
+- `mini_agent/cli.py` only for reusable slash command metadata/helpers
+- `pyproject.toml`
+- `setup.py` if dependency metadata exists there
 - `tests/test_cli.py`
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
 
-- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-152 eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
 - `mini_agent/static/`
-- `pyproject.toml`
-- `setup.py`
 
 ## Non-Goals
 
-- No new commands.
-- No fullscreen TUI, animation, streaming, colors, rich/textual/curses dependency, or UI framework.
+- No fullscreen dashboard.
+- No curses-style custom renderer if a lighter prompt-session approach works.
+- No Web UI changes.
+- No model provider/router semantic changes.
 - No hidden reasoning display.
-- No Web UI redesign.
-- No model router/provider behavior changes.
-- No runtime/worker/plugin/tool semantic changes.
-- Do not clean non-CLI JSON/API errors unless directly surfaced by `MiniAgentCLI`.
+- No auto-approval of tools.
+- No broad rewrite of `MiniAgentCLI`.
 
-## Required Verification
+## Verification
 
 Run:
 
 ```bash
 python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
-python3 evals/run_evals.py
 git diff --check
-rg -n "===|───|提示:|未知命令|输入 / 查看命令菜单|Nora 已启动|Provider:|Model:|Base URL:|Timeout:|Enabled:|Agent:" mini_agent/cli.py tests/test_cli.py evals/run_evals.py
 ```
 
-If existing evals fail only because TASK-152 has not yet updated expected copy, report exact failing eval names and still make unit tests pass.
+If feasible, also run a manual TTY smoke:
+
+```bash
+nora
+```
+
+Check `/` completion, arrow navigation, Tab completion, normal chat status, and `/exit`.
+
+If the local installed `nora` is stale, report the exact install command needed instead of silently assuming success.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the `rg` scan summary.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and any manual TTY observations.
 
 Then notify Codex PM:
 
