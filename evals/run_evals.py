@@ -12,7 +12,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
-from mini_agent.cli import INPUT_SEPARATOR
 from mini_agent.config import AgentConfig, load_agent_config
 from mini_agent.context_compiler import ContextCompiler
 from mini_agent.context_summary import ContextSummaryStore
@@ -705,7 +704,7 @@ def eval_cli_runs_command_and_exits():
     assert agent.inputs == ["hello"]
     assert "Nora 已启动" in outputs[0]
     assert "高风险工具会先确认" in outputs[0]
-    assert any("Agent: reply: hello" in output for output in outputs)
+    assert any("reply: hello" in output for output in outputs)
 
 
 def eval_cli_handles_help_command():
@@ -1068,8 +1067,8 @@ def eval_cli_response_status_normal_prompt():
     outputs = []
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
     cli.run()
-    status_outputs = [o for o in outputs if "正在调用模型" in o]
-    done_outputs = [o for o in outputs if "模型响应完成" in o]
+    status_outputs = [o for o in outputs if o.strip() == "thinking"]
+    done_outputs = [o for o in outputs if o.strip() == "ready"]
     assert len(status_outputs) >= 1, f"no start status line: {outputs}"
     assert len(done_outputs) >= 1, f"no done status line: {outputs}"
 
@@ -1470,10 +1469,10 @@ def eval_cli_terminal_lifecycle_normal_exact():
     )
     cli.run()
     assert agent.inputs == ["hello"], f"unexpected model inputs: {agent.inputs}"
-    accepted = outputs.index("✓ 已接收输入")
-    started = outputs.index("⏳ 正在调用模型...")
-    done = outputs.index("✓ 模型响应完成")
-    reply = next(index for index, output in enumerate(outputs) if "Agent: reply: hello" in output)
+    accepted = outputs.index("received")
+    started = outputs.index("thinking")
+    done = outputs.index("ready")
+    reply = next(index for index, output in enumerate(outputs) if "reply: hello" in output)
     assert accepted < started < done < reply, f"lifecycle order wrong: {outputs}"
 
 
@@ -1489,9 +1488,9 @@ def eval_cli_terminal_lifecycle_multiline_exact():
     )
     cli.run()
     assert agent.inputs == ["line1\nline2"], f"unexpected multiline input: {agent.inputs}"
-    assert outputs.count("✓ 已接收输入") == 1, f"accepted status count wrong: {outputs}"
-    assert outputs.count("⏳ 正在调用模型...") == 1, f"start status count wrong: {outputs}"
-    assert outputs.count("✓ 模型响应完成") == 1, f"done status count wrong: {outputs}"
+    assert outputs.count("received") == 1, f"accepted status count wrong: {outputs}"
+    assert outputs.count("thinking") == 1, f"start status count wrong: {outputs}"
+    assert outputs.count("ready") == 1, f"done status count wrong: {outputs}"
 
 
 def eval_cli_terminal_lifecycle_non_model_no_noise():
@@ -1508,9 +1507,9 @@ def eval_cli_terminal_lifecycle_non_model_no_noise():
         cli.run()
         full = "\n".join(outputs)
         assert agent.inputs == [], f"non-model input called agent: {inputs} -> {agent.inputs}"
-        assert "✓ 已接收输入" not in full, f"accepted status leaked for {inputs}: {full[:300]}"
-        assert "正在调用模型" not in full, f"model start leaked for {inputs}: {full[:300]}"
-        assert "模型响应完成" not in full, f"model done leaked for {inputs}: {full[:300]}"
+        assert "received" not in full, f"accepted status leaked for {inputs}: {full[:300]}"
+        assert "thinking" not in full, f"model start leaked for {inputs}: {full[:300]}"
+        assert "ready" not in full, f"model done leaked for {inputs}: {full[:300]}"
 
 
 def eval_cli_terminal_surfaces_plain_text():
@@ -1573,9 +1572,9 @@ def eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak():
         cli.run()
         status_lines = [
             output for output in outputs
-            if "已接收输入" in output or "正在调用模型" in output or "模型响应完成" in output
+            if output.strip() in ("received", "thinking", "ready")
         ]
-        assert status_lines == ["✓ 已接收输入", "⏳ 正在调用模型...", "✓ 模型响应完成"], \
+        assert status_lines == ["received", "thinking", "ready"], \
             f"unexpected lifecycle lines: {status_lines}"
         lifecycle_text = "\n".join(status_lines).lower()
         for forbidden in ["sk-terminal-no-leak-999", "sk-prompt-secret-888", "chain_of_thought", "hidden_reasoning", "{", "["]:
@@ -1608,11 +1607,11 @@ def eval_cli_ui_v2_input_status_line():
             output_func=disabled_outputs.append,
         ).run()
         disabled_footer = disabled_outputs[1]
-        assert disabled_footer.count(INPUT_SEPARATOR) == 2, f"missing input separators: {disabled_footer}"
         assert "model:" in disabled_footer, f"missing model label: {disabled_footer}"
         assert "disabled" in disabled_footer, f"missing disabled model state: {disabled_footer}"
         assert "local-first" in disabled_footer, f"missing local-first: {disabled_footer}"
         assert "/ for commands" in disabled_footer, f"missing command hint: {disabled_footer}"
+        assert "─" not in disabled_footer, f"heavy separator leaked into input hint: {disabled_footer}"
 
         settings = load_settings(
             env_path=root / ".env",
@@ -1636,7 +1635,7 @@ def eval_cli_ui_v2_input_status_line():
         status_lines = [line for line in configured_outputs if "local-first" in line]
         assert status_lines, f"status line missing from output: {full_output[:500]}"
         assert any("model: gpt-4.1-mini" in line for line in status_lines), f"model missing from status lines: {status_lines}"
-        assert full_output.count(INPUT_SEPARATOR) >= 4, f"input separators missing around prompt area: {full_output[:500]}"
+        assert "─" not in "\n".join(status_lines), f"heavy separator leaked into status lines: {status_lines}"
         for forbidden in ["intelligence", "speed", "routing", "sk-status-secret-12345", "hidden_reasoning"]:
             assert forbidden not in full_output, f"forbidden status content leaked: {forbidden}"
 
@@ -1658,7 +1657,7 @@ def eval_cli_ui_default_hides_run_report():
             output_func=outputs.append,
         ).run()
         full_output = "\n".join(outputs)
-        assert "Agent: reply: hello" in full_output, f"agent reply missing: {full_output[:500]}"
+        assert "reply: hello" in full_output, f"agent reply missing: {full_output[:500]}"
         assert "运行报告:" not in full_output, f"run report leaked into default CLI output: {full_output[:500]}"
         assert "fake_tool(ok)" not in full_output, f"tool report leaked into default CLI output: {full_output[:500]}"
 
@@ -2273,7 +2272,7 @@ def eval_cli_auto_command():
     agent = FakeCLIAgent()
     result = MiniAgentCLI(agent, FakeCLIRegistry()).handle_slash_command("/auto 3 inspect project")
     assert agent.autonomous_calls == [("inspect project", 3)]
-    assert "Agent: auto reply: inspect project / 3" in result, result
+    assert "auto reply: inspect project / 3" in result, result
 
 
 def eval_provider_factory_openai():

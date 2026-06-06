@@ -8,31 +8,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-141: CLI default terminal surface v3
-- 架构层: Agent OS Dashboard
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: 当前主线 TASK-139/TASK-140 已完成
-- 目标: 将 Nora 默认终端继续收敛到 Claude Code-like 的纯文本交互表面：回答直接显示在 `> ` 上方，默认不使用重分隔线、不重复上下文、不显示 `Agent:` 标签。
-- 非目标: 不做 fullscreen TUI、Web UI redesign、模型路由行为变更、worker/runtime 后端语义变更、图标/favicon 变更。
-- 安全边界: 不泄漏 API key、token、`.env` 值、raw prompt、hidden reasoning、raw tool payload；保持 slash command deterministic/plain-text；不编辑 `CODEX_TERMINAL_HANDOFF.md`、`designs/`、图标/Web favicon 相关文件。
-- 持久证据: CLI 输出契约通过 `tests/test_cli.py` 固化；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog/review。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard；`mini_agent/cli.py`；`tests/test_cli.py`；用户方向“像 Claude 那样单调、`> ` 输入框”。
-
-### TASK-142: CLI default terminal surface v3 deterministic eval coverage
-- 架构层: Eval/Review System
-- 优先级: high
-- 预计: 1 小时
-- 依赖: 等待 TASK-141 runtime 变更可见后补充/调整 eval
-- 目标: 为 TASK-141 的默认终端表面增加 deterministic offline eval，防止回归到重 footer、`Agent:` 标签、上下文重复 prompt、默认 intelligence/speed/routing 展示或 secret 泄漏。
-- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做视觉/TUI/Web UI 变更。
-- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload leak。
-- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog/review。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Eval/Review System；`evals/run_evals.py` TASK-140 CLI UI v2 evals；`mini_agent/cli.py` current prompt/footer/response formatting。
-
 ## 已完成
+
+### TASK-142: CLI default terminal surface v3 deterministic eval coverage ✅
+- 完成者: Claude B；Codex PM 清理 dead `INPUT_SEPARATOR` import 并补强 no heavy separator 断言。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 evals/run_evals.py` 561 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 227 tests OK；`git diff --check` OK。
+- 内容: 更新旧 CLI v2 eval 断言以匹配 TASK-141 v3 surface：普通回复无 `Agent:` 前缀、lifecycle 为 `received`/`thinking`/`ready`、默认 input hint 为单行 `model: ... | local-first | / for commands` 且无重 separator；覆盖 slash/blank/exit no lifecycle noise、no intelligence/speed/routing、no API key/raw prompt/hidden reasoning/raw payload leak，以及 `/auto` 输出兼容。
+
+### TASK-141: CLI default terminal surface v3 ✅
+- 完成者: Claude A；Codex PM 手动集成到主线。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 227 tests OK；`git diff --check` OK；合并 TASK-142 后 `python3 evals/run_evals.py` 561 passed。
+- 内容: 将 Nora 默认终端继续收敛到 Claude Code-like 纯文本表面：保留 `> ` prompt；将重 footer/separator 改为单行 `model: ... | local-first | / for commands`；普通模型回复不再加 `Agent:` 标签；lifecycle 压缩为 `received`、`thinking`、`ready`；slash/blank/exit 保持无 lifecycle 噪声；不改变 Web UI、模型路由、worker/runtime 后端语义或图标/favicon 资产。
 
 ### TASK-140: CLI UI v2 deterministic eval coverage ✅
 - 完成者: Codex PM 直接完成 eval-only patch；Claude B worktree 未包含 PM 主仓库中未提交的 TASK-139 集成，因此 B 报告 blocked。
