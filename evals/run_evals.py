@@ -69,6 +69,19 @@ def main() -> int:
         EvalCase("cli_startup_banner_no_model", eval_cli_startup_banner_no_model),
         EvalCase("cli_startup_banner_with_model", eval_cli_startup_banner_with_model),
         EvalCase("cli_startup_banner_worker_summary", eval_cli_startup_banner_worker_summary),
+        # TASK-146: Startup header and working indicator eval coverage
+        EvalCase("startup_header_has_nora_code", eval_startup_header_has_nora_code),
+        EvalCase("startup_header_has_robot_icon", eval_startup_header_has_robot_icon),
+        EvalCase("startup_header_model_state", eval_startup_header_model_state),
+        EvalCase("startup_header_workspace_path", eval_startup_header_workspace_path),
+        EvalCase("startup_header_compact", eval_startup_header_compact),
+        EvalCase("working_indicator_normal_prompt", eval_working_indicator_normal_prompt),
+        EvalCase("working_indicator_multiline_prompt", eval_working_indicator_multiline_prompt),
+        EvalCase("working_indicator_slash_no_noise", eval_working_indicator_slash_no_noise),
+        EvalCase("working_indicator_blank_exit_no_noise", eval_working_indicator_blank_exit_no_noise),
+        EvalCase("working_indicator_no_raw_prompt_leak", eval_working_indicator_no_raw_prompt_leak),
+        EvalCase("working_indicator_no_api_key_leak", eval_working_indicator_no_api_key_leak),
+        EvalCase("prompt_remains_minimal", eval_prompt_remains_minimal),
         EvalCase("cli_wake_project_panel", eval_cli_wake_project_panel),
         EvalCase("cli_wake_non_project_guidance", eval_cli_wake_non_project_guidance),
         EvalCase("cli_model_provider_diagnostics", eval_cli_model_provider_diagnostics),
@@ -710,8 +723,8 @@ def eval_cli_runs_command_and_exits():
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
     cli.run()
     assert agent.inputs == ["hello"]
-    assert "Nora 已启动" in outputs[0]
-    assert "高风险工具会先确认" in outputs[0]
+    assert "Nora Code" in outputs[0], f"missing Nora Code: {outputs[0]}"
+    assert "Nora 已启动" not in outputs[0], f"old Chinese welcome found: {outputs[0]}"
     assert any("reply: hello" in output for output in outputs)
 
 
@@ -761,7 +774,7 @@ def eval_cli_multiline_input():
 # --- TASK-130: CLI UX smoke/eval coverage ---
 
 def eval_cli_startup_banner_no_model():
-    """Startup banner shows local-only key state and common commands when no key is configured."""
+    """Startup banner shows Nora Code, robot icon, local mode, and workspace path when no key is configured."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -775,12 +788,13 @@ def eval_cli_startup_banner_no_model():
         )
         cli.run()
         banner = outputs[0]
-        assert "Nora 已启动" in banner, f"missing startup message: {banner}"
-        assert "API key: not used" in banner, f"missing local-only API key state: {banner}"
-        assert "Workspace:" in banner, f"missing workspace: {banner}"
-        assert "/wake" in banner, f"missing /wake hint: {banner}"
-        assert "/model" in banner, f"missing /model hint: {banner}"
-        assert "/workers" in banner, f"missing /workers hint: {banner}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner}"
+        assert "(o_o)" in banner, f"missing robot icon: {banner}"
+        assert "local mode (no LLM)" in banner, f"missing local mode: {banner}"
+        assert str(root) in banner, f"missing workspace path: {banner}"
+        assert "Nora 已启动" not in banner, f"old Chinese welcome found: {banner}"
+        assert "===" not in banner, f"panel header found: {banner}"
+        assert "───" not in banner, f"section header found: {banner}"
 
 
 def eval_cli_startup_banner_with_model():
@@ -802,8 +816,9 @@ def eval_cli_startup_banner_with_model():
         )
         cli.run()
         banner = outputs[0]
-        assert "openai-compatible" in banner, f"missing provider: {banner}"
-        assert "gpt-4.1-mini" in banner, f"missing model: {banner}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner}"
+        assert "(o_o)" in banner, f"missing robot icon: {banner}"
+        assert "model: openai-compatible / gpt-4.1-mini" in banner, f"missing model info: {banner}"
         assert "API key: configured" in banner, f"missing key configured: {banner}"
         assert "sk-test-secret-key-12345" not in banner, "API key leaked in banner"
 
@@ -832,6 +847,230 @@ def eval_cli_startup_banner_worker_summary():
         banner = outputs[0]
         assert "claude-a: done" in banner, f"missing claude-a status: {banner}"
         assert "claude-b: done" in banner, f"missing claude-b status: {banner}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner}"
+
+
+# TASK-146: Startup header and working indicator eval coverage
+
+def eval_startup_header_has_nora_code():
+    """Banner includes 'Nora Code' product identifier."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "Nora Code" in banner, f"missing Nora Code in banner: {banner}"
+
+
+def eval_startup_header_has_robot_icon():
+    """Banner includes ASCII robot icon on the left side."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert "(o_o)" in banner, f"missing robot icon in banner: {banner}"
+        assert "/|_|\\" in banner, f"missing robot body in banner: {banner}"
+
+
+def eval_startup_header_model_state():
+    """Banner shows model state: configured provider/model or local/disabled."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Test disabled state
+        settings_disabled = load_settings(env_path=Path(tmpdir) / ".missing.env", environ={})
+        outputs_disabled = []
+        cli_disabled = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings_disabled,
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs_disabled.append,
+        )
+        cli_disabled.run()
+        banner_disabled = outputs_disabled[0]
+        assert "local mode (no LLM)" in banner_disabled, f"missing local mode: {banner_disabled}"
+
+        # Test configured state
+        settings_configured = load_settings(environ={
+            "LLM_PROVIDER": "anthropic",
+            "ANTHROPIC_API_KEY": "sk-ant-test-key",
+            "ANTHROPIC_MODEL": "claude-sonnet-4-5",
+        })
+        outputs_configured = []
+        cli_configured = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings_configured,
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs_configured.append,
+        )
+        cli_configured.run()
+        banner_configured = outputs_configured[0]
+        assert "model: anthropic / claude-sonnet-4-5" in banner_configured, f"missing configured model: {banner_configured}"
+        assert "API key: configured" in banner_configured, f"missing API key status: {banner_configured}"
+        assert "sk-ant-test-key" not in banner_configured, "API key leaked"
+
+
+def eval_startup_header_workspace_path():
+    """Banner includes workspace path."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "my_project"
+        root.mkdir()
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        assert str(root) in banner, f"missing workspace path: {banner}"
+
+
+def eval_startup_header_compact():
+    """Header is compact and bounded, not a long welcome panel."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        banner = outputs[0]
+        line_count = len(banner.split("\n"))
+        assert line_count <= 10, f"banner too long ({line_count} lines): {banner}"
+        assert "Nora 已启动" not in banner, f"old welcome found: {banner}"
+        assert "Status" not in banner, f"section header found: {banner}"
+        assert "Workspace:" not in banner, f"old format found: {banner}"
+
+
+def eval_working_indicator_normal_prompt():
+    """Normal prompt emits Working... before response and Done. after."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        # Find Working... and Done. in outputs
+        working_indices = [i for i, o in enumerate(outputs) if o.strip() == "Working..."]
+        done_indices = [i for i, o in enumerate(outputs) if o.strip() == "Done."]
+        assert len(working_indices) >= 1, f"missing Working... in outputs: {outputs}"
+        assert len(done_indices) >= 1, f"missing Done. in outputs: {outputs}"
+        # Working... should come before Done.
+        assert working_indices[0] < done_indices[0], f"Working... not before Done.: {outputs}"
+
+
+def eval_working_indicator_multiline_prompt():
+    """Multiline prompt emits Working... before response and Done. after."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["<<<", "line1", "line2", ">>>", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        working_indices = [i for i, o in enumerate(outputs) if o.strip() == "Working..."]
+        done_indices = [i for i, o in enumerate(outputs) if o.strip() == "Done."]
+        assert len(working_indices) >= 1, f"missing Working... in multiline: {outputs}"
+        assert len(done_indices) >= 1, f"missing Done. in multiline: {outputs}"
+        assert working_indices[0] < done_indices[0], f"Working... not before Done.: {outputs}"
+
+
+def eval_working_indicator_slash_no_noise():
+    """Slash commands do not emit Working... or Done."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["/help", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        for output in outputs:
+            assert output.strip() != "Working...", f"Working... emitted for slash command: {outputs}"
+            assert output.strip() != "Done.", f"Done. emitted for slash command: {outputs}"
+
+
+def eval_working_indicator_blank_exit_no_noise():
+    """Blank input and exit do not emit Working... or Done."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["", "   ", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        for output in outputs:
+            assert output.strip() != "Working...", f"Working... emitted for blank/exit: {outputs}"
+            assert output.strip() != "Done.", f"Done. emitted for blank/exit: {outputs}"
+
+
+def eval_working_indicator_no_raw_prompt_leak():
+    """Working... line does not echo the raw prompt or hidden reasoning."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        secret_prompt = "sk-secret-prompt-12345"
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input([secret_prompt, "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        for output in outputs:
+            if output.strip() in ("Working...", "Done."):
+                assert secret_prompt not in output, f"raw prompt leaked in working indicator: {output}"
+                assert "thinking" not in output.lower(), f"reasoning leaked: {output}"
+                assert "hidden" not in output.lower(), f"hidden reasoning leaked: {output}"
+
+
+def eval_working_indicator_no_api_key_leak():
+    """Working... line does not leak API keys."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-leaked-key-99999",
+            "LLM_MODEL": "gpt-4",
+        })
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(),
+            settings=settings,
+            root=Path(tmpdir),
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        for output in outputs:
+            assert "sk-leaked-key-99999" not in output, f"API key leaked in output: {output}"
+
+
+def eval_prompt_remains_minimal():
+    """Prompt remains exactly '> '."""
+    cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+    assert cli.prompt() == "> ", f"prompt changed: {cli.prompt()!r}"
 
 
 def eval_cli_wake_project_panel():
@@ -1072,8 +1311,8 @@ def eval_cli_response_status_normal_prompt():
     outputs = []
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
     cli.run()
-    status_outputs = [o for o in outputs if o.strip() == "thinking"]
-    done_outputs = [o for o in outputs if o.strip() == "ready"]
+    status_outputs = [o for o in outputs if o.strip() == "Working..."]
+    done_outputs = [o for o in outputs if o.strip() == "Done."]
     assert len(status_outputs) >= 1, f"no start status line: {outputs}"
     assert len(done_outputs) >= 1, f"no done status line: {outputs}"
 
@@ -1328,11 +1567,9 @@ def eval_banner_next_action_hint():
         )
         cli.run()
         banner = outputs[0]
-        assert "输入 / 查看命令菜单" in banner, f"missing slash launcher hint: {banner[:300]}"
-        assert "/wake" in banner, f"missing /wake hint in banner: {banner[:300]}"
-        assert "/setup" in banner, f"missing /setup hint in banner: {banner[:300]}"
-        assert "/model" in banner, f"missing /model hint in banner: {banner[:300]}"
-        assert "/workers" in banner, f"missing /workers hint in banner: {banner[:300]}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner[:300]}"
+        assert "local mode (no LLM)" in banner, f"missing local mode: {banner[:300]}"
+        assert str(root) in banner, f"missing workspace path: {banner[:300]}"
 
 
 def eval_banner_preserves_core_info():
@@ -1359,11 +1596,10 @@ def eval_banner_preserves_core_info():
         )
         cli.run()
         banner = outputs[0]
-        assert "Workspace:" in banner, f"missing workspace: {banner[:300]}"
-        assert "LLM:" in banner, f"missing LLM info: {banner[:300]}"
-        assert "gpt-4.1-mini" in banner, f"missing model: {banner[:300]}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner[:300]}"
+        assert "model: openai-compatible / gpt-4.1-mini" in banner, f"missing model info: {banner[:300]}"
         assert "API key: configured" in banner, f"missing key presence: {banner[:300]}"
-        assert "Tools:" in banner, f"missing tools count: {banner[:300]}"
+        assert str(root) in banner, f"missing workspace path: {banner[:300]}"
 
 
 def eval_banner_missing_key_safe():
@@ -1382,7 +1618,8 @@ def eval_banner_missing_key_safe():
         )
         cli.run()
         banner = outputs[0]
-        assert "API key: not used" in banner, f"missing local-only key indication: {banner[:300]}"
+        assert "local mode (no LLM)" in banner, f"missing local mode: {banner[:300]}"
+        assert "Nora Code" in banner, f"missing Nora Code: {banner[:300]}"
         assert "sk-test" not in banner, f"fake key leaked: {banner[:300]}"
 
 
@@ -1489,6 +1726,7 @@ def eval_cli_terminal_landing_sections():
         )
         cli.run()
         banner = outputs[0]
+        # Old section headers should not appear
         for forbidden in [
             "─── Status ───",
             "─── Workspace ───",
@@ -1497,21 +1735,14 @@ def eval_cli_terminal_landing_sections():
             "─── Next ───",
         ]:
             assert forbidden not in banner, f"old landing section still visible {forbidden}: {banner[:500]}"
-        for exact in [
-            "Nora 已启动",
-            "Workspace:",
-            "LLM:",
-            "API key: not used",
-            "Tools:",
-            "输入 / 查看命令菜单",
-            "/wake",
-            "/setup",
-            "/model",
-            "/workers",
-        ]:
-            assert exact in banner, f"missing landing text {exact}: {banner[:500]}"
+        # New compact format should be present
+        assert "Nora Code" in banner, f"missing Nora Code: {banner[:500]}"
+        assert "(o_o)" in banner, f"missing robot icon: {banner[:500]}"
+        assert "local mode (no LLM)" in banner, f"missing local mode: {banner[:500]}"
+        assert str(root) in banner, f"missing workspace path: {banner[:500]}"
+        assert "Nora 已启动" not in banner, f"old Chinese welcome found: {banner[:500]}"
         line_count = len(banner.splitlines())
-        assert 6 <= line_count <= 12, f"banner not compact ({line_count} lines): {banner[:500]}"
+        assert 2 <= line_count <= 6, f"banner not compact ({line_count} lines): {banner[:500]}"
 
 
 def eval_cli_terminal_landing_tasks_workers():
@@ -1561,7 +1792,8 @@ def eval_cli_terminal_landing_key_states_safe():
             output_func=missing_outputs.append,
         ).run()
         missing_banner = missing_outputs[0]
-        assert "API key: not used" in missing_banner, f"local-only key state absent: {missing_banner[:500]}"
+        assert "local mode (no LLM)" in missing_banner, f"local-only key state absent: {missing_banner[:500]}"
+        assert "Nora Code" in missing_banner, f"missing Nora Code: {missing_banner[:500]}"
         assert "sk-terminal-secret-12345" not in missing_banner, "unexpected fake secret in missing-key banner"
 
         configured_settings = load_settings(
@@ -1584,8 +1816,7 @@ def eval_cli_terminal_landing_key_states_safe():
         ).run()
         configured_banner = configured_outputs[0]
         assert "API key: configured" in configured_banner, f"configured state absent: {configured_banner[:500]}"
-        assert "openai-compatible" in configured_banner, f"provider missing: {configured_banner[:500]}"
-        assert "gpt-4.1-mini" in configured_banner, f"model missing: {configured_banner[:500]}"
+        assert "model: openai-compatible / gpt-4.1-mini" in configured_banner, f"model info missing: {configured_banner[:500]}"
         assert "sk-terminal-secret-12345" not in configured_banner, "API key leaked in configured banner"
 
 
@@ -1601,11 +1832,10 @@ def eval_cli_terminal_lifecycle_normal_exact():
     )
     cli.run()
     assert agent.inputs == ["hello"], f"unexpected model inputs: {agent.inputs}"
-    accepted = outputs.index("received")
-    started = outputs.index("thinking")
-    done = outputs.index("ready")
+    working = outputs.index("Working...")
+    done = outputs.index("Done.")
     reply = next(index for index, output in enumerate(outputs) if "reply: hello" in output)
-    assert accepted < started < done < reply, f"lifecycle order wrong: {outputs}"
+    assert working < done < reply, f"lifecycle order wrong: {outputs}"
 
 
 def eval_cli_terminal_lifecycle_multiline_exact():
@@ -1620,9 +1850,8 @@ def eval_cli_terminal_lifecycle_multiline_exact():
     )
     cli.run()
     assert agent.inputs == ["line1\nline2"], f"unexpected multiline input: {agent.inputs}"
-    assert outputs.count("received") == 1, f"accepted status count wrong: {outputs}"
-    assert outputs.count("thinking") == 1, f"start status count wrong: {outputs}"
-    assert outputs.count("ready") == 1, f"done status count wrong: {outputs}"
+    assert outputs.count("Working...") == 1, f"Working... status count wrong: {outputs}"
+    assert outputs.count("Done.") == 1, f"Done. status count wrong: {outputs}"
 
 
 def eval_cli_terminal_lifecycle_non_model_no_noise():
@@ -1639,9 +1868,8 @@ def eval_cli_terminal_lifecycle_non_model_no_noise():
         cli.run()
         full = "\n".join(outputs)
         assert agent.inputs == [], f"non-model input called agent: {inputs} -> {agent.inputs}"
-        assert "received" not in full, f"accepted status leaked for {inputs}: {full[:300]}"
-        assert "thinking" not in full, f"model start leaked for {inputs}: {full[:300]}"
-        assert "ready" not in full, f"model done leaked for {inputs}: {full[:300]}"
+        assert "Working..." not in full, f"working status leaked for {inputs}: {full[:300]}"
+        assert "Done." not in full, f"done status leaked for {inputs}: {full[:300]}"
 
 
 def eval_cli_terminal_surfaces_plain_text():
@@ -1704,9 +1932,9 @@ def eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak():
         cli.run()
         status_lines = [
             output for output in outputs
-            if output.strip() in ("received", "thinking", "ready")
+            if output.strip() in ("Working...", "Done.")
         ]
-        assert status_lines == ["received", "thinking", "ready"], \
+        assert status_lines == ["Working...", "Done."], \
             f"unexpected lifecycle lines: {status_lines}"
         lifecycle_text = "\n".join(status_lines).lower()
         for forbidden in ["sk-terminal-no-leak-999", "sk-prompt-secret-888", "chain_of_thought", "hidden_reasoning", "{", "["]:
