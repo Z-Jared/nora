@@ -1,4 +1,4 @@
-# TASK-145: Claude Code-like startup header with Nora robot
+# TASK-145: Claude Code-like startup header and working indicator
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
@@ -20,6 +20,8 @@ The next startup gap is the banner. The user provided a Claude Code screenshot w
 - bottom: minimal prompt/input surface
 
 For Nora, implement the same structure with a small robot ASCII icon and compact information next to it. Keep it monochrome/plain text and avoid a dashboard or welcome panel.
+
+The user also wants Codex-like visibility while Nora is thinking/working. This must be a safe progress display only: show stages such as received/working/ready or bounded tool/action summaries, but never hidden reasoning, chain-of-thought, raw prompts, raw tool payloads, or secrets.
 
 Read first:
 
@@ -45,7 +47,7 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Replace the current startup `banner()` with a Claude Code-like startup header.
+Replace the current startup `banner()` with a Claude Code-like startup header, and update ordinary model-call feedback to a Codex-like safe working indicator.
 
 Required behavior:
 
@@ -76,6 +78,13 @@ Required behavior:
    - No API key, token, `.env` value, raw prompt, hidden reasoning, raw tool payload, or raw file content leak.
    - Slash commands and existing CLI command semantics must continue working.
 
+5. Codex-like working display
+   - When a normal prompt or multiline prompt calls the agent/model, show a compact visible work state before the response, e.g. `• Working` or another short Claude/Codex-like line.
+   - Preserve a clear completion state after the response if the current CLI contract expects one.
+   - Do not show working status for slash commands, blank input, `exit`, or `quit`.
+   - Do not reveal hidden reasoning, raw prompt text, raw model payloads, raw tool payloads, API keys, `.env` values, or private file contents.
+   - Keep output deterministic for tests; do not implement live streaming unless it is already supported by existing abstractions.
+
 ## Scope
 
 Primary files:
@@ -99,6 +108,8 @@ Do not edit:
 ## Non-Goals
 
 - No animation in this task.
+- No chain-of-thought or hidden reasoning display.
+- No live streaming implementation unless it is a trivial wrapper around existing deterministic status output.
 - No web UI redesign.
 - No icon/favicon/package-data changes.
 - No model routing behavior changes.

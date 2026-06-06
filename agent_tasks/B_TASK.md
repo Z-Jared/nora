@@ -1,10 +1,10 @@
-# TASK-146: Startup header deterministic eval coverage
+# TASK-146: Startup header and working indicator deterministic eval coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-145: a Claude Code-like startup header with a small Nora robot ASCII icon on the left and compact status text on the right. Your job is deterministic offline eval coverage after TASK-145 is visible in your worktree or after PM asks you to rebase/integrate.
+Claude A owns TASK-145: a Claude Code-like startup header with a small Nora robot ASCII icon on the left and compact status text on the right, plus Codex-like safe working feedback while normal prompts are being processed. Your job is deterministic offline eval coverage after TASK-145 is visible in your worktree or after PM asks you to rebase/integrate.
 
 Target UX:
 
@@ -13,6 +13,7 @@ Target UX:
 - Model line shows provider/model when configured or local/disabled state when not configured.
 - Workspace path is visible.
 - No old Chinese welcome sentence, no dashboard panel, no section-heavy banner.
+- Normal prompts show safe working/progress feedback while Nora is processing, without exposing hidden reasoning.
 - Prompt remains `> ` and input status remains compact.
 
 Read first:
@@ -65,10 +66,16 @@ Coverage requirements:
 4. Worker summary and compatibility
    - Existing `.ccb` DONE summary coverage should still pass or be updated to the new compact wording.
    - Prompt remains exactly `> `.
-   - Startup banner does not call fake agent and does not emit `received`/`thinking`/`ready`.
+   - Startup banner does not call fake agent and does not emit model-call lifecycle text.
    - Slash command evals remain compatible.
 
-5. Safety
+5. Codex-like working display
+   - Normal prompt and multiline prompt runs emit a compact work-state line before the final response.
+   - Slash commands, blank input, `exit`, and `quit` do not emit work-state lines.
+   - Work-state lines are bounded and deterministic.
+   - Work-state lines do not echo the raw prompt or hidden reasoning.
+
+6. Safety
    - No API key, raw `.env`, raw prompt, hidden reasoning, raw tool payload, or raw file content leak.
    - No network, LLM, external service, or CCB command calls from evals.
 
