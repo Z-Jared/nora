@@ -1,3 +1,4 @@
+import re
 import shutil
 import shlex
 from pathlib import Path
@@ -12,6 +13,14 @@ def _truncate_text(text: str, max_len: int = 120) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+def _strip_terminal_emoji(text: str) -> str:
+    return re.sub(
+        r"[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U00002600-\U000026FF]",
+        "",
+        text,
+    )
 
 
 class MiniAgentCLI:
@@ -36,7 +45,6 @@ class MiniAgentCLI:
 
     def run(self) -> None:
         self.output_func(self.banner())
-        self.output_func(self._input_status_line())
         while not self.should_exit:
             try:
                 user_input = self.input_func(self.prompt()).strip()
@@ -47,7 +55,6 @@ class MiniAgentCLI:
             result = self.handle_input(user_input)
             if result:
                 self.output_func(result)
-                self.output_func(self._input_status_line())
 
     def banner(self) -> str:
         # Small robot ASCII icon
@@ -810,7 +817,19 @@ class MiniAgentCLI:
             return f"invalid arg: {name} must be an integer"
 
     def _format_agent_response(self, response: str) -> str:
-        return response
+        if not response:
+            return response
+        lines = []
+        for raw_line in response.splitlines():
+            line = raw_line.rstrip()
+            line = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)
+            line = re.sub(r"^\s*[-*]\s+", "  ", line)
+            line = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", line)
+            line = re.sub(r"__([^_\n]+)__", r"\1", line)
+            line = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", line)
+            line = _strip_terminal_emoji(line).rstrip()
+            lines.append(line)
+        return "\n".join(lines).strip()
 
     def _help(self) -> str:
         return "\n".join(

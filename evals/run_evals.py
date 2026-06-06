@@ -2389,7 +2389,7 @@ def eval_cli_ui_v2_minimal_prompt():
 
 
 def eval_cli_ui_v2_input_status_line():
-    """Input footer exposes model/local-first/command hint without routing controls or secrets."""
+    """Default chat does not repeat model footer; model state lives in startup and /model."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         disabled_outputs = []
@@ -2401,12 +2401,9 @@ def eval_cli_ui_v2_input_status_line():
             input_func=_fake_input(["exit"]),
             output_func=disabled_outputs.append,
         ).run()
-        disabled_footer = disabled_outputs[1]
-        assert "model:" in disabled_footer, f"missing model label: {disabled_footer}"
-        assert "disabled" in disabled_footer, f"missing disabled model state: {disabled_footer}"
-        assert "local-first" in disabled_footer, f"missing local-first: {disabled_footer}"
-        assert "/ for commands" in disabled_footer, f"missing command hint: {disabled_footer}"
-        assert "─" not in disabled_footer, f"heavy separator leaked into input hint: {disabled_footer}"
+        assert len(disabled_outputs) == 1, f"unexpected footer in disabled output: {disabled_outputs}"
+        assert "local mode" in disabled_outputs[0], f"missing disabled model state: {disabled_outputs[0]}"
+        assert "local-first" not in "\n".join(disabled_outputs), f"repeated footer leaked: {disabled_outputs}"
 
         settings = load_settings(
             env_path=root / ".env",
@@ -2427,10 +2424,10 @@ def eval_cli_ui_v2_input_status_line():
             output_func=configured_outputs.append,
         ).run()
         full_output = "\n".join(configured_outputs)
-        status_lines = [line for line in configured_outputs if "local-first" in line]
-        assert status_lines, f"status line missing from output: {full_output[:500]}"
-        assert any("model: gpt-4.1-mini" in line for line in status_lines), f"model missing from status lines: {status_lines}"
-        assert "─" not in "\n".join(status_lines), f"heavy separator leaked into status lines: {status_lines}"
+        assert "model: openai-compatible / gpt-4.1-mini" in configured_outputs[0], \
+            f"model missing from startup: {configured_outputs[0]}"
+        assert "local-first" not in full_output, f"repeated footer leaked: {full_output[:500]}"
+        assert "─" not in full_output, f"heavy separator leaked into output: {full_output[:500]}"
         for forbidden in ["intelligence", "speed", "routing", "sk-status-secret-12345", "hidden_reasoning"]:
             assert forbidden not in full_output, f"forbidden status content leaked: {forbidden}"
 

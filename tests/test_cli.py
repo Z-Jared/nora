@@ -17,7 +17,8 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertEqual(agent.inputs, ["hello"])
         self.assertIn("Nora Code", outputs[0])
         self.assertTrue(any("reply: hello" in output for output in outputs))
-        self.assertTrue(any("model:" in output and "/ for commands" in output for output in outputs))
+        self.assertIn("local mode", outputs[0])
+        self.assertFalse(any("local-first" in output for output in outputs[1:]))
 
     def test_quit_exits_without_agent_call(self):
         agent = FakeCLIAgent()
@@ -194,6 +195,35 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("model:", status)
         self.assertIn("/ for commands", status)
         self.assertNotIn("Workspace:", status)
+
+    def test_default_run_does_not_repeat_status_footer(self):
+        outputs = []
+        cli = MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=outputs.append,
+        )
+
+        cli.run()
+
+        repeated_footers = [output for output in outputs[1:] if "local-first" in output]
+        self.assertEqual(repeated_footers, [])
+
+    def test_agent_response_is_terminal_plain_text(self):
+        agent = FakeCLIAgent()
+        agent.run = lambda text: "# Title 👋\n\n**Bold**\n* item"
+        cli = MiniAgentCLI(agent, FakeCLIRegistry())
+
+        result = cli.handle_input("format")
+
+        self.assertIn("Title", result)
+        self.assertIn("Bold", result)
+        self.assertIn("  item", result)
+        self.assertNotIn("# Title", result)
+        self.assertNotIn("**", result)
+        self.assertNotIn("* item", result)
+        self.assertNotIn("👋", result)
 
     def test_disabled_banner_shows_api_key_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:
