@@ -8,18 +8,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-139: CLI UI v2 lightweight terminal surface
-- Owner: Codex A
-- Goal: Make the default CLI lighter and closer to modern terminal coding assistants: minimal `> ` prompt, compact startup banner, single model/local-first status line, quieter lifecycle feedback, no fullscreen TUI and no dashboard.
-- Scope: `mini_agent/cli.py`, `tests/test_cli.py`, `agent_tasks/A_DONE.md`.
-
-### TASK-140: CLI UI v2 deterministic eval coverage
-- Owner: Codex B
-- Goal: After TASK-139 integration, add deterministic offline eval coverage for prompt simplification, compact banner, model/local-first status line, no intelligence/speed/routing in default status, lifecycle compatibility, and slash command compatibility.
-- Scope: `evals/run_evals.py`, `agent_tasks/B_DONE.md`.
-- Dependency: Wait for TASK-139 integration; do not implement runtime surface in B.
-
 ## 已完成
+
+### TASK-140: CLI UI v2 deterministic eval coverage ✅
+- 完成者: Codex PM 直接完成 eval-only patch；Claude B worktree 未包含 PM 主仓库中未提交的 TASK-139 集成，因此 B 报告 blocked。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 evals/run_evals.py` 560 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 226 tests OK；`git diff --check` OK。
+- 内容: 更新旧 banner eval 断言以匹配 CLI UI v2 compact surface，新增 minimal `> ` prompt 和 `model: ... | local-first | / for commands` input status line eval，覆盖 no old section headers、local-only `API key: not used`、无 task panel、worker compact summary、no intelligence/speed/routing/no secret leak，以及 slash/lifecycle/plain-text compatibility。
+
+### TASK-139: CLI UI v2 lightweight terminal surface ✅
+- 完成者: Claude A；Codex PM 手动集成并补充 disabled/no-settings `API key: not used` 断言。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 226 tests OK；`git diff --check` OK；`python3 evals/run_evals.py` 仍有 6 个旧 banner eval 断言失败，留给 TASK-140 更新。
+- 内容: 默认 CLI prompt 改为极简 `> `；启动 banner 压缩为轻量 workspace/branch/LLM/API-key/tools/worker/commands surface；新增单行 input status `model: ... | local-first | / for commands`；保留 slash/blank/exit 无 lifecycle 噪声、无 fullscreen TUI、无 dashboard、无 intelligence/speed/routing 默认展示。
 
 ### TASK-138: Minimal model routing deterministic eval coverage ✅
 - 完成者: Claude B；Codex PM 修正完成报告中的 eval 数量（实际为 21 个）。

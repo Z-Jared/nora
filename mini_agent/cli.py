@@ -45,6 +45,7 @@ class MiniAgentCLI:
 
     def run(self) -> None:
         self.output_func(self.banner())
+        self.output_func(self._input_status_line())
         while not self.should_exit:
             try:
                 user_input = self.input_func(self.prompt()).strip()
@@ -55,68 +56,51 @@ class MiniAgentCLI:
             result = self.handle_input(user_input)
             if result:
                 self.output_func(result)
+                self.output_func(self._input_status_line())
 
     def banner(self) -> str:
         lines = [
-            "=== Nora 已启动 ===",
-            "本地优先，文件/Git/终端/浏览器等高风险工具会先确认。",
-            "输入 / 查看命令菜单，输入 exit 或 quit 退出。",
+            "Nora 已启动 — 本地优先，高风险工具会先确认。",
             "",
         ]
-        lines.append(_section_header("Status"))
-        lines.append(_status_line("Nora ready", True))
-        lines.append(_status_line("高风险工具需要确认", True))
-        lines.append("")
 
-        lines.append(_section_header("Workspace"))
         lines.append(f"Workspace: {self.root}")
         git = GitTools(self.root)
         branch = git.current_branch().strip()
         if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
             lines.append(f"Branch: {branch}")
-        lines.append("")
 
-        lines.append(_section_header("Model"))
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
+            api_key = getattr(self.settings, "api_key", "")
             lines.append(f"LLM: {provider} / {model}")
+            lines.append(f"API key: {'configured' if api_key else 'missing'}")
         else:
             lines.append("LLM: disabled，本地规则模式")
-        if self.settings:
-            provider = getattr(self.settings, "provider", "")
-            api_key = getattr(self.settings, "api_key", "")
-            if api_key:
-                lines.append(f"API key: configured ({provider})")
-            else:
-                env_vars = required_env_vars(provider)
-                lines.append(f"API key: missing (需设置 {', '.join(env_vars)})")
-        lines.append("")
+            lines.append("API key: not used")
 
-        lines.append(_section_header("Tools"))
         try:
             tool_count = len(self.registry.to_openai_tools())
         except AttributeError:
             tool_count = "unknown"
         lines.append(f"Tools: {tool_count}")
-        lines.append("")
-
-        task_summary = self._task_backlog_summary()
-        if task_summary:
-            lines.append(_section_header("Tasks"))
-            lines.append(f"  {task_summary}")
-            lines.append("")
 
         worker_summary = self._worker_state_summary()
         if worker_summary:
-            lines.append(_section_header("Workers"))
-            lines.append(f"  {worker_summary}")
-            lines.append("")
+            lines.append(worker_summary)
 
-        lines.append(_section_header("Next"))
-        lines.append("下一步: / 打开命令菜单；/wake 查看项目；/setup 检查配置")
-        lines.append("常用命令: /wake  /setup  /model  /workers  /status  /test  /help")
+        lines.append("")
+        lines.append("输入 / 查看命令菜单 | /wake /setup /model /workers /help | exit 退出")
         return "\n".join(lines)
+
+    def _input_status_line(self) -> str:
+        """Return a single subtle status line near the input area."""
+        if self.settings and getattr(self.settings, "is_llm_enabled", False):
+            model_str = getattr(self.settings, "model", "unknown")
+        else:
+            model_str = "disabled"
+        return f"  model: {model_str} | local-first | / for commands"
 
     def _task_backlog_summary(self) -> str:
         """Read agent_tasks/BACKLOG.md and return a short summary line."""
@@ -467,10 +451,7 @@ class MiniAgentCLI:
         return ""
 
     def prompt(self) -> str:
-        branch = GitTools(self.root).current_branch().strip()
-        if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
-            return f"Nora({branch})> "
-        return "Nora> "
+        return "> "
 
     def handle_input(self, text: str) -> Optional[str]:
         text = text.strip()

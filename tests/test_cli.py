@@ -16,14 +16,8 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(agent.inputs, ["hello"])
         self.assertIn("Nora 已启动", outputs[0])
-        self.assertIn("高风险工具会先确认", outputs[0])
-        self.assertIn("输入 / 查看命令菜单，输入 exit 或 quit 退出。", outputs[0])
-        self.assertIn("─── Status ───", outputs[0])
-        self.assertIn("─── Workspace ───", outputs[0])
-        self.assertIn("─── Model ───", outputs[0])
-        self.assertIn("─── Tools ───", outputs[0])
-        self.assertIn("─── Next ───", outputs[0])
         self.assertIn("Workspace:", outputs[0])
+        self.assertIn("LLM:", outputs[0])
         self.assertIn("Tools:", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
         self.assertTrue(any("运行报告:" in output for output in outputs))
@@ -193,13 +187,27 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(agent.inputs, ["line1\nline2"])
 
-    def test_prompt_includes_branch_when_available(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            _init_git_repo(root)
-            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+    def test_prompt_is_minimal(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        self.assertEqual(cli.prompt(), "> ")
 
-            self.assertIn("Nora(", cli.prompt())
+    def test_disabled_banner_shows_api_key_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outputs = []
+            cli = MiniAgentCLI(
+                FakeCLIAgent(),
+                FakeCLIRegistry(),
+                settings=None,
+                root=Path(tmpdir),
+                input_func=_fake_input(["exit"]),
+                output_func=outputs.append,
+            )
+
+            cli.run()
+
+            banner = outputs[0]
+            self.assertIn("LLM: disabled", banner)
+            self.assertIn("API key", banner)
 
 
     def test_durable_tasks_empty(self):
@@ -883,18 +891,13 @@ class CLISlashLauncherTests(unittest.TestCase):
 
             banner = outputs[0]
             self.assertIn("Nora 已启动", banner)
-            self.assertIn("─── Status ───", banner)
-            self.assertIn("─── Workspace ───", banner)
-            self.assertIn("─── Model ───", banner)
-            self.assertIn("─── Tools ───", banner)
-            self.assertIn("─── Next ───", banner)
-            self.assertIn("下一步:", banner)
-            self.assertIn("/ 打开命令菜单", banner)
-            self.assertIn("/wake", banner)
-            self.assertIn("/setup", banner)
             self.assertIn("Workspace:", banner)
             self.assertIn("LLM:", banner)
             self.assertIn("Tools:", banner)
+            self.assertIn("/wake", banner)
+            self.assertIn("/setup", banner)
+            self.assertIn("/model", banner)
+            self.assertIn("/workers", banner)
 
     def test_unknown_slash_points_to_launcher(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())

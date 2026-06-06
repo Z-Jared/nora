@@ -109,6 +109,9 @@ def main() -> int:
         EvalCase("cli_terminal_surfaces_plain_text", eval_cli_terminal_surfaces_plain_text),
         EvalCase("cli_terminal_recovery_guidance_exact", eval_cli_terminal_recovery_guidance_exact),
         EvalCase("cli_terminal_lifecycle_no_prompt_or_reasoning_leak", eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak),
+        # TASK-140: CLI UI v2 eval coverage
+        EvalCase("cli_ui_v2_minimal_prompt", eval_cli_ui_v2_minimal_prompt),
+        EvalCase("cli_ui_v2_input_status_line", eval_cli_ui_v2_input_status_line),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -747,7 +750,7 @@ def eval_cli_multiline_input():
 # --- TASK-130: CLI UX smoke/eval coverage ---
 
 def eval_cli_startup_banner_no_model():
-    """Startup banner shows API key missing and common commands when no key is configured."""
+    """Startup banner shows local-only key state and common commands when no key is configured."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -762,7 +765,7 @@ def eval_cli_startup_banner_no_model():
         cli.run()
         banner = outputs[0]
         assert "Nora 已启动" in banner, f"missing startup message: {banner}"
-        assert "API key: missing" in banner, f"missing API key indication: {banner}"
+        assert "API key: not used" in banner, f"missing local-only API key state: {banner}"
         assert "Workspace:" in banner, f"missing workspace: {banner}"
         assert "/wake" in banner, f"missing /wake hint: {banner}"
         assert "/model" in banner, f"missing /model hint: {banner}"
@@ -1177,7 +1180,7 @@ def eval_slash_launcher_no_raw_json():
 
 
 def eval_banner_next_action_hint():
-    """Banner includes exact next-action hint for /, /wake, and /setup."""
+    """Banner includes compact command hint for /, /wake, /setup, /model, and /workers."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -1192,10 +1195,11 @@ def eval_banner_next_action_hint():
         )
         cli.run()
         banner = outputs[0]
-        assert "下一步:" in banner, f"missing next-action label: {banner[:300]}"
-        assert "/ 打开命令菜单" in banner, f"missing slash launcher hint: {banner[:300]}"
+        assert "输入 / 查看命令菜单" in banner, f"missing slash launcher hint: {banner[:300]}"
         assert "/wake" in banner, f"missing /wake hint in banner: {banner[:300]}"
         assert "/setup" in banner, f"missing /setup hint in banner: {banner[:300]}"
+        assert "/model" in banner, f"missing /model hint in banner: {banner[:300]}"
+        assert "/workers" in banner, f"missing /workers hint in banner: {banner[:300]}"
 
 
 def eval_banner_preserves_core_info():
@@ -1230,7 +1234,7 @@ def eval_banner_preserves_core_info():
 
 
 def eval_banner_missing_key_safe():
-    """Missing-key state is explicit and safe."""
+    """Local-only key state is explicit and safe."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -1245,7 +1249,7 @@ def eval_banner_missing_key_safe():
         )
         cli.run()
         banner = outputs[0]
-        assert "API key: missing" in banner, f"missing key indication: {banner[:300]}"
+        assert "API key: not used" in banner, f"missing local-only key indication: {banner[:300]}"
         assert "sk-test" not in banner, f"fake key leaked: {banner[:300]}"
 
 
@@ -1337,7 +1341,7 @@ def eval_no_secret_or_raw_json_leak():
 # --- TASK-136: CLI terminal UI polish deterministic eval coverage ---
 
 def eval_cli_terminal_landing_sections():
-    """Startup banner has deterministic terminal landing sections and preserves core hints."""
+    """Startup banner is compact and preserves core hints without old landing sections."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -1352,29 +1356,33 @@ def eval_cli_terminal_landing_sections():
         )
         cli.run()
         banner = outputs[0]
-        for section in [
+        for forbidden in [
             "─── Status ───",
             "─── Workspace ───",
             "─── Model ───",
             "─── Tools ───",
             "─── Next ───",
         ]:
-            assert section in banner, f"missing landing section {section}: {banner[:500]}"
+            assert forbidden not in banner, f"old landing section still visible {forbidden}: {banner[:500]}"
         for exact in [
-            "✓ Nora ready",
-            "✓ 高风险工具需要确认",
+            "Nora 已启动",
             "Workspace:",
             "LLM:",
-            "API key: missing",
+            "API key: not used",
             "Tools:",
-            "输入 / 查看命令菜单，输入 exit 或 quit 退出。",
-            "下一步: / 打开命令菜单；/wake 查看项目；/setup 检查配置",
+            "输入 / 查看命令菜单",
+            "/wake",
+            "/setup",
+            "/model",
+            "/workers",
         ]:
             assert exact in banner, f"missing landing text {exact}: {banner[:500]}"
+        line_count = len(banner.splitlines())
+        assert 6 <= line_count <= 12, f"banner not compact ({line_count} lines): {banner[:500]}"
 
 
 def eval_cli_terminal_landing_tasks_workers():
-    """Startup banner preserves task and worker state in dedicated sections when present."""
+    """Startup banner avoids always-visible task panels and keeps worker state compact."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         tasks = root / "agent_tasks"
@@ -1399,14 +1407,14 @@ def eval_cli_terminal_landing_tasks_workers():
         )
         cli.run()
         banner = outputs[0]
-        assert "─── Tasks ───" in banner, f"missing task section: {banner[:500]}"
-        assert "Active tasks: TASK-900" in banner, f"missing active task summary: {banner[:500]}"
-        assert "─── Workers ───" in banner, f"missing worker section: {banner[:500]}"
+        assert "─── Tasks ───" not in banner, f"task section should not be always visible: {banner[:500]}"
+        assert "Active tasks: TASK-900" not in banner, f"task summary should not be in compact banner: {banner[:500]}"
+        assert "─── Workers ───" not in banner, f"worker section header should not be visible: {banner[:500]}"
         assert "Workers: claude-a: done, claude-b: done" in banner, f"missing worker state: {banner[:500]}"
 
 
 def eval_cli_terminal_landing_key_states_safe():
-    """Missing-key and configured-key landing states are explicit and do not leak secrets."""
+    """Local-only and configured-key landing states are explicit and do not leak secrets."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         missing_settings = load_settings(env_path=root / ".missing.env", environ={})
@@ -1420,7 +1428,7 @@ def eval_cli_terminal_landing_key_states_safe():
             output_func=missing_outputs.append,
         ).run()
         missing_banner = missing_outputs[0]
-        assert "API key: missing" in missing_banner, f"missing key state absent: {missing_banner[:500]}"
+        assert "API key: not used" in missing_banner, f"local-only key state absent: {missing_banner[:500]}"
         assert "sk-terminal-secret-12345" not in missing_banner, "unexpected fake secret in missing-key banner"
 
         configured_settings = load_settings(
@@ -1570,6 +1578,63 @@ def eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak():
         lifecycle_text = "\n".join(status_lines).lower()
         for forbidden in ["sk-terminal-no-leak-999", "sk-prompt-secret-888", "chain_of_thought", "hidden_reasoning", "{", "["]:
             assert forbidden not in lifecycle_text, f"lifecycle leaked {forbidden}: {status_lines}"
+
+
+def eval_cli_ui_v2_minimal_prompt():
+    """Default prompt is exactly minimal and contains no repeated context."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        subprocess.run(["git", "init"], cwd=root, capture_output=True)
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+        prompt = cli.prompt()
+        assert prompt == "> ", f"prompt is not minimal: {prompt!r}"
+        for forbidden in ["Nora", "main", str(root), "openai", "gpt", "model"]:
+            assert forbidden not in prompt, f"context leaked into prompt: {prompt!r}"
+
+
+def eval_cli_ui_v2_input_status_line():
+    """Input status line exposes model/local-first/command hint without routing controls or secrets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        disabled_outputs = []
+        MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=None,
+            root=root,
+            input_func=_fake_input(["exit"]),
+            output_func=disabled_outputs.append,
+        ).run()
+        disabled_status = disabled_outputs[1]
+        assert "model:" in disabled_status, f"missing model label: {disabled_status}"
+        assert "disabled" in disabled_status, f"missing disabled model state: {disabled_status}"
+        assert "local-first" in disabled_status, f"missing local-first: {disabled_status}"
+        assert "/ for commands" in disabled_status, f"missing command hint: {disabled_status}"
+
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-status-secret-12345",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        configured_outputs = []
+        MiniAgentCLI(
+            FakeCLIAgent(),
+            FakeCLIRegistry(),
+            settings=settings,
+            root=root,
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=configured_outputs.append,
+        ).run()
+        full_output = "\n".join(configured_outputs)
+        status_lines = [line for line in configured_outputs if "local-first" in line]
+        assert status_lines, f"status line missing from output: {full_output[:500]}"
+        assert any("model: gpt-4.1-mini" in line for line in status_lines), f"model missing from status lines: {status_lines}"
+        for forbidden in ["intelligence", "speed", "routing", "sk-status-secret-12345", "hidden_reasoning"]:
+            assert forbidden not in full_output, f"forbidden status content leaked: {forbidden}"
 
 
 def eval_notes_round_trip():
