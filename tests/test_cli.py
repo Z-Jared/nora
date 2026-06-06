@@ -87,9 +87,9 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("logs path:", result)
         self.assertIn("nora command:", result)
         self.assertIn("suggestions:", result)
-        self.assertIn("进入 Git 项目目录", result)
+        self.assertIn("git init", result)
         self.assertIn("LLM_API_KEY", result)
-        self.assertIn("data/ 缺失通常没关系", result)
+        self.assertIn("data/ will be created", result)
 
     def test_symbol_commands_call_registry(self):
         registry = FakeCLIRegistry()
@@ -419,7 +419,7 @@ class CLIDoctorProviderTests(unittest.TestCase):
         self.assertIn("LLM_API_KEY", result)
         self.assertIn("LLM_MODEL", result)
         self.assertIn("OPENAI_API_KEY", result)
-        self.assertIn("替代", result)
+        self.assertIn("also accepts", result)
         self.assertNotIn("ANTHROPIC_API_KEY", result)
         self.assertNotIn("GEMINI_API_KEY", result)
 
@@ -907,36 +907,37 @@ class CLISlashLauncherTests(unittest.TestCase):
     def test_unknown_slash_points_to_launcher(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
         result = cli.handle_slash_command("/does-not-exist")
-        self.assertIn("未知命令", result)
-        self.assertIn("输入 / 查看命令菜单", result)
+        self.assertIn("unknown command", result)
+        self.assertIn("/help", result)
 
 
 class CLIErrorRecoveryTests(unittest.TestCase):
-    """Tests for error recovery hints (TASK-129)."""
+    """Tests for error recovery hints (TASK-149)."""
 
     def test_hint_for_401(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             hint = cli._error_recovery_hint("Error: 401 Unauthorized")
             self.assertIn("API key", hint)
+            self.assertIn("hint:", hint)
 
     def test_hint_for_connection_timeout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             hint = cli._error_recovery_hint("Connection timeout")
-            self.assertIn("连接超时", hint)
+            self.assertIn("network", hint)
 
     def test_hint_for_model_not_found(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             hint = cli._error_recovery_hint("Model not found")
-            self.assertIn("模型不存在", hint)
+            self.assertIn("model name", hint)
 
     def test_hint_for_rate_limit(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             hint = cli._error_recovery_hint("Rate limit exceeded")
-            self.assertIn("频率超限", hint)
+            self.assertIn("rate limited", hint)
 
     def test_hint_for_missing_key(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -948,7 +949,7 @@ class CLIErrorRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             hint = cli._error_recovery_hint("Port 8080 already in use")
-            self.assertIn("端口已被占用", hint)
+            self.assertIn("port in use", hint)
 
     def test_no_hint_for_normal_response(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -961,7 +962,7 @@ class CLIErrorRecoveryTests(unittest.TestCase):
         agent.run = lambda text: "Error: 401 Unauthorized"
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), root=Path("/tmp"))
         result = cli.handle_input("test")
-        self.assertIn("API key", result)
+        self.assertIn("hint:", result)
 
 
 if __name__ == "__main__":

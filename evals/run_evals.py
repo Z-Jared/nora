@@ -107,6 +107,16 @@ def main() -> int:
         EvalCase("slash_model_no_secret_leak_multi_provider", eval_slash_model_no_secret_leak_multi_provider),
         EvalCase("slash_setup_recovery_hints", eval_slash_setup_recovery_hints),
         EvalCase("slash_setup_no_secret_leak_configured", eval_slash_setup_no_secret_leak_configured),
+        # TASK-150: Error recovery and doctor eval coverage
+        EvalCase("recovery_hint_coverage_all_error_types", eval_recovery_hint_coverage_all_error_types),
+        EvalCase("recovery_hint_no_secret_leak", eval_recovery_hint_no_secret_leak),
+        EvalCase("recovery_hint_appended_to_error_response", eval_recovery_hint_appended_to_error_response),
+        EvalCase("unknown_slash_guidance", eval_unknown_slash_guidance),
+        EvalCase("unknown_slash_no_lifecycle", eval_unknown_slash_no_lifecycle),
+        EvalCase("doctor_llm_enabled_shows_provider", eval_doctor_llm_enabled_shows_provider),
+        EvalCase("doctor_no_secret_leak", eval_doctor_no_secret_leak),
+        EvalCase("doctor_data_logs_path", eval_doctor_data_logs_path),
+        EvalCase("doctor_no_dashboard_formatting", eval_doctor_no_dashboard_formatting),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -770,6 +780,167 @@ def eval_cli_doctor_reports_runtime_status():
     assert "LLM_API_KEY" in result
 
 
+# --- TASK-150: Error recovery and doctor eval coverage ---
+
+
+def _assert_no_old_recovery_style(text: str, context: str) -> None:
+    for forbidden in [
+        "提示:",
+        "未知命令",
+        "输入 / 查看命令菜单",
+        "查看完整帮助",
+        "检查 .env",
+        "缺少 API key",
+        "端口已被占用",
+        "连接超时",
+        "模型不存在",
+        "频率超限",
+        "进入 Git 项目目录",
+        "如需模型能力",
+        "也可用",
+        "缺失通常没关系",
+        "首次保存",
+        "首次记录",
+        "将 Python user scripts",
+    ]:
+        assert forbidden not in text, f"old recovery style leaked {forbidden!r} in {context}: {text[:500]}"
+
+
+def eval_recovery_hint_coverage_all_error_types():
+    """Each common error type produces a compact English recovery hint."""
+    error_cases = [
+        ("Error: 401 Unauthorized - invalid API key", "hint: check API key in .env"),
+        ("Error: 403 Forbidden - access denied", "hint: check key permissions"),
+        ("Error: missing API key", "hint: set API key in .env"),
+        ("Error: connection timeout", "hint: check network or base URL"),
+        ("Error: model not found", "hint: check model name and provider match"),
+        ("Error: unsupported provider", "hint: check LLM_PROVIDER in .env"),
+        ("Error: rate limit exceeded", "hint: rate limited"),
+        ("Error: quota exceeded", "hint: check account quota and billing"),
+        ("Error: port already in use", "hint: port in use"),
+    ]
+    for error_text, expected in error_cases:
+        hint = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())._error_recovery_hint(error_text)
+        assert hint, f"empty hint for: {error_text}"
+        assert len(hint) < 200, f"hint too long for {error_text}: {hint}"
+        assert expected in hint, f"missing compact hint {expected!r} for {error_text}: {hint}"
+        _assert_no_old_recovery_style(hint, f"hint for {error_text}")
+
+
+def eval_recovery_hint_no_secret_leak():
+    """Recovery hints never echo raw error text containing secrets."""
+    secret = "sk-recovery-leak-test-777"
+    hint = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())._error_recovery_hint(
+        f"Error: 401 Unauthorized - key {secret}"
+    )
+    assert secret not in hint, f"recovery hint leaked secret: {hint}"
+    _assert_no_old_recovery_style(hint, "secret recovery hint")
+
+
+def eval_recovery_hint_appended_to_error_response():
+    """Agent error responses get recovery hint appended."""
+    class ErrorAgent:
+        def run(self, text):
+            return "Error: 403 Forbidden - access denied"
+        def run_autonomous(self, goal, max_steps=None):
+            return ""
+    outputs = []
+    cli = MiniAgentCLI(
+        ErrorAgent(), FakeCLIRegistry(),
+        input_func=_fake_input(["query", "exit"]),
+        output_func=outputs.append,
+    )
+    cli.run()
+    full = "\n".join(outputs)
+    assert "403" in full, f"missing error in output: {full[:300]}"
+    assert "hint: check key permissions" in full, f"missing compact recovery guidance: {full[:300]}"
+    _assert_no_old_recovery_style(full, "appended error response")
+
+
+def eval_unknown_slash_guidance():
+    """Unknown slash command gives short guidance pointing to / or /help."""
+    result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry()).handle_slash_command("/notacommand")
+    assert result, "unknown slash returned empty"
+    assert len(result) < 300, f"unknown slash too long: {result[:300]}"
+    assert result.startswith("unknown command:"), f"unknown slash lacks compact prefix: {result[:300]}"
+    assert "type / for commands or /help for help" in result, f"unknown slash lacks command guidance: {result[:300]}"
+    _assert_no_old_recovery_style(result, "unknown slash")
+
+
+def eval_unknown_slash_no_lifecycle():
+    """Unknown slash does not call agent or emit Working.../Done."""
+    agent = FakeCLIAgent()
+    outputs = []
+    cli = MiniAgentCLI(
+        agent, FakeCLIRegistry(),
+        input_func=_fake_input(["/notacommand", "exit"]),
+        output_func=outputs.append,
+    )
+    cli.run()
+    assert agent.inputs == [], f"unknown slash called agent: {agent.inputs}"
+    full = "\n".join(outputs)
+    assert "Working..." not in full, f"unknown slash emitted Working: {full[:200]}"
+    assert "Done." not in full, f"unknown slash emitted Done: {full[:200]}"
+    _assert_no_old_recovery_style(full, "unknown slash lifecycle")
+
+
+def eval_doctor_llm_enabled_shows_provider():
+    """/doctor with LLM enabled shows provider and model."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-doctor-test",
+            "LLM_MODEL": "gpt-4.1-mini",
+        })
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+        ).handle_slash_command("/doctor")
+        assert "llm: enabled" in result, f"missing llm enabled: {result[:300]}"
+        assert "openai-compatible" in result, f"missing provider: {result[:300]}"
+        assert "gpt-4.1-mini" in result, f"missing model: {result[:300]}"
+        _assert_no_old_recovery_style(result, "doctor enabled")
+
+
+def eval_doctor_no_secret_leak():
+    """/doctor never leaks API keys."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-doctor-secret-leak-888",
+            "LLM_MODEL": "gpt-4.1-mini",
+        })
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+        ).handle_slash_command("/doctor")
+        assert "sk-doctor-secret-leak-888" not in result, f"/doctor leaked API key: {result[:300]}"
+        _assert_no_old_recovery_style(result, "doctor no secret leak")
+
+
+def eval_doctor_data_logs_path():
+    """/doctor shows data and logs paths with exists/missing status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir),
+        ).handle_slash_command("/doctor")
+        assert "data path:" in result, f"missing data path: {result[:300]}"
+        assert "logs path:" in result, f"missing logs path: {result[:300]}"
+        assert "missing" in result or "exists" in result, f"missing exists/missing status: {result[:300]}"
+        for expected in ["data/ will be created on first save", "logs/ will be created on first tool call"]:
+            assert expected in result, f"missing compact doctor suggestion {expected!r}: {result[:500]}"
+        _assert_no_old_recovery_style(result, "doctor data/logs")
+
+
+def eval_doctor_no_dashboard_formatting():
+    """/doctor output has no section bars, tables, or dashboard formatting."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir),
+        ).handle_slash_command("/doctor")
+        for forbidden in ["===", "───", "--- ", "+---", "| "]:
+            assert forbidden not in result, f"/doctor has dashboard marker '{forbidden}': {result[:300]}"
+        _assert_no_old_recovery_style(result, "doctor formatting")
+
+
 def eval_cli_multiline_input():
     agent = FakeCLIAgent()
     cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["<<<", "line1", "line2", ">>>", "exit"]), output_func=lambda output: None)
@@ -1217,7 +1388,8 @@ def eval_cli_error_recovery_hint():
     cli.run()
     full = "\n".join(outputs)
     assert "401 Unauthorized" in full, f"missing error: {full}"
-    assert "API key" in full and "检查" in full, f"missing recovery hint: {full}"
+    assert "hint: check API key in .env" in full, f"missing recovery hint: {full}"
+    _assert_no_old_recovery_style(full, "401 recovery hint")
 
 
 def eval_cli_markdown_no_raw_json():
@@ -1995,9 +2167,11 @@ def eval_cli_terminal_recovery_guidance_exact():
         for old_marker in ["Nora Setup / Config", "===", "───", "provider/model 不匹配", "常见问题排查", "诊断:"]:
             assert old_marker not in setup, f"old /setup marker leaked {old_marker}: {setup[:500]}"
         unknown = cli.handle_slash_command("/unknown")
-        assert "输入 / 查看命令菜单" in unknown, f"unknown slash lacks / launcher guidance: {unknown}"
+        assert "type / for commands or /help for help" in unknown, f"unknown slash lacks / launcher guidance: {unknown}"
+        _assert_no_old_recovery_style(unknown, "terminal recovery unknown slash")
         response = cli._append_recovery_hint("Error: 401 Unauthorized - invalid API key")
-        assert "API key" in response and "检查" in response, f"missing 401 recovery hint: {response}"
+        assert "hint: check API key in .env" in response, f"missing 401 recovery hint: {response}"
+        _assert_no_old_recovery_style(response, "terminal recovery 401 hint")
 
 
 def eval_cli_terminal_lifecycle_no_prompt_or_reasoning_leak():

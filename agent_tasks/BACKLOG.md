@@ -4,33 +4,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-149: Compact error recovery and doctor surfaces v6
-- 架构层: Agent OS Dashboard / Model Router
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-147/TASK-148
-- 目标: 将模型错误恢复提示、unknown slash 提示和 `/doctor` 输出收敛到与当前 CLI 一致的 Claude Code-like compact plain-text 风格：短英文提示、lowercase labels、无长中文解释、无面板感；保留实际有用的 401/403/missing key/timeout/model not found/provider/rate/quota/port recovery 信息。
-- 非目标: 不改错误检测语义、模型调用、provider loading、tool/runtime 行为、Web UI、图标资产、worker/CCB 语义；不新增 TUI/颜色/动画依赖。
-- 安全边界: 不泄漏 API key、token、`.env` 原值、raw prompt、hidden reasoning、raw tool payload；error hint 和 `/doctor` 必须 deterministic、plain text、ANSI-safe；不调用模型、不写 durable state。
-- 持久证据: 更新 `tests/test_cli.py` 中 recovery/doctor/unknown slash 输出契约；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
-- 参考: `mini_agent/cli.py` `_error_recovery_hint()`、`_append_recovery_hint()`、`doctor()`、unknown slash return；`docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard；TASK-147/TASK-148 compact `/model`/`/setup` contract。
-
-### TASK-150: Error recovery and doctor deterministic eval coverage
-- 架构层: Eval/Review System
-- 优先级: high
-- 预计: 1 小时
-- 依赖: 等待 TASK-149 runtime/test 变更可见后补充/调整 eval
-- 目标: 为 TASK-149 增加 deterministic offline eval，锁住 compact error recovery、unknown slash 和 `/doctor` 契约：短英文提示、no old Chinese long hints/no `提示:`、provider-specific env hints 保留、no secret leak、slash/doctor 不触发 `Working...`/`Done.`。
-- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做 runtime/Web/UI asset/模型路由变更。
-- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload/raw `.env` leak；保持 deterministic/offline。
-- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: TASK-149；`evals/run_evals.py` existing `cli_error_recovery_hint`、`cli_doctor_reports_runtime_status`、`cli_terminal_recovery_guidance_exact` cases。
-
 ## 进行中
 
 ## 已完成
+
+### TASK-150: Error recovery and doctor deterministic eval coverage ✅
+- 完成者: Claude B；Codex PM 集成时补强 no-old-recovery-style 断言，锁住 TASK-149 英文 compact 契约。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 evals/run_evals.py` 594 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 228 tests OK；`git diff --check` OK。
+- 内容: 为 error recovery、unknown slash 和 `/doctor` 增加 deterministic offline eval，覆盖 401/403/missing-key/timeout/model-not-found/unsupported-provider/rate/quota/port hint、secret no-leak、hint append、unknown slash no model/no lifecycle、doctor llm/provider/data/logs/no secret/no dashboard formatting；PM 补强禁止 `提示:`、`未知命令`、`输入 / 查看命令菜单`、旧中文长提示和旧 doctor suggestions 回归。
+
+### TASK-149: Compact error recovery and doctor surfaces v6 ✅
+- 完成者: Claude A；Codex PM 集成。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 228 tests OK；合并 TASK-150 后 `python3 evals/run_evals.py` 594 passed；`git diff --check` OK。
+- 内容: 将 `_error_recovery_hint()` 从旧中文 `提示:` 长句改为短英文 `hint:`，覆盖 401/403/missing-key/port/timeout/model/provider/rate/quota；unknown slash 改为 `unknown command` + `/`/`/help` guidance；`/doctor` suggestions 改为短英文 bullet；同时将 parse/optional-int 错误文案收敛为 compact English。未改变错误检测语义、模型调用、provider loading、runtime、Web UI 或图标资产。
 
 ### TASK-148: /model and /setup compact surface deterministic eval coverage ✅
 - 完成者: Claude B；Codex PM 集成时补强旧断言迁移和 no-old-header/no-old-label 覆盖。

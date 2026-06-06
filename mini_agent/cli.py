@@ -402,25 +402,25 @@ class MiniAgentCLI:
         error_lower = error_text.lower()
 
         if "401" in error_text or "unauthorized" in error_lower:
-            return "提示: API key 可能无效或过期。请检查 .env 中的 API key 是否正确。"
+            return "hint: check API key in .env"
         if "403" in error_text or "forbidden" in error_lower:
-            return "提示: API key 可能没有访问权限。请检查 key 的权限范围。"
+            return "hint: check key permissions"
         if "missing" in error_lower and "key" in error_lower:
-            return "提示: 缺少 API key。请在 .env 中设置对应的 API key。"
+            return "hint: set API key in .env"
         if "missing" in error_lower and "api" in error_lower:
-            return "提示: 缺少 API key。请在 .env 中设置对应的 API key。"
+            return "hint: set API key in .env"
         if "port" in error_lower and ("in use" in error_lower or "already" in error_lower):
-            return "提示: 端口已被占用。请关闭占用该端口的进程或使用其他端口。"
+            return "hint: port in use — stop the process or change port"
         if "connection" in error_lower or "timeout" in error_lower:
-            return "提示: 连接超时。请检查网络连接或 base URL 是否正确。"
+            return "hint: check network or base URL"
         if "model" in error_lower and ("not found" in error_lower or "does not exist" in error_lower):
-            return "提示: 模型不存在。请检查模型名称和 provider 是否匹配。"
+            return "hint: check model name and provider match"
         if "unsupported" in error_lower and "provider" in error_lower:
-            return "提示: 不支持的 provider。请检查 LLM_PROVIDER 设置。"
+            return "hint: check LLM_PROVIDER in .env"
         if "rate" in error_lower and "limit" in error_lower:
-            return "提示: API 调用频率超限。请稍后重试。"
+            return "hint: rate limited — retry later"
         if "quota" in error_lower or "billing" in error_lower:
-            return "提示: API 配额或计费问题。请检查账户余额和使用限制。"
+            return "hint: check account quota and billing"
         return ""
 
     def prompt(self) -> str:
@@ -477,7 +477,7 @@ class MiniAgentCLI:
         try:
             parts = shlex.split(text)
         except ValueError as error:
-            return f"命令解析失败: {error}"
+            return f"parse error: {error}"
         if not parts:
             return ""
         command = parts[0]
@@ -749,7 +749,7 @@ class MiniAgentCLI:
             import json
             return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
 
-        return f"未知命令: {command}\n输入 / 查看命令菜单，或输入 /help 查看完整帮助。"
+        return f"unknown command: {command}\ntype / for commands or /help for help"
 
     def _slash_menu(self) -> str:
         """Show a compact command launcher for exact '/' input."""
@@ -778,7 +778,7 @@ class MiniAgentCLI:
         git_status = GitTools(self.root).status()
         if "not a git repository" in git_status.lower() or git_status.startswith(("Git 命令失败", "Git 命令超时")):
             lines.append("git: unavailable")
-            suggestions.append("进入 Git 项目目录后再启动 Nora，或先运行 git init。")
+            suggestions.append("cd to a git repo or run git init first")
         else:
             lines.append("git: available")
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
@@ -787,10 +787,10 @@ class MiniAgentCLI:
             lines.append("llm: disabled")
             provider = getattr(self.settings, "provider", "") if self.settings else ""
             env_vars = required_env_vars(provider)
-            suggestions.append(f"如需模型能力，请检查 .env 中的 {', '.join(env_vars)}。")
+            suggestions.append(f"set {', '.join(env_vars)} in .env to enable LLM")
             alternatives = env_alternatives(provider)
             for primary, alt in alternatives.items():
-                suggestions.append(f"{primary} 也可用 {alt} 替代。")
+                suggestions.append(f"{primary} also accepts {alt}")
         try:
             lines.append(f"tools: {len(self.registry.to_openai_tools())}")
         except AttributeError:
@@ -799,14 +799,14 @@ class MiniAgentCLI:
         logs_path = self.root / "logs"
         lines.append(f"data path: {data_path} ({'exists' if data_path.exists() else 'missing'})")
         if not data_path.exists():
-            suggestions.append("data/ 缺失通常没关系，首次保存记忆、任务或工具结果时会生成。")
+            suggestions.append("data/ will be created on first save")
         lines.append(f"logs path: {logs_path} ({'exists' if logs_path.exists() else 'missing'})")
         if not logs_path.exists():
-            suggestions.append("logs/ 缺失通常没关系，首次记录工具调用日志时会生成。")
+            suggestions.append("logs/ will be created on first tool call")
         nora_path = shutil.which("nora")
         lines.append(f"nora command: {nora_path if nora_path else 'not found on PATH'}")
         if not nora_path:
-            suggestions.append('将 Python user scripts 加入 PATH，例如 export PATH="$HOME/Library/Python/3.9/bin:$PATH"。')
+            suggestions.append('add Python user scripts to PATH, e.g. export PATH="$HOME/Library/Python/3.9/bin:$PATH"')
         if suggestions:
             lines.append("suggestions:")
             lines.extend(f"- {suggestion}" for suggestion in suggestions)
@@ -816,11 +816,11 @@ class MiniAgentCLI:
         if not args:
             return default
         if len(args) > 1:
-            return f"参数过多: {name} 只接受一个整数。"
+            return f"too many args: {name} accepts one integer"
         try:
             return int(args[0])
         except ValueError:
-            return f"参数错误: {name} 必须是整数。"
+            return f"invalid arg: {name} must be an integer"
 
     def _format_agent_response(self, response: str) -> str:
         return response
