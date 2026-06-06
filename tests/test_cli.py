@@ -649,7 +649,7 @@ class CLIModelCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
             result = cli.handle_slash_command("/model")
-            self.assertIn("Settings not loaded", result)
+            self.assertIn("settings not loaded", result)
             self.assertIn("LLM_PROVIDER", result)
 
     def test_model_shows_provider_info(self):
@@ -744,7 +744,7 @@ class CLISetupCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
             result = cli.handle_slash_command("/setup")
-            self.assertIn("Nora Setup / Config", result)
+            self.assertIn("settings not loaded", result)
             self.assertIn("openai-compatible", result)
             self.assertIn("anthropic", result)
             self.assertIn("gemini", result)
@@ -770,7 +770,7 @@ class CLISetupCommandTests(unittest.TestCase):
             settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
             result = cli.handle_slash_command("/setup")
-            self.assertIn("API key 缺失", result)
+            self.assertIn("missing API key", result)
             self.assertIn("LLM_API_KEY", result)
 
     def test_setup_no_key_leak(self):
@@ -785,15 +785,15 @@ class CLISetupCommandTests(unittest.TestCase):
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             result = cli.handle_slash_command("/setup")
             self.assertIn("401 Unauthorized", result)
-            self.assertIn("provider/model 不匹配", result)
-            self.assertIn("端口占用", result)
+            self.assertIn("provider/model mismatch", result)
+            self.assertIn("port in use", result)
 
     def test_setup_shows_mismatch_guidance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
             result = cli.handle_slash_command("/setup")
-            self.assertIn("provider/model 不匹配", result)
+            self.assertIn("provider/model mismatch", result)
 
     def test_help_includes_setup(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())

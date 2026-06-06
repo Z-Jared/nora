@@ -101,6 +101,12 @@ def main() -> int:
         EvalCase("cli_response_status_blank_exit_no_noise", eval_cli_response_status_blank_exit_no_noise),
         EvalCase("cli_response_status_no_hidden_reasoning", eval_cli_response_status_no_hidden_reasoning),
         EvalCase("cli_setup_config_no_raw_json", eval_cli_setup_config_no_raw_json),
+        # TASK-148: /model and /setup compact surface eval coverage
+        EvalCase("slash_model_timeout_and_enabled", eval_slash_model_timeout_and_enabled),
+        EvalCase("slash_model_anthropic_env_names", eval_slash_model_anthropic_env_names),
+        EvalCase("slash_model_no_secret_leak_multi_provider", eval_slash_model_no_secret_leak_multi_provider),
+        EvalCase("slash_setup_recovery_hints", eval_slash_setup_recovery_hints),
+        EvalCase("slash_setup_no_secret_leak_configured", eval_slash_setup_no_secret_leak_configured),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -1134,10 +1140,13 @@ def eval_cli_model_provider_diagnostics():
             settings=settings,
             root=Path(tmpdir),
         ).handle_slash_command("/model")
-        assert "Provider: openai-compatible" in result, f"missing provider: {result[:300]}"
-        assert "Model: gpt-4.1" in result, f"missing model: {result[:300]}"
+        assert "provider: openai-compatible" in result, f"missing provider: {result[:300]}"
+        assert "model: gpt-4.1" in result, f"missing model: {result[:300]}"
+        assert "base URL: https://api.openai.com/v1" in result, f"missing base URL: {result[:300]}"
         assert "API key: configured" in result, f"missing key status: {result[:300]}"
         assert "401 Unauthorized" in result, f"missing recovery hint: {result[:300]}"
+        for old_marker in ["Provider:", "Model:", "Base URL:", "Timeout:", "Enabled:", "===", "───"]:
+            assert old_marker not in result, f"old /model marker leaked {old_marker}: {result[:300]}"
         assert "sk-fake-secret-abc" not in result, "API key leaked in /model"
 
 
@@ -1146,8 +1155,9 @@ def eval_cli_model_no_settings():
     result = MiniAgentCLI(
         FakeCLIAgent(), FakeCLIRegistry(),
     ).handle_slash_command("/model")
-    assert "Settings not loaded" in result, f"missing no-settings message: {result[:300]}"
+    assert "settings not loaded" in result, f"missing no-settings message: {result[:300]}"
     assert "LLM_API_KEY" in result, f"missing setup hint: {result[:300]}"
+    assert "Settings not loaded" not in result, f"old no-settings message leaked: {result[:300]}"
 
 
 def eval_cli_workers_ccb_status():
@@ -1286,9 +1296,11 @@ def eval_cli_setup_guidance_for_errors():
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
         result = cli.handle_slash_command("/setup")
         assert "401 Unauthorized" in result, f"missing 401 guidance: {result}"
-        assert "API key 缺失" in result, f"missing exact missing-key guidance: {result}"
+        assert "missing API key" in result, f"missing exact missing-key guidance: {result}"
         assert "LLM_API_KEY" in result, f"missing required key name: {result}"
-        assert "provider/model 不匹配" in result, f"missing mismatch guidance: {result}"
+        assert "provider/model mismatch" in result, f"missing mismatch guidance: {result}"
+        for old_marker in ["=== Nora Setup / Config ===", "API key 缺失", "provider/model 不匹配", "常见问题排查", "诊断:"]:
+            assert old_marker not in result, f"old /setup marker leaked {old_marker}: {result[:500]}"
 
 
 def eval_cli_config_is_alias_for_setup():
@@ -1373,6 +1385,90 @@ def eval_cli_setup_config_no_raw_json():
             result = cli.handle_slash_command(cmd)
             assert not result.lstrip().startswith("{"), f"{cmd} returned raw JSON: {result[:100]}"
             assert not result.lstrip().startswith("["), f"{cmd} returned raw JSON array: {result[:100]}"
+
+
+# --- TASK-148: /model and /setup compact surface eval coverage ---
+
+
+def eval_slash_model_timeout_and_enabled():
+    """/model shows Timeout and Enabled fields for configured settings."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-timeout-test",
+            "LLM_MODEL": "gpt-4.1-mini",
+            "LLM_TIMEOUT_SECONDS": "120",
+        })
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+        ).handle_slash_command("/model")
+        assert "timeout:" in result, f"missing timeout field: {result[:300]}"
+        assert "120s" in result, f"missing timeout value: {result[:300]}"
+        assert "enabled:" in result, f"missing enabled field: {result[:300]}"
+        assert "yes" in result, f"enabled should be yes: {result[:300]}"
+        for old_marker in ["Timeout:", "Enabled:", "Provider:", "Model:", "Base URL:", "===", "───"]:
+            assert old_marker not in result, f"old /model marker leaked {old_marker}: {result[:300]}"
+
+
+def eval_slash_model_anthropic_env_names():
+    """/model with anthropic provider shows ANTHROPIC_API_KEY env name in missing-key hint."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "anthropic",
+            # No ANTHROPIC_API_KEY set
+        })
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+        ).handle_slash_command("/model")
+        assert "ANTHROPIC_API_KEY" in result, f"missing ANTHROPIC_API_KEY hint: {result[:300]}"
+        assert "missing" in result.lower(), f"should indicate missing key: {result[:300]}"
+
+
+def eval_slash_model_no_secret_leak_multi_provider():
+    """/model never leaks API keys across openai-compatible, anthropic, and gemini providers."""
+    providers = [
+        ("openai-compatible", "LLM_API_KEY", "sk-openai-secret-aaa"),
+        ("anthropic", "ANTHROPIC_API_KEY", "sk-ant-secret-bbb"),
+        ("gemini", "GEMINI_API_KEY", "AIza-secret-ccc"),
+    ]
+    for provider, key_env, secret in providers:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = load_settings(environ={
+                "LLM_PROVIDER": provider,
+                key_env: secret,
+            })
+            result = MiniAgentCLI(
+                FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+            ).handle_slash_command("/model")
+            assert secret not in result, f"{provider} /model leaked {key_env}: {result[:300]}"
+            assert "configured" in result, f"{provider} missing key status: {result[:300]}"
+
+
+def eval_slash_setup_recovery_hints():
+    """/setup includes recovery hints for 401, 403, and provider/model mismatch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir),
+        ).handle_slash_command("/setup")
+        for hint in ["401 Unauthorized", "403 Forbidden", "provider/model mismatch"]:
+            assert hint in result, f"missing recovery hint '{hint}': {result[:500]}"
+        for old_marker in ["=== Nora Setup / Config ===", "provider/model 不匹配", "常见问题排查", "诊断:"]:
+            assert old_marker not in result, f"old /setup marker leaked {old_marker}: {result[:500]}"
+
+
+def eval_slash_setup_no_secret_leak_configured():
+    """/setup with configured settings does not leak the API key."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-setup-leak-test-999",
+            "LLM_MODEL": "gpt-4.1-mini",
+        }, env_path=Path(tmpdir) / ".env")
+        result = MiniAgentCLI(
+            FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir),
+        ).handle_slash_command("/setup")
+        assert "sk-setup-leak-test-999" not in result, f"/setup leaked API key: {result[:300]}"
+        assert "configured" in result, f"/setup missing key status: {result[:300]}"
 
 
 # --- TASK-134: CLI slash launcher/welcome deterministic eval coverage ---
@@ -1493,14 +1589,14 @@ def eval_slash_model_v4_compact():
             },
         )
         result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root).handle_slash_command("/model")
-        for expected in ["Provider:", "Model:", "Base URL:", "API key:", "Enabled:"]:
+        for expected in ["provider:", "model:", "base URL:", "API key:", "enabled:", "timeout:"]:
             assert expected in result, f"missing {expected}: {result[:300]}"
         assert "openai-compatible" in result, f"missing provider: {result[:300]}"
         assert "gpt-4.1-mini" in result, f"missing model: {result[:300]}"
         assert "configured" in result, f"missing key presence: {result[:300]}"
         for expected in ["401 Unauthorized", "model mismatch"]:
             assert expected in result, f"missing recovery hint {expected}: {result[:300]}"
-        for forbidden in ["sk-test-key-12345", "===", "Nora Model Configuration", "intelligence", "speed", "routing"]:
+        for forbidden in ["sk-test-key-12345", "===", "───", "Provider:", "Model:", "Base URL:", "Enabled:", "Timeout:", "Nora Model Configuration", "intelligence", "speed", "routing"]:
             assert forbidden not in result, f"forbidden model content leaked: {forbidden}"
 
 
@@ -1547,7 +1643,7 @@ def eval_slash_commands_no_model_call():
             cli.run()
             assert agent.inputs == [], f"{cmd} called agent with: {agent.inputs}"
             full = "\n".join(outputs)
-            for forbidden in ["received", "thinking", "ready"]:
+            for forbidden in ["Working...", "Done."]:
                 assert forbidden not in full, f"{cmd} emitted lifecycle line {forbidden}: {full[:200]}"
 
 
@@ -1893,9 +1989,11 @@ def eval_cli_terminal_recovery_guidance_exact():
         settings = load_settings(env_path=root / ".missing.env", environ={})
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root)
         setup = cli.handle_slash_command("/setup")
-        assert "Nora Setup / Config" in setup, f"missing /setup surface: {setup[:500]}"
-        for exact in ["API key", "401 Unauthorized", "provider/model 不匹配"]:
+        assert "current" in setup and "env" in setup and "recovery" in setup, f"missing compact /setup surface: {setup[:500]}"
+        for exact in ["API key", "401 Unauthorized", "provider/model mismatch"]:
             assert exact in setup, f"missing recovery guidance {exact}: {setup[:500]}"
+        for old_marker in ["Nora Setup / Config", "===", "───", "provider/model 不匹配", "常见问题排查", "诊断:"]:
+            assert old_marker not in setup, f"old /setup marker leaked {old_marker}: {setup[:500]}"
         unknown = cli.handle_slash_command("/unknown")
         assert "输入 / 查看命令菜单" in unknown, f"unknown slash lacks / launcher guidance: {unknown}"
         response = cli._append_recovery_hint("Error: 401 Unauthorized - invalid API key")

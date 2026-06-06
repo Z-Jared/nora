@@ -233,9 +233,9 @@ class MiniAgentCLI:
         """Show current provider/model/base URL/key presence without leaking key values."""
         if not self.settings:
             return "\n".join([
-                "Settings not loaded.",
+                "settings not loaded",
                 "",
-                "Set in .env:",
+                "set in .env:",
                 "  LLM_PROVIDER=openai-compatible",
                 "  LLM_API_KEY=your-key",
                 "  LLM_MODEL=gpt-4.1-mini",
@@ -249,12 +249,12 @@ class MiniAgentCLI:
         enabled = getattr(self.settings, "is_llm_enabled", False)
 
         lines = []
-        lines.append(f"Provider: {provider or '(not set)'}")
-        lines.append(f"Model: {model or '(not set)'}")
-        lines.append(f"Base URL: {base_url or '(not set)'}")
+        lines.append(f"provider: {provider or '(not set)'}")
+        lines.append(f"model: {model or '(not set)'}")
+        lines.append(f"base URL: {base_url or '(not set)'}")
         lines.append(f"API key: {'configured' if api_key else 'missing'}")
-        lines.append(f"Timeout: {timeout}s")
-        lines.append(f"Enabled: {'yes' if enabled else 'no'}")
+        lines.append(f"timeout: {timeout}s")
+        lines.append(f"enabled: {'yes' if enabled else 'no'}")
 
         # Recovery hints
         if not api_key:
@@ -271,7 +271,7 @@ class MiniAgentCLI:
 
     def _setup_info(self) -> str:
         """Show setup/config guidance without leaking key values."""
-        lines = ["=== Nora Setup / Config ===", ""]
+        lines = []
 
         if self.settings:
             provider = getattr(self.settings, "provider", "")
@@ -281,62 +281,60 @@ class MiniAgentCLI:
             timeout = getattr(self.settings, "timeout_seconds", 60)
             enabled = getattr(self.settings, "is_llm_enabled", False)
 
-            lines.append("当前配置:")
-            lines.append(f"  Provider: {provider or '(not set)'}")
-            lines.append(f"  Model: {model or '(not set)'}")
-            lines.append(f"  Base URL: {base_url or '(not set)'}")
+            lines.append("current")
+            lines.append(f"  provider: {provider or '(not set)'}")
+            lines.append(f"  model: {model or '(not set)'}")
+            lines.append(f"  base URL: {base_url or '(not set)'}")
             lines.append(f"  API key: {'configured' if api_key else 'missing'}")
-            lines.append(f"  Timeout: {timeout}s")
-            lines.append(f"  Enabled: {'yes' if enabled else 'no'}")
+            lines.append(f"  timeout: {timeout}s")
+            lines.append(f"  enabled: {'yes' if enabled else 'no'}")
         else:
-            lines.append("当前配置: Settings 未加载")
+            lines.append("current")
+            lines.append("  settings not loaded")
             provider = ""
 
         lines.append("")
-        lines.append("各 Provider 配置键:")
+        lines.append("env")
         lines.append("  openai-compatible:")
         lines.append("    LLM_PROVIDER=openai-compatible")
-        lines.append("    LLM_API_KEY=your-key  (或 OPENAI_API_KEY)")
+        lines.append("    LLM_API_KEY=your-key  (or OPENAI_API_KEY)")
         lines.append("    LLM_MODEL=gpt-4.1-mini")
-        lines.append("    LLM_BASE_URL=https://api.openai.com/v1  (可选)")
+        lines.append("    LLM_BASE_URL=https://api.openai.com/v1  (optional)")
         lines.append("")
         lines.append("  anthropic:")
         lines.append("    LLM_PROVIDER=anthropic")
         lines.append("    ANTHROPIC_API_KEY=your-key")
         lines.append("    ANTHROPIC_MODEL=claude-sonnet-4-5")
-        lines.append("    ANTHROPIC_BASE_URL=https://api.anthropic.com/v1  (可选)")
+        lines.append("    ANTHROPIC_BASE_URL=https://api.anthropic.com/v1  (optional)")
         lines.append("")
         lines.append("  gemini:")
         lines.append("    LLM_PROVIDER=gemini")
         lines.append("    GEMINI_API_KEY=your-key")
         lines.append("    GEMINI_MODEL=gemini-2.5-pro")
-        lines.append("    GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta  (可选)")
+        lines.append("    GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta  (optional)")
 
         lines.append("")
-        lines.append("诊断:")
+        lines.append("recovery")
         if not provider:
-            lines.append("  LLM_PROVIDER 未设置，默认 openai-compatible")
+            lines.append("  LLM_PROVIDER not set, defaults to openai-compatible")
         if self.settings:
             api_key = getattr(self.settings, "api_key", "")
             model = getattr(self.settings, "model", "")
             if not api_key:
                 env_vars = required_env_vars(provider)
-                lines.append(f"  API key 缺失。需设置: {', '.join(env_vars)}")
+                lines.append(f"  missing API key — set {', '.join(env_vars)} in .env")
                 alternatives = env_alternatives(provider)
                 for primary, alt in alternatives.items():
-                    lines.append(f"    {primary} 也可用 {alt} 替代")
+                    lines.append(f"    {primary} also accepts {alt}")
             if not model:
-                lines.append("  LLM_MODEL 未设置，将使用默认模型")
-
-        lines.append("")
-        lines.append("常见问题排查:")
-        lines.append("  401 Unauthorized → API key 无效或过期，请检查 .env")
-        lines.append("  403 Forbidden → key 无权限，请检查 key 的访问范围")
-        lines.append("  连接超时 → 检查网络或 base URL 是否正确")
-        lines.append("  模型不存在 → 检查模型名称拼写和 provider 匹配")
-        lines.append("  provider/model 不匹配 → openai-compatible 用 gpt-*，anthropic 用 claude-*，gemini 用 gemini-*")
-        lines.append("  端口占用 → 关闭占用端口的进程或更换端口")
-        lines.append("  频率超限 → 稍后重试或升级 API 计划")
+                lines.append("  LLM_MODEL not set, will use default")
+        lines.append("  401 Unauthorized — check API key")
+        lines.append("  403 Forbidden — check key permissions")
+        lines.append("  connection timeout — check network or base URL")
+        lines.append("  model not found — check model name and provider match")
+        lines.append("  provider/model mismatch — openai-compatible: gpt-*, anthropic: claude-*, gemini: gemini-*")
+        lines.append("  port in use — stop the process or change port")
+        lines.append("  rate limit — retry later or upgrade plan")
 
         return "\n".join(lines)
 
