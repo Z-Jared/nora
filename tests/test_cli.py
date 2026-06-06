@@ -59,12 +59,11 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(agent.inputs, [])
         help_output = "\n".join(outputs)
-        self.assertIn("Nora 命令帮助", help_output)
-        self.assertIn("推荐开始:", help_output)
-        self.assertIn("Git:", help_output)
-        self.assertIn("代码理解与测试:", help_output)
-        self.assertIn("任务、记忆与上下文:", help_output)
-        self.assertIn("自主执行:", help_output)
+        self.assertIn("Commands", help_output)
+        self.assertIn("Project", help_output)
+        self.assertIn("Tasks & Memory", help_output)
+        self.assertIn("Git", help_output)
+        self.assertIn("Code", help_output)
         self.assertIn("/auto [n] <goal>", help_output)
         self.assertIn("/status", help_output)
 
@@ -568,10 +567,9 @@ class CLITaskCommandTests(unittest.TestCase):
     def test_help_includes_new_commands(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
         result = cli._help()
-        self.assertIn("/task <task_id>", result)
+        self.assertIn("/task", result)
         self.assertIn("/tasks [n]", result)
-        self.assertIn("/durable-tasks", result)
-        self.assertIn("/durable-task", result)
+        self.assertIn("/dashboard", result)
         self.assertIn("/wake", result)
         self.assertIn("/model", result)
         self.assertIn("/workers", result)
@@ -585,12 +583,9 @@ class CLIWakeCommandTests(unittest.TestCase):
             root = Path(tmpdir)
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
             result = cli.handle_slash_command("/wake")
-            self.assertIn("Nora Project Wake", result)
-            self.assertIn("─── Workspace ───", result)
-            self.assertIn("─── Model ───", result)
-            self.assertIn("─── Knowledge ───", result)
-            self.assertIn("─── Tasks ───", result)
             self.assertIn("Workspace:", result)
+            self.assertIn("Branch:", result)
+            self.assertIn("Model:", result)
 
     def test_wake_panel_shows_knowledge_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -601,22 +596,23 @@ class CLIWakeCommandTests(unittest.TestCase):
             (kb / "DECISIONS.md").write_text("# Decisions\n")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
             result = cli.handle_slash_command("/wake")
-            self.assertIn("✓ PROJECT_WAKEUP.md", result)
-            self.assertIn("✓ DECISIONS.md", result)
+            self.assertIn("PROJECT_WAKEUP.md", result)
+            self.assertIn("DECISIONS.md", result)
+            self.assertIn("Knowledge:", result)
 
     def test_wake_panel_shows_missing_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
             result = cli.handle_slash_command("/wake")
-            self.assertIn("✗", result)
+            self.assertIn("Missing:", result)
 
     def test_wake_panel_no_git_repo_hint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
             result = cli.handle_slash_command("/wake")
-            self.assertIn("未在 Git 项目中", result)
+            self.assertIn("not in a git repo", result)
 
     def test_wake_panel_with_git_repo(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -635,7 +631,7 @@ class CLIModelCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=None, root=Path(tmpdir))
             result = cli.handle_slash_command("/model")
-            self.assertIn("Settings 未配置", result)
+            self.assertIn("Settings not loaded", result)
             self.assertIn("LLM_PROVIDER", result)
 
     def test_model_shows_provider_info(self):
@@ -674,8 +670,8 @@ class CLIModelCommandTests(unittest.TestCase):
             settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
             result = cli.handle_slash_command("/model")
-            self.assertIn("401 Unauthorized", result)
-            self.assertIn("连接超时", result)
+            self.assertIn("missing key", result)
+            self.assertIn("ANTHROPIC_API_KEY", result)
 
 
 class CLIWorkersCommandTests(unittest.TestCase):
@@ -685,7 +681,7 @@ class CLIWorkersCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
             result = cli.handle_slash_command("/workers")
-            self.assertIn("未找到 .ccb/", result)
+            self.assertIn("No .ccb/", result)
 
     def test_workers_shows_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -851,9 +847,7 @@ class CLISlashLauncherTests(unittest.TestCase):
     def test_exact_slash_shows_grouped_menu(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
         result = cli.handle_slash_command("/")
-        self.assertIn("Nora 命令菜单", result)
-        for heading in ["Start", "Project", "Workers", "Memory / Tasks / Context", "Diagnostics", "Help"]:
-            self.assertIn(heading, result)
+        self.assertIn("Commands", result)
         for command in ["/wake", "/setup", "/model", "/workers", "/status", "/test", "/help"]:
             self.assertIn(command, result)
 
@@ -872,7 +866,7 @@ class CLISlashLauncherTests(unittest.TestCase):
 
         self.assertEqual(agent.inputs, [])
         joined = "\n".join(outputs)
-        self.assertIn("Nora 命令菜单", joined)
+        self.assertIn("Commands", joined)
         self.assertNotIn("thinking", joined)
         self.assertNotIn("ready", joined)
 

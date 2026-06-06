@@ -148,11 +148,10 @@ class MiniAgentCLI:
         return ""
 
     def _wake_panel(self) -> str:
-        """Read project context files and output a concise wake panel."""
-        lines = ["=== Nora Project Wake ===", ""]
+        """Read project context files and output a concise wake snapshot."""
+        lines = []
 
         # Workspace & branch
-        lines.append(_section_header("Workspace"))
         lines.append(f"Workspace: {self.root}")
         git = GitTools(self.root)
         branch = git.current_branch().strip()
@@ -163,93 +162,85 @@ class MiniAgentCLI:
 
         # Git status (brief)
         status = git.status()
-        if status and not status.startswith(("Git 命令失败", "Git 命令超时", "没有 Git 输出")):
+        if status and not status.lower().startswith("fatal:") and not status.startswith(("Git 命令失败", "Git 命令超时", "没有 Git 输出")):
             status_lines = [l for l in status.splitlines() if l.strip()][:5]
             if status_lines:
-                lines.append("")
-                lines.append("Git status:")
                 for sl in status_lines:
                     lines.append(f"  {sl}")
 
         # Provider / model
-        lines.append("")
-        lines.append(_section_header("Model"))
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
             api_key = getattr(self.settings, "api_key", "")
-            lines.append(f"Provider: {provider}")
-            lines.append(f"Model: {model}")
+            lines.append(f"Model: {provider} / {model}")
             lines.append(f"API key: {'configured' if api_key else 'missing'}")
         else:
-            lines.append("Provider: disabled (本地规则模式)")
+            lines.append("Model: disabled")
             if self.settings:
                 provider = getattr(self.settings, "provider", "")
                 if provider:
                     env_vars = required_env_vars(provider)
-                    lines.append(f"需设置: {', '.join(env_vars)}")
+                    lines.append(f"  needs: {', '.join(env_vars)}")
 
         # Project knowledge files
-        lines.append("")
-        lines.append(_section_header("Knowledge"))
         knowledge_files = [
             ("PROJECT_WAKEUP.md", "docs/knowledge/PROJECT_WAKEUP.md"),
             ("DECISIONS.md", "docs/knowledge/DECISIONS.md"),
             ("CHAT_INDEX.md", "docs/knowledge/CHAT_INDEX.md"),
             ("AGENTS.md", "AGENTS.md"),
         ]
+        present = []
+        missing = []
         for label, relpath in knowledge_files:
             fpath = self.root / relpath
             if fpath.exists():
-                lines.append(f"  ✓ {label}")
+                present.append(label)
             else:
-                lines.append(f"  ✗ {label} (missing)")
+                missing.append(label)
+        if present:
+            lines.append(f"Knowledge: {', '.join(present)}")
+        if missing:
+            lines.append(f"Missing: {', '.join(missing)}")
 
         # Agent tasks
-        lines.append("")
-        lines.append(_section_header("Tasks"))
         task_summary = self._task_backlog_summary()
         if task_summary:
-            lines.append(f"  {task_summary}")
-        else:
-            lines.append("  Active tasks: none")
+            lines.append(task_summary)
 
         # Worker state
         worker_summary = self._worker_state_summary()
         if worker_summary:
-            lines.append(f"  {worker_summary}")
+            lines.append(worker_summary)
 
         # Recovery hints if things look wrong
-        lines.append("")
         hints = []
         if not (self.root / ".git").exists():
-            hints.append("未在 Git 项目中。请 cd 到 Nora 项目目录后重新启动。")
+            hints.append("not in a git repo — cd to project dir")
         if self.settings and not getattr(self.settings, "api_key", ""):
             provider = getattr(self.settings, "provider", "")
             if provider:
                 env_vars = required_env_vars(provider)
-                hints.append(f"模型未配置。请在 .env 中设置 {', '.join(env_vars)}。")
+                hints.append(f"no API key — set {', '.join(env_vars)} in .env")
         if not (self.root / "agent_tasks").exists():
-            hints.append("agent_tasks/ 目录不存在。请确认在正确的 Nora 项目目录中。")
+            hints.append("agent_tasks/ missing — check project dir")
         if hints:
-            lines.append(_section_header("Recovery"))
-            lines.append("提示:")
             for h in hints:
-                lines.append(f"  - {h}")
+                lines.append(f"hint: {h}")
 
         return "\n".join(lines)
 
     def _model_info(self) -> str:
         """Show current provider/model/base URL/key presence without leaking key values."""
-        lines = ["=== Nora Model Configuration ===", ""]
         if not self.settings:
-            lines.append("Settings 未配置。")
-            lines.append("")
-            lines.append("如需模型能力，请在 .env 中设置:")
-            lines.append("  LLM_PROVIDER=openai-compatible")
-            lines.append("  LLM_API_KEY=your-key")
-            lines.append("  LLM_MODEL=gpt-4.1-mini")
-            return "\n".join(lines)
+            return "\n".join([
+                "Settings not loaded.",
+                "",
+                "Set in .env:",
+                "  LLM_PROVIDER=openai-compatible",
+                "  LLM_API_KEY=your-key",
+                "  LLM_MODEL=gpt-4.1-mini",
+            ])
 
         provider = getattr(self.settings, "provider", "")
         model = getattr(self.settings, "model", "")
@@ -258,6 +249,7 @@ class MiniAgentCLI:
         timeout = getattr(self.settings, "timeout_seconds", 60)
         enabled = getattr(self.settings, "is_llm_enabled", False)
 
+        lines = []
         lines.append(f"Provider: {provider or '(not set)'}")
         lines.append(f"Model: {model or '(not set)'}")
         lines.append(f"Base URL: {base_url or '(not set)'}")
@@ -265,26 +257,17 @@ class MiniAgentCLI:
         lines.append(f"Timeout: {timeout}s")
         lines.append(f"Enabled: {'yes' if enabled else 'no'}")
 
-        # Diagnostics
-        lines.append("")
-        lines.append("Diagnostics:")
-        if not provider:
-            lines.append("  LLM_PROVIDER 未设置。")
+        # Recovery hints
         if not api_key:
             env_vars = required_env_vars(provider)
-            lines.append(f"  API key 缺失。需设置: {', '.join(env_vars)}")
+            lines.append(f"missing key — set {', '.join(env_vars)} in .env")
             alternatives = env_alternatives(provider)
             for primary, alt in alternatives.items():
-                lines.append(f"    {primary} 也可用 {alt} 替代。")
-        if not model:
-            lines.append("  LLM_MODEL 未设置，将使用默认模型。")
-
-        # Error recovery hints
-        lines.append("")
-        lines.append("常见问题:")
-        lines.append("  401 Unauthorized → API key 无效或过期，请检查 .env")
-        lines.append("  连接超时 → 检查网络或 base URL 是否正确")
-        lines.append("  模型不存在 → 检查模型名称拼写和 provider 匹配")
+                lines.append(f"  {primary} also accepts {alt}")
+        if not provider:
+            lines.append("no provider — set LLM_PROVIDER in .env")
+        lines.append("401 Unauthorized — check API key")
+        lines.append("model mismatch — match provider and model name")
         return "\n".join(lines)
 
     def _setup_info(self) -> str:
@@ -360,66 +343,55 @@ class MiniAgentCLI:
 
     def _workers_status(self) -> str:
         """Show Claude A/B / CCB worker status from project files."""
-        lines = ["=== Nora Worker Status ===", ""]
-
         ccb_path = self.root / ".ccb"
         if not ccb_path.exists():
-            lines.append("未找到 .ccb/ 目录。Worker 状态不可用。")
-            lines.append("")
-            lines.append("这可能意味着:")
-            lines.append("  - 不在 Nora CCB 项目目录中")
-            lines.append("  - Worker 尚未初始化")
-            return "\n".join(lines)
+            return "No .ccb/ found. Workers not initialized."
 
-        # Check each worker
+        lines = []
         for agent in ("claude-a", "claude-b"):
             workspace = ccb_path / "workspaces" / agent
-            lines.append(f"--- {agent} ---")
-
             if not workspace.exists():
-                lines.append(f"  Workspace: 不存在")
-                lines.append("")
+                lines.append(f"{agent}: no workspace")
                 continue
 
-            lines.append(f"  Workspace: {workspace}")
-
-            # Task file
             task_letter = agent.split("-")[-1].upper()
             task_path = workspace / "agent_tasks" / f"{task_letter}_TASK.md"
             done_path = workspace / "agent_tasks" / f"{task_letter}_DONE.md"
 
+            parts = [agent]
+
+            # Task file
             if task_path.exists():
                 try:
                     task_content = task_path.read_text(encoding="utf-8")[:300]
-                    # Extract first heading or task line
                     for tl in task_content.splitlines():
                         tl = tl.strip()
                         if tl.startswith("#") or tl.startswith("TASK-"):
-                            lines.append(f"  Task: {_truncate_text(tl, 80)}")
+                            parts.append(f"task: {_truncate_text(tl, 60)}")
                             break
                     else:
-                        lines.append(f"  Task: (file exists)")
+                        parts.append("task: (file exists)")
                 except OSError:
-                    lines.append(f"  Task: (read error)")
+                    parts.append("task: (read error)")
             else:
-                lines.append(f"  Task: 无任务文件")
+                parts.append("task: none")
 
             # Done file
             if done_path.exists():
                 try:
                     done_content = done_path.read_text(encoding="utf-8")[:300]
                     if "ready for review" in done_content.lower():
-                        lines.append(f"  Done: ✓ ready for PM review")
+                        parts.append("done: ready for PM review")
                     elif "done" in done_content.lower()[:50]:
-                        lines.append(f"  Done: ✓ completed")
+                        parts.append("done: completed")
                     else:
-                        lines.append(f"  Done: (file exists)")
+                        parts.append("done: (file exists)")
                 except OSError:
-                    lines.append(f"  Done: (read error)")
+                    parts.append("done: (read error)")
             else:
-                lines.append(f"  Done: 未完成")
+                parts.append("done: no")
 
-            lines.append("")
+            lines.append(" | ".join(parts))
 
         # PM inbox hint
         pm_inbox = self.root / "agent_tasks" / "PM_INBOX.md"
@@ -787,36 +759,17 @@ class MiniAgentCLI:
         """Show a compact command launcher for exact '/' input."""
         return "\n".join(
             [
-                "Nora 命令菜单",
+                "Commands",
                 "",
-                "Start",
-                "  /wake       项目状态面板",
-                "  /setup      配置检查与排查指南",
-                "  /model      当前模型配置和诊断",
-                "",
-                "Project",
-                "  /status     当前 Git 状态",
-                "  /diff       查看 Git diff",
-                "  /test       运行项目测试",
-                "  /tools      查看可用工具",
-                "",
-                "Workers",
-                "  /workers    查看 Claude/CCB worker 状态",
-                "",
-                "Memory / Tasks / Context",
-                "  /task       当前任务",
-                "  /tasks      Durable tasks",
-                "  /dashboard  Durable task 状态概览",
-                "  /context    最近上下文摘要",
-                "",
-                "Diagnostics",
-                "  /doctor     检查 workspace、Git、LLM、工具和 PATH",
-                "  /logs       查看工具日志",
-                "  /audit      工具调用安全审计摘要",
-                "",
-                "Help",
-                "  /help       完整命令帮助",
-                "  exit        退出 Nora",
+                "  /wake       project snapshot",
+                "  /setup      config & diagnostics",
+                "  /model      model config",
+                "  /workers    worker status",
+                "  /status     git status",
+                "  /test       run tests",
+                "  /tools      list tools",
+                "  /help       all commands",
+                "  exit        quit",
             ]
         )
 
@@ -879,82 +832,49 @@ class MiniAgentCLI:
     def _help(self) -> str:
         return "\n".join(
             [
-                "Nora 命令帮助",
+                "Commands",
                 "",
-                "推荐开始:",
-                "  /wake - 项目状态面板（新窗口推荐）",
-                "  /setup - 完整配置检查与排查指南",
-                "  /model - 查看当前模型配置和诊断",
-                "  /workers - 查看 worker 状态",
-                "  /status - 查看当前 Git 状态",
-                "  /tools - 查看可用工具",
-                "  /auto 3 总结 README 并说明项目能力",
+                "Project",
+                "  /wake        project snapshot",
+                "  /setup       config & diagnostics  (/config)",
+                "  /model       model config & recovery",
+                "  /workers     A/B worker status",
+                "  /status      git status",
+                "  /diff [p]    git diff",
+                "  /staged      staged diff",
+                "  /changes     summarize changes",
+                "  /test        run tests",
+                "  /tools       list tools",
+                "  /doctor      workspace health check",
                 "",
-                "状态与工具:",
-                "  /help - 查看命令帮助",
-                "  /wake - 项目状态面板",
-                "  /setup - 完整配置检查（/config 别名）",
-                "  /model - 模型配置和诊断",
-                "  /workers - worker 状态",
-                "  /tools - 查看工具列表",
-                "  /permissions - 查看工具权限",
-                "  /doctor - 检查 workspace、Git、LLM、工具数量和 PATH",
-                "  /logs [n] - 查看工具日志",
-                "  /audit [n] - 生成工具调用安全审计摘要",
-                "  /traces [n] - 查看最近运行 trace",
-                "  /trace <trace_id> - 查看单条 trace 详情",
-                "  /durable-tasks [n] - 查看最近 durable tasks",
-                "  /durable-task <task_id> - 查看单条 durable task 详情",
-                "  /tasks [n] - durable-tasks 的别名",
-                "  /dashboard - Durable task 状态概览",
+                "Tasks & Memory",
+                "  /task        current task",
+                "  /tasks [n]   durable tasks",
+                "  /dashboard   task overview",
+                "  /context [n] context summaries",
+                "  /traces [n]  run traces",
                 "",
-                "Git:",
-                "  /status - 查看 Git 状态",
-                "  /diff [path] - 查看 Git diff",
-                "  /staged - 查看 staged diff",
-                "  /changes - 汇总当前 Git 变更",
-                "  /review-staged - 审查 staged diff",
-                "  /check-commit - 提交前检查",
-                "  /branch - 查看当前分支",
-                "  /log [n] - 查看最近提交",
-                "  /git-stage <path...> - 暂存路径，需要确认",
-                "  /git-unstage <path...> - 取消暂存路径，需要确认",
-                "  /git-commit <message> - 提交 staged 改动，需要确认",
-                "  /git-branch-create <name> - 创建本地分支，需要确认",
+                "Git",
+                "  /branch         current branch",
+                "  /log [n]        recent commits",
+                "  /git-stage <p>  stage paths",
+                "  /git-commit <m> commit staged",
                 "",
-                "代码理解与测试:",
-                "  /symbols [query] - 列出 Python 符号",
-                "  /symbol <name> - 查看 Python 符号详情",
-                "  /refs <name> - 查找 Python 可能引用",
-                "  /outline <path> - 生成 Python 文件 outline",
-                "  /test - 运行项目测试",
-                "  /repair [n] - 运行受控修复测试循环",
+                "Code",
+                "  /symbols [q]    list symbols",
+                "  /symbol <name>  symbol info",
+                "  /refs <name>    find references",
+                "  /outline <path> file outline",
+                "  /repair [n]     repair loop",
                 "",
-                "任务、记忆与上下文:",
-                "  /task - 查看当前任务",
-                "  /task <task_id> - 查看 durable task 详情",
-                "  /task-next - 推进当前任务一步",
-                "  /task-history [n] - 查看最近完成的任务历史",
-                "  /task-search <query> - 搜索已完成任务历史",
-                "  /task-restore <task_id> - 从历史恢复任务为当前任务",
-                "  /context [n] - 列出上下文摘要",
-                "  /context-search <query> - 搜索上下文摘要",
+                "Session",
+                "  /session-save [n]  save session",
+                "  /session-load <n>  load session",
+                "  /session-list      list sessions",
                 "",
-                "会话管理:",
-                "  /session-save [name] - 保存当前会话",
-                "  /session-load <name> - 恢复已保存的会话",
-                "  /session-list - 列出已保存的会话",
-                "",
-                "后台进程与浏览器:",
-                "  /processes - 列出后台进程",
-                "  /process-start <profile> - 启动后台进程，需要确认",
-                "  /process-stop <process_id> - 停止后台进程，需要确认",
-                "",
-                "自主执行:",
-                "  /auto [n] <goal> - 受控自主执行，最多 n 步，高风险工具仍需确认",
-                "",
-                "输入:",
-                "  <<< 开始多行输入，>>> 结束。",
-                "  exit 或 quit 退出。",
+                "Input",
+                "  <<<  start multiline, >>>  end",
+                "  /auto [n] <goal>  autonomous execution",
+                "  exit  quit",
             ]
         )

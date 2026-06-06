@@ -93,6 +93,14 @@ def main() -> int:
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
         EvalCase("slash_launcher_no_model_call", eval_slash_launcher_no_model_call),
         EvalCase("slash_launcher_no_raw_json", eval_slash_launcher_no_raw_json),
+        # TASK-144: CLI slash surfaces v4 eval coverage
+        EvalCase("slash_launcher_v4_compact", eval_slash_launcher_v4_compact),
+        EvalCase("slash_help_v4_concise", eval_slash_help_v4_concise),
+        EvalCase("slash_wake_v4_compact", eval_slash_wake_v4_compact),
+        EvalCase("slash_model_v4_compact", eval_slash_model_v4_compact),
+        EvalCase("slash_workers_v4_compact", eval_slash_workers_v4_compact),
+        EvalCase("slash_workers_v4_missing_ccb", eval_slash_workers_v4_missing_ccb),
+        EvalCase("slash_commands_no_model_call", eval_slash_commands_no_model_call),
         EvalCase("banner_next_action_hint", eval_banner_next_action_hint),
         EvalCase("banner_preserves_core_info", eval_banner_preserves_core_info),
         EvalCase("banner_missing_key_safe", eval_banner_missing_key_safe),
@@ -714,9 +722,11 @@ def eval_cli_handles_help_command():
     cli.run()
     help_output = "\n".join(outputs)
     assert agent.inputs == []
-    assert "Nora 命令帮助" in help_output
-    assert "推荐开始:" in help_output
-    assert "Git:" in help_output
+    assert "Commands" in help_output
+    assert "Project" in help_output
+    assert "Git" in help_output
+    assert "Tasks & Memory" in help_output
+    assert "Code" in help_output
     assert "/auto [n] <goal>" in help_output
     assert "/status" in help_output
 
@@ -850,13 +860,12 @@ def eval_cli_wake_project_panel():
             settings=settings,
             root=root,
         ).handle_slash_command("/wake")
-        assert "Nora Project Wake" in result, f"missing wake header: {result[:300]}"
         assert "Workspace:" in result, f"missing workspace: {result[:300]}"
         assert "Branch:" in result, f"missing branch: {result[:300]}"
-        assert "✓ PROJECT_WAKEUP.md" in result, f"missing PROJECT_WAKEUP status: {result[:300]}"
-        assert "✓ DECISIONS.md" in result, f"missing DECISIONS status: {result[:300]}"
-        assert "✓ AGENTS.md" in result, f"missing AGENTS status: {result[:300]}"
-        assert "Active tasks:" in result, f"missing task summary: {result[:300]}"
+        assert "PROJECT_WAKEUP.md" in result, f"missing PROJECT_WAKEUP status: {result[:300]}"
+        assert "DECISIONS.md" in result, f"missing DECISIONS status: {result[:300]}"
+        assert "AGENTS.md" in result, f"missing AGENTS status: {result[:300]}"
+        assert "agent_tasks/ missing" in result or "Active tasks:" in result, f"missing task state or recovery hint: {result[:300]}"
 
 
 def eval_cli_wake_non_project_guidance():
@@ -868,9 +877,8 @@ def eval_cli_wake_non_project_guidance():
             settings=settings,
             root=Path(tmpdir),
         ).handle_slash_command("/wake")
-        assert "Nora Project Wake" in result, f"missing wake header: {result[:300]}"
         assert "not in git repo" in result.lower() or "not in git" in result.lower() or "(not in git repo)" in result, f"missing non-git guidance: {result[:300]}"
-        assert "提示:" in result, f"missing recovery hints: {result[:300]}"
+        assert "hint:" in result, f"missing recovery hints: {result[:300]}"
 
 
 def eval_cli_model_provider_diagnostics():
@@ -887,10 +895,10 @@ def eval_cli_model_provider_diagnostics():
             settings=settings,
             root=Path(tmpdir),
         ).handle_slash_command("/model")
-        assert "Nora Model Configuration" in result, f"missing header: {result[:300]}"
         assert "Provider: openai-compatible" in result, f"missing provider: {result[:300]}"
         assert "Model: gpt-4.1" in result, f"missing model: {result[:300]}"
         assert "API key: configured" in result, f"missing key status: {result[:300]}"
+        assert "401 Unauthorized" in result, f"missing recovery hint: {result[:300]}"
         assert "sk-fake-secret-abc" not in result, "API key leaked in /model"
 
 
@@ -899,8 +907,7 @@ def eval_cli_model_no_settings():
     result = MiniAgentCLI(
         FakeCLIAgent(), FakeCLIRegistry(),
     ).handle_slash_command("/model")
-    assert "Nora Model Configuration" in result, f"missing header: {result[:300]}"
-    assert "Settings 未配置" in result or "未设置" in result, f"missing no-settings message: {result[:300]}"
+    assert "Settings not loaded" in result, f"missing no-settings message: {result[:300]}"
     assert "LLM_API_KEY" in result, f"missing setup hint: {result[:300]}"
 
 
@@ -927,12 +934,11 @@ def eval_cli_workers_ccb_status():
             FakeCLIAgent(), FakeCLIRegistry(),
             root=root,
         ).handle_slash_command("/workers")
-        assert "Nora Worker Status" in result, f"missing header: {result[:300]}"
         assert "claude-a" in result, f"missing claude-a: {result[:300]}"
         assert "claude-b" in result, f"missing claude-b: {result[:300]}"
         assert "TASK-129" in result, f"missing task ID for A: {result[:300]}"
         assert "ready for PM review" in result, f"missing ready-for-review: {result[:300]}"
-        assert "未完成" in result, f"missing not-done for B: {result[:300]}"
+        assert "done: no" in result, f"missing not-done for B: {result[:300]}"
         assert "PM inbox:" in result, f"missing PM inbox: {result[:300]}"
 
 
@@ -943,8 +949,7 @@ def eval_cli_workers_no_ccb():
             FakeCLIAgent(), FakeCLIRegistry(),
             root=Path(tmpdir),
         ).handle_slash_command("/workers")
-        assert "Nora Worker Status" in result, f"missing header: {result[:300]}"
-        assert "未找到 .ccb/" in result, f"missing no-ccb message: {result[:300]}"
+        assert "No .ccb/" in result, f"missing no-ccb message: {result[:300]}"
 
 
 def eval_cli_error_recovery_hint():
@@ -1138,9 +1143,9 @@ def eval_slash_launcher_returns_menu():
     with tempfile.TemporaryDirectory() as tmpdir:
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
         result = cli.handle_slash_command("/")
-        assert "Nora 命令菜单" in result, f"missing menu title: {result[:200]}"
-        for heading in ["Start", "Project", "Workers", "Memory / Tasks / Context", "Diagnostics", "Help"]:
-            assert heading in result, f"missing menu group {heading}: {result[:300]}"
+        assert result.startswith("Commands"), f"missing menu title: {result[:200]}"
+        for old_marker in ["Nora 命令菜单", "Memory / Tasks / Context", "Diagnostics"]:
+            assert old_marker not in result, f"old menu marker leaked {old_marker}: {result[:300]}"
 
 
 def eval_slash_launcher_includes_required_commands():
@@ -1178,6 +1183,133 @@ def eval_slash_launcher_no_raw_json():
         result = cli.handle_slash_command("/")
         assert not result.lstrip().startswith("{"), f"launcher returned raw JSON: {result[:100]}"
         assert not result.lstrip().startswith("["), f"launcher returned raw JSON array: {result[:100]}"
+
+
+# --- TASK-144: CLI slash surfaces v4 eval coverage ---
+
+def eval_slash_launcher_v4_compact():
+    """Launcher / is compact, monotone, plain text with required commands."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        result = cli.handle_slash_command("/")
+        assert result.startswith("Commands"), f"unexpected launcher title: {result[:200]}"
+        for cmd in ["/wake", "/setup", "/model", "/workers", "/status", "/test", "/help"]:
+            assert cmd in result, f"missing {cmd} in launcher: {result[:300]}"
+        for forbidden in ["───", "===", "Nora 命令菜单", "Start", "Memory / Tasks / Context", "Diagnostics"]:
+            assert forbidden not in result, f"old launcher marker leaked: {forbidden}"
+        assert len([line for line in result.splitlines() if line.strip()]) <= 12, f"launcher too long: {result}"
+        assert not result.lstrip().startswith(("{", "[")), f"launcher returned raw JSON: {result[:100]}"
+        for forbidden in ["received", "thinking", "ready", "api_key", "sk-", "hidden_reasoning"]:
+            assert forbidden not in result.lower(), f"forbidden launcher content leaked: {forbidden}"
+
+
+def eval_slash_help_v4_concise():
+    """/help is concise, not a long manual; preserves command family discoverability."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        result = cli.handle_slash_command("/help")
+        for keyword in ["project", "model", "worker", "memory", "task", "doctor", "git", "code"]:
+            assert keyword in result.lower(), f"missing family keyword '{keyword}': {result[:500]}"
+        for old_marker in ["Nora 命令帮助", "推荐开始:", "代码理解与测试:", "任务、记忆与上下文:", "自主执行:"]:
+            assert old_marker not in result, f"old help marker leaked: {old_marker}"
+        assert not result.lstrip().startswith(("{", "[")), f"help returned raw JSON: {result[:100]}"
+        assert "sk-" not in result, f"possible secret in help: {result[:200]}"
+        assert len(result) < 1800, f"help text too long for v4 ({len(result)} chars): {result[:200]}"
+
+
+def eval_slash_wake_v4_compact():
+    """/wake provides bounded project snapshot without section headers or dashboard panels."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        subprocess.run(["git", "init"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=root, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=root, capture_output=True)
+
+        docs = root / "docs" / "knowledge"
+        docs.mkdir(parents=True)
+        (docs / "PROJECT_WAKEUP.md").write_text("# Wakeup\nSECRET_SHOULD_NOT_APPEAR\n", encoding="utf-8")
+        (root / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+
+        result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=load_settings(environ={}), root=root).handle_slash_command("/wake")
+        assert "Workspace:" in result, f"missing workspace: {result[:300]}"
+        assert "Branch:" in result, f"missing branch: {result[:300]}"
+        assert "PROJECT_WAKEUP.md" in result, f"missing PROJECT_WAKEUP: {result[:300]}"
+        assert "AGENTS.md" in result, f"missing AGENTS.md: {result[:300]}"
+        for forbidden in ["───", "===", "Nora Project Wake", "SECRET_SHOULD_NOT_APPEAR", "sk-"]:
+            assert forbidden not in result, f"forbidden wake content leaked: {forbidden}"
+
+
+def eval_slash_model_v4_compact():
+    """/model provides compact provider/model/base URL/key presence/enabled state."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(
+            env_path=root / ".env",
+            environ={
+                "LLM_PROVIDER": "openai-compatible",
+                "LLM_API_KEY": "sk-test-key-12345",
+                "LLM_MODEL": "gpt-4.1-mini",
+                "LLM_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root).handle_slash_command("/model")
+        for expected in ["Provider:", "Model:", "Base URL:", "API key:", "Enabled:"]:
+            assert expected in result, f"missing {expected}: {result[:300]}"
+        assert "openai-compatible" in result, f"missing provider: {result[:300]}"
+        assert "gpt-4.1-mini" in result, f"missing model: {result[:300]}"
+        assert "configured" in result, f"missing key presence: {result[:300]}"
+        for expected in ["401 Unauthorized", "model mismatch"]:
+            assert expected in result, f"missing recovery hint {expected}: {result[:300]}"
+        for forbidden in ["sk-test-key-12345", "===", "Nora Model Configuration", "intelligence", "speed", "routing"]:
+            assert forbidden not in result, f"forbidden model content leaked: {forbidden}"
+
+
+def eval_slash_workers_v4_compact():
+    """/workers provides compact A/B summary with workspace/task/DONE status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        ccb = root / ".ccb"
+        (ccb / "workspaces" / "claude-a" / "agent_tasks").mkdir(parents=True)
+        (ccb / "workspaces" / "claude-b" / "agent_tasks").mkdir(parents=True)
+        (ccb / "workspaces" / "claude-a" / "agent_tasks" / "A_TASK.md").write_text("# TASK-143: Test task\n", encoding="utf-8")
+        (ccb / "workspaces" / "claude-b" / "agent_tasks" / "B_DONE.md").write_text("# B DONE\nStatus: ready for review\n", encoding="utf-8")
+
+        result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root).handle_slash_command("/workers")
+        for expected in ["claude-a", "claude-b", "task:", "done:"]:
+            assert expected in result, f"missing worker summary field {expected}: {result[:300]}"
+        assert "ready for PM review" in result, f"missing ready-for-review detection: {result[:300]}"
+        for forbidden in ["===", "───", "--- claude-a ---", "Nora Worker Status"]:
+            assert forbidden not in result, f"old worker panel marker leaked: {forbidden}"
+
+
+def eval_slash_workers_v4_missing_ccb():
+    """/workers with missing .ccb/ gives one short recovery line."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir)).handle_slash_command("/workers")
+        assert len(result) < 120, f"recovery response too long ({len(result)} chars): {result[:200]}"
+        assert "No .ccb/" in result, f"missing .ccb recovery guidance: {result[:300]}"
+        assert "\n" not in result, f"missing .ccb recovery should be one line: {result!r}"
+
+
+def eval_slash_commands_no_model_call():
+    """Common slash commands do not call the agent model or emit lifecycle lines."""
+    for cmd in ["/", "/help", "/wake", "/model", "/workers", "/setup", "/status"]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent = FakeCLIAgent()
+            outputs = []
+            cli = MiniAgentCLI(
+                agent,
+                FakeCLIRegistry(),
+                root=Path(tmpdir),
+                input_func=_fake_input([cmd, "exit"]),
+                output_func=outputs.append,
+            )
+            cli.run()
+            assert agent.inputs == [], f"{cmd} called agent with: {agent.inputs}"
+            full = "\n".join(outputs)
+            for forbidden in ["received", "thinking", "ready"]:
+                assert forbidden not in full, f"{cmd} emitted lifecycle line {forbidden}: {full[:200]}"
 
 
 def eval_banner_next_action_hint():
