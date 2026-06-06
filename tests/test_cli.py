@@ -1059,6 +1059,25 @@ class InteractiveCLITests(unittest.TestCase):
 
         self.assertIs(registry.confirm_action, selectable_confirm)
 
+    def test_selectable_confirm_uses_dialog_when_stdout_is_tty(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        class FakeStdout:
+            def isatty(self):
+                return True
+
+        class FakeDialog:
+            def run(self):
+                return True
+
+        with unittest.mock.patch.object(interactive_cli.sys, "stdout", FakeStdout()):
+            with unittest.mock.patch.object(interactive_cli, "radiolist_dialog", return_value=FakeDialog()) as dialog:
+                result = interactive_cli.selectable_confirm("approve?")
+
+        self.assertTrue(result)
+        dialog.assert_called_once()
+
 
 class SlashCompleterTests(unittest.TestCase):
     def _get_completions(self, text):

@@ -39,7 +39,7 @@ class SlashCompleter(Completer):
 
 def selectable_confirm(prompt_text: str) -> bool:
     """TTY approval selector with non-TTY y/N fallback."""
-    if not is_tty():
+    if not sys.stdout.isatty():
         return confirm_in_terminal(prompt_text)
     try:
         result = radiolist_dialog(
