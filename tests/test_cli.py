@@ -150,17 +150,17 @@ class MiniAgentCLITests(unittest.TestCase):
         agent = FakeCLIAgent()
         cli = MiniAgentCLI(agent, FakeCLIRegistry())
 
-        self.assertIn("用法", cli.handle_slash_command("/auto"))
-        self.assertIn("用法", cli.handle_slash_command("/auto 3"))
+        self.assertIn("usage", cli.handle_slash_command("/auto"))
+        self.assertIn("usage", cli.handle_slash_command("/auto 3"))
         self.assertEqual(agent.autonomous_calls, [])
 
     def test_symbol_commands_require_arguments(self):
         registry = FakeCLIRegistry()
         cli = MiniAgentCLI(FakeCLIAgent(), registry)
 
-        self.assertIn("用法", cli.handle_slash_command("/symbol"))
-        self.assertIn("用法", cli.handle_slash_command("/refs"))
-        self.assertIn("用法", cli.handle_slash_command("/outline"))
+        self.assertIn("usage", cli.handle_slash_command("/symbol"))
+        self.assertIn("usage", cli.handle_slash_command("/refs"))
+        self.assertIn("usage", cli.handle_slash_command("/outline"))
         self.assertEqual(registry.calls, [])
 
     def test_write_slash_command_uses_registry_path(self):
@@ -251,7 +251,7 @@ class MiniAgentCLITests(unittest.TestCase):
 
                 result = cli.handle_slash_command("/durable-tasks")
 
-                self.assertIn("暂无", result)
+                self.assertIn("no durable tasks", result)
             finally:
                 db.close()
 
@@ -318,7 +318,7 @@ class MiniAgentCLITests(unittest.TestCase):
 
                 result = cli.handle_slash_command("/durable-task dtask_999")
 
-                self.assertIn("未找到", result)
+                self.assertIn("not found", result)
             finally:
                 db.close()
 
@@ -328,7 +328,7 @@ class MiniAgentCLITests(unittest.TestCase):
 
         result = cli.handle_slash_command("/durable-tasks")
 
-        self.assertIn("未配置", result)
+        self.assertIn("not configured", result)
 
     def test_durable_task_no_store(self):
         registry = FakeCLIRegistry()
@@ -336,7 +336,7 @@ class MiniAgentCLITests(unittest.TestCase):
 
         result = cli.handle_slash_command("/durable-task dtask_1")
 
-        self.assertIn("未配置", result)
+        self.assertIn("not configured", result)
 
     def test_durable_task_requires_id(self):
         registry = FakeCLIRegistry()
@@ -344,7 +344,7 @@ class MiniAgentCLITests(unittest.TestCase):
 
         result = cli.handle_slash_command("/durable-task")
 
-        self.assertIn("用法", result)
+        self.assertIn("usage", result)
 
 
 class FakeCLIAgent:
@@ -531,7 +531,7 @@ class CLITaskCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli, db = self._make_cli(tmpdir)
             result = cli.handle_slash_command("/task dtask_999")
-            self.assertIn("未找到", result)
+            self.assertIn("not found", result)
             db.close()
 
     def test_tasks_lists_durable_tasks(self):
@@ -541,7 +541,7 @@ class CLITaskCommandTests(unittest.TestCase):
             store.create_task(goal="task a", steps=[])
             store.create_task(goal="task b", steps=[])
             result = cli.handle_slash_command("/tasks")
-            self.assertIn("最近 2 条", result)
+            self.assertIn("recent 2", result)
             self.assertIn("task a", result)
             self.assertIn("task b", result)
             db.close()
@@ -550,7 +550,7 @@ class CLITaskCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cli, db = self._make_cli(tmpdir)
             result = cli.handle_slash_command("/tasks")
-            self.assertIn("暂无 durable tasks", result)
+            self.assertIn("no durable tasks", result)
             db.close()
 
     def test_tasks_with_count(self):
@@ -560,7 +560,7 @@ class CLITaskCommandTests(unittest.TestCase):
             for i in range(5):
                 store.create_task(goal=f"task {i}", steps=[])
             result = cli.handle_slash_command("/tasks 2")
-            self.assertIn("最近 2 条", result)
+            self.assertIn("recent 2", result)
             db.close()
 
     def test_durable_tasks_still_works(self):
@@ -603,7 +603,7 @@ class CLIWakeCommandTests(unittest.TestCase):
             result = cli.handle_slash_command("/wake")
             self.assertIn("Workspace:", result)
             self.assertIn("Branch:", result)
-            self.assertIn("Model:", result)
+            self.assertIn("model:", result)
 
     def test_wake_panel_shows_knowledge_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:

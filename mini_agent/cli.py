@@ -8,23 +8,10 @@ from mini_agent.session import SessionStore
 from mini_agent.settings import required_env_vars, env_alternatives
 
 
-def _section_header(title: str) -> str:
-    return f"─── {title} ───"
-
-
-def _status_line(label: str, ok: bool) -> str:
-    mark = "✓" if ok else "✗"
-    return f"  {mark} {label}"
-
-
 def _truncate_text(text: str, max_len: int = 120) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
-
-
-# Deprecated: kept for eval compatibility; no longer used in CLI output.
-INPUT_SEPARATOR = "─" * 52
 
 
 class MiniAgentCLI:
@@ -172,10 +159,10 @@ class MiniAgentCLI:
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
             api_key = getattr(self.settings, "api_key", "")
-            lines.append(f"Model: {provider} / {model}")
+            lines.append(f"model: {provider} / {model}")
             lines.append(f"API key: {'configured' if api_key else 'missing'}")
         else:
-            lines.append("Model: disabled")
+            lines.append("model: disabled")
             if self.settings:
                 provider = getattr(self.settings, "provider", "")
                 if provider:
@@ -525,15 +512,15 @@ class MiniAgentCLI:
             return self.registry.call("list_python_symbols", query=query)
         if command == "/symbol":
             if not args:
-                return "用法: /symbol <name>"
+                return "usage: /symbol <name>"
             return self.registry.call("describe_python_symbol", **{"name": " ".join(args)})
         if command == "/refs":
             if not args:
-                return "用法: /refs <name>"
+                return "usage: /refs <name>"
             return self.registry.call("find_python_references", **{"name": " ".join(args)})
         if command == "/outline":
             if len(args) != 1:
-                return "用法: /outline <path>"
+                return "usage: /outline <path>"
             return self.registry.call("outline_python_file", path=args[0])
         if command == "/test":
             return self.registry.call("run_project_tests")
@@ -544,7 +531,7 @@ class MiniAgentCLI:
             return self.registry.call("run_repair_loop", max_attempts=attempts)
         if command == "/auto":
             if not args:
-                return "用法: /auto [n] <goal>"
+                return "usage: /auto [n] <goal>"
             max_steps = None
             goal_parts = args
             try:
@@ -553,7 +540,7 @@ class MiniAgentCLI:
             except ValueError:
                 pass
             if not goal_parts:
-                return "用法: /auto [n] <goal>"
+                return "usage: /auto [n] <goal>"
             return self._format_agent_response(self.agent.run_autonomous(" ".join(goal_parts), max_steps=max_steps))
         if command == "/task":
             if not args:
@@ -561,10 +548,10 @@ class MiniAgentCLI:
             # /task <task_id> → get durable task by ID
             store = getattr(self.registry, "durable_task_store", None)
             if not store:
-                return "Durable task 存储未配置。"
+                return "durable task store not configured"
             task = store.get_task(args[0])
             if not task:
-                return f"未找到 durable task: {args[0]}"
+                return f"not found: durable task: {args[0]}"
             import json
             return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
         if command == "/task-next":
@@ -576,11 +563,11 @@ class MiniAgentCLI:
             return self.registry.call("list_task_history", max_results=count)
         if command == "/task-search":
             if not args:
-                return "用法: /task-search <query>"
+                return "usage: /task-search <query>"
             return self.registry.call("search_task_history", query=" ".join(args))
         if command == "/task-restore":
             if len(args) != 1:
-                return "用法: /task-restore <task_id>"
+                return "usage: /task-restore <task_id>"
             return self.registry.call("restore_task", history_id=args[0])
         if command == "/logs":
             count = self._optional_int(args, default=10, name="max_entries")
@@ -599,48 +586,48 @@ class MiniAgentCLI:
             return self.registry.call("list_context_summaries", max_results=count)
         if command == "/context-search":
             if not args:
-                return "用法: /context-search <query>"
+                return "usage: /context-search <query>"
             return self.registry.call("search_context_summaries", query=" ".join(args))
         if command == "/processes":
             return self.registry.call("list_background_processes")
         if command == "/git-stage":
             if not args:
-                return "用法: /git-stage <path...>"
+                return "usage: /git-stage <path...>"
             return self.registry.call("git_stage_paths", paths=args, reason="cli slash command")
         if command == "/git-unstage":
             if not args:
-                return "用法: /git-unstage <path...>"
+                return "usage: /git-unstage <path...>"
             return self.registry.call("git_unstage_paths", paths=args, reason="cli slash command")
         if command == "/git-commit":
             if not args:
-                return "用法: /git-commit <message>"
+                return "usage: /git-commit <message>"
             return self.registry.call("git_commit_staged", message=" ".join(args), reason="cli slash command")
         if command == "/git-branch-create":
             if len(args) != 1:
-                return "用法: /git-branch-create <name>"
+                return "usage: /git-branch-create <name>"
             return self.registry.call("git_create_branch", name=args[0], reason="cli slash command")
         if command == "/process-start":
             if len(args) != 1:
-                return "用法: /process-start <profile>"
+                return "usage: /process-start <profile>"
             return self.registry.call("start_background_process", profile=args[0], reason="cli slash command")
         if command == "/process-stop":
             if len(args) != 1:
-                return "用法: /process-stop <process_id>"
+                return "usage: /process-stop <process_id>"
             return self.registry.call("stop_background_process", process_id=args[0], reason="cli slash command")
         if command == "/session-save":
             if not self.session_store:
-                return "会话存储未配置。"
+                return "session store not configured"
             name = args[0] if args else ""
             return self.session_store.save(self.agent.memory, name=name)
         if command == "/session-load":
             if not self.session_store:
-                return "会话存储未配置。"
+                return "session store not configured"
             if not args:
-                return "用法: /session-load <name>"
+                return "usage: /session-load <name>"
             return self.session_store.load(args[0], self.agent.memory)
         if command == "/session-list":
             if not self.session_store:
-                return "会话存储未配置。"
+                return "session store not configured"
             return self.session_store.list_sessions()
         if command == "/traces":
             count = self._optional_int(args, default=20, name="max_results")
@@ -648,11 +635,11 @@ class MiniAgentCLI:
                 return count
             trace_store = getattr(self.registry, "trace_store", None)
             if not trace_store:
-                return "Trace 存储未配置。"
+                return "trace store not configured"
             traces = trace_store.list_traces(max_results=count)
             if not traces:
-                return "暂无运行 trace。"
-            lines = [f"最近 {len(traces)} 条运行 trace:"]
+                return "no traces"
+            lines = [f"recent {len(traces)} traces:"]
             for t in traces:
                 tools = len(t.get("tool_calls", []))
                 fail = t.get("failure", "")
@@ -664,13 +651,13 @@ class MiniAgentCLI:
             return "\n".join(lines)
         if command == "/trace":
             if not args:
-                return "用法: /trace <trace_id>"
+                return "usage: /trace <trace_id>"
             trace_store = getattr(self.registry, "trace_store", None)
             if not trace_store:
-                return "Trace 存储未配置。"
+                return "trace store not configured"
             t = trace_store.get_trace(args[0])
             if not t:
-                return f"未找到 trace: {args[0]}"
+                return f"not found: trace: {args[0]}"
             import json
             return json.dumps(t, ensure_ascii=False, indent=2)
         if command in ("/durable-tasks", "/tasks"):
@@ -679,11 +666,11 @@ class MiniAgentCLI:
                 return count
             store = getattr(self.registry, "durable_task_store", None)
             if not store:
-                return "Durable task 存储未配置。"
+                return "durable task store not configured"
             tasks = store.list_tasks(limit=count)
             if not tasks:
-                return "暂无 durable tasks。"
-            lines = [f"最近 {len(tasks)} 条 durable tasks:"]
+                return "no durable tasks"
+            lines = [f"recent {len(tasks)} durable tasks:"]
             for t in tasks:
                 cp = len(t.checkpoints)
                 lines.append(
@@ -694,23 +681,23 @@ class MiniAgentCLI:
         if command == "/dashboard":
             store = getattr(self.registry, "durable_task_store", None)
             if not store:
-                return "Durable task 存储未配置。"
+                return "durable task store not configured"
             tasks = store.list_tasks(limit=200)
             if not tasks:
-                return "暂无 durable tasks。"
+                return "no durable tasks"
             from collections import Counter
             counts = Counter(t.status for t in tasks)
             lines = ["Durable Task Dashboard", ""]
-            lines.append("状态分布:")
+            lines.append("status:")
             for status in ("pending", "running", "paused", "blocked", "completed", "failed", "cancelled"):
                 n = counts.get(status, 0)
                 if n > 0:
                     lines.append(f"  {status}: {n}")
-            lines.append(f"  总计: {len(tasks)}")
+            lines.append(f"  total: {len(tasks)}")
             running = [t for t in tasks if t.status == "running"]
             if running:
                 lines.append("")
-                lines.append(f"进行中的任务 ({len(running)}):")
+                lines.append(f"running ({len(running)}):")
                 for t in running:
                     step = t.current_step or "-"
                     total = len(t.steps)
@@ -721,7 +708,7 @@ class MiniAgentCLI:
             if completed:
                 recent = completed[:5]
                 lines.append("")
-                lines.append(f"最近完成的任务 ({len(recent)}):")
+                lines.append(f"recently completed ({len(recent)}):")
                 for t in recent:
                     lines.append(
                         f"  {t.task_id}  {t.goal[:50]}"
@@ -730,7 +717,7 @@ class MiniAgentCLI:
             if failed:
                 recent_fail = failed[:5]
                 lines.append("")
-                lines.append(f"失败的任务 ({len(recent_fail)}):")
+                lines.append(f"failed ({len(recent_fail)}):")
                 for t in recent_fail:
                     reason = t.failure_reason[:40] if t.failure_reason else "-"
                     lines.append(
@@ -739,13 +726,13 @@ class MiniAgentCLI:
             return "\n".join(lines)
         if command == "/durable-task":
             if not args:
-                return "用法: /durable-task <task_id>"
+                return "usage: /durable-task <task_id>"
             store = getattr(self.registry, "durable_task_store", None)
             if not store:
-                return "Durable task 存储未配置。"
+                return "durable task store not configured"
             task = store.get_task(args[0])
             if not task:
-                return f"未找到 durable task: {args[0]}"
+                return f"not found: durable task: {args[0]}"
             import json
             return json.dumps(task.to_dict(), ensure_ascii=False, indent=2)
 

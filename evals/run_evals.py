@@ -117,6 +117,12 @@ def main() -> int:
         EvalCase("doctor_no_secret_leak", eval_doctor_no_secret_leak),
         EvalCase("doctor_data_logs_path", eval_doctor_data_logs_path),
         EvalCase("doctor_no_dashboard_formatting", eval_doctor_no_dashboard_formatting),
+        # TASK-152: Final terminal UX regression eval sweep
+        EvalCase("terminal_regression_no_old_panel_markers", eval_terminal_regression_no_old_panel_markers),
+        EvalCase("terminal_regression_no_old_cli_copy", eval_terminal_regression_no_old_cli_copy),
+        EvalCase("terminal_regression_lifecycle_contract", eval_terminal_regression_lifecycle_contract),
+        EvalCase("terminal_regression_safety_no_leak", eval_terminal_regression_safety_no_leak),
+        EvalCase("terminal_regression_bounds_compact", eval_terminal_regression_bounds_compact),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -939,6 +945,163 @@ def eval_doctor_no_dashboard_formatting():
         for forbidden in ["===", "───", "--- ", "+---", "| "]:
             assert forbidden not in result, f"/doctor has dashboard marker '{forbidden}': {result[:300]}"
         _assert_no_old_recovery_style(result, "doctor formatting")
+
+
+# --- TASK-152: Final terminal UX regression eval sweep ---
+
+
+def _build_all_surfaces():
+    """Build representative outputs for all terminal surfaces."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = load_settings(environ={
+            "LLM_PROVIDER": "openai-compatible",
+            "LLM_API_KEY": "sk-regression-surface-key",
+            "LLM_MODEL": "gpt-4.1-mini",
+        })
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(
+            agent, FakeCLIRegistry(),
+            settings=settings, root=root,
+            input_func=_fake_input(["hello", "<<<", "line1", "line2", ">>>", "/notacommand", "exit"]),
+            output_func=outputs.append,
+        )
+        cli.run()
+        full_output = "\n".join(outputs)
+
+        surfaces = {
+            "startup": outputs[0] if outputs else "",
+            "status_line": outputs[1] if len(outputs) > 1 else "",
+            "slash_menu": cli.handle_slash_command("/"),
+            "help": cli.handle_slash_command("/help"),
+            "wake": cli.handle_slash_command("/wake"),
+            "model": cli.handle_slash_command("/model"),
+            "setup": cli.handle_slash_command("/setup"),
+            "workers": cli.handle_slash_command("/workers"),
+            "doctor": cli.handle_slash_command("/doctor"),
+            "unknown": cli.handle_slash_command("/notacommand"),
+            "full_output": full_output,
+        }
+        return surfaces
+
+
+def eval_terminal_regression_no_old_panel_markers():
+    """No surface contains old panel markers: ===, ───, boxed/table/card."""
+    surfaces = _build_all_surfaces()
+    panel_markers = ["===", "───", "--- ", "+---", "┌", "└", "┐", "┘", "│"]
+    for name, text in surfaces.items():
+        for marker in panel_markers:
+            assert marker not in text, f"{name} has panel marker '{marker}': {text[:300]}"
+
+
+def eval_terminal_regression_no_old_cli_copy():
+    """No surface contains old CLI copy strings."""
+    surfaces = _build_all_surfaces()
+    old_copy = [
+        "Nora 已启动",
+        "提示:",
+        "未知命令",
+        "输入 / 查看命令菜单",
+        "查看完整帮助",
+        "当前配置",
+        "常见问题排查",
+        "诊断:",
+        "=== Nora",
+    ]
+    for name, text in surfaces.items():
+        for old in old_copy:
+            assert old not in text, f"{name} has old CLI copy '{old}': {text[:300]}"
+    # Capitalized labels allowed only in /wake context
+    label_copy = ["Provider:", "Model:", "Base URL:", "Timeout:", "Enabled:", "Agent:"]
+    for name, text in surfaces.items():
+        if name == "wake":
+            continue
+        for label in label_copy:
+            assert label not in text, f"{name} has old label '{label}': {text[:300]}"
+
+
+def eval_terminal_regression_lifecycle_contract():
+    """Normal and multiline emit Working.../Done.; slash/unknown/blank/exit do not."""
+    # Normal prompt lifecycle
+    normal_agent = FakeCLIAgent()
+    normal_outputs = []
+    normal_cli = MiniAgentCLI(
+        normal_agent, FakeCLIRegistry(),
+        input_func=_fake_input(["hello", "exit"]),
+        output_func=normal_outputs.append,
+    )
+    normal_cli.run()
+    normal_full = "\n".join(normal_outputs)
+    assert "Working..." in normal_full, f"normal prompt missing Working: {normal_outputs}"
+    assert "Done." in normal_full, f"normal prompt missing Done: {normal_outputs}"
+    # Working before Done
+    w_idx = normal_outputs.index("Working...")
+    d_idx = normal_outputs.index("Done.")
+    assert w_idx < d_idx, f"Working after Done: {normal_outputs}"
+
+    # Multiline prompt lifecycle
+    multi_agent = FakeCLIAgent()
+    multi_outputs = []
+    multi_cli = MiniAgentCLI(
+        multi_agent, FakeCLIRegistry(),
+        input_func=_fake_input(["<<<", "line1", "line2", ">>>", "exit"]),
+        output_func=multi_outputs.append,
+    )
+    multi_cli.run()
+    multi_full = "\n".join(multi_outputs)
+    assert "Working..." in multi_full, f"multiline missing Working: {multi_outputs}"
+    assert "Done." in multi_full, f"multiline missing Done: {multi_outputs}"
+
+    # No lifecycle for slash/unknown/blank/exit
+    no_lifecycle_inputs = [
+        ["/help", "exit"],
+        ["/notacommand", "exit"],
+        ["", "  ", "exit"],
+        ["exit"],
+        ["quit"],
+    ]
+    for inputs in no_lifecycle_inputs:
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(
+            agent, FakeCLIRegistry(),
+            input_func=_fake_input(inputs),
+            output_func=outputs.append,
+        )
+        cli.run()
+        full = "\n".join(outputs)
+        assert "Working..." not in full, f"lifecycle leaked for {inputs}: {full[:200]}"
+        assert "Done." not in full, f"lifecycle leaked for {inputs}: {full[:200]}"
+
+
+def eval_terminal_regression_safety_no_leak():
+    """No surface leaks API keys, raw prompts, or hidden reasoning markers."""
+    surfaces = _build_all_surfaces()
+    secrets = ["sk-regression-surface-key", "sk-regression-leak-999"]
+    reasoning_markers = ["chain_of_thought", "hidden_reasoning", "thinking_process"]
+    for name, text in surfaces.items():
+        text_lower = text.lower()
+        for secret in secrets:
+            assert secret not in text, f"{name} leaked secret: {text[:300]}"
+        for marker in reasoning_markers:
+            assert marker not in text_lower, f"{name} leaked reasoning marker '{marker}': {text[:300]}"
+        # No raw JSON payloads
+        assert not text.lstrip().startswith("{"), f"{name} starts with JSON: {text[:100]}"
+        assert not text.lstrip().startswith("["), f"{name} starts with JSON array: {text[:100]}"
+
+
+def eval_terminal_regression_bounds_compact():
+    """Startup, unknown slash, and recovery hints stay within bounded lengths."""
+    surfaces = _build_all_surfaces()
+    # Startup header compact
+    startup_lines = surfaces["startup"].split("\n")
+    assert len(startup_lines) <= 10, f"startup too long ({len(startup_lines)} lines): {surfaces['startup'][:300]}"
+    # Unknown slash short
+    assert len(surfaces["unknown"]) < 200, f"unknown slash too long: {surfaces['unknown'][:300]}"
+    # Doctor plain text (no dashboard)
+    doctor = surfaces["doctor"]
+    assert len(doctor.split("\n")) <= 30, f"/doctor too long ({len(doctor.split(chr(10)))} lines): {doctor[:300]}"
 
 
 def eval_cli_multiline_input():
@@ -3413,7 +3576,7 @@ def eval_cli_durable_tasks_output_format():
             # Empty state
             cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
             result = cli.handle_slash_command("/durable-tasks")
-            assert "暂无 durable tasks" in result, f"expected empty message, got: {result}"
+            assert "no durable tasks" in result, f"expected empty message, got: {result}"
 
             # Create tasks
             t1 = store.create_task(
@@ -3426,7 +3589,7 @@ def eval_cli_durable_tasks_output_format():
             )
 
             result = cli.handle_slash_command("/durable-tasks")
-            assert "最近 2 条 durable tasks" in result, f"expected count header, got: {result}"
+            assert "recent 2 durable tasks" in result, f"expected count header, got: {result}"
             assert "dtask_" in result, f"expected task_id, got: {result}"
             assert "pending" in result, f"expected status, got: {result}"
             assert "implement feature X" in result, f"expected goal, got: {result}"
@@ -3479,7 +3642,7 @@ def eval_cli_durable_task_detail_output():
 
             # Non-existent task returns error message
             result = cli.handle_slash_command("/durable-task dtask_999")
-            assert "未找到" in result, f"expected not-found message, got: {result}"
+            assert "not found" in result, f"expected not-found message, got: {result}"
         finally:
             db.close()
 
@@ -3496,7 +3659,7 @@ def eval_cli_dashboard_shows_status_distribution():
             # Empty state
             cli = MiniAgentCLI(FakeCLIAgent(), registry, root=tmp_path)
             result = cli.handle_slash_command("/dashboard")
-            assert "暂无 durable tasks" in result
+            assert "no durable tasks" in result
 
             # Create tasks in various statuses
             t1 = store.create_task(goal="pending task", steps=[{"text": "a"}])
@@ -3515,7 +3678,7 @@ def eval_cli_dashboard_shows_status_distribution():
             assert "running: 1" in result, f"missing running count: {result}"
             assert "completed: 1" in result, f"missing completed count: {result}"
             assert "failed: 1" in result, f"missing failed count: {result}"
-            assert "总计: 4" in result, f"missing total: {result}"
+            assert "total: 4" in result, f"missing total: {result}"
         finally:
             db.close()
 
@@ -3556,15 +3719,15 @@ def eval_cli_dashboard_shows_running_and_completed():
             result = cli.handle_slash_command("/dashboard")
 
             # Running section
-            assert "进行中的任务" in result, f"missing running section: {result}"
+            assert "running (1)" in result, f"missing running section: {result}"
             assert "build dashboard feature" in result, f"missing running goal: {result}"
 
             # Completed section
-            assert "最近完成的任务" in result, f"missing completed section: {result}"
+            assert "recently completed (1)" in result, f"missing completed section: {result}"
             assert "fix authentication bug" in result, f"missing completed goal: {result}"
 
             # Failed section
-            assert "失败的任务" in result, f"missing failed section: {result}"
+            assert "failed (1)" in result, f"missing failed section: {result}"
             assert "deploy to production" in result, f"missing failed goal: {result}"
             assert "timeout error" in result, f"missing failure reason: {result}"
         finally:

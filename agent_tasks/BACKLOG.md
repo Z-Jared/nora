@@ -4,33 +4,21 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-151: Final CLI terminal copy consistency sweep
-- 架构层: Agent OS Dashboard
-- 优先级: high
-- 预计: 1-2 小时
-- 依赖: TASK-149/TASK-150
-- 目标: 对 `mini_agent/cli.py` 的 CLI 用户可见输出做最后一致性扫尾：清理残余旧面板/旧中文/大小写不一致/过长提示，重点检查 `/wake`、`/help`、`/doctor`、unknown command、错误提示、prompt/status、启动 header、slash surfaces；保持 Claude Code-like compact plain-text 风格。
-- 非目标: 不重做 UX 架构，不新增命令，不改模型调用/provider loading/model routing/tool/runtime/Web UI/icon asset/worker 语义；不清理非 CLI JSON/API 错误文案。
-- 安全边界: 不泄漏 API key、token、`.env` 原值、raw prompt、hidden reasoning、raw tool payload；所有 CLI 输出 deterministic、plain text、ANSI-safe；slash/doctor/help/wake 不调用模型、不写 durable state。
-- 持久证据: 更新 `tests/test_cli.py` 中必要断言；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog。
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`；附上 `rg` 扫描结果说明。
-- 参考: TASK-139 到 TASK-150；`mini_agent/cli.py` user-facing methods；用户要求本线“追求稳”并在收口后审查和测试。
-
-### TASK-152: Final terminal UX regression eval sweep
-- 架构层: Eval/Review System
-- 优先级: high
-- 预计: 1 小时
-- 依赖: 等待 TASK-151 runtime/test 变更可见后补充/调整 eval
-- 目标: 增加全局 terminal UX regression eval，扫描关键 CLI surfaces（startup、`/`、`/help`、`/wake`、`/model`、`/setup`、`/workers`、`/doctor`、unknown slash、normal prompt/multiline lifecycle），锁住 no old panels/no old Chinese CLI hints/no forbidden status words/no secret leak/no model-call noise for slash。
-- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做 runtime/Web/UI asset/模型路由变更；不扫描非 CLI JSON/API surfaces。
-- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload/raw `.env` leak；保持 deterministic/offline。
-- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog。
-- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
-- 参考: `evals/run_evals.py` existing CLI evals and TASK-150 `_assert_no_old_recovery_style` helper。
-
 ## 进行中
 
 ## 已完成
+
+### TASK-152: Final terminal UX regression eval sweep ✅
+- 完成者: Claude B；Codex PM 集成时同步迁移 4 个 durable task/dashboard 旧中文 eval 断言。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 evals/run_evals.py` 599 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 228 tests OK；`git diff --check` OK；`rg -n "===|───|提示:|未知命令|输入 / 查看命令菜单|Nora 已启动|Provider:|Model:|Base URL:|Timeout:|Enabled:|Agent:" mini_agent/cli.py tests/test_cli.py evals/run_evals.py` 仅命中测试/eval forbidden-list 和负断言，`mini_agent/cli.py` 0 命中。
+- 内容: 增加 5 个 deterministic terminal UX regression eval，覆盖 startup、status line、slash menu、`/help`、`/wake`、`/model`、`/setup`、`/workers`、`/doctor`、unknown slash、normal/multiline lifecycle 和 full output；锁住 no old panel markers/no old CLI copy/no lifecycle leak/no secret/raw JSON/hidden reasoning leak/compact bounds。
+
+### TASK-151: Final CLI terminal copy consistency sweep ✅
+- 完成者: Claude A；Codex PM 集成。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 228 tests OK；合并 TASK-152 后 `python3 evals/run_evals.py` 599 passed；`git diff --check` OK；forbidden scan 中 `mini_agent/cli.py` 0 命中。
+- 内容: 清理 CLI 用户可见输出残余旧中文/旧配置标签，将 usage、durable task、trace、session、dashboard 等 slash command 文案统一为 compact English；`/wake` 中 `Model:` 收敛为 `model:`；移除 `_section_header()`、`_status_line()` 和 unused `INPUT_SEPARATOR`，不改变模型调用、provider loading、runtime、Web UI 或 worker 语义。
 
 ### TASK-150: Error recovery and doctor deterministic eval coverage ✅
 - 完成者: Claude B；Codex PM 集成时补强 no-old-recovery-style 断言，锁住 TASK-149 英文 compact 契约。
