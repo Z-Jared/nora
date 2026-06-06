@@ -535,7 +535,7 @@ class CLITraceCommandTests(unittest.TestCase):
         cli = MiniAgentCLI(FakeAgent(), registry)
 
         result = cli.handle_slash_command("/traces")
-        self.assertIn("未配置", result)
+        self.assertIn("trace store not configured", result)
 
     def test_traces_command_with_empty_store(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -545,7 +545,7 @@ class CLITraceCommandTests(unittest.TestCase):
             cli = MiniAgentCLI(FakeAgent(), registry)
 
             result = cli.handle_slash_command("/traces")
-            self.assertIn("暂无运行 trace", result)
+            self.assertIn("no traces", result)
             db.conn.close()
 
     def test_traces_command_shows_traces(self):
@@ -573,13 +573,13 @@ class CLITraceCommandTests(unittest.TestCase):
             cli = MiniAgentCLI(FakeAgent(), registry)
 
             result = cli.handle_slash_command("/traces 2")
-            self.assertIn("最近 2 条", result)
+            self.assertIn("recent 2 traces", result)
             db.conn.close()
 
     def test_trace_command_requires_id(self):
         cli = MiniAgentCLI(FakeAgent(), FakeRegistryWithTrace(TraceStore()))
         result = cli.handle_slash_command("/trace")
-        self.assertIn("用法", result)
+        self.assertIn("usage: /trace <trace_id>", result)
 
     def test_trace_command_not_found(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -589,7 +589,7 @@ class CLITraceCommandTests(unittest.TestCase):
             cli = MiniAgentCLI(FakeAgent(), registry)
 
             result = cli.handle_slash_command("/trace trace_999")
-            self.assertIn("未找到", result)
+            self.assertIn("not found: trace: trace_999", result)
             db.conn.close()
 
     def test_trace_command_shows_detail(self):
