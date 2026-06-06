@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mini_agent.cli import MiniAgentCLI
+from mini_agent.cli import INPUT_SEPARATOR, MiniAgentCLI
 
 
 class MiniAgentCLITests(unittest.TestCase):
@@ -20,8 +20,10 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("LLM:", outputs[0])
         self.assertIn("Tools:", outputs[0])
         self.assertTrue(any("Agent: reply: hello" in output for output in outputs))
-        self.assertTrue(any("运行报告:" in output for output in outputs))
-        self.assertTrue(any("工具: fake_tool(ok)" in output for output in outputs))
+        self.assertTrue(any(INPUT_SEPARATOR in output for output in outputs))
+        self.assertTrue(any("model:" in output and "/ for commands" in output for output in outputs))
+        self.assertFalse(any("运行报告:" in output for output in outputs))
+        self.assertFalse(any("工具: fake_tool(ok)" in output for output in outputs))
 
     def test_quit_exits_without_agent_call(self):
         agent = FakeCLIAgent()
@@ -190,6 +192,16 @@ class MiniAgentCLITests(unittest.TestCase):
     def test_prompt_is_minimal(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
         self.assertEqual(cli.prompt(), "> ")
+
+    def test_input_footer_separates_prompt_area(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+
+        footer = cli._input_footer()
+
+        self.assertEqual(footer.count(INPUT_SEPARATOR), 2)
+        self.assertIn("model:", footer)
+        self.assertIn("/ for commands", footer)
+        self.assertNotIn("Workspace:", footer)
 
     def test_disabled_banner_shows_api_key_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:

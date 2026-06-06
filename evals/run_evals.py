@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mini_agent.cli import MiniAgentCLI
+from mini_agent.cli import INPUT_SEPARATOR
 from mini_agent.config import AgentConfig, load_agent_config
 from mini_agent.context_compiler import ContextCompiler
 from mini_agent.context_summary import ContextSummaryStore
@@ -112,6 +113,7 @@ def main() -> int:
         # TASK-140: CLI UI v2 eval coverage
         EvalCase("cli_ui_v2_minimal_prompt", eval_cli_ui_v2_minimal_prompt),
         EvalCase("cli_ui_v2_input_status_line", eval_cli_ui_v2_input_status_line),
+        EvalCase("cli_ui_default_hides_run_report", eval_cli_ui_default_hides_run_report),
         EvalCase("notes_round_trip", eval_notes_round_trip),
         EvalCase("workspace_rejects_env", eval_workspace_rejects_env),
         EvalCase("workspace_writes_when_confirmed", eval_workspace_writes_when_confirmed),
@@ -1593,7 +1595,7 @@ def eval_cli_ui_v2_minimal_prompt():
 
 
 def eval_cli_ui_v2_input_status_line():
-    """Input status line exposes model/local-first/command hint without routing controls or secrets."""
+    """Input footer exposes model/local-first/command hint without routing controls or secrets."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         disabled_outputs = []
@@ -1605,11 +1607,12 @@ def eval_cli_ui_v2_input_status_line():
             input_func=_fake_input(["exit"]),
             output_func=disabled_outputs.append,
         ).run()
-        disabled_status = disabled_outputs[1]
-        assert "model:" in disabled_status, f"missing model label: {disabled_status}"
-        assert "disabled" in disabled_status, f"missing disabled model state: {disabled_status}"
-        assert "local-first" in disabled_status, f"missing local-first: {disabled_status}"
-        assert "/ for commands" in disabled_status, f"missing command hint: {disabled_status}"
+        disabled_footer = disabled_outputs[1]
+        assert disabled_footer.count(INPUT_SEPARATOR) == 2, f"missing input separators: {disabled_footer}"
+        assert "model:" in disabled_footer, f"missing model label: {disabled_footer}"
+        assert "disabled" in disabled_footer, f"missing disabled model state: {disabled_footer}"
+        assert "local-first" in disabled_footer, f"missing local-first: {disabled_footer}"
+        assert "/ for commands" in disabled_footer, f"missing command hint: {disabled_footer}"
 
         settings = load_settings(
             env_path=root / ".env",
@@ -1633,8 +1636,31 @@ def eval_cli_ui_v2_input_status_line():
         status_lines = [line for line in configured_outputs if "local-first" in line]
         assert status_lines, f"status line missing from output: {full_output[:500]}"
         assert any("model: gpt-4.1-mini" in line for line in status_lines), f"model missing from status lines: {status_lines}"
+        assert full_output.count(INPUT_SEPARATOR) >= 4, f"input separators missing around prompt area: {full_output[:500]}"
         for forbidden in ["intelligence", "speed", "routing", "sk-status-secret-12345", "hidden_reasoning"]:
             assert forbidden not in full_output, f"forbidden status content leaked: {forbidden}"
+
+
+def eval_cli_ui_default_hides_run_report():
+    """Default conversational CLI output keeps run reports out of the middle of chat."""
+    class ReportingAgent(FakeCLIAgent):
+        def __init__(self):
+            super().__init__()
+            self.last_run_report = FakeRunReport()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outputs = []
+        MiniAgentCLI(
+            ReportingAgent(),
+            FakeCLIRegistry(),
+            root=Path(tmpdir),
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=outputs.append,
+        ).run()
+        full_output = "\n".join(outputs)
+        assert "Agent: reply: hello" in full_output, f"agent reply missing: {full_output[:500]}"
+        assert "运行报告:" not in full_output, f"run report leaked into default CLI output: {full_output[:500]}"
+        assert "fake_tool(ok)" not in full_output, f"tool report leaked into default CLI output: {full_output[:500]}"
 
 
 def eval_notes_round_trip():
@@ -18870,6 +18896,20 @@ class FakeCLIAgent:
     def run_autonomous(self, goal, max_steps=None):
         self.autonomous_calls.append((goal, max_steps))
         return f"auto reply: {goal} / {max_steps}"
+
+
+class FakeRunReport:
+    def format(self):
+        return "\n".join(
+            [
+                "运行报告:",
+                "- 状态: done",
+                "- 步骤: 1",
+                "- 工具: fake_tool(ok)",
+                "- 失败: 无",
+                "- 下一步: 无",
+            ]
+        )
 
 
 class FakeCLIRegistry:
