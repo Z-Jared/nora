@@ -1,24 +1,17 @@
-# TASK-141: CLI default terminal surface v3
+# TASK-143: CLI slash surfaces v4
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-The user wants Nora's terminal page redesigned toward Codex/Claude Code restraint. TASK-139/TASK-140 already moved Nora to a minimal `> ` prompt, compact banner, and a single model/local-first command hint. The next step is another reduction pass:
+Nora's default terminal surface is now intentionally minimal:
 
-- Default interaction should feel like a quiet terminal assistant, not a dashboard.
-- Keep `> ` as the only input prompt.
-- Keep replies above the prompt.
-- Avoid heavy separator/footer chrome around every turn.
-- Avoid `Agent:` labels in normal model replies unless needed for compatibility.
-- Keep intelligence/speed/routing hidden under `/model`, not in default prompt/status.
-- Keep workers/tasks/traces on slash commands, not as always-visible panels.
+- Prompt is exactly `> `.
+- Normal replies render without `Agent:`.
+- Lifecycle feedback is `received`, `thinking`, `ready`.
+- Input hint is a single line: `model: ... | local-first | / for commands`.
 
-Current PM state:
-
-- Main branch is at or after `8b87512 Polish CLI input footer`.
-- Claude A/B worktrees were fast-forwarded to main after old TASK-139/140 residue was stashed.
-- The main repository currently has unrelated icon/favicon edits. Do not touch those files.
+The next UX gap is slash pages. `/`, `/help`, `/wake`, `/model`, and `/workers` still feel more like panels/status dumps than Claude Code-like terminal command surfaces. The user wants the same restraint there: short, monochrome, plain text, functional.
 
 Read first:
 
@@ -44,42 +37,43 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Implement CLI terminal surface v3 in the existing plain terminal CLI.
+Implement CLI slash surfaces v4. Keep behavior deterministic and narrow.
 
 Required behavior:
 
-1. Default prompt remains minimal
-   - `MiniAgentCLI.prompt()` must remain exactly `> `.
-   - No branch, workspace, provider, model, or tool count in the prompt.
+1. `/` command palette becomes shorter
+   - Keep required commands: `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, `/help`.
+   - Prefer 4-6 compact groups max.
+   - Avoid verbose descriptions, decorative section bars, raw JSON, and dashboard feel.
+   - Keep it plain text and predictable.
 
-2. Replace heavy input footer with a quiet one-line hint
-   - The current repeated 52-character separator footer is still too visually heavy.
-   - Replace it with a one-line status/hint such as `model: <model-or-disabled> | local-first | / for commands`.
-   - Do not print decorative separator bars around every turn.
-   - It is acceptable to print the one-line hint after banner and after normal responses, but keep output deterministic.
+2. `/help` becomes a concise index, not a long manual
+   - It may list common commands and point to command-specific slash pages.
+   - Preserve discoverability for existing command families: project/git, model/setup, workers, memory/tasks/context, diagnostics.
+   - Do not remove command handling. Only reduce the default help text.
 
-3. Remove normal `Agent:` response label
-   - A one-line model response should render as the response text itself, not `Agent: <text>`.
-   - Multiline model responses should preserve text exactly enough for tests, without adding a speaker label.
-   - Do not expose hidden reasoning or raw tool payloads.
+3. `/wake` becomes a short project snapshot
+   - Remove `─── ... ───` section headers.
+   - Keep useful facts: workspace, branch, git status summary, model/API-key state, knowledge file presence, active task summary, worker summary, recovery hints if needed.
+   - Keep output bounded and readable.
 
-4. Compact lifecycle feedback
-   - Replace verbose lifecycle lines with compact deterministic lines close to:
-     - `received`
-     - `thinking`
-     - `ready`
-   - ASCII is preferred for this task to avoid terminal/font noise.
-   - Slash commands, blank input, and exit must not emit lifecycle lines.
-   - Keep lifecycle output free of raw prompt, API key, hidden reasoning, or raw payload.
+4. `/model` becomes a compact config/status surface
+   - Remove `=== Nora Model Configuration ===`.
+   - Keep provider, model, base URL, API key presence, enabled state, and short recovery hints for missing key / 401 / model mismatch.
+   - Never print actual API key or token values.
+   - Do not expose intelligence/speed/routing in default slash output unless explicitly already part of model diagnostics.
 
-5. Banner stays compact and useful
-   - Keep required useful substrings: `Nora 已启动`, `Workspace:`, `LLM:`, `Tools:`, `API key`, `/wake`, `/setup`, `/model`, `/workers`.
-   - Do not reintroduce section-heavy panels, dashboard columns, or long always-visible task/worker blocks.
-   - A single concise worker summary line is acceptable if already present.
+5. `/workers` becomes a compact A/B worker summary
+   - Remove `=== Nora Worker Status ===` and `--- claude-a ---` style panel sections.
+   - Keep each worker on a small set of lines or a compact block: workspace present/missing, task file title, DONE status if present.
+   - Preserve ready-for-PM-review detection.
+   - Missing `.ccb/` should produce one short recovery line.
 
-6. Slash commands remain stable
-   - `/`, `/setup`, `/model`, `/workers`, `/wake`, `/help` must remain plain text/Markdown, not raw JSON.
-   - Do not change runtime behavior for tools, model routing, worker status, durable tasks, or web UI.
+6. Compatibility and safety
+   - `/setup`, `/config`, `/doctor`, git/tool/durable commands must continue working.
+   - Slash commands must not call the model or emit lifecycle lines.
+   - No raw JSON for `/`, `/help`, `/wake`, `/model`, `/workers`, `/setup`.
+   - No API key, raw prompt, hidden reasoning, raw tool payload, or `.env` secret leak.
 
 ## Scope
 
@@ -91,33 +85,31 @@ Primary files:
 
 Do not edit:
 
-- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-142 eval coverage.
+- `evals/run_evals.py` unless a tiny unit-test helper absolutely requires it. Claude B owns TASK-144 eval coverage.
 - `agent_tasks/B_TASK.md`
 - `agent_tasks/B_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-- `mini_agent/static/index.html`
-- `mini_agent/static/favicon.svg`
+- `mini_agent/static/`
 - `pyproject.toml`
 - `setup.py`
 
 ## Non-Goals
 
-- No curses/rich/textual/fullscreen TUI.
-- No fake fixed-bottom input box.
+- No fullscreen TUI, curses, rich, textual, or fake fixed-bottom UI.
 - No web UI redesign.
-- No model routing behavior changes.
-- No intelligence/speed/routing default status display.
-- No hidden reasoning display.
 - No icon/favicon/package-data changes.
+- No model routing behavior changes.
+- No worker runtime behavior changes.
+- No Git/tool/durable task command semantics changes.
 
 ## Safety Boundaries
 
 - Never print API keys, tokens, `.env` values, private file contents, raw prompts, hidden reasoning, or raw tool payloads.
 - Keep CLI output deterministic for tests/evals.
 - Preserve slash command compatibility.
-- Do not revert unrelated user/Codex icon work in the main repository.
+- Do not revert unrelated user/Codex work.
 
 ## Required Verification
 
@@ -129,7 +121,7 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If existing evals fail only because TASK-142 has not yet updated expected CLI v3 output, report the exact failing eval names and still make unit tests pass.
+If existing evals fail only because TASK-144 has not yet updated expected CLI v4 slash output, report the exact failing eval names and still make unit tests pass.
 
 ## Completion Report
 

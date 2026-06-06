@@ -1,25 +1,19 @@
-# TASK-142: CLI default terminal surface v3 deterministic eval coverage
+# TASK-144: CLI slash surfaces v4 deterministic eval coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Claude A owns TASK-141: CLI default terminal surface v3. Your job is deterministic offline eval coverage and test hardening for the same UX direction after TASK-141 is visible in your worktree or after PM asks you to rebase/integrate.
+Claude A owns TASK-143: CLI slash surfaces v4. Your job is deterministic offline eval coverage and test hardening after TASK-143 is visible in your worktree or after PM asks you to rebase/integrate.
 
 Target UX:
 
-- Default prompt is exactly `> `.
-- Default output uses a quiet one-line hint, not heavy separator bars around every turn.
-- Normal model replies do not get an `Agent:` label.
-- Lifecycle feedback is compact and deterministic: `received`, `thinking`, `ready` style.
-- No intelligence/speed/routing in the default status/hint; those remain under `/model`.
-- Slash commands remain plain text/Markdown.
-
-Current PM state:
-
-- Main branch is at or after `8b87512 Polish CLI input footer`.
-- Old TASK-139/140 residue in CCB worktrees was stashed before this task.
-- The main repository currently has unrelated icon/favicon edits. Do not touch those files.
+- `/`, `/help`, `/wake`, `/model`, and `/workers` are short, monotone, plain-text slash surfaces.
+- No section-heavy dashboard/panel style.
+- No raw JSON.
+- No model call or lifecycle feedback for slash commands.
+- No API key/raw prompt/hidden reasoning/raw payload leak.
+- Default CLI behavior from TASK-141/TASK-142 remains unchanged.
 
 Read first:
 
@@ -47,31 +41,39 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic eval coverage for TASK-141 and update narrow CLI tests if needed.
+Add deterministic eval coverage for TASK-143 and update narrow CLI tests if needed.
 
 Coverage requirements:
 
-1. Minimal prompt
-   - Prompt is exactly `> `.
-   - Prompt output does not include branch, workspace, provider, model, tools, or `Nora(main)>`.
+1. Slash launcher `/`
+   - Includes required commands: `/wake`, `/setup`, `/model`, `/workers`, `/status`, `/test`, `/help`.
+   - Output is compact and plain text.
+   - No raw JSON, heavy panel markers, API key leak, hidden reasoning, or lifecycle lines.
 
-2. Quiet input hint
-   - Default run output contains a one-line `model:` / `local-first` / `/ for commands` hint.
-   - Default run output does not contain repeated decorative separator bars such as long runs of `─` around the prompt area.
-   - Hint does not contain intelligence/speed/routing labels.
+2. `/help`
+   - Is concise, not a long manual.
+   - Preserves discoverability for project/git, model/setup, workers, memory/tasks/context, diagnostics.
+   - No raw JSON or secret leak.
 
-3. Unlabeled model replies
-   - Normal one-line fake model response appears without an `Agent:` prefix.
-   - Multiline fake model response remains readable and is not wrapped in raw JSON.
+3. `/wake`
+   - Provides bounded project snapshot: workspace, branch, git status summary, model/key state, knowledge files, tasks/workers.
+   - Does not include `───` section headers or dashboard-like panels.
+   - No raw file contents or secrets.
 
-4. Compact lifecycle
-   - Normal prompt and multiline emit deterministic compact lifecycle feedback.
-   - Slash commands, blank input, and exit do not emit lifecycle feedback.
-   - Lifecycle output does not leak raw prompt, API key, hidden reasoning, shell command, raw JSON, or raw payload.
+4. `/model`
+   - Provides compact provider/model/base URL/API-key presence/enabled state.
+   - Includes short recovery hints for missing key / 401 / model mismatch.
+   - Does not print actual API key, raw `.env`, intelligence/speed/routing, or raw JSON.
 
-5. Compatibility
-   - `/`, `/setup`, `/model`, `/workers`, `/wake`, and `/help` remain plain text/Markdown.
-   - Existing provider/config/no-secret evals continue to pass.
+5. `/workers`
+   - Provides compact A/B summary with workspace/task/DONE status.
+   - Missing `.ccb/` has one short recovery response.
+   - Preserves ready-for-PM-review detection.
+   - No raw worker report dump.
+
+6. Compatibility
+   - `/setup`, `/config`, `/doctor`, git/tool/durable commands still pass existing tests.
+   - Slash commands do not call fake agent and do not emit `received`/`thinking`/`ready`.
 
 ## Scope
 
@@ -83,14 +85,13 @@ Primary files:
 
 Do not edit:
 
-- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-141.
+- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-143.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-- `mini_agent/static/index.html`
-- `mini_agent/static/favicon.svg`
+- `mini_agent/static/`
 - `pyproject.toml`
 - `setup.py`
 
@@ -112,7 +113,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-141 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
+If TASK-143 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
 
 ## Completion Report
 

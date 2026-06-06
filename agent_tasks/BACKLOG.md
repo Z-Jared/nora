@@ -8,6 +8,30 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-143: CLI slash surfaces v4
+- 架构层: Agent OS Dashboard
+- 优先级: high
+- 预计: 1-2 小时
+- 依赖: TASK-141/TASK-142
+- 目标: 将 `/`、`/help`、`/wake`、`/model`、`/workers` 继续收敛到 Claude Code-like 的短、单调、纯文本 slash 页面，去掉 section-heavy panel 和冗长说明，同时保留必要诊断信息与现有命令兼容。
+- 非目标: 不做 fullscreen TUI、Web UI redesign、图标/favicon 变更、模型路由行为变更、worker/runtime 后端语义变更、Git/tool/durable task 命令语义变更。
+- 安全边界: 不泄漏 API key、token、`.env` 值、raw prompt、hidden reasoning、raw tool payload；slash 输出必须 plain text/Markdown，不返回 raw JSON；不编辑 `CODEX_TERMINAL_HANDOFF.md`、`designs/`、`assets/`、`mini_agent/static/`、package metadata。
+- 持久证据: CLI slash 输出契约通过 `tests/test_cli.py` 固化；完成报告写入 `agent_tasks/A_DONE.md`；PM 后续 review/test 记录到 backlog/review。
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`python3 evals/run_evals.py`；`git diff --check`。
+- 参考: `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard；`mini_agent/cli.py`；`tests/test_cli.py`；用户方向“像 Claude 那样单调、默认 `> ` 输入框”。
+
+### TASK-144: CLI slash surfaces v4 deterministic eval coverage
+- 架构层: Eval/Review System
+- 优先级: high
+- 预计: 1 小时
+- 依赖: 等待 TASK-143 runtime/test 变更可见后补充/调整 eval
+- 目标: 为 TASK-143 增加 deterministic offline eval，锁住 `/`、`/help`、`/wake`、`/model`、`/workers` 的短、单调、plain-text 输出，防止回退到 dashboard、section-heavy panels、raw JSON、secret leak 或过度说明。
+- 非目标: 不修改 `mini_agent/cli.py`，除非 PM 明确要求修复测试暴露的阻塞问题；不做 runtime/Web/UI asset 变更。
+- 安全边界: eval 不调用网络/LLM/外部服务/CCB 命令；使用 tempdir/settings/fake agent；断言 no API key/raw prompt/hidden reasoning/raw payload leak。
+- 持久证据: eval case 写入 `evals/run_evals.py`；完成报告写入 `agent_tasks/B_DONE.md`；PM 后续 review/test 记录到 backlog/review。
+- 验证: `python3 evals/run_evals.py`；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`；`git diff --check`。
+- 参考: `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Eval/Review System；`evals/run_evals.py` TASK-134/TASK-136/TASK-142 CLI evals；`mini_agent/cli.py` slash command surfaces。
+
 ## 已完成
 
 ### TASK-142: CLI default terminal surface v3 deterministic eval coverage ✅
