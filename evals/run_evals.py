@@ -1124,6 +1124,7 @@ def eval_tty_slash_completer_prefixes():
     assert "/model" in root and "/help" in root and "/wake" in root, f"/ completions missing core commands: {root[:20]}"
     assert "/model" in completions("/m"), "/m did not complete /model"
     assert "/model" in completions("/mo"), "/mo did not complete /model"
+    assert completer.match("/mo") == ["/model"], f"/mo tab match failed: {completer.match('/mo')}"
     assert completions("hello") == [], f"non-slash text completed unexpectedly: {completions('hello')}"
 
 

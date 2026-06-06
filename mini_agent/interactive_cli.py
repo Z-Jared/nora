@@ -23,12 +23,18 @@ class SlashCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
+        for command in self.match(text):
+            yield Completion(command, start_position=-len(text), display=command)
+
+    def match(self, text: str) -> list[str]:
         if not text.startswith("/"):
-            return
+            return []
         prefix = text.lower()
-        for command in self.commands:
-            if command.lower().startswith(prefix) and command.lower() != prefix:
-                yield Completion(command, start_position=-len(text), display=command)
+        return [
+            command
+            for command in self.commands
+            if command.lower().startswith(prefix) and command.lower() != prefix
+        ]
 
 
 def selectable_confirm(prompt_text: str) -> bool:
@@ -106,6 +112,19 @@ class InteractiveCLI:
         def _(event):
             event.app.current_buffer.insert_text("/")
             event.app.current_buffer.start_completion(select_first=False)
+
+        @bindings.add("tab")
+        def _(event):
+            buffer = event.app.current_buffer
+            text = buffer.document.text_before_cursor
+            matches = self.completer.match(text)
+            if len(matches) == 1:
+                buffer.delete_before_cursor(count=len(text))
+                buffer.insert_text(matches[0])
+            elif matches:
+                buffer.start_completion(select_first=True)
+            else:
+                buffer.insert_text("\t")
 
         return bindings
 

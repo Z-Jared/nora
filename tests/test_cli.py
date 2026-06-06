@@ -1080,6 +1080,14 @@ class SlashCompleterTests(unittest.TestCase):
         self.assertIn("/model", self._get_completions("/mo"))
         self.assertIn("/model", self._get_completions("/mod"))
 
+    def test_slash_match_supports_tab_binding(self):
+        from mini_agent.interactive_cli import SlashCompleter
+
+        completer = SlashCompleter(MiniAgentCLI.slash_command_names())
+
+        self.assertEqual(completer.match("/mo"), ["/model"])
+        self.assertEqual(completer.match("hello"), [])
+
     def test_exact_match_does_not_suggest_itself(self):
         self.assertNotIn("/model", self._get_completions("/model"))
 
