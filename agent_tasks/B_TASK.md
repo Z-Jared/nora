@@ -1,19 +1,28 @@
-# TASK-140: CLI UI v2 deterministic eval coverage
+# TASK-142: CLI default terminal surface v3 deterministic eval coverage
 
-You are Codex B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
+You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Codex A owns TASK-139: lightweight CLI UI v2 for Nora's default terminal surface. You own deterministic offline eval coverage after TASK-139 is integrated by Codex PM.
+Claude A owns TASK-141: CLI default terminal surface v3. Your job is deterministic offline eval coverage and test hardening for the same UX direction after TASK-141 is visible in your worktree or after PM asks you to rebase/integrate.
 
-The intended CLI direction:
-- Minimal `> ` prompt instead of `Nora(main)>`.
-- Compact startup banner.
-- Single subtle input status line: `model: ...   local-first   / for commands`.
-- No intelligence/speed/routing in default status line; those belong in `/model`.
-- No fullscreen TUI, no always-visible three-column dashboard.
+Target UX:
+
+- Default prompt is exactly `> `.
+- Default output uses a quiet one-line hint, not heavy separator bars around every turn.
+- Normal model replies do not get an `Agent:` label.
+- Lifecycle feedback is compact and deterministic: `received`, `thinking`, `ready` style.
+- No intelligence/speed/routing in the default status/hint; those remain under `/model`.
+- Slash commands remain plain text/Markdown.
+
+Current PM state:
+
+- Main branch is at or after `8b87512 Polish CLI input footer`.
+- Old TASK-139/140 residue in CCB worktrees was stashed before this task.
+- The main repository currently has unrelated icon/favicon edits. Do not touch those files.
 
 Read first:
+
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
@@ -31,66 +40,66 @@ Before editing, run:
 
 ```bash
 git status --short --branch
+git log --oneline --decorate -5
 ```
 
 If your worktree is dirty before you edit, stop and write the conflict in `agent_tasks/B_DONE.md`.
 
 ## Goal
 
-Add deterministic offline eval coverage for TASK-139 after PM integrates it.
+Add deterministic eval coverage for TASK-141 and update narrow CLI tests if needed.
 
 Coverage requirements:
 
 1. Minimal prompt
-   - CLI prompt is exactly or effectively `> `.
-   - Prompt output does not include `Nora(main)>`, branch, workspace, provider, or model.
+   - Prompt is exactly `> `.
+   - Prompt output does not include branch, workspace, provider, model, tools, or `Nora(main)>`.
 
-2. Compact startup banner
-   - Banner remains deterministic and contains required useful substrings:
-     - `Nora 已启动`
-     - `Workspace:`
-     - `LLM:`
-     - `Tools:`
-     - `API key`
-     - `/wake`, `/setup`, `/model`, `/workers`
-   - Banner is compact and not a section-heavy dashboard.
-   - No API key leak.
+2. Quiet input hint
+   - Default run output contains a one-line `model:` / `local-first` / `/ for commands` hint.
+   - Default run output does not contain repeated decorative separator bars such as long runs of `─` around the prompt area.
+   - Hint does not contain intelligence/speed/routing labels.
 
-3. Input status line
-   - Status line contains `model:`, current model or disabled state, `local-first`, and `/ for commands`.
-   - Status line does not contain intelligence/speed/routing labels.
-   - Status line does not leak API key, raw prompt, hidden reasoning, or raw payloads.
+3. Unlabeled model replies
+   - Normal one-line fake model response appears without an `Agent:` prefix.
+   - Multiline fake model response remains readable and is not wrapped in raw JSON.
 
-4. Lifecycle feedback
-   - Normal prompt and multiline still emit deterministic lifecycle feedback.
-   - Lifecycle output is compact.
-   - Slash commands, blank input, and exit do not emit lifecycle noise.
+4. Compact lifecycle
+   - Normal prompt and multiline emit deterministic compact lifecycle feedback.
+   - Slash commands, blank input, and exit do not emit lifecycle feedback.
+   - Lifecycle output does not leak raw prompt, API key, hidden reasoning, shell command, raw JSON, or raw payload.
 
 5. Compatibility
-   - `/`, `/setup`, `/model`, `/workers`, `/wake`, and `/help` remain plain text/Markdown, not raw JSON.
-   - Existing CLI/provider/config evals continue to pass.
+   - `/`, `/setup`, `/model`, `/workers`, `/wake`, and `/help` remain plain text/Markdown.
+   - Existing provider/config/no-secret evals continue to pass.
 
 ## Scope
 
 Primary files:
+
 - `evals/run_evals.py`
+- `tests/test_cli.py` only if necessary for focused CLI assertions
 - `agent_tasks/B_DONE.md`
 
-Only touch `tests/test_cli.py` if a tiny helper is absolutely needed.
-
 Do not edit:
-- `mini_agent/cli.py` unless PM explicitly asks after TASK-139 integration.
+
+- `mini_agent/cli.py` unless PM explicitly asks after reviewing TASK-141.
 - `agent_tasks/A_TASK.md`
 - `agent_tasks/A_DONE.md`
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
+- `assets/`
+- `mini_agent/static/index.html`
+- `mini_agent/static/favicon.svg`
+- `pyproject.toml`
+- `setup.py`
 
 ## Coverage Quality Requirements
 
 - No `or True`, tautological assertions, or broad substring-only pass conditions.
-- Use tempdir-isolated roots and explicit settings/env objects where needed.
+- Use tempdir-isolated roots and explicit settings/env/fake agent objects.
 - Assert exact or meaningfully specific substrings.
-- Assert secrets/API keys are not leaked.
+- Assert secrets/API keys/raw prompts are not leaked.
 - Do not call network, LLMs, external services, or CCB commands from evals.
 
 ## Required Verification
@@ -103,7 +112,7 @@ python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
 git diff --check
 ```
 
-If TASK-139 is not integrated yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening your scope.
+If TASK-141 is not integrated into your worktree yet and required checks cannot pass without runtime implementation, stop and report that dependency clearly in `agent_tasks/B_DONE.md` rather than broadening scope.
 
 ## Completion Report
 
