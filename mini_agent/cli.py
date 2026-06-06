@@ -63,39 +63,38 @@ class MiniAgentCLI:
                 self.output_func(self._input_status_line())
 
     def banner(self) -> str:
-        lines = [
-            "Nora 已启动 — 本地优先，高风险工具会先确认。",
-            "",
-        ]
+        # Small robot ASCII icon
+        icon = [" (o_o)", " /|_|\\"]
+        info = []
 
-        lines.append(f"Workspace: {self.root}")
-        git = GitTools(self.root)
-        branch = git.current_branch().strip()
-        if branch and not branch.startswith(("fatal:", "Git 命令失败", "Git 命令超时", "没有 Git 输出")):
-            lines.append(f"Branch: {branch}")
+        info.append("Nora Code")
 
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
             api_key = getattr(self.settings, "api_key", "")
-            lines.append(f"LLM: {provider} / {model}")
-            lines.append(f"API key: {'configured' if api_key else 'missing'}")
+            info.append(f"model: {provider} / {model}")
+            info.append(f"API key: {'configured' if api_key else 'missing'}")
         else:
-            lines.append("LLM: disabled，本地规则模式")
-            lines.append("API key: not used")
+            info.append("local mode (no LLM)")
 
-        try:
-            tool_count = len(self.registry.to_openai_tools())
-        except AttributeError:
-            tool_count = "unknown"
-        lines.append(f"Tools: {tool_count}")
+        info.append(str(self.root))
 
+        # Pad icon to same length as info
+        while len(icon) < len(info):
+            icon.append("")
+
+        # Build side-by-side lines
+        lines = []
+        for i in range(len(info)):
+            left = icon[i] if i < len(icon) else ""
+            lines.append(f"{left:8s}{info[i]}")
+
+        # Worker summary (short)
         worker_summary = self._worker_state_summary()
         if worker_summary:
             lines.append(worker_summary)
 
-        lines.append("")
-        lines.append("输入 / 查看命令菜单 | /wake /setup /model /workers /help | exit 退出")
         return "\n".join(lines)
 
     def _input_status_line(self) -> str:
@@ -452,11 +451,10 @@ class MiniAgentCLI:
         return self._append_recovery_hint(response)
 
     def _model_call_start(self) -> None:
-        self.output_func("received")
-        self.output_func("thinking")
+        self.output_func("Working...")
 
     def _model_call_end(self) -> None:
-        self.output_func("ready")
+        self.output_func("Done.")
 
     def _append_recovery_hint(self, response: str) -> str:
         """Append error recovery hint if response contains common error patterns."""

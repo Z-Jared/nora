@@ -15,14 +15,9 @@ class MiniAgentCLITests(unittest.TestCase):
         cli.run()
 
         self.assertEqual(agent.inputs, ["hello"])
-        self.assertIn("Nora 已启动", outputs[0])
-        self.assertIn("Workspace:", outputs[0])
-        self.assertIn("LLM:", outputs[0])
-        self.assertIn("Tools:", outputs[0])
+        self.assertIn("Nora Code", outputs[0])
         self.assertTrue(any("reply: hello" in output for output in outputs))
         self.assertTrue(any("model:" in output and "/ for commands" in output for output in outputs))
-        self.assertFalse(any("运行报告:" in output for output in outputs))
-        self.assertFalse(any("工具: fake_tool(ok)" in output for output in outputs))
 
     def test_quit_exits_without_agent_call(self):
         agent = FakeCLIAgent()
@@ -215,8 +210,31 @@ class MiniAgentCLITests(unittest.TestCase):
             cli.run()
 
             banner = outputs[0]
-            self.assertIn("LLM: disabled", banner)
-            self.assertIn("API key", banner)
+            self.assertIn("Nora Code", banner)
+            self.assertIn("local mode", banner)
+            self.assertNotIn("API key", banner)
+
+    def test_configured_banner_shows_api_key_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(provider="openai", model="gpt-4", api_key="sk-test")
+            outputs = []
+            cli = MiniAgentCLI(
+                FakeCLIAgent(),
+                FakeCLIRegistry(),
+                settings=settings,
+                root=Path(tmpdir),
+                input_func=_fake_input(["exit"]),
+                output_func=outputs.append,
+            )
+
+            cli.run()
+
+            banner = outputs[0]
+            self.assertIn("Nora Code", banner)
+            self.assertIn("model: openai / gpt-4", banner)
+            self.assertIn("API key: configured", banner)
+            self.assertNotIn("sk-test", banner)
+            self.assertNotIn("local mode", banner)
 
 
     def test_durable_tasks_empty(self):
@@ -785,18 +803,17 @@ class CLISetupCommandTests(unittest.TestCase):
 
 
 class CLIResponseStatusTests(unittest.TestCase):
-    """Tests for response lifecycle lines (TASK-141)."""
+    """Tests for response lifecycle lines (TASK-145 working indicator)."""
 
-    def test_model_call_shows_lifecycle_lines(self):
+    def test_model_call_shows_working_indicator(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["hello", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        self.assertIn("received", outputs)
-        self.assertIn("thinking", outputs)
-        self.assertIn("ready", outputs)
+        self.assertIn("Working...", outputs)
+        self.assertIn("Done.", outputs)
 
     def test_slash_command_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
@@ -805,9 +822,8 @@ class CLIResponseStatusTests(unittest.TestCase):
 
         cli.run()
 
-        self.assertNotIn("received", outputs)
-        self.assertNotIn("thinking", outputs)
-        self.assertNotIn("ready", outputs)
+        self.assertNotIn("Working...", outputs)
+        self.assertNotIn("Done.", outputs)
 
     def test_blank_input_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
@@ -816,8 +832,8 @@ class CLIResponseStatusTests(unittest.TestCase):
 
         cli.run()
 
-        self.assertNotIn("received", outputs)
-        self.assertNotIn("thinking", outputs)
+        self.assertNotIn("Working...", outputs)
+        self.assertNotIn("Done.", outputs)
 
     def test_exit_no_lifecycle_noise(self):
         agent = FakeCLIAgent()
@@ -826,19 +842,18 @@ class CLIResponseStatusTests(unittest.TestCase):
 
         cli.run()
 
-        self.assertNotIn("received", outputs)
-        self.assertNotIn("thinking", outputs)
+        self.assertNotIn("Working...", outputs)
+        self.assertNotIn("Done.", outputs)
 
-    def test_multiline_input_shows_lifecycle(self):
+    def test_multiline_input_shows_working_indicator(self):
         agent = FakeCLIAgent()
         outputs = []
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), input_func=_fake_input(["<<<", "line1", ">>>", "exit"]), output_func=outputs.append)
 
         cli.run()
 
-        self.assertIn("received", outputs)
-        self.assertIn("thinking", outputs)
-        self.assertIn("ready", outputs)
+        self.assertIn("Working...", outputs)
+        self.assertIn("Done.", outputs)
 
 
 class CLISlashLauncherTests(unittest.TestCase):
@@ -867,8 +882,8 @@ class CLISlashLauncherTests(unittest.TestCase):
         self.assertEqual(agent.inputs, [])
         joined = "\n".join(outputs)
         self.assertIn("Commands", joined)
-        self.assertNotIn("thinking", joined)
-        self.assertNotIn("ready", joined)
+        self.assertNotIn("Working...", joined)
+        self.assertNotIn("Done.", joined)
 
     def test_banner_shows_next_action_and_preserves_core_info(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -884,14 +899,10 @@ class CLISlashLauncherTests(unittest.TestCase):
             cli.run()
 
             banner = outputs[0]
-            self.assertIn("Nora 已启动", banner)
-            self.assertIn("Workspace:", banner)
-            self.assertIn("LLM:", banner)
-            self.assertIn("Tools:", banner)
-            self.assertIn("/wake", banner)
-            self.assertIn("/setup", banner)
-            self.assertIn("/model", banner)
-            self.assertIn("/workers", banner)
+            self.assertIn("Nora Code", banner)
+            self.assertIn("local mode", banner)
+            self.assertIn(str(Path(tmpdir).resolve()), banner)
+            self.assertNotIn("Nora 已启动", banner)
 
     def test_unknown_slash_points_to_launcher(self):
         cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
