@@ -44,7 +44,7 @@ from mini_agent.mcp_server import (
     registry_to_mcp_tools,
 )
 from mini_agent.plugins import inspect_manifest_json, inspect_manifest
-from mini_agent.registry import ToolRegistry
+from mini_agent.registry import ToolPermission, ToolRegistry
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SCHEDULER_DECISION, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
 from mini_agent.durable_workers import WorkerStatus
@@ -123,6 +123,11 @@ def main() -> int:
         EvalCase("terminal_regression_lifecycle_contract", eval_terminal_regression_lifecycle_contract),
         EvalCase("terminal_regression_safety_no_leak", eval_terminal_regression_safety_no_leak),
         EvalCase("terminal_regression_bounds_compact", eval_terminal_regression_bounds_compact),
+        # TASK-153/154: TTY terminal interaction and permission coverage
+        EvalCase("tty_slash_completer_prefixes", eval_tty_slash_completer_prefixes),
+        EvalCase("tty_permission_selector_wiring", eval_tty_permission_selector_wiring),
+        EvalCase("selectable_confirm_allow_deny_choices", eval_selectable_confirm_allow_deny_choices),
+        EvalCase("permission_deny_blocks_tool", eval_permission_deny_blocks_tool),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -1102,6 +1107,70 @@ def eval_terminal_regression_bounds_compact():
     # Doctor plain text (no dashboard)
     doctor = surfaces["doctor"]
     assert len(doctor.split("\n")) <= 30, f"/doctor too long ({len(doctor.split(chr(10)))} lines): {doctor[:300]}"
+
+
+def eval_tty_slash_completer_prefixes():
+    """TTY slash completer handles /, /m, and /mo prefixes."""
+    from prompt_toolkit.document import Document
+    from mini_agent.interactive_cli import SlashCompleter
+
+    completer = SlashCompleter(MiniAgentCLI.slash_command_names())
+
+    def completions(text: str) -> list[str]:
+        document = Document(text=text, cursor_position=len(text))
+        return [item.text for item in completer.get_completions(document, None)]
+
+    root = completions("/")
+    assert "/model" in root and "/help" in root and "/wake" in root, f"/ completions missing core commands: {root[:20]}"
+    assert "/model" in completions("/m"), "/m did not complete /model"
+    assert "/model" in completions("/mo"), "/mo did not complete /model"
+    assert completions("hello") == [], f"non-slash text completed unexpectedly: {completions('hello')}"
+
+
+def eval_tty_permission_selector_wiring():
+    """InteractiveCLI wires registry confirmations to the TTY selector."""
+    from mini_agent.interactive_cli import InteractiveCLI, selectable_confirm
+
+    registry = FakeCLIRegistry()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
+    assert registry.confirm_action is selectable_confirm, "InteractiveCLI did not wire selectable_confirm"
+
+
+def eval_selectable_confirm_allow_deny_choices():
+    """selectable_confirm presents allow/deny choices and obeys selection."""
+    from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+    captured = []
+
+    def allow(prompt: str) -> str:
+        captured.append(prompt)
+        return "1"
+
+    allowed = selectable_confirm("Tool needs approval", choices=[ALLOW_ONCE, DENY], input_func=allow)
+    prompt = "\n".join(captured)
+    assert allowed is True, "Allow once should approve"
+    assert "Allow once" in prompt and "Deny" in prompt, f"prompt missing choices: {prompt}"
+
+    denied = selectable_confirm("Tool needs approval", choices=[ALLOW_ONCE, DENY], input_func=lambda prompt: "2")
+    assert denied is False, "Deny should block"
+
+
+def eval_permission_deny_blocks_tool():
+    """Denied permission blocks the tool call and does not call handler."""
+    called = []
+    registry = ToolRegistry(confirm_action=lambda prompt: False)
+    registry.register(
+        "dangerous_tool",
+        "Dangerous tool",
+        lambda: called.append("called") or "done",
+        permission=ToolPermission(category="terminal", risk="execute", requires_confirmation=True),
+    )
+
+    result = registry.call("dangerous_tool")
+
+    assert result == "已取消操作。", f"unexpected denial result: {result}"
+    assert called == [], f"tool was called despite denial: {called}"
 
 
 def eval_cli_multiline_input():

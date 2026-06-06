@@ -6,33 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+## 已完成
+
 ### TASK-153: Nora TTY raw terminal interaction layer v1
-- 架构层: Agent OS Dashboard / Policy Hook Kernel integration
-- 优先级: high
-- 预计: 1-2h
-- 依赖: none
-- Worker: Claude A
-- 目标: Add a real TTY interactive terminal frontend for Nora so the default manual `nora` experience has bottom-owned input, slash completion before Enter, arrow-key command selection, compact transient thinking status, and non-noisy bottom toolbar metadata.
-- 非目标: No fullscreen dashboard, no Web UI redesign, no model/provider/runtime semantic changes, no hidden reasoning display, no removal of safety confirmations, no broad CLI copy rewrite.
-- 安全边界: Preserve non-TTY fallback exactly enough for pipes/tests; do not auto-approve tools; no API-key/raw prompt/hidden reasoning leak in toolbar/status/completions.
-- 持久证据: Focused unit tests for mode selection and interactive helpers; DONE report with real/manual verification notes if TTY cannot be automated fully.
-- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`; targeted new tests; `git diff --check`; manual `nora` smoke when possible.
-- 参考: Pencil design `pencil-new.pen` node `kdiWB` (`Nora CLI TUI Raw Terminal Mock v2`); `mini_agent/app.py`; `mini_agent/cli.py`; `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` Agent OS Dashboard and Policy Hook Kernel sections.
+- 完成者: Claude A；Codex PM 集成时补强临时 `Working...` TTY status、slash completer eval 和 real `nora` pipe smoke。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 249 tests OK；`python3 evals/run_evals.py` 603 passed；`printf '/model\nexit\n' | python3 -c 'from mini_agent.app import main; main()'` OK；`printf '/model\nexit\n' | nora` OK；`printf '/\nexit\n' | nora` OK；`git diff --check` OK；local package reinstall OK with `prompt_toolkit>=3.0`.
+- 内容: 新增 `mini_agent/interactive_cli.py` TTY frontend，TTY stdin/stdout 走 prompt_toolkit `PromptSession`，非 TTY/pipe/tests 继续走 legacy `MiniAgentCLI`；新增 slash command metadata 和 `SlashCompleter`，覆盖 `/`、`/m`、`/mo` → `/model`；TTY 模式使用 bottom toolbar 显示 model/cwd/local-first，抑制 legacy `Working...`/`Done.` 历史噪声并以 carriage-return 临时 status 显示工作中状态；保留 non-TTY legacy lifecycle 和 script compatibility。
 
 ### TASK-154: TTY permissions selector and regression coverage
-- 架构层: Policy Hook Kernel / Eval Review System / Agent OS Dashboard
-- 优先级: high
-- 预计: 1-2h
-- 依赖: TASK-153 for full green integration; can prepare test/eval scaffolding in parallel.
-- Worker: Claude B
-- 目标: Add deterministic regression coverage for the TTY/raw terminal contract and implement or integrate the selectable permission UX if TASK-153 exposes the hook point.
-- 非目标: No backend permission bypass, no auto-approval, no Web UI redesign, no unrelated eval churn, no broad runtime refactor.
-- 安全边界: Approval choices must remain explicit; y/n fallback must remain for non-TTY; tests must prove no raw API key, raw prompt, hidden reasoning, or raw `.env` leak.
-- 持久证据: Unit tests/evals covering TTY mode selection, slash command completion metadata, fallback behavior, permission choice labels, and lifecycle noise boundaries.
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent`; `git diff --check`.
-- 参考: Pencil design `pencil-new.pen` node `kdiWB`; `mini_agent/registry.py`; `mini_agent/tools_common.py`; `mini_agent/app.py`; `mini_agent/cli.py`.
-
-## 已完成
+- 完成者: Claude B；Codex PM 集成时接入 TASK-153 的真实 TTY confirmation hook。
+- Reviewer: Codex PM APPROVED
+- 验证: `python3 evals/run_evals.py` 603 passed；`python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent` 249 tests OK；`git diff --check` OK。
+- 内容: 新增 `PermissionChoice`、`ALLOW_ONCE`、`DENY`、`ALWAYS_ALLOW_SESSION` 和 deny-by-default `selectable_confirm` helper；TTY `InteractiveCLI` 将 `registry.confirm_action` 接到 prompt_toolkit `radiolist_dialog` 的 `Allow once`/`Deny` 选择，非 TTY 继续使用旧 `y/N` fallback；新增 unit/eval 覆盖 slash completion、permission selector wiring、allow/deny labels、denied tool call no-execute 和 no auto-approval。
 
 ### TASK-152: Final terminal UX regression eval sweep ✅
 - 完成者: Claude B；Codex PM 集成时同步迁移 4 个 durable task/dashboard 旧中文 eval 断言。

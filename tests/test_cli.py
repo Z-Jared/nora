@@ -409,6 +409,7 @@ class FakeRunReport:
 class FakeCLIRegistry:
     def __init__(self):
         self.calls = []
+        self.confirm_action = None
 
     def call(self, tool_name, **kwargs):
         self.calls.append((tool_name, kwargs))
@@ -993,6 +994,97 @@ class CLIErrorRecoveryTests(unittest.TestCase):
         cli = MiniAgentCLI(agent, FakeCLIRegistry(), root=Path("/tmp"))
         result = cli.handle_input("test")
         self.assertIn("hint:", result)
+
+
+class SlashCommandNamesTests(unittest.TestCase):
+    def test_contains_core_commands(self):
+        names = MiniAgentCLI.slash_command_names()
+        for command in [
+            "/", "/help", "/wake", "/model", "/setup", "/workers",
+            "/permissions", "/doctor", "/status", "/test", "/tools", "/exit",
+        ]:
+            self.assertIn(command, names)
+
+    def test_no_duplicates(self):
+        names = MiniAgentCLI.slash_command_names()
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_all_start_with_slash(self):
+        for name in MiniAgentCLI.slash_command_names():
+            self.assertTrue(name.startswith("/"), name)
+
+
+class InteractiveCLITests(unittest.TestCase):
+    def test_interactive_cli_toolbar_text(self):
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            toolbar = cli._toolbar_text()
+
+        self.assertIn("model:", toolbar.value)
+        self.assertIn("cwd:", toolbar.value)
+
+    def test_legacy_non_tty_emits_lifecycle(self):
+        agent = FakeCLIAgent()
+        outputs = []
+        cli = MiniAgentCLI(
+            agent,
+            FakeCLIRegistry(),
+            input_func=_fake_input(["hello", "exit"]),
+            output_func=outputs.append,
+        )
+
+        cli.run()
+
+        self.assertIn("Working...", outputs)
+        self.assertIn("Done.", outputs)
+
+    def test_tty_interactive_suppresses_lifecycle(self):
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            result = cli.cli.handle_input("hello")
+
+        self.assertIn("reply: hello", result)
+        self.assertEqual(cli._status_events, ["Working...", "Done."])
+
+    def test_interactive_cli_wires_confirm_action(self):
+        from mini_agent.interactive_cli import InteractiveCLI, selectable_confirm
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry = FakeCLIRegistry()
+            InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
+
+        self.assertIs(registry.confirm_action, selectable_confirm)
+
+
+class SlashCompleterTests(unittest.TestCase):
+    def _get_completions(self, text):
+        from prompt_toolkit.document import Document
+        from mini_agent.interactive_cli import SlashCompleter
+
+        completer = SlashCompleter(MiniAgentCLI.slash_command_names())
+        document = Document(text=text, cursor_position=len(text))
+        return [completion.text for completion in completer.get_completions(document, None)]
+
+    def test_slash_shows_commands(self):
+        completions = self._get_completions("/")
+        self.assertIn("/model", completions)
+        self.assertIn("/help", completions)
+        self.assertIn("/wake", completions)
+
+    def test_slash_prefix_completes_model(self):
+        self.assertIn("/model", self._get_completions("/m"))
+        self.assertIn("/model", self._get_completions("/mo"))
+        self.assertIn("/model", self._get_completions("/mod"))
+
+    def test_exact_match_does_not_suggest_itself(self):
+        self.assertNotIn("/model", self._get_completions("/model"))
+
+    def test_non_slash_returns_nothing(self):
+        self.assertEqual(self._get_completions("hello"), [])
 
 
 if __name__ == "__main__":

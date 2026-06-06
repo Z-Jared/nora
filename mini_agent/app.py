@@ -95,7 +95,19 @@ def build_agent(root: Path = None):
 
 def main() -> None:
     agent, registry, settings, session_store, root = build_agent()
-    MiniAgentCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()
+    import sys
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            from mini_agent.interactive_cli import InteractiveCLI
+        except ImportError:
+            print("prompt_toolkit not installed. Falling back to basic CLI.")
+            print("Install with: pip install prompt_toolkit>=3.0")
+            MiniAgentCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()
+            return
+        InteractiveCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()
+    else:
+        MiniAgentCLI(agent, registry, settings=settings, root=root, session_store=session_store).run()
 
 
 def serve(host: str = "", port: int = 0, api_token: str = "") -> None:

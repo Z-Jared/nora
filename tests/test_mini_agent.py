@@ -2439,5 +2439,93 @@ class RunEventsTests(unittest.TestCase):
         self.assertEqual(agent.last_run_report.tool_calls[0].name, "calculate")
 
 
+class TestSelectableConfirmation(unittest.TestCase):
+    def test_allow_once_approves(self):
+        from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+        result = selectable_confirm(
+            "Tool needs approval",
+            choices=[ALLOW_ONCE, DENY],
+            input_func=lambda prompt: "1",
+        )
+
+        self.assertTrue(result)
+
+    def test_deny_blocks(self):
+        from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+        result = selectable_confirm(
+            "Tool needs approval",
+            choices=[ALLOW_ONCE, DENY],
+            input_func=lambda prompt: "2",
+        )
+
+        self.assertFalse(result)
+
+    def test_invalid_input_defaults_to_deny(self):
+        from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+        result = selectable_confirm(
+            "Tool needs approval",
+            choices=[ALLOW_ONCE, DENY],
+            input_func=lambda prompt: "abc",
+        )
+
+        self.assertFalse(result)
+
+    def test_always_allow_session_can_approve(self):
+        from mini_agent.tools_common import ALLOW_ONCE, ALWAYS_ALLOW_SESSION, DENY, selectable_confirm
+
+        result = selectable_confirm(
+            "Tool needs approval",
+            choices=[ALLOW_ONCE, DENY, ALWAYS_ALLOW_SESSION],
+            input_func=lambda prompt: "3",
+        )
+
+        self.assertTrue(result)
+
+    def test_registry_with_selectable_confirm_blocks_on_deny(self):
+        from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+        called = []
+
+        def confirm(prompt):
+            return selectable_confirm(prompt, choices=[ALLOW_ONCE, DENY], input_func=lambda p: "2")
+
+        registry = ToolRegistry(confirm_action=confirm)
+        registry.register(
+            "write_file",
+            "Write file",
+            lambda reason="": called.append(reason) or "wrote",
+            permission=ToolPermission(category="workspace", risk="write", requires_confirmation=True),
+        )
+
+        result = registry.call("write_file", reason="test")
+
+        self.assertEqual(result, "已取消操作。")
+        self.assertEqual(called, [])
+
+    def test_registry_with_selectable_confirm_allows_on_allow(self):
+        from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
+
+        called = []
+
+        def confirm(prompt):
+            return selectable_confirm(prompt, choices=[ALLOW_ONCE, DENY], input_func=lambda p: "1")
+
+        registry = ToolRegistry(confirm_action=confirm)
+        registry.register(
+            "write_file",
+            "Write file",
+            lambda reason="": called.append(reason) or "wrote",
+            permission=ToolPermission(category="workspace", risk="write", requires_confirmation=True),
+        )
+
+        result = registry.call("write_file", reason="test")
+
+        self.assertEqual(result, "wrote")
+        self.assertEqual(called, ["test"])
+
+
 if __name__ == "__main__":
     unittest.main()

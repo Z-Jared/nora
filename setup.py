@@ -8,7 +8,7 @@ setup(
     packages=["mini_agent", "mini_agent.providers", "mini_agent.toolkits"],
     package_data={"mini_agent": ["static/*.html", "static/*.svg"]},
     include_package_data=True,
-    install_requires=["playwright==1.60.0"],
+    install_requires=["playwright==1.60.0", "prompt_toolkit>=3.0"],
     extras_require={
         "mcp": ["mcp>=1.0"],
     },

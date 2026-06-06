@@ -420,6 +420,22 @@ class MiniAgentCLI:
     def prompt(self) -> str:
         return "> "
 
+    @staticmethod
+    def slash_command_names() -> list[str]:
+        """Return known slash commands for interactive completion."""
+        return [
+            "/", "/help", "/wake", "/model", "/setup", "/config", "/workers",
+            "/permissions", "/doctor", "/status", "/diff", "/staged", "/changes",
+            "/review-staged", "/check-commit", "/branch", "/log", "/symbols",
+            "/symbol", "/refs", "/outline", "/test", "/repair", "/auto",
+            "/task", "/task-next", "/task-history", "/task-search", "/task-restore",
+            "/tasks", "/dashboard", "/durable-task", "/durable-tasks",
+            "/context", "/context-search", "/git-stage", "/git-unstage",
+            "/git-commit", "/git-branch-create", "/processes", "/process-start",
+            "/process-stop", "/session-save", "/session-load", "/session-list",
+            "/traces", "/trace", "/logs", "/audit", "/tools", "/exit",
+        ]
+
     def handle_input(self, text: str) -> Optional[str]:
         text = text.strip()
         if text.lower() in {"exit", "quit", "/exit", "/quit"}:
