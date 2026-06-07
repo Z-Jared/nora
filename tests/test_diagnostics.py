@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -100,6 +101,40 @@ class RunTestsEdgeCasesTests(unittest.TestCase):
         result = diag.run_tests(command="python3 -m unittest discover -s tests -v")
 
         self.assertIn("拒绝执行", result)
+
+    @patch("mini_agent.diagnostics.subprocess.run")
+    def test_runs_tty_eval_whitelist_command(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["python3", "evals/run_evals.py", "--filter", "tty_"],
+            returncode=0,
+            stdout="616 passed, 0 failed\n",
+            stderr="",
+        )
+        diag = Diagnostics(Path("/tmp"))
+
+        result = diag.run_tests(command="python3 evals/run_evals.py --filter tty_")
+
+        self.assertIn("exit_code: 0", result)
+        self.assertEqual(mock_run.call_args.kwargs["cwd"], Path("/tmp").resolve())
+        self.assertEqual(
+            mock_run.call_args.args[0],
+            ["python3", "evals/run_evals.py", "--filter", "tty_"],
+        )
+
+    @patch("mini_agent.diagnostics.subprocess.run")
+    def test_runs_diff_check_whitelist_command(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git", "diff", "--check"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        diag = Diagnostics(Path("/tmp"))
+
+        result = diag.run_tests(command="git diff --check")
+
+        self.assertIn("exit_code: 0", result)
+        self.assertEqual(mock_run.call_args.args[0], ["git", "diff", "--check"])
 
     @patch("mini_agent.diagnostics.subprocess.run")
     def test_handles_timeout(self, mock_run):

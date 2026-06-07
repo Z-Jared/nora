@@ -125,7 +125,20 @@ def main() -> int:
         EvalCase("terminal_regression_bounds_compact", eval_terminal_regression_bounds_compact),
         # TASK-153/154: TTY terminal interaction and permission coverage
         EvalCase("tty_slash_completer_prefixes", eval_tty_slash_completer_prefixes),
+        EvalCase("tty_slash_launcher_selection", eval_tty_slash_launcher_selection),
+        EvalCase("tty_slash_selection_no_command_echo", eval_tty_slash_selection_no_command_echo),
+        EvalCase("tty_slash_argument_levels", eval_tty_slash_argument_levels),
+        EvalCase("tty_body_wrap_tail", eval_tty_body_wrap_tail),
+        EvalCase("tty_body_scroll_history", eval_tty_body_scroll_history),
+        EvalCase("tty_input_history", eval_tty_input_history),
+        EvalCase("tty_multiline_paste_normalization", eval_tty_multiline_paste_normalization),
+        EvalCase("tty_cancel_ignores_late_result", eval_tty_cancel_ignores_late_result),
         EvalCase("tty_permission_selector_wiring", eval_tty_permission_selector_wiring),
+        EvalCase("tty_worker_errors_render", eval_tty_worker_errors_render),
+        EvalCase("tty_autosave_restores_previous_session", eval_tty_autosave_restores_previous_session),
+        EvalCase("tty_restored_history_renders_in_body", eval_tty_restored_history_renders_in_body),
+        EvalCase("tty_run_events_tool_activity", eval_tty_run_events_tool_activity),
+        EvalCase("tty_run_events_streaming_answer", eval_tty_run_events_streaming_answer),
         EvalCase("selectable_confirm_allow_deny_choices", eval_selectable_confirm_allow_deny_choices),
         EvalCase("permission_deny_blocks_tool", eval_permission_deny_blocks_tool),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
@@ -1128,14 +1141,351 @@ def eval_tty_slash_completer_prefixes():
     assert completions("hello") == [], f"non-slash text completed unexpectedly: {completions('hello')}"
 
 
+def eval_tty_slash_launcher_selection():
+    """TTY slash launcher owns selection state for grouped command navigation."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._current_input = "/"
+        cli._move_slash(1)
+        panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+    assert cli._selected_slash_row()["value"] == "Project", f"unexpected selected row: {cli._selected_slash_row()}"
+    assert "> Project/" in panel, f"selection marker missing from panel: {panel}"
+    assert "> Common/" not in panel, f"old first-row marker still selected: {panel}"
+
+
+def eval_tty_slash_selection_no_command_echo():
+    """Selecting a slash launcher item fills the input without executing or echoing it as chat."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._current_input = "/"
+        cli._slash_group = "Project"
+        for _ in range(20):
+            if cli._selected_slash_row()["value"] == "/setup":
+                break
+            cli._move_slash(1)
+
+        class FakeBuffer:
+            text = "/"
+            cursor_position = 1
+
+        class FakeEvent:
+            class App:
+                current_buffer = FakeBuffer()
+
+            app = App()
+
+        cli._accept_slash_selection(FakeEvent())
+
+    transcript = "\n".join(cli._transcript)
+    assert FakeEvent.App.current_buffer.text == "/setup", f"selected command not filled: {FakeEvent.App.current_buffer.text}"
+    assert cli._current_input == "/setup", f"current input not selected command: {cli._current_input}"
+    assert cli._worker_thread is None, "slash selection should not execute immediately"
+    assert "> /setup" not in transcript, f"selected command echoed as chat: {transcript[:300]}"
+    assert "current" not in transcript, f"selected command executed immediately: {transcript[:300]}"
+
+
+def eval_tty_slash_argument_levels():
+    """Commands with arguments drill into command-specific argument levels before filling a template."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._current_input = "/"
+        cli._slash_group = "Tasks"
+        for _ in range(20):
+            if cli._selected_slash_row()["value"] == "/auto":
+                break
+            cli._move_slash(1)
+        assert cli._selected_slash_row()["value"] == "/auto", f"/auto missing from Tasks group: {cli._slash_launcher_panel('/')}"
+
+        class FakeBuffer:
+            text = "/"
+            cursor_position = 1
+
+        class FakeEvent:
+            class App:
+                current_buffer = FakeBuffer()
+
+            app = App()
+
+        cli._accept_slash_selection(FakeEvent())
+        first = cli._slash_launcher_panel("/", cli._slash_selected)
+        for _ in range(12):
+            if cli._selected_slash_row()["value"] == "3":
+                break
+            cli._move_slash(1)
+        assert cli._selected_slash_row()["value"] == "3", f"steps choices missing: {first}"
+        cli._accept_slash_selection(FakeEvent())
+        second = cli._slash_launcher_panel("/", cli._slash_selected)
+        cli._accept_slash_selection(FakeEvent())
+
+    assert "<steps>" in first, f"first arg missing: {first}"
+    assert "<goal>" in second, f"second arg missing: {second}"
+    assert FakeEvent.App.current_buffer.text == "/auto 3 <goal>", f"final template not filled: {FakeEvent.App.current_buffer.text}"
+    assert cli._worker_thread is None, "argument drilldown should not execute immediately"
+
+
+def eval_tty_body_wrap_tail():
+    """TTY body wraps long visual lines before tailing so endings remain visible."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._transcript = ["A" * 180 + " END"]
+        long_body = "".join(fragment for _, fragment in cli._render_body(max_lines=3, width=40))
+        cli._transcript = ["中文测试" * 60 + "\n最后一行END"]
+        cjk_body = "".join(fragment for _, fragment in cli._render_body(max_lines=4, width=36))
+
+    assert "END" in long_body, f"long line tail missing: {long_body}"
+    assert "A" * 80 not in long_body, f"long line not wrapped: {long_body}"
+    assert "最后一行END" in cjk_body, f"CJK tail missing: {cjk_body}"
+
+
+def eval_tty_body_scroll_history():
+    """TTY body supports paging back without forcing new output to the latest line."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._transcript = ["\n".join(f"line {index}" for index in range(80))]
+        latest = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+        cli._scroll_body(-1, page_size=10)
+        older = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+        cli._append_transcript("new final line")
+        after_append = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+        cli._scroll_body(1, page_size=10)
+        returned = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+    assert "line 79" in latest, f"latest tail missing: {latest}"
+    assert "line 69" in older and "line 79" not in older, f"page up failed: {older}"
+    assert "new final line" not in after_append, f"manual scroll should hold position: {after_append}"
+    assert "new final line" in returned, f"page down did not return to latest: {returned}"
+
+
+def eval_tty_input_history():
+    """TTY input supports shell-like history navigation without losing the draft."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    class FakeBuffer:
+        text = "draft"
+        cursor_position = 5
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._record_input_history("first")
+        cli._record_input_history("second")
+        buffer = FakeBuffer()
+        cli._move_input_history(buffer, -1)
+        latest = buffer.text
+        cli._move_input_history(buffer, -1)
+        previous = buffer.text
+        cli._move_input_history(buffer, 1)
+        forward = buffer.text
+        cli._move_input_history(buffer, 1)
+        restored = buffer.text
+
+    assert latest == "second", f"latest history missing: {latest}"
+    assert previous == "first", f"previous history missing: {previous}"
+    assert forward == "second", f"forward history missing: {forward}"
+    assert restored == "draft", f"draft not restored: {restored}"
+
+
+def eval_tty_multiline_paste_normalization():
+    """TTY multiline paste is normalized into a single submitted turn."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        normalized = cli._normalize_input_text("hello\n  world\r\nagain")
+
+    assert normalized == "hello world again", f"multiline input not normalized: {normalized!r}"
+
+
+def eval_tty_cancel_ignores_late_result():
+    """Cancelled TTY turns free the UI and ignore late worker output."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    class SlowAgent:
+        def run(self, text):
+            return "late reply"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(SlowAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._active_turn_id = 3
+        cli._cancelled_turn_ids.add(3)
+        cli._is_working = True
+        cli._run_cli_input("hello", turn_id=3)
+
+    transcript = "\n".join(cli._transcript)
+    assert "late reply" not in transcript, f"cancelled output leaked: {transcript}"
+    assert cli._is_working is False, "cancelled turn did not release working state"
+    assert "Cancelled" in cli._status_message, f"missing cancelled status: {cli._status_message}"
+
+
 def eval_tty_permission_selector_wiring():
-    """InteractiveCLI wires registry confirmations to the TTY selector."""
-    from mini_agent.interactive_cli import InteractiveCLI, selectable_confirm
+    """InteractiveCLI wires registry confirmations to the in-app TTY selector."""
+    from mini_agent.interactive_cli import InteractiveCLI
 
     registry = FakeCLIRegistry()
     with tempfile.TemporaryDirectory() as tmpdir:
-        InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
-    assert registry.confirm_action is selectable_confirm, "InteractiveCLI did not wire selectable_confirm"
+        cli = InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
+    assert registry.confirm_action == cli._confirm_action, "InteractiveCLI did not wire in-app confirm handler"
+
+
+def eval_tty_worker_errors_render():
+    """TTY worker thread errors render into the transcript instead of leaking tracebacks."""
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    class ErrorAgent:
+        def run(self, text):
+            raise RuntimeError("boom")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(ErrorAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._run_cli_input("hello")
+
+    transcript = "\n".join(cli._transcript)
+    assert "error: boom" in transcript, f"error not rendered: {transcript}"
+    assert "Traceback" not in transcript, f"traceback leaked into transcript: {transcript}"
+
+
+def eval_tty_autosave_restores_previous_session():
+    """Normal CLI chat autosaves and the next CLI instance restores it."""
+    from mini_agent.memory import ConversationMemory
+    from mini_agent.session import CLI_AUTOSAVE_SESSION, SessionStore
+
+    class MemoryAgent:
+        def __init__(self):
+            self.memory = ConversationMemory()
+            self.last_run_report = FakeRunReport()
+
+        def run(self, text):
+            answer = f"reply: {text}"
+            self.memory.add_user(text)
+            self.memory.add_assistant(answer)
+            return answer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = SessionStore(Path(tmpdir) / "sessions")
+        first = MiniAgentCLI(MemoryAgent(), FakeCLIRegistry(), session_store=store)
+        reply = first.handle_input("keep this context")
+        saved = store.load_messages(CLI_AUTOSAVE_SESSION)
+        second_agent = MemoryAgent()
+        second = MiniAgentCLI(second_agent, FakeCLIRegistry(), session_store=store)
+        slash = second.handle_input("/help")
+
+    assert "reply: keep this context" in reply, f"normal reply failed: {reply}"
+    assert saved and saved[0]["content"] == "keep this context", f"autosave missing: {saved}"
+    assert second.restored_session_message_count == 2, f"restore count wrong: {second.restored_session_message_count}"
+    assert second_agent.memory.messages()[1]["content"] == "reply: keep this context", "restored memory missing answer"
+    assert "/wake" in slash, "slash command should still work after restore"
+
+
+def eval_tty_restored_history_renders_in_body():
+    """TTY startup renders a concise restored autosave preview above the fixed input."""
+    from mini_agent.interactive_cli import InteractiveCLI
+    from mini_agent.memory import ConversationMemory
+    from mini_agent.session import SessionStore
+
+    class MemoryAgent:
+        def __init__(self):
+            self.memory = ConversationMemory()
+            self.last_run_report = FakeRunReport()
+
+        def run(self, text):
+            return "unused"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = SessionStore(Path(tmpdir) / "sessions")
+        memory = ConversationMemory()
+        memory.add_user("h/exit")
+        memory.add_assistant("'utf-8' codec can't decode byte 0xe4")
+        memory.add_user("old tty question")
+        memory.add_assistant("\n".join(f"old tty answer {index}" for index in range(12)))
+        memory.add_user("/exit")
+        memory.add_assistant("好的，再见！")
+        store.save_cli_autosave(memory)
+        cli = InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+        body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+    assert "restored previous session" in body, f"restore marker missing: {body}"
+    assert "last: old tty question" in body, f"user preview missing: {body}"
+    assert "reply: old tty answer 0" in body, f"assistant preview missing: {body}"
+    assert "h/exit" not in body, f"mistyped exit polluted restore preview: {body}"
+    assert "codec can't decode" not in body, f"error noise polluted restore preview: {body}"
+    assert "好的，再见" not in body, f"exit reply polluted restore preview: {body}"
+    assert "old tty answer 11" not in body, f"restored preview is too long: {body}"
+
+
+def eval_tty_run_events_tool_activity():
+    """TTY uses agent event streams to show thinking/tool activity without transcript noise."""
+    from mini_agent.interactive_cli import InteractiveCLI
+    from mini_agent.memory import ConversationMemory
+
+    class EventAgent:
+        def __init__(self):
+            self.memory = ConversationMemory()
+            self.last_run_report = FakeRunReport()
+
+        def run_events(self, text):
+            self.memory.add_user(text)
+            yield {"type": "typing"}
+            yield {"type": "tool_call_start", "name": "read_project_file", "arguments": {"path": "README.md"}}
+            yield {"type": "tool_call_result", "name": "read_project_file", "status": "ok", "result": "bounded preview"}
+            yield {"type": "delta", "content": "final event answer"}
+            self.memory.add_assistant("final event answer")
+            yield {"type": "done", "status": "done"}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(EventAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        cli._run_agent_events_input("inspect project", turn_id=0)
+        activity = "\n".join(cli._activity_lines)
+        transcript = "\n".join(cli._transcript)
+
+    assert "tool: read_project_file ok" in activity, f"tool activity missing: {activity}"
+    assert "final event answer" in transcript, f"final answer missing: {transcript}"
+    assert "tool: read_project_file" not in transcript, f"tool activity polluted transcript: {transcript}"
+
+
+def eval_tty_run_events_streaming_answer():
+    """TTY streams delta text into the body before committing the final transcript."""
+    from mini_agent.interactive_cli import InteractiveCLI
+    from mini_agent.memory import ConversationMemory
+
+    class EventAgent:
+        def __init__(self):
+            self.memory = ConversationMemory()
+            self.last_run_report = FakeRunReport()
+
+        def run_events(self, text):
+            self.memory.add_user(text)
+            yield {"type": "typing"}
+            yield {"type": "delta", "content": "stream"}
+            yield {"type": "delta", "content": " answer"}
+            self.memory.add_assistant("stream answer")
+            yield {"type": "done", "status": "done"}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(EventAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        seen = []
+        original = cli._set_streaming_answer
+
+        def capture(text):
+            seen.append(text)
+            original(text)
+
+        cli._set_streaming_answer = capture
+        cli._run_agent_events_input("stream please", turn_id=0)
+        transcript = "\n".join(cli._transcript)
+
+    assert seen == ["stream", "stream answer"], f"streaming deltas not surfaced incrementally: {seen}"
+    assert cli._streaming_answer == "", f"streaming draft not cleared: {cli._streaming_answer}"
+    assert transcript.count("stream answer") == 1, f"final answer duplicated in transcript: {transcript}"
 
 
 def eval_selectable_confirm_allow_deny_choices():
@@ -1229,7 +1579,8 @@ def eval_cli_startup_banner_with_model():
         assert "Nora Code" in banner, f"missing Nora Code: {banner}"
         assert "(o_o)" in banner, f"missing robot icon: {banner}"
         assert "model: openai-compatible / gpt-4.1-mini" in banner, f"missing model info: {banner}"
-        assert "API key: configured" in banner, f"missing key configured: {banner}"
+        assert "credentials: configured" in banner, f"missing credentials configured: {banner}"
+        assert "API key:" not in banner, f"old key status label leaked: {banner}"
         assert "sk-test-secret-key-12345" not in banner, "API key leaked in banner"
 
 
@@ -1327,7 +1678,8 @@ def eval_startup_header_model_state():
         cli_configured.run()
         banner_configured = outputs_configured[0]
         assert "model: anthropic / claude-sonnet-4-5" in banner_configured, f"missing configured model: {banner_configured}"
-        assert "API key: configured" in banner_configured, f"missing API key status: {banner_configured}"
+        assert "credentials: configured" in banner_configured, f"missing credential status: {banner_configured}"
+        assert "API key:" not in banner_configured, f"old key status label leaked: {banner_configured}"
         assert "sk-ant-test-key" not in banner_configured, "API key leaked"
 
 
@@ -1531,7 +1883,7 @@ def eval_cli_wake_non_project_guidance():
 
 
 def eval_cli_model_provider_diagnostics():
-    """Model command shows provider/model/base URL/key-safe diagnostics."""
+    """Model command shows provider/model/base URL/credential-safe diagnostics."""
     with tempfile.TemporaryDirectory() as tmpdir:
         settings = load_settings(environ={
             "LLM_PROVIDER": "openai-compatible",
@@ -1547,7 +1899,8 @@ def eval_cli_model_provider_diagnostics():
         assert "provider: openai-compatible" in result, f"missing provider: {result[:300]}"
         assert "model: gpt-4.1" in result, f"missing model: {result[:300]}"
         assert "base URL: https://api.openai.com/v1" in result, f"missing base URL: {result[:300]}"
-        assert "API key: configured" in result, f"missing key status: {result[:300]}"
+        assert "credentials: configured" in result, f"missing credential status: {result[:300]}"
+        assert "API key:" not in result, f"old key status label leaked: {result[:300]}"
         assert "401 Unauthorized" in result, f"missing recovery hint: {result[:300]}"
         for old_marker in ["Provider:", "Model:", "Base URL:", "Timeout:", "Enabled:", "===", "───"]:
             assert old_marker not in result, f"old /model marker leaked {old_marker}: {result[:300]}"
@@ -1874,6 +2227,8 @@ def eval_slash_setup_no_secret_leak_configured():
         ).handle_slash_command("/setup")
         assert "sk-setup-leak-test-999" not in result, f"/setup leaked API key: {result[:300]}"
         assert "configured" in result, f"/setup missing key status: {result[:300]}"
+        assert "credentials:" in result, f"/setup missing credentials label: {result[:300]}"
+        assert "API key:" not in result, f"/setup leaked old API key label: {result[:300]}"
 
 
 # --- TASK-134: CLI slash launcher/welcome deterministic eval coverage ---
@@ -1981,7 +2336,7 @@ def eval_slash_wake_v4_compact():
 
 
 def eval_slash_model_v4_compact():
-    """/model provides compact provider/model/base URL/key presence/enabled state."""
+    """/model provides compact provider/model/base URL/credential presence/enabled state."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(
@@ -1994,7 +2349,7 @@ def eval_slash_model_v4_compact():
             },
         )
         result = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=root).handle_slash_command("/model")
-        for expected in ["provider:", "model:", "base URL:", "API key:", "enabled:", "timeout:"]:
+        for expected in ["provider:", "model:", "base URL:", "credentials:", "enabled:", "timeout:"]:
             assert expected in result, f"missing {expected}: {result[:300]}"
         assert "openai-compatible" in result, f"missing provider: {result[:300]}"
         assert "gpt-4.1-mini" in result, f"missing model: {result[:300]}"
@@ -2074,7 +2429,7 @@ def eval_banner_next_action_hint():
 
 
 def eval_banner_preserves_core_info():
-    """Banner preserves workspace, provider/model/key presence, and tools count."""
+    """Banner preserves workspace, provider/model/credential presence, and tools count."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         settings = load_settings(
@@ -2099,7 +2454,8 @@ def eval_banner_preserves_core_info():
         banner = outputs[0]
         assert "Nora Code" in banner, f"missing Nora Code: {banner[:300]}"
         assert "model: openai-compatible / gpt-4.1-mini" in banner, f"missing model info: {banner[:300]}"
-        assert "API key: configured" in banner, f"missing key presence: {banner[:300]}"
+        assert "credentials: configured" in banner, f"missing credential presence: {banner[:300]}"
+        assert "API key:" not in banner, f"old key status label leaked: {banner[:300]}"
         assert str(root) in banner, f"missing workspace path: {banner[:300]}"
 
 
@@ -2149,7 +2505,8 @@ def eval_banner_configured_key_no_leak():
         cli.run()
         banner = outputs[0]
         assert "sk-super-secret-fake-key-12345" not in banner, "secret key leaked in banner"
-        assert "API key: configured" in banner, f"missing configured indication: {banner[:300]}"
+        assert "credentials: configured" in banner, f"missing configured indication: {banner[:300]}"
+        assert "API key:" not in banner, f"old key status label leaked: {banner[:300]}"
 
 
 def eval_no_chain_of_thought_markers():
@@ -2316,7 +2673,8 @@ def eval_cli_terminal_landing_key_states_safe():
             output_func=configured_outputs.append,
         ).run()
         configured_banner = configured_outputs[0]
-        assert "API key: configured" in configured_banner, f"configured state absent: {configured_banner[:500]}"
+        assert "credentials: configured" in configured_banner, f"configured state absent: {configured_banner[:500]}"
+        assert "API key:" not in configured_banner, f"old key status label leaked: {configured_banner[:500]}"
         assert "model: openai-compatible / gpt-4.1-mini" in configured_banner, f"model info missing: {configured_banner[:500]}"
         assert "sk-terminal-secret-12345" not in configured_banner, "API key leaked in configured banner"
 

@@ -7,6 +7,8 @@ from pathlib import Path
 from mini_agent.memory import ConversationMemory, is_sensitive_text
 from mini_agent.tools_common import read_jsonl
 
+CLI_AUTOSAVE_SESSION = "_nora_cli_autosave"
+
 
 class SessionStore:
     def __init__(self, directory: Path = None, db=None):
@@ -58,6 +60,56 @@ class SessionStore:
         if self.db:
             return self._load_db(name, memory)
         return self._load_jsonl(name, memory)
+
+    def load_messages(self, name: str) -> list[dict]:
+        if self.db:
+            return self._load_messages_db(name)
+        return self._load_messages_jsonl(name)
+
+    def _load_messages_db(self, name: str) -> list[dict]:
+        row = self.db.conn.execute(
+            "SELECT messages_json FROM sessions WHERE name = ?", (name,)
+        ).fetchone()
+        if not row:
+            return []
+        try:
+            messages = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return [
+            message
+            for message in messages
+            if isinstance(message, dict) and "role" in message and "content" in message
+        ]
+
+    def _load_messages_jsonl(self, name: str) -> list[dict]:
+        path = self._path(name)
+        if not path.exists():
+            return []
+        records = read_jsonl(path)
+        return [
+            message
+            for message in records[1:]
+            if isinstance(message, dict) and "role" in message and "content" in message
+        ]
+
+    def restore_cli_autosave(self, memory: ConversationMemory) -> int:
+        messages = self.load_messages(CLI_AUTOSAVE_SESSION)
+        if not messages:
+            return 0
+        memory._messages.clear()
+        for message in messages:
+            memory._messages.append(message)
+        return len(messages)
+
+    def save_cli_autosave(self, memory: ConversationMemory) -> None:
+        messages = memory.messages()
+        if not messages:
+            return
+        if self.db:
+            self._save_db(CLI_AUTOSAVE_SESSION, messages)
+        else:
+            self._save_jsonl(CLI_AUTOSAVE_SESSION, messages)
 
     def _load_db(self, name: str, memory: ConversationMemory) -> str:
         row = self.db.conn.execute(

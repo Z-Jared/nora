@@ -12,6 +12,11 @@ from mini_agent.durable_events import (
 
 
 ALLOWED_TEST_COMMAND = "python3 -m unittest discover -s tests"
+ALLOWED_TEST_COMMANDS = {
+    ALLOWED_TEST_COMMAND: "unittest_discover",
+    "python3 evals/run_evals.py --filter tty_": "tty_evals",
+    "git diff --check": "diff_check",
+}
 
 
 class Diagnostics:
@@ -30,11 +35,13 @@ class Diagnostics:
         timeout: bool = False,
         error: str = "",
         max_output_chars: Optional[int] = None,
+        command: str = ALLOWED_TEST_COMMAND,
     ) -> None:
         if not self.event_store:
             return
+        command_kind = ALLOWED_TEST_COMMANDS.get(command or ALLOWED_TEST_COMMAND, "unknown")
         payload = {
-            "command_kind": "unittest_discover",
+            "command_kind": command_kind,
             "status": status,
             "exit_code": exit_code,
             "timeout": timeout,
@@ -49,7 +56,7 @@ class Diagnostics:
                 event_type=event_type,
                 task_id=None,
                 source="diagnostics",
-                summary=f"{event_type}: unittest_discover",
+                summary=f"{event_type}: {command_kind}",
                 severity="info" if event_type in (TEST_RUN_STARTED, TEST_RUN_FINISHED) else "warning",
                 payload=payload,
             )
@@ -72,12 +79,22 @@ class Diagnostics:
 
     def run_tests(self, command: str = ALLOWED_TEST_COMMAND, max_output_chars: int = 12000, reason: str = "") -> str:
         command = command.strip() or ALLOWED_TEST_COMMAND
-        if command != ALLOWED_TEST_COMMAND:
-            self._record_test_run_event(TEST_RUN_BLOCKED, status="blocked", error="disallowed_command")
+        if command not in ALLOWED_TEST_COMMANDS:
+            self._record_test_run_event(
+                TEST_RUN_BLOCKED,
+                status="blocked",
+                error="disallowed_command",
+                command=command,
+            )
             return "拒绝执行测试: 命令不在测试白名单内。"
 
         max_output_chars = max(500, min(max_output_chars, 50000))
-        self._record_test_run_event(TEST_RUN_STARTED, status="started", max_output_chars=max_output_chars)
+        self._record_test_run_event(
+            TEST_RUN_STARTED,
+            status="started",
+            max_output_chars=max_output_chars,
+            command=command,
+        )
 
         try:
             completed = subprocess.run(
@@ -96,6 +113,7 @@ class Diagnostics:
                 stderr_bytes=self._byte_len(error.stderr),
                 error="timeout",
                 max_output_chars=max_output_chars,
+                command=command,
             )
             output = "\n".join(part for part in (stdout, stderr) if part)
             return f"exit_code: timeout\nsummary: 测试超时\n{output[:max_output_chars]}".strip()
@@ -105,6 +123,7 @@ class Diagnostics:
                 status="error",
                 error="os_error",
                 max_output_chars=max_output_chars,
+                command=command,
             )
             return f"测试执行失败: OSError"
 
@@ -116,6 +135,7 @@ class Diagnostics:
             stdout_bytes=self._byte_len(stdout),
             stderr_bytes=self._byte_len(stderr),
             max_output_chars=max_output_chars,
+            command=command,
         )
 
         output = "\n".join(part for part in (stdout, stderr) if part)

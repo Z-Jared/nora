@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -43,6 +44,24 @@ class NoraDBTests(unittest.TestCase):
             db = NoraDB(Path(tmpdir) / "test.db")
             self.assertEqual(db.table_count("long_term_memory"), 0)
             self.assertFalse(db.has_data("long_term_memory"))
+            db.close()
+
+    def test_connection_can_be_used_from_tty_worker_thread(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = NoraDB(Path(tmpdir) / "test.db")
+            errors = []
+
+            def worker():
+                try:
+                    db.conn.execute("SELECT 1").fetchone()
+                except Exception as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+
+            self.assertEqual(errors, [])
             db.close()
 
 

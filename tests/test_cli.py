@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -71,6 +72,27 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(registry.calls[-1], ("git_status", {}))
         self.assertIn("called git_status", result)
+
+    def test_test_command_passes_selected_whitelisted_command(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/test python3 evals/run_evals.py --filter tty_")
+
+        self.assertEqual(
+            registry.calls[-1],
+            ("run_project_tests", {"command": "python3 evals/run_evals.py --filter tty_"}),
+        )
+        self.assertIn("called run_project_tests", result)
+
+    def test_test_command_rejects_non_whitelisted_command(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/test rm -rf /")
+
+        self.assertIn("拒绝执行测试", result)
+        self.assertEqual(registry.calls, [])
 
     def test_doctor_reports_runtime_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -244,7 +266,7 @@ class MiniAgentCLITests(unittest.TestCase):
             self.assertIn("local mode", banner)
             self.assertNotIn("API key", banner)
 
-    def test_configured_banner_shows_api_key_configured(self):
+    def test_configured_banner_shows_credentials_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = FakeSettings(provider="openai", model="gpt-4", api_key="sk-test")
             outputs = []
@@ -262,10 +284,50 @@ class MiniAgentCLITests(unittest.TestCase):
             banner = outputs[0]
             self.assertIn("Nora Code", banner)
             self.assertIn("model: openai / gpt-4", banner)
-            self.assertIn("API key: configured", banner)
+            self.assertIn("credentials: configured", banner)
+            self.assertNotIn("API key:", banner)
             self.assertNotIn("sk-test", banner)
             self.assertNotIn("local mode", banner)
 
+    def test_cli_autosaves_normal_chat_and_restores_next_start(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import CLI_AUTOSAVE_SESSION, SessionStore
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                answer = f"reply: {text}"
+                self.memory.add_user(text)
+                self.memory.add_assistant(answer)
+                return answer
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            first_agent = MemoryAgent()
+            cli = MiniAgentCLI(first_agent, FakeCLIRegistry(), session_store=store)
+            result = cli.handle_input("hello")
+            second_agent = MemoryAgent()
+            restored_cli = MiniAgentCLI(second_agent, FakeCLIRegistry(), session_store=store)
+            saved_messages = store.load_messages(CLI_AUTOSAVE_SESSION)
+
+        self.assertIn("reply: hello", result)
+        self.assertEqual(restored_cli.restored_session_message_count, 2)
+        self.assertEqual(saved_messages[0]["content"], "hello")
+        self.assertEqual(second_agent.memory.messages()[1]["content"], "reply: hello")
+
+    def test_cli_slash_command_does_not_autosave_conversation(self):
+        from mini_agent.session import CLI_AUTOSAVE_SESSION, SessionStore
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), session_store=store)
+            result = cli.handle_input("/help")
+
+        self.assertIn("/wake", result)
+        self.assertEqual(store.load_messages(CLI_AUTOSAVE_SESSION), [])
 
     def test_durable_tasks_empty(self):
         import tempfile
@@ -696,7 +758,7 @@ class CLIModelCommandTests(unittest.TestCase):
             settings = FakeSettings(provider="anthropic", model="claude-sonnet-4-5")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
             result = cli.handle_slash_command("/model")
-            self.assertIn("API key: missing", result)
+            self.assertIn("credentials: missing", result)
             self.assertIn("ANTHROPIC_API_KEY", result)
 
     def test_model_shows_key_configured(self):
@@ -704,7 +766,8 @@ class CLIModelCommandTests(unittest.TestCase):
             settings = FakeSettings(provider="openai-compatible", model="gpt-4.1-mini", api_key="sk-test")
             cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
             result = cli.handle_slash_command("/model")
-            self.assertIn("API key: configured", result)
+            self.assertIn("credentials: configured", result)
+            self.assertNotIn("API key:", result)
             self.assertNotIn("sk-test", result)
 
     def test_model_no_key_leak(self):
@@ -1015,15 +1078,960 @@ class SlashCommandNamesTests(unittest.TestCase):
 
 
 class InteractiveCLITests(unittest.TestCase):
-    def test_interactive_cli_toolbar_text(self):
-        from mini_agent.interactive_cli import InteractiveCLI
+    def test_tty_prompt_matches_raw_terminal_contract(self):
+        from mini_agent import interactive_cli
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
-            toolbar = cli._toolbar_text()
+            settings = FakeSettings(
+                provider="openai-compatible",
+                model="deepseek-v4-flash",
+                api_key="sk-secret123",
+            )
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            app = cli._make_application()
+            banner = cli._tty_banner()
+            toolbar = cli._bottom_toolbar()
 
-        self.assertIn("model:", toolbar.value)
-        self.assertIn("cwd:", toolbar.value)
+        self.assertTrue(app.full_screen)
+        self.assertIn("[::]    Nora Code", banner)
+        self.assertNotIn("API key", banner)
+        self.assertNotIn("sk-secret123", banner)
+        self.assertIn("Ready", toolbar.value)
+        self.assertIn("/ commands", toolbar.value)
+        self.assertIn("Esc clear", toolbar.value)
+        self.assertIn("Ctrl-D exit", toolbar.value)
+        self.assertNotIn("API key", toolbar.value)
+
+    def test_tty_startup_renders_restored_autosave_preview(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            memory = ConversationMemory()
+            memory.add_user("old question")
+            memory.add_assistant("old answer")
+            store.save_cli_autosave(memory)
+            agent = MemoryAgent()
+            cli = interactive_cli.InteractiveCLI(agent, FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=6, width=80))
+
+        self.assertIn("restored previous session", body)
+        self.assertIn("last: old question", body)
+        self.assertIn("reply: old answer", body)
+
+    def test_tty_restored_history_preview_is_clipped_for_first_screen(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            memory = ConversationMemory()
+            memory.add_user("old question")
+            memory.add_assistant("\n".join(f"old answer line {index}" for index in range(20)))
+            store.save_cli_autosave(memory)
+            agent = MemoryAgent()
+            cli = interactive_cli.InteractiveCLI(agent, FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+        self.assertIn("restored previous session", body)
+        self.assertIn("reply: old answer line 0", body)
+        self.assertNotIn("old answer line 19", body)
+
+    def test_tty_restored_history_hides_internal_tool_markup(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            memory = ConversationMemory()
+            memory.add_assistant(
+                "\n".join([
+                    "<｜｜DSML｜｜tool_calls>",
+                    "<tool_call>",
+                    "visible restored answer",
+                    "</｜｜DSML｜｜tool_calls>",
+                ])
+            )
+            store.save_cli_autosave(memory)
+            cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
+
+        self.assertIn("visible restored answer", body)
+        self.assertNotIn("DSML", body)
+        self.assertNotIn("<tool_call>", body)
+
+    def test_tty_restored_history_skips_error_noise(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            memory = ConversationMemory()
+            memory.add_user("h/exit")
+            memory.add_assistant("'utf-8' codec can't decode byte 0xe4")
+            memory.add_user("real question")
+            memory.add_assistant("real answer")
+            store.save_cli_autosave(memory)
+            cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
+
+        self.assertIn("last: real question", body)
+        self.assertIn("reply: real answer", body)
+        self.assertNotIn("h/exit", body)
+        self.assertNotIn("codec can't decode", body)
+
+    def test_tty_restored_history_uses_latest_valid_pair(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            memory = ConversationMemory()
+            memory.add_user("useful question")
+            memory.add_assistant("useful answer")
+            memory.add_user("/exit")
+            memory.add_assistant("好的，再见！")
+            store.save_cli_autosave(memory)
+            cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
+
+        self.assertIn("last: useful question", body)
+        self.assertIn("reply: useful answer", body)
+        self.assertNotIn("好的，再见", body)
+
+    def test_tty_session_load_syncs_restored_memory_to_transcript(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.session import SessionStore
+        from mini_agent import interactive_cli
+
+        class MemoryAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run(self, text):
+                return "unused"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(Path(tmpdir) / "sessions")
+            saved = ConversationMemory()
+            saved.add_user("saved question")
+            saved.add_assistant("saved answer")
+            store.save(saved, name="manual")
+            cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
+            cli._run_cli_input("/session-load manual")
+            transcript = "\n".join(cli._transcript)
+
+        self.assertIn("> saved question", transcript)
+        self.assertIn("saved answer", transcript)
+        self.assertIn("已恢复会话", transcript)
+
+    def test_tty_exact_slash_opens_launcher_without_transcript_echo(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+
+            class FakeBuffer:
+                text = "/"
+
+            cli._handle_app_input(FakeBuffer())
+            panel = "".join(fragment for _, fragment in cli._render_slash_panel())
+
+        self.assertEqual(cli._transcript, [])
+        self.assertEqual(cli._current_input, "/")
+        self.assertIn("/ commands", panel)
+        self.assertIn("Common/", panel)
+        self.assertIn("Project/", panel)
+        self.assertIn("Tools/", panel)
+
+    def test_tty_slash_prefix_renders_matching_launcher_panel(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/mo"
+            rendered = "".join(fragment for _, fragment in cli._render_slash_panel())
+            body = "".join(fragment for _, fragment in cli._render_body())
+
+        self.assertIn("/ commands", rendered)
+        self.assertIn("/model", rendered)
+        self.assertNotIn("/workers", rendered)
+        self.assertNotIn("/ commands", body)
+
+    def test_tty_slash_launcher_filters_full_command_catalog(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/t"
+            rendered = "".join(fragment for _, fragment in cli._render_slash_panel())
+
+        self.assertIn("/tasks", rendered)
+        self.assertIn("/tools", rendered)
+        self.assertIn("/test", rendered)
+        self.assertNotIn("/model", rendered)
+
+    def test_tty_slash_launcher_panel_is_lightweight_and_fits_container(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            panel = cli._slash_launcher_panel("/t", selected=0)
+
+        self.assertLessEqual(len(panel.splitlines()), 10)
+        self.assertNotIn("+", panel)
+        self.assertNotIn("|", panel)
+        self.assertIn("/ commands", panel)
+
+    def test_tty_slash_group_enters_second_level(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+            panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertEqual(cli._slash_group, "Common")
+        self.assertEqual(FakeEvent.app.current_buffer.text, "/")
+        self.assertIn("/ commands / Common", panel)
+        self.assertIn("/wake", panel)
+        self.assertIn("/status", panel)
+        self.assertNotIn("current", "\n".join(cli._transcript))
+
+    def test_tty_slash_launcher_has_own_selection_state(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._move_slash(1)
+            panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertEqual(cli._selected_slash_row()["value"], "Project")
+        self.assertIn("> Project/", panel)
+        self.assertNotIn("> Common/", panel)
+
+    def test_tty_slash_selection_fills_input_without_executing(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_group = "Project"
+            for _ in range(20):
+                if cli._selected_slash_row()["value"] == "/setup":
+                    break
+                cli._move_slash(1)
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+
+        transcript = "\n".join(cli._transcript)
+        self.assertEqual(FakeEvent.app.current_buffer.text, "/setup")
+        self.assertEqual(cli._current_input, "/setup")
+        self.assertIn("Enter to run", cli._status_message)
+        self.assertIsNone(cli._worker_thread)
+        self.assertNotIn("> /setup", transcript)
+        self.assertNotIn("current", transcript)
+
+    def test_tty_slash_command_with_args_enters_argument_level(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_group = "Git"
+            for _ in range(20):
+                if cli._selected_slash_row()["value"] == "/git-stage":
+                    break
+                cli._move_slash(1)
+            self.assertEqual(cli._selected_slash_row()["value"], "/git-stage")
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+            panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertEqual(cli._slash_command, "/git-stage")
+        self.assertEqual(cli._slash_arg_step, 0)
+        self.assertEqual(FakeEvent.app.current_buffer.text, "/")
+        self.assertIn("/git-stage", panel)
+        self.assertIn("<path>", panel)
+        self.assertNotIn("current", "\n".join(cli._transcript))
+
+    def test_tty_slash_argument_choice_fills_command_template(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_command = "/git-stage"
+            cli._slash_arg_step = 0
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+
+        self.assertEqual(FakeEvent.app.current_buffer.text, "/git-stage <path>")
+        self.assertEqual(cli._current_input, "/git-stage <path>")
+        self.assertIn("replace <path>", cli._status_message)
+        self.assertEqual(FakeEvent.app.current_buffer.cursor_position, len("/git-stage "))
+        self.assertIsNone(cli._worker_thread)
+
+    def test_tty_slash_multi_argument_command_advances_steps(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_group = "Tasks"
+            for _ in range(20):
+                if cli._selected_slash_row()["value"] == "/auto":
+                    break
+                cli._move_slash(1)
+            self.assertEqual(cli._selected_slash_row()["value"], "/auto")
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+            first = cli._slash_launcher_panel("/", cli._slash_selected)
+            cli._accept_slash_selection(FakeEvent())
+            second = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertEqual(cli._slash_command, "/auto")
+        self.assertEqual(cli._slash_arg_step, 1)
+        self.assertIn("<steps>", first)
+        self.assertIn("<goal>", second)
+        self.assertNotIn("current", "\n".join(cli._transcript))
+
+    def test_tty_slash_multi_argument_command_preserves_choices(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_command = "/auto"
+            cli._slash_arg_step = 0
+            for _ in range(12):
+                if cli._selected_slash_row()["value"] == "3":
+                    break
+                cli._move_slash(1)
+            self.assertEqual(cli._selected_slash_row()["value"], "3")
+
+            class FakeBuffer:
+                text = "/"
+                cursor_position = 1
+
+            class FakeEvent:
+                class App:
+                    current_buffer = FakeBuffer()
+
+                app = App()
+
+            cli._accept_slash_selection(FakeEvent())
+            self.assertEqual(cli._slash_arg_step, 1)
+            self.assertEqual(FakeEvent.app.current_buffer.text, "/")
+            cli._accept_slash_selection(FakeEvent())
+
+        self.assertEqual(FakeEvent.app.current_buffer.text, "/auto 3 <goal>")
+        self.assertEqual(cli._current_input, "/auto 3 <goal>")
+        self.assertIn("replace <goal>", cli._status_message)
+        self.assertEqual(FakeEvent.app.current_buffer.cursor_position, len("/auto 3 "))
+        self.assertIsNone(cli._worker_thread)
+
+    def test_tty_slash_path_argument_uses_workspace_candidates(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text("print('hello')\n", encoding="utf-8")
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=root)
+            cli._current_input = "/"
+            cli._slash_command = "/git-stage"
+            cli._slash_arg_step = 0
+            panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertIn("src/app.py", panel)
+        self.assertIn("<path>", panel)
+
+    def test_tty_slash_test_command_suggests_common_checks(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/"
+            cli._slash_command = "/test"
+            cli._slash_arg_step = 0
+            panel = cli._slash_launcher_panel("/", cli._slash_selected)
+
+        self.assertIn("python3 -m unittest discover -s tests", panel)
+        self.assertIn("python3 evals/run_evals.py --filter tty_", panel)
+        self.assertIn("格式检查", panel)
+
+    def test_tty_slash_argument_quotes_values_with_spaces(self):
+        from mini_agent import interactive_cli
+
+        self.assertEqual(
+            interactive_cli._command_template("/git-stage", ["docs/My File.md"]),
+            "/git-stage 'docs/My File.md'",
+        )
+
+    def test_tty_exact_slash_command_enter_executes_after_fill(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+
+            class FakeBuffer:
+                text = "/setup"
+
+            cli._handle_app_input(FakeBuffer())
+            for _ in range(20):
+                if "current" in "\n".join(cli._transcript):
+                    break
+                time.sleep(0.01)
+
+        transcript = "\n".join(cli._transcript)
+        self.assertNotIn("> /setup", transcript)
+        self.assertIn("current", transcript)
+
+    def test_tty_multiline_paste_submits_as_single_turn(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+
+            class FakeBuffer:
+                text = "hello\nworld\n  again"
+
+            cli._handle_app_input(FakeBuffer())
+            for _ in range(20):
+                if "reply: hello world again" in "\n".join(cli._transcript):
+                    break
+                time.sleep(0.01)
+
+        transcript = "\n".join(cli._transcript)
+        self.assertIn("> hello world again", transcript)
+        self.assertIn("reply: hello world again", transcript)
+        self.assertEqual(cli._input_history[-1], "hello world again")
+
+    def test_tty_input_history_up_down_restores_draft(self):
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            text = "draft"
+            cursor_position = 5
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._record_input_history("first")
+            cli._record_input_history("second")
+            buffer = FakeBuffer()
+            cli._move_input_history(buffer, -1)
+            latest = buffer.text
+            cli._move_input_history(buffer, -1)
+            previous = buffer.text
+            cli._move_input_history(buffer, 1)
+            forward = buffer.text
+            cli._move_input_history(buffer, 1)
+            restored = buffer.text
+
+        self.assertEqual(latest, "second")
+        self.assertEqual(previous, "first")
+        self.assertEqual(forward, "second")
+        self.assertEqual(restored, "draft")
+        self.assertEqual(buffer.cursor_position, len("draft"))
+
+    def test_tty_input_history_dedupes_consecutive_entries(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._record_input_history("same")
+            cli._record_input_history("same")
+
+        self.assertEqual(cli._input_history, ["same"])
+
+    def test_tty_bottom_input_is_framed_and_fixed_in_layout(self):
+        import unittest.mock
+        from prompt_toolkit.widgets import Frame
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(100, 30)):
+                cli._make_application()
+
+        self.assertIsInstance(cli._input_frame, Frame)
+        self.assertEqual(cli._input_frame.title, "Nora")
+
+    def test_tty_standard_terminal_keeps_framed_input(self):
+        import unittest.mock
+        from prompt_toolkit.widgets import Frame
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(80, 24)):
+                cli._make_application()
+
+        self.assertIsInstance(cli._input_frame, Frame)
+
+    def test_tty_status_line_is_below_input_frame(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(100, 30)):
+                app = cli._make_application()
+            children = app.layout.container.children
+
+        self.assertIs(children[-2], cli._input_frame.container)
+        self.assertIn("_render_status", repr(children[-1]))
+
+    def test_tty_status_line_preserves_shortcuts(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = FakeSettings(
+                provider="openai-compatible",
+                model="deepseek-v4-flash",
+                api_key="sk-secret123",
+            )
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), settings=settings, root=Path(tmpdir))
+            status = "".join(fragment for _, fragment in cli._render_status())
+
+        self.assertIn("Ready", status)
+        self.assertIn("/ commands", status)
+        self.assertIn("Ctrl-Up/Down scroll", status)
+        self.assertIn("Esc clear", status)
+        self.assertIn("Ctrl-D exit", status)
+        self.assertNotIn("deepseek-v4-flash", status)
+        self.assertNotIn("API key", status)
+
+    def test_tty_compact_status_keeps_ready_visible(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(60, 16)):
+                status = "".join(fragment for _, fragment in cli._render_status())
+
+        self.assertIn("Ready", status)
+        self.assertIn("/ commands", status)
+
+    def test_tty_status_line_is_padded_to_clear_old_text(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._status_message = "status: thinking"
+            status = "".join(fragment for _, fragment in cli._render_status())
+
+        self.assertTrue(status.startswith("status: thinking"))
+        self.assertGreater(len(status), len("status: thinking"))
+        self.assertEqual(status[-1], " ")
+
+    def test_tty_body_tails_long_chat_to_latest_lines(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["\n".join(f"line {index}" for index in range(120))]
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=20))
+
+        self.assertNotIn("line 0\n", body)
+        self.assertIn("line 119", body)
+        self.assertLessEqual(body.count("\n"), 20)
+
+    def test_tty_body_pageup_pages_back_through_history(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["\n".join(f"line {index}" for index in range(80))]
+            latest = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+            cli._scroll_body(-1, page_size=10)
+            older = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+        self.assertIn("line 79", latest)
+        self.assertNotIn("line 79", older)
+        self.assertIn("line 69", older)
+
+    def test_tty_body_pagedown_returns_to_latest(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["\n".join(f"line {index}" for index in range(80))]
+            cli._scroll_body(-1, page_size=10)
+            cli._scroll_body(1, page_size=10)
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+        self.assertIn("line 79", body)
+
+    def test_tty_new_reply_keeps_manual_scroll_position(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["\n".join(f"line {index}" for index in range(80))]
+            cli._scroll_body(-1, page_size=10)
+            cli._append_transcript("new final line")
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+        self.assertIn("line 69", body)
+        self.assertNotIn("new final line", body)
+
+    def test_tty_new_reply_follows_when_not_scrolled(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["\n".join(f"line {index}" for index in range(80))]
+            cli._append_transcript("new final line")
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
+
+        self.assertIn("new final line", body)
+
+    def test_tty_body_wraps_long_single_line_before_tailing(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["A" * 180 + " END"]
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=3, width=40))
+
+        self.assertIn("END", body)
+        self.assertNotIn("A" * 80, body)
+        self.assertLessEqual(body.count("\n"), 3)
+
+    def test_tty_body_wraps_cjk_before_tailing(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._transcript = ["中文测试" * 60 + "\n最后一行END"]
+            body = "".join(fragment for _, fragment in cli._render_body(max_lines=4, width=36))
+
+        self.assertIn("最后一行END", body)
+        self.assertNotIn("中文测试" * 20, body)
+
+    def test_tty_layout_uses_compact_input_on_small_screens(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(60, 18)):
+                app = cli._make_application()
+
+        self.assertFalse(any(getattr(child, "title", None) == "Nora" for child in app.layout.container.children))
+        self.assertIsNone(cli._input_frame)
+
+    def test_tty_input_change_clears_temporary_status(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            app = cli._make_application()
+            cli._status_message = "Use /exit or Ctrl-D to exit"
+            input_buffer = app.layout.current_control.buffer
+            input_buffer.text = "h"
+
+        self.assertEqual(cli._status_message, "")
+
+    def test_escape_clears_input_without_exiting(self):
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            def __init__(self, text):
+                self.text = text
+
+        class FakeApp:
+            def __init__(self, text):
+                self.current_buffer = FakeBuffer(text)
+                self.invalidated = False
+                self.exited = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+            def exit(self):
+                self.exited = True
+
+        class FakeEvent:
+            def __init__(self, app):
+                self.app = app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            app_with_input = FakeApp("/")
+            cli._handle_escape(FakeEvent(app_with_input))
+            app_without_input = FakeApp("")
+            cli._handle_escape(FakeEvent(app_without_input))
+
+        self.assertEqual(app_with_input.current_buffer.text, "")
+        self.assertTrue(app_with_input.invalidated)
+        self.assertFalse(app_with_input.exited)
+        self.assertFalse(app_without_input.exited)
+        self.assertTrue(app_without_input.invalidated)
+        self.assertEqual(cli._status_message, "Use /exit or Ctrl-D to exit")
+
+    def test_ctrl_c_clears_input_before_exit(self):
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            def __init__(self, text):
+                self.text = text
+
+        class FakeApp:
+            def __init__(self, text):
+                self.current_buffer = FakeBuffer(text)
+                self.invalidated = False
+                self.exited = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+            def exit(self):
+                self.exited = True
+
+        class FakeEvent:
+            def __init__(self, app):
+                self.app = app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            app_with_input = FakeApp("draft")
+            cli._handle_interrupt(FakeEvent(app_with_input))
+            app_without_input = FakeApp("")
+            cli._handle_interrupt(FakeEvent(app_without_input))
+
+        self.assertEqual(app_with_input.current_buffer.text, "")
+        self.assertTrue(app_with_input.invalidated)
+        self.assertFalse(app_with_input.exited)
+        self.assertTrue(app_without_input.exited)
+
+    def test_ctrl_d_exits_even_with_input(self):
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            def __init__(self, text):
+                self.text = text
+
+        class FakeApp:
+            def __init__(self, text):
+                self.current_buffer = FakeBuffer(text)
+                self.exited = False
+
+            def exit(self):
+                self.exited = True
+
+        class FakeEvent:
+            def __init__(self, app):
+                self.app = app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            app_with_input = FakeApp("draft")
+            cli._handle_exit(FakeEvent(app_with_input))
+
+        self.assertTrue(app_with_input.exited)
+
+    def test_ctrl_c_during_work_cancels_current_turn(self):
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            text = ""
+
+        class FakeApp:
+            current_buffer = FakeBuffer()
+            invalidated = False
+            exited = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+            def exit(self):
+                self.exited = True
+
+        class FakeEvent:
+            app = FakeApp()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._is_working = True
+            cli._active_turn_id = 7
+            cli._handle_interrupt(FakeEvent())
+
+        self.assertFalse(FakeEvent.app.exited)
+        self.assertTrue(FakeEvent.app.invalidated)
+        self.assertFalse(cli._is_working)
+        self.assertEqual(cli._cancelled_turn_ids, {7})
+        self.assertIn("Cancelled", cli._status_message)
+
+    def test_tty_cancelled_live_worker_blocks_next_submit_and_keeps_draft(self):
+        import threading
+        from mini_agent import interactive_cli
+
+        class FakeBuffer:
+            text = "next task"
+
+        class FakeApp:
+            invalidated = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli.app = FakeApp()
+            blocker = threading.Event()
+            cli._worker_thread = threading.Thread(target=blocker.wait, daemon=True)
+            cli._worker_thread.start()
+            existing_thread = cli._worker_thread
+            cli._is_working = False
+            buffer = FakeBuffer()
+            handled = cli._handle_app_input(buffer)
+            blocker.set()
+            cli._worker_thread.join(timeout=1)
+
+        self.assertTrue(handled)
+        self.assertEqual(buffer.text, "next task")
+        self.assertIs(cli._worker_thread, existing_thread)
+        self.assertEqual(cli._active_turn_id, 0)
+        self.assertIn("Cancelling current turn", cli._status_message)
+        self.assertTrue(cli.app.invalidated)
+
+    def test_cancelled_worker_result_is_ignored(self):
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        class SlowAgent:
+            def run(self, text):
+                return "late reply"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(SlowAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._active_turn_id = 3
+            cli._cancelled_turn_ids.add(3)
+            cli._is_working = True
+            cli._run_cli_input("hello", turn_id=3)
+
+        self.assertNotIn("late reply", "\n".join(cli._transcript))
+        self.assertFalse(cli._is_working)
+        self.assertIn("Cancelled", cli._status_message)
+
+    def test_non_current_worker_result_is_ignored(self):
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        class SlowAgent:
+            def run(self, text):
+                return "stale reply"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(SlowAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._active_turn_id = 4
+            cli._is_working = True
+            cli._run_cli_input("hello", turn_id=3)
+
+        self.assertNotIn("stale reply", "\n".join(cli._transcript))
+        self.assertTrue(cli._is_working)
 
     def test_legacy_non_tty_emits_lifecycle(self):
         agent = FakeCLIAgent()
@@ -1048,18 +2056,106 @@ class InteractiveCLITests(unittest.TestCase):
             result = cli.cli.handle_input("hello")
 
         self.assertIn("reply: hello", result)
-        self.assertEqual(cli._status_events, ["Working...", "Done."])
+        self.assertEqual(cli._status_events, ["status: thinking", "Done."])
+
+    def test_tty_run_events_shows_tool_activity_without_transcript_noise(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        class EventAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run_events(self, text):
+                self.memory.add_user(text)
+                yield {"type": "typing"}
+                yield {"type": "tool_call_start", "name": "read_project_file", "arguments": {"path": "README.md"}}
+                yield {"type": "tool_call_result", "name": "read_project_file", "status": "ok", "result": "content"}
+                yield {"type": "delta", "content": "final answer"}
+                self.memory.add_assistant("final answer")
+                yield {"type": "done", "status": "done"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(EventAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._run_agent_events_input("inspect project", turn_id=0)
+            body_during = "\n".join(cli._activity_lines)
+            transcript = "\n".join(cli._transcript)
+
+        self.assertIn("tool: read_project_file ok", body_during)
+        self.assertIn("final answer", transcript)
+        self.assertNotIn("tool: read_project_file", transcript)
+
+    def test_tty_run_events_streams_delta_into_body_then_commits_once(self):
+        from mini_agent.memory import ConversationMemory
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        class EventAgent:
+            def __init__(self):
+                self.memory = ConversationMemory()
+                self.last_run_report = FakeRunReport()
+
+            def run_events(self, text):
+                self.memory.add_user(text)
+                yield {"type": "typing"}
+                yield {"type": "delta", "content": "hello"}
+                yield {"type": "delta", "content": " world"}
+                self.memory.add_assistant("hello world")
+                yield {"type": "done", "status": "done"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(EventAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            seen = []
+            original_set_streaming = cli._set_streaming_answer
+
+            def capture_stream(text):
+                seen.append(text)
+                original_set_streaming(text)
+
+            cli._set_streaming_answer = capture_stream
+            cli._run_agent_events_input("say hello", turn_id=0)
+            transcript = "\n".join(cli._transcript)
+
+        self.assertEqual(seen, ["hello", "hello world"])
+        self.assertEqual(cli._streaming_answer, "")
+        self.assertEqual(transcript.count("hello world"), 1)
+
+    def test_tty_worker_errors_render_in_transcript(self):
+        from mini_agent.interactive_cli import InteractiveCLI
+
+        class ErrorAgent:
+            def run(self, text):
+                raise RuntimeError("boom")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = InteractiveCLI(ErrorAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._run_cli_input("hello")
+
+        self.assertIn("error: boom", "\n".join(cli._transcript))
+        self.assertEqual(cli._status_message, "")
 
     def test_interactive_cli_wires_confirm_action(self):
-        from mini_agent.interactive_cli import InteractiveCLI, selectable_confirm
+        from mini_agent.interactive_cli import InteractiveCLI
 
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = FakeCLIRegistry()
-            InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
+            cli = InteractiveCLI(FakeCLIAgent(), registry, root=Path(tmpdir))
 
-        self.assertIs(registry.confirm_action, selectable_confirm)
+        self.assertEqual(registry.confirm_action, cli._confirm_action)
 
-    def test_selectable_confirm_uses_dialog_when_stdout_is_tty(self):
+    def test_interactive_confirm_falls_back_before_app_runs(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli, "selectable_confirm", return_value=True) as fallback:
+                result = cli._confirm_action("工具需要确认: run_shell_command\n原因: inspect project")
+
+        self.assertTrue(result)
+        fallback.assert_called_once()
+
+    def test_selectable_confirm_uses_inline_card_when_stdout_is_tty(self):
         import unittest.mock
         from mini_agent import interactive_cli
 
@@ -1067,16 +2163,146 @@ class InteractiveCLITests(unittest.TestCase):
             def isatty(self):
                 return True
 
-        class FakeDialog:
-            def run(self):
-                return True
-
         with unittest.mock.patch.object(interactive_cli.sys, "stdout", FakeStdout()):
-            with unittest.mock.patch.object(interactive_cli, "radiolist_dialog", return_value=FakeDialog()) as dialog:
-                result = interactive_cli.selectable_confirm("approve?")
+            with unittest.mock.patch.object(interactive_cli, "_run_approval_card", return_value=True) as card:
+                result = interactive_cli.selectable_confirm("工具需要确认: run_shell_command\n原因: inspect project")
 
         self.assertTrue(result)
-        dialog.assert_called_once()
+        card.assert_called_once()
+
+    def test_approval_card_lines_match_design_contract(self):
+        from mini_agent.interactive_cli import _approval_lines
+
+        lines = "\n".join(_approval_lines("工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n原因: inspect project", selected=2))
+
+        self.assertIn("Tool approval", lines)
+        self.assertIn("run_shell_command", lines)
+        self.assertIn("execute", lines)
+        self.assertIn("scope: terminal", lines)
+        self.assertIn("why: inspect project", lines)
+        self.assertIn("risk:", lines)
+        self.assertIn("  Allow once", lines)
+        self.assertIn("  Deny", lines)
+        self.assertIn("> Always allow run_shell_command this session", lines)
+        self.assertIn("Esc/Ctrl-C deny", lines)
+        self.assertNotIn("+", lines)
+        self.assertNotIn("|", lines)
+
+    def test_approval_panel_height_fits_all_options(self):
+        from mini_agent.interactive_cli import _approval_lines, _approval_panel_height
+
+        prompt = "工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n原因: inspect project"
+
+        self.assertGreaterEqual(_approval_panel_height(), len(_approval_lines(prompt)))
+
+    def test_approval_default_selection_matches_risk(self):
+        from mini_agent.interactive_cli import _approval_default_index
+
+        self.assertEqual(
+            _approval_default_index("工具需要确认: read_project_file\n权限: workspace/read, 需要确认\n原因: inspect"),
+            0,
+        )
+        self.assertEqual(
+            _approval_default_index("工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n原因: inspect"),
+            1,
+        )
+
+    def test_approval_card_handles_wide_cjk_text(self):
+        from mini_agent.interactive_cli import _approval_lines
+
+        lines = _approval_lines(
+            "工具需要确认: run_shell_command\n"
+            "权限: terminal/execute, 需要确认\n"
+            "原因: 查看项目根目录并确认中文不会撑歪线框",
+            selected=0,
+        )
+
+        self.assertFalse(any(line.startswith(("+", "|")) for line in lines))
+        self.assertIn("查看项目根目录", "\n".join(lines))
+        self.assertTrue(all(len(line) <= 72 for line in lines))
+
+    def test_in_app_approval_ctrl_c_denies_without_exit(self):
+        import threading
+        from mini_agent import interactive_cli
+
+        class FakeApp:
+            exited = False
+
+            def exit(self):
+                self.exited = True
+
+        class FakeEvent:
+            app = FakeApp()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            event = threading.Event()
+            cli._approval_state = {
+                "prompt": "工具需要确认: run_shell_command\n原因: inspect project",
+                "selected": 0,
+                "event": event,
+                "result": True,
+            }
+            cli._resolve_approval(False)
+
+        self.assertTrue(event.is_set())
+        self.assertFalse(cli._approval_state["result"])
+        self.assertFalse(FakeEvent.app.exited)
+
+    def test_in_app_approval_defaults_to_deny_for_execute(self):
+        import threading
+        from mini_agent import interactive_cli
+
+        class FakeApp:
+            _is_running = True
+            invalidated = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+        prompt = "工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n原因: inspect project"
+        selected = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli.app = FakeApp()
+
+            def release():
+                while cli._approval_state is None:
+                    pass
+                selected.append(cli._approval_state["selected"])
+                cli._approval_state["result"] = False
+                cli._approval_state["event"].set()
+
+            thread = threading.Thread(target=release)
+            thread.start()
+            result = cli._confirm_action(prompt)
+            thread.join(timeout=1)
+
+        self.assertFalse(result)
+        self.assertEqual(selected, [1])
+
+    def test_selectable_confirm_session_choice_allows_same_tool(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        class FakeStdout:
+            def isatty(self):
+                return True
+
+        interactive_cli._SESSION_ALLOWED_TOOLS.clear()
+        prompt = "工具需要确认: run_shell_command\n原因: inspect project"
+        with unittest.mock.patch.object(interactive_cli.sys, "stdout", FakeStdout()):
+            with unittest.mock.patch.object(interactive_cli, "_run_approval_card", return_value="session") as card:
+                first = interactive_cli.selectable_confirm(prompt)
+            with unittest.mock.patch.object(interactive_cli, "_run_approval_card") as second_card:
+                second = interactive_cli.selectable_confirm(prompt)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        card.assert_called_once()
+        second_card.assert_not_called()
+        interactive_cli._SESSION_ALLOWED_TOOLS.clear()
 
 
 class SlashCompleterTests(unittest.TestCase):
@@ -1088,6 +2314,14 @@ class SlashCompleterTests(unittest.TestCase):
         document = Document(text=text, cursor_position=len(text))
         return [completion.text for completion in completer.get_completions(document, None)]
 
+    def _get_completion_objects(self, text):
+        from prompt_toolkit.document import Document
+        from mini_agent.interactive_cli import SlashCompleter
+
+        completer = SlashCompleter(MiniAgentCLI.slash_command_names())
+        document = Document(text=text, cursor_position=len(text))
+        return list(completer.get_completions(document, None))
+
     def test_slash_shows_commands(self):
         completions = self._get_completions("/")
         self.assertIn("/model", completions)
@@ -1098,6 +2332,13 @@ class SlashCompleterTests(unittest.TestCase):
         self.assertIn("/model", self._get_completions("/m"))
         self.assertIn("/model", self._get_completions("/mo"))
         self.assertIn("/model", self._get_completions("/mod"))
+
+    def test_slash_completion_includes_design_meta_and_style(self):
+        completions = self._get_completion_objects("/")
+        model = next(completion for completion in completions if completion.text == "/model")
+
+        self.assertEqual(model.display_meta_text, "模型设置")
+        self.assertIn("#3a3127", model.selected_style)
 
     def test_slash_match_supports_tab_binding(self):
         from mini_agent.interactive_cli import SlashCompleter

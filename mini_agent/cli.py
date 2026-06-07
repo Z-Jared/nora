@@ -4,6 +4,7 @@ import shlex
 from pathlib import Path
 from typing import Callable, Optional
 
+from mini_agent.diagnostics import ALLOWED_TEST_COMMANDS
 from mini_agent.git_tools import GitTools
 from mini_agent.session import SessionStore
 from mini_agent.settings import required_env_vars, env_alternatives
@@ -42,6 +43,12 @@ class MiniAgentCLI:
         self.output_func = output_func
         self.should_exit = False
         self.session_store = session_store
+        self.restored_session_message_count = 0
+        if self.session_store:
+            try:
+                self.restored_session_message_count = self.session_store.restore_cli_autosave(self.agent.memory)
+            except Exception:
+                self.restored_session_message_count = 0
 
     def run(self) -> None:
         self.output_func(self.banner())
@@ -66,9 +73,8 @@ class MiniAgentCLI:
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
-            api_key = getattr(self.settings, "api_key", "")
             info.append(f"model: {provider} / {model}")
-            info.append(f"API key: {'configured' if api_key else 'missing'}")
+            info.append(f"credentials: {'configured' if getattr(self.settings, 'api_key', '') else 'missing'}")
         else:
             info.append("local mode (no LLM)")
 
@@ -165,9 +171,8 @@ class MiniAgentCLI:
         if self.settings and getattr(self.settings, "is_llm_enabled", False):
             provider = getattr(self.settings, "provider", "")
             model = getattr(self.settings, "model", "")
-            api_key = getattr(self.settings, "api_key", "")
             lines.append(f"model: {provider} / {model}")
-            lines.append(f"API key: {'configured' if api_key else 'missing'}")
+            lines.append(f"credentials: {'configured' if getattr(self.settings, 'api_key', '') else 'missing'}")
         else:
             lines.append("model: disabled")
             if self.settings:
@@ -224,7 +229,7 @@ class MiniAgentCLI:
         return "\n".join(lines)
 
     def _model_info(self) -> str:
-        """Show current provider/model/base URL/key presence without leaking key values."""
+        """Show current provider/model/base URL/credential presence without leaking values."""
         if not self.settings:
             return "\n".join([
                 "settings not loaded",
@@ -246,7 +251,7 @@ class MiniAgentCLI:
         lines.append(f"provider: {provider or '(not set)'}")
         lines.append(f"model: {model or '(not set)'}")
         lines.append(f"base URL: {base_url or '(not set)'}")
-        lines.append(f"API key: {'configured' if api_key else 'missing'}")
+        lines.append(f"credentials: {'configured' if api_key else 'missing'}")
         lines.append(f"timeout: {timeout}s")
         lines.append(f"enabled: {'yes' if enabled else 'no'}")
 
@@ -279,7 +284,7 @@ class MiniAgentCLI:
             lines.append(f"  provider: {provider or '(not set)'}")
             lines.append(f"  model: {model or '(not set)'}")
             lines.append(f"  base URL: {base_url or '(not set)'}")
-            lines.append(f"  API key: {'configured' if api_key else 'missing'}")
+            lines.append(f"  credentials: {'configured' if api_key else 'missing'}")
             lines.append(f"  timeout: {timeout}s")
             lines.append(f"  enabled: {'yes' if enabled else 'no'}")
         else:
@@ -450,13 +455,23 @@ class MiniAgentCLI:
             self._model_call_start()
             response = self._format_agent_response(self.agent.run(multiline))
             self._model_call_end()
+            self._autosave_conversation()
             return self._append_recovery_hint(response)
         if text.startswith("/"):
             return self.handle_slash_command(text)
         self._model_call_start()
         response = self._format_agent_response(self.agent.run(text))
         self._model_call_end()
+        self._autosave_conversation()
         return self._append_recovery_hint(response)
+
+    def _autosave_conversation(self) -> None:
+        if not self.session_store:
+            return
+        try:
+            self.session_store.save_cli_autosave(self.agent.memory)
+        except Exception:
+            return
 
     def _model_call_start(self) -> None:
         self.output_func("Working...")
@@ -546,7 +561,11 @@ class MiniAgentCLI:
                 return "usage: /outline <path>"
             return self.registry.call("outline_python_file", path=args[0])
         if command == "/test":
-            return self.registry.call("run_project_tests")
+            test_command = " ".join(args).strip()
+            if test_command and test_command not in ALLOWED_TEST_COMMANDS:
+                return "拒绝执行测试: 命令不在测试白名单内。"
+            kwargs = {"command": test_command} if test_command else {}
+            return self.registry.call("run_project_tests", **kwargs)
         if command == "/repair":
             attempts = self._optional_int(args, default=2, name="max_attempts")
             if isinstance(attempts, str):

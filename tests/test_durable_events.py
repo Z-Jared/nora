@@ -1474,6 +1474,22 @@ class TestRunDurableEventTests(unittest.TestCase):
         self.assertEqual(started[0].payload["command_kind"], "unittest_discover")
         self.assertEqual(started[0].payload["max_output_chars"], 900)
 
+    def test_whitelisted_tty_eval_records_command_kind(self):
+        diag = Diagnostics(self.root, event_store=self.event_store)
+        with patch("mini_agent.diagnostics.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=["python3", "evals/run_evals.py", "--filter", "tty_"],
+                returncode=0,
+                stdout="616 passed, 0 failed\n",
+                stderr="",
+            )
+            diag.run_tests(command="python3 evals/run_evals.py --filter tty_")
+
+        started = self._test_events(TEST_RUN_STARTED)
+        finished = self._test_events(TEST_RUN_FINISHED)
+        self.assertEqual(started[0].payload["command_kind"], "tty_evals")
+        self.assertEqual(finished[0].payload["command_kind"], "tty_evals")
+
     def test_default_registry_wires_test_run_events(self):
         self._write_test(
             "test_ok.py",
