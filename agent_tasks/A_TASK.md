@@ -1,10 +1,10 @@
-# TASK-165: Identity Editor MVP for pet customization
+# TASK-167: Phase 1 MVP release audit
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora is now a customizable electronic pet agent. Relationship Memory has landed in `c676cc0`, so Phase 1 moves to letting each user define the pet's identity from the Pet Room.
+Nora is now in Phase 1 Exit Gate after Identity Editor landed. Your job is to audit whether Phase 1 Pet Life MVP can be considered release-ready as a local customizable electronic pet agent.
 
 Read first:
 
@@ -12,104 +12,35 @@ Read first:
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
+- `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
-- `mini_agent/pets.py`
-- `mini_agent/http_server.py`
+- `agent_tasks/PHASE_STATUS.md`
 - `mini_agent/static/index.html`
-- `tests/test_pets.py`
-- `tests/test_http_server.py`
-- `tests/test_webui_smoke.py`
-
-## Worktree Safety
-
-Before editing, run:
-
-```bash
-git status --short --branch
-git log --oneline --decorate -5
-```
-
-If your worktree is dirty before you edit, stop and write the conflict in `agent_tasks/A_DONE.md`.
+- README or any relevant demo docs if present
 
 ## Goal
 
-Build an Identity Editor MVP for existing pets.
+Perform a Phase 1 MVP release audit.
 
-Required behavior:
+Verify the first-use pet loop:
 
-1. Pet store/API:
-   - Add a deterministic update method for `PetIdentity` fields:
-     - `name`
-     - `species`
-     - `personality_traits`
-     - `relationship_role`
-     - `speech_style`
-     - `voice_profile`
-     - `taste_profile`
-     - `skills`
-   - Preserve existing `pet_id` and `created_at`.
-   - Update `updated_at`.
-   - Do not reset `PetState`, compute food balance, activity events, or relationship memories.
-   - Reuse existing secret validation from `create_pet` for strings/lists/dicts.
-   - Reject unknown field types with bounded errors.
+1. Open or inspect Pet Room and confirm Nora-01/current pet, state, token food, activity, and memory surfaces are visible.
+2. Confirm Identity Editor can edit name, species, relationship role, speech style, personality traits, skills, voice profile, and taste profile.
+3. Confirm compute food add/feed/status paths show transparent balance and estimates.
+4. Confirm care/feed/relationship memory paths create visible state, activity, or memory feedback.
+5. Confirm user-visible copy has no fake intimacy, guilt, loneliness pressure, hidden purchase pressure, marketplace pressure, or voice-cloning claims.
 
-2. HTTP:
-   - Add a mutation endpoint such as `POST /pet/update-identity`.
-   - Mutation endpoint must honor existing HTTP auth behavior when `NORA_API_TOKEN` is set.
-   - Return the updated pet record or identity in bounded JSON.
-   - Add concise `/docs` entry.
+## Allowed Changes
 
-3. Pet Room UI:
-   - Add a compact Identity Editor section in the Pet Room.
-   - Show current identity fields.
-   - Allow editing a practical MVP subset at minimum:
-     - name
-     - species
-     - relationship_role
-     - speech_style
-     - personality_traits
-     - skills
-   - Voice/taste can be editable as simple JSON textareas or compact key fields, as long as input is bounded and invalid JSON is handled cleanly.
-   - Escape all rendered identity text.
-   - Avoid fake intimacy, purchase pressure, or marketplace language.
+- `agent_tasks/A_DONE.md`
+- Optional small audit document, such as `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`
+- Minimal README/demo documentation if the Phase 1 local MVP path is missing
 
 ## Non-Goals
 
-- No 3D/VRM.
-- No voice synthesis or voice cloning.
-- No avatar asset generation.
-- No account/cloud sync.
-- No billing, marketplace, or plugin store.
-- No CLI/TUI redesign.
-- No LLM calls.
-
-## Safety Boundaries
-
-- Secret-like identity text must be rejected before persistence.
-- HTML must escape identity content.
-- Model output must not directly mutate identity.
-- Updating identity must not clear state, food balance, activity, or relationship memories.
-- Do not touch unrelated runtime/CLI code.
-
-## Scope
-
-Primary files:
-
-- `mini_agent/pets.py`
-- `mini_agent/http_server.py`
-- `mini_agent/static/index.html`
-- `tests/test_pets.py`
-- `tests/test_http_server.py`
-- `tests/test_webui_smoke.py`
-- `agent_tasks/A_DONE.md`
-
-Do not edit:
-
-- `agent_tasks/B_TASK.md`
-- `agent_tasks/B_DONE.md`
-- `CODEX_TERMINAL_HANDOFF.md`
-- `designs/`
-- `assets/`
+- Do not implement Phase 2 voice or presence features.
+- Do not implement 3D/VRM, real payments, marketplace, account sync, native desktop, or native mobile.
+- Do not modify product/runtime code unless you find a tiny documentation/test naming issue; report real product blockers in `A_DONE.md`.
 
 ## Verification
 
@@ -121,11 +52,16 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If full evals fail because of unrelated baseline state, report the exact failure and still run targeted tests.
+If full evals fail because of unrelated baseline state, report exact failures and still run targeted tests.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the public contract TASK-166 should lock.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-167` and include:
+
+- Whether the first-use flow passed
+- Whether Phase 1 can be sealed or which blockers remain
+- Whether PM should proceed to `TASK-168`
+- Exact command results
 
 Then notify Codex PM:
 
