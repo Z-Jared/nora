@@ -30,6 +30,59 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
 - 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`.
 
+## Phase 1 Exit Gate
+
+这些任务是 Phase 1 完成后的硬门禁。`TASK-165`/`TASK-166` 集成后，PM 必须先把这些任务转入「待分配」并完成，不能直接进入 Phase 2。
+
+### TASK-167: Phase 1 MVP release audit
+- 架构层: Eval/Review System / Pet Identity / Pet State Engine / Token Food Economy / Memory/Relationship System / Avatar/Room UI
+- 优先级: high
+- 预计: 1-2 hours
+- 依赖: TASK-165 和 TASK-166 已集成。
+- 目标: 对 Phase 1 Pet Life MVP 做封版审查，验证首次使用闭环、测试/eval 状态、README/demo 路径和阶段完成证据。
+- 非目标: 不新增 Phase 2 voice/presence 功能；不做 3D/VRM、支付、marketplace、账号云同步。
+- 安全边界: 不修改用户数据；不隐藏 baseline failure；不把未验证体验标记为完成；不提交无关未跟踪设计稿。
+- 持久证据: PM release audit report、更新后的 `agent_tasks/PHASE_STATUS.md`、必要 README/demo 文档、测试/eval 输出。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; 手动或自动 first-use flow walkthrough。
+- 参考: `agent_tasks/PHASE_STATUS.md` Phase 1 Exit Criteria, `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`.
+
+### TASK-168: Phase 1.5 Pet Room life-feel polish
+- 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
+- 优先级: high
+- 预计: 1-2 hours
+- 依赖: TASK-167 完成。
+- 目标: 把 Pet Room 从功能表单进一步打磨成“电子生命体房间”：更清晰的状态反馈、确定性互动、宠物日记/记忆反馈、身份影响展示。
+- 非目标: 不做真正语音、3D/VRM、Live2D asset pipeline、native desktop/mobile、支付或 marketplace。
+- 安全边界: 所有动态文本 escape；不加入 fake intimacy、guilt、loneliness pressure、hidden purchase pressure；不让模型输出直接改状态。
+- 持久证据: UI/HTML markers、pet activity or diary state、deterministic tests/evals、PM walkthrough notes。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; Pet Room visual/DOM smoke.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` MVP Product Shape / Avatar and Room.
+
+### TASK-169: Commercial model and no-manipulation audit
+- 架构层: Monetization/Billing / Safety/Policy / Token Food Economy
+- 优先级: high
+- 预计: 1 hour
+- 依赖: TASK-167 完成。
+- 目标: 明确 Phase 1 后的商业化边界：Token Food、会员、扩展包的定位，并审查所有用户可见文案不诱导、不情绪勒索、不隐藏成本。
+- 非目标: 不接真实支付；不做 billing backend；不做 marketplace；不做价格实验。
+- 安全边界: 禁止“宠物痛苦/孤独/快死了”式付费压力；token cost、balance、local demo boundary 必须透明；不能暗示 voice cloning 或高级能力已经可用。
+- 持久证据: monetization boundary doc or section、no-manipulation checklist、deterministic copy evals。
+- 验证: `python3 evals/run_evals.py`; targeted text scan/eval for guilt, fake intimacy, hidden purchase, marketplace, voice cloning, and misleading token-food copy; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Monetization / Safety.
+
+### TASK-170: Phase 2 Voice & Presence technical plan
+- 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition / Safety/Policy
+- 优先级: medium
+- 预计: 1 hour
+- 依赖: TASK-167、TASK-168、TASK-169 完成。
+- 目标: 在进入 Phase 2 前产出技术计划，把 Voice Profile v1、TTS 接入边界、Web/PWA presence、桌面浮窗路径、成本/同意/安全边界拆成可验证小任务，并明确是否自动增开 Claude C/D 等额外 worker 线程。
+- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM 或 marketplace。
+- 安全边界: voice cloning 必须默认排除；TTS/voice 需有 consent、cost estimate、secret/no-recording boundary；cross-device presence 不能默认同步隐私数据。
+- Worker 扩容规则: 默认 A/B；如果 Voice Profile、eval/safety、Web/PWA presence、TTS/desktop prototype 能拆成低冲突文件边界，则 PM 必须配置并派发 Claude C/D；如果边界不清晰，先生成架构切分任务，不盲目加线程。
+- 持久证据: Phase 2 task candidates、updated `PHASE_STATUS.md` transition note、PM approval criteria、worker scaling plan（active workers、职责、文件边界、阻塞项）。
+- 验证: 文档审查；任务具备架构层、非目标、安全边界、持久证据和验证路径；worker scaling plan 明确是否开 C/D 以及原因；`git diff --check`。
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Voice and Expression / Cross-Device Presence.
+
 ## 进行中
 
 ## 已完成

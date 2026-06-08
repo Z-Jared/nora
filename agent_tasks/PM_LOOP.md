@@ -59,7 +59,64 @@
    - 根据 completion report、review findings、测试/eval 结果、用户反馈和 radar 信号，判断是否需要更新 `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
    - 如果只是候选方向，写入 PM 候选建议或 radar，不直接扩大当前任务 scope
    - 如果是稳定架构决策，同步更新 `docs/knowledge/DECISIONS.md`；如果新窗口必须继承，同步更新 `docs/knowledge/PROJECT_WAKEUP.md`
-12. 回到步骤 1，分配下一个任务
+12. **阶段切换门禁检查**：
+   - 如果当前阶段是 `Phase 1 - Pet Life MVP`，并且 Identity Editor、Token Food、Relationship Memory、Pet Room、Pet State 的功能与覆盖已经完成，不得直接进入 Phase 2。
+   - Phase 1 完成后必须先执行「Phase 1 Exit Gate」：MVP 封版审查、用户视角体验走查、Phase 1.5 体验打磨、商业化/反诱导审查、Phase 2 技术准备。
+   - 这些门禁任务必须从 `agent_tasks/BACKLOG.md` 的「Phase 1 Exit Gate」队列进入待分配并按顺序完成。
+   - 只有门禁任务全部通过 PM 初审、Reviewer gate、最终验证并更新 `agent_tasks/PHASE_STATUS.md` 后，才能把当前阶段切到 `Phase 2 - Voice & Presence`。
+13. 回到步骤 1，分配下一个任务
+
+## Phase 1 Exit Gate Protocol
+
+当 `agent_tasks/PHASE_STATUS.md` 显示 Phase 1 达到 100% 或 Phase 1 核心闭环已经完成时，PM 必须执行以下硬规则：
+
+1. **停止直接派发 Phase 2 功能任务**
+   - 不得直接开始 voice deep work、desktop/native presence、3D/VRM、marketplace、billing 或复杂 plugin infrastructure。
+   - 除非用户明确要求，否则 Phase 2 只能在 Exit Gate 全部完成后进入。
+2. **先做 MVP 封版审查**
+   - 运行全量 unit tests、`python3 evals/run_evals.py` 和 `git diff --check`。
+   - 从真实用户路径验证：创建/读取宠物、编辑身份、喂食 token food、查看状态变化、记录/读取关系记忆、打开 Pet Room。
+   - 更新 README、项目方向文档或 demo 路径时必须保持 scoped commit。
+3. **做一次用户视角体验走查**
+   - 判断第一屏是否像电子生命体，而不是表单、dashboard 或普通 chatbot。
+   - 检查身份、状态、食物、互动、记忆是否形成“这是我的宠物”的闭环。
+   - 如果体验不足，先生成 Phase 1.5 打磨任务，不进入 Phase 2。
+4. **执行 Phase 1.5 体验打磨**
+   - 优先补 Pet Room life-feel、确定性互动、宠物日记/记忆反馈、身份对语气/技能展示的影响。
+   - 不引入真正语音、3D/VRM、账号云同步、支付系统或 marketplace。
+5. **执行商业化与反诱导审查**
+   - Token Food、会员、扩展包可以作为商业模型，但不得出现情绪勒索、孤独压力、隐藏成本或误导购买。
+   - 费用、食物余额、动作估算和本地 demo 边界必须清晰。
+6. **准备 Phase 2 技术计划**
+   - 只规划 Voice Profile v1、TTS 接入边界、Web/PWA presence、桌面浮窗路径和安全/成本边界。
+   - Phase 2 任务必须拆成可验证小任务，并带有 no-secret、no-cloning-without-consent、成本透明和用户确认边界。
+   - 进入 Phase 2 前必须做 Claude 线程规划：根据任务是否可并行，自动决定继续使用 A/B，还是增开 Claude C/D 等额外 worker 线程。
+
+## Phase 2 Worker Scaling Protocol
+
+Phase 2 开始时，PM 必须先评估开发并行度，再派发任务：
+
+1. **默认至少保留两个 Claude worker**
+   - Claude A: Voice/Profile/Presence 的产品功能实现。
+   - Claude B: deterministic eval、UI smoke、安全、成本透明和反滥用覆盖。
+2. **满足以下条件时自动建议并开启更多 Claude 线程**
+   - 存在 3 个以上互不冲突的工作流，例如 Voice Profile、TTS adapter、Web/PWA floating presence、desktop shell、eval/security。
+   - 任务触碰文件边界清晰，能避免多个 worker 同时改同一核心文件。
+   - 每个新增线程都有独立 task file、DONE file、scope、non-goals、verification 和 no-commit/no-push 规则。
+   - 主仓库和现有 worker worktree 已同步，且没有会影响集成的 tracked dirty conflict。
+3. **建议线程分工**
+   - Claude A: Voice Profile / expression contract / product API。
+   - Claude B: evals / safety / no-cloning-without-consent / cost transparency。
+   - Claude C: Web/PWA presence / floating pet shell / responsive UI。
+   - Claude D: optional TTS adapter or desktop prototype only when the API boundary is already stable.
+4. **开新线程前的 PM 动作**
+   - 先更新 CCB 配置或 task-file layout，使新 worker 有明确身份和文件边界。
+   - 同步所有 worker worktree 到当前 main。
+   - 在 `agent_tasks/PHASE_STATUS.md` 记录 Phase 2 active workers、每个线程职责和当前阻塞项。
+   - 在 `agent_tasks/BACKLOG.md` 只发布可以独立验证的小任务，不能把多个高冲突功能塞给不同线程同时改。
+5. **不得为了“看起来并行”盲目加线程**
+   - 如果 Voice/Profile/Presence 仍共享同一核心模块且边界未稳定，先用 A/B 完成架构切分。
+   - 新线程必须减少等待时间或风险，而不是增加 PM 集成成本。
 
 ## 任务生成流程
 
