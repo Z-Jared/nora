@@ -521,7 +521,7 @@ class MiniAgentCLI:
         if command == "/workers":
             return self._workers_status()
         if command == "/tools":
-            return self.registry.describe()
+            return self.registry.describe() if args and args[0] == "all" else self._tools_summary()
         if command == "/permissions":
             return self.registry.call("list_tool_permissions")
         if command == "/doctor":
@@ -564,7 +564,9 @@ class MiniAgentCLI:
             test_command = " ".join(args).strip()
             if test_command and test_command not in ALLOWED_TEST_COMMANDS:
                 return "拒绝执行测试: 命令不在测试白名单内。"
-            kwargs = {"command": test_command} if test_command else {}
+            kwargs = {"reason": "cli slash command"}
+            if test_command:
+                kwargs["command"] = test_command
             return self.registry.call("run_project_tests", **kwargs)
         if command == "/repair":
             attempts = self._optional_int(args, default=2, name="max_attempts")
@@ -798,6 +800,34 @@ class MiniAgentCLI:
             ]
         )
 
+    def _tools_summary(self) -> str:
+        tools = getattr(self.registry, "_tools", None)
+        if not isinstance(tools, dict):
+            return self.registry.describe()
+        from collections import Counter
+
+        categories = Counter()
+        risky = []
+        for tool in tools.values():
+            permission = getattr(tool, "permission", None)
+            category = getattr(permission, "category", "general")
+            risk = getattr(permission, "risk", "read")
+            categories[category] += 1
+            if getattr(permission, "requires_confirmation", False):
+                risky.append(f"{tool.name} ({category}/{risk})")
+        lines = ["Tools", ""]
+        for category, count in sorted(categories.items()):
+            lines.append(f"  {category}: {count}")
+        if risky:
+            lines.append("")
+            lines.append("requires approval:")
+            lines.extend(f"  {name}" for name in risky[:8])
+            if len(risky) > 8:
+                lines.append(f"  +{len(risky) - 8} more")
+        lines.append("")
+        lines.append("use /tools all for full list")
+        return "\n".join(lines)
+
     def doctor(self) -> str:
         lines = [
             "Nora doctor",
@@ -872,46 +902,36 @@ class MiniAgentCLI:
                 "Commands",
                 "",
                 "Project",
-                "  /wake        project snapshot",
-                "  /setup       config & diagnostics  (/config)",
-                "  /model       model config & recovery",
-                "  /workers     A/B worker status",
-                "  /status      git status",
-                "  /diff [p]    git diff",
-                "  /staged      staged diff",
-                "  /changes     summarize changes",
-                "  /test        run tests",
-                "  /tools       list tools",
-                "  /doctor      workspace health check",
+                "  /wake /setup /config /model /workers /doctor",
                 "",
                 "Tasks & Memory",
-                "  /task        current task",
-                "  /tasks [n]   durable tasks",
-                "  /dashboard   task overview",
-                "  /context [n] context summaries",
-                "  /traces [n]  run traces",
+                "  /tasks [n] /task [id] /task-next /task-history [n]",
+                "  /task-search <q> /task-restore <id> /dashboard",
+                "  /durable-tasks [n] /durable-task <id>",
+                "  /context [n] /context-search <q>",
                 "",
                 "Git",
-                "  /branch         current branch",
-                "  /log [n]        recent commits",
-                "  /git-stage <p>  stage paths",
-                "  /git-commit <m> commit staged",
+                "  /status /diff [p] /staged /changes /review-staged",
+                "  /check-commit /branch /log [n]",
+                "  /git-stage <p...> /git-unstage <p...>",
+                "  /git-commit <m> /git-branch-create <name>",
                 "",
                 "Code",
-                "  /symbols [q]    list symbols",
-                "  /symbol <name>  symbol info",
-                "  /refs <name>    find references",
-                "  /outline <path> file outline",
-                "  /repair [n]     repair loop",
+                "  /test [cmd] /repair [n]",
+                "  /symbols [q] /symbol <name> /refs <name> /outline <path>",
                 "",
                 "Session",
-                "  /session-save [n]  save session",
-                "  /session-load <n>  load session",
-                "  /session-list      list sessions",
+                "  /session-list /session-save [name] /session-load <name>",
+                "  /traces [n] /trace <id>",
+                "",
+                "Tools",
+                "  /tools /permissions /audit [n] /logs [n]",
+                "  /processes /process-start <profile> /process-stop <id>",
                 "",
                 "Input",
                 "  <<<  start multiline, >>>  end",
                 "  /auto [n] <goal>  autonomous execution",
-                "  exit  quit",
+                "  /help  command index",
+                "  /exit  exit Nora",
             ]
         )

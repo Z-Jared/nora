@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
@@ -178,11 +179,49 @@ class ToolRegistry:
 
     def _confirmation_prompt(self, tool: Tool, arguments: dict) -> str:
         reason = str(arguments.get("reason") or "").strip() or "未提供"
-        return "\n".join(
-            [
-                f"工具需要确认: {tool.name}",
-                f"权限: {tool.permission.label()}",
-                f"原因: {reason}",
-                "是否继续? [y/N]: ",
-            ]
-        )
+        lines = [
+            f"工具需要确认: {tool.name}",
+            f"权限: {tool.permission.label()}",
+        ]
+        action = self._approval_action(arguments)
+        if action:
+            lines.append(f"动作: {action}")
+        lines.extend([
+            f"原因: {reason}",
+            "是否继续? [y/N]: ",
+        ])
+        return "\n".join(lines)
+
+    def _approval_action(self, arguments: dict) -> str:
+        for key in (
+            "command",
+            "paths",
+            "path",
+            "message",
+            "name",
+            "profile",
+            "process_id",
+            "task_id",
+            "worker_id",
+            "trace_id",
+            "history_id",
+        ):
+            if key in arguments:
+                return f"{key}: {self._safe_action_value(key, arguments[key])}"
+        hidden = [key for key in ("patch", "content", "old_text", "new_text", "output") if key in arguments]
+        if hidden:
+            return ", ".join(f"{key}: <{len(str(arguments[key]))} chars>" for key in hidden)
+        return ""
+
+    def _safe_action_value(self, key: str, value) -> str:
+        if isinstance(value, (list, tuple)):
+            text = ", ".join(str(item) for item in value[:5])
+            if len(value) > 5:
+                text += f", +{len(value) - 5} more"
+        elif isinstance(value, dict):
+            text = f"<{len(value)} fields>"
+        else:
+            text = str(value)
+        text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "sk-...", text)
+        text = re.sub(r"(?i)(api[_-]?key|token|secret)=\\S+", r"\\1=...", text)
+        return text[:160] + ("..." if len(text) > 160 else "")

@@ -236,7 +236,13 @@ class ShellRunner:
 
     def _confirmation_prompt(self, command: str, reason: str) -> str:
         reason_text = reason.strip() or "未提供"
-        return f"执行命令: {command}\n原因: {reason_text}\n是否继续? [y/N]: "
+        return "\n".join([
+            "工具需要确认: run_shell_command",
+            "权限: terminal/execute, 需要确认",
+            f"动作: command: {command}",
+            f"原因: {reason_text}",
+            "是否继续? [y/N]: ",
+        ])
 
     def _format_result(self, exit_code: str, stdout: str, stderr: str) -> str:
         return "\n".join(

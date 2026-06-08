@@ -1,10 +1,16 @@
+import os
+import re
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
 from mini_agent.cli import MiniAgentCLI
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class MiniAgentCLITests(unittest.TestCase):
@@ -81,7 +87,13 @@ class MiniAgentCLITests(unittest.TestCase):
 
         self.assertEqual(
             registry.calls[-1],
-            ("run_project_tests", {"command": "python3 evals/run_evals.py --filter tty_"}),
+            (
+                "run_project_tests",
+                {
+                    "command": "python3 evals/run_evals.py --filter tty_",
+                    "reason": "cli slash command",
+                },
+            ),
         )
         self.assertIn("called run_project_tests", result)
 
@@ -176,6 +188,56 @@ class MiniAgentCLITests(unittest.TestCase):
         self.assertIn("usage", cli.handle_slash_command("/auto"))
         self.assertIn("usage", cli.handle_slash_command("/auto 3"))
         self.assertEqual(agent.autonomous_calls, [])
+
+    def test_repair_command_argument_matches_backend_attempts(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/repair 3")
+
+        self.assertEqual(registry.calls[-1], ("run_repair_loop", {"max_attempts": 3}))
+        self.assertIn("called run_repair_loop", result)
+        self.assertIn("integer", cli.handle_slash_command("/repair python3 -m unittest discover -s tests"))
+
+    def test_context_command_argument_is_result_limit(self):
+        registry = FakeCLIRegistry()
+        cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+        result = cli.handle_slash_command("/context 5")
+
+        self.assertEqual(registry.calls[-1], ("list_context_summaries", {"max_results": 5}))
+        self.assertIn("called list_context_summaries", result)
+
+    def test_tools_default_is_summary_and_all_keeps_full_list(self):
+        from mini_agent.registry import Tool, ToolPermission
+
+        class Registry(FakeCLIRegistry):
+            def __init__(self):
+                super().__init__()
+                self._tools = {
+                    "calculate": Tool("calculate", "math", lambda: "ok", {}, ToolPermission("local", "read")),
+                    "run_project_tests": Tool(
+                        "run_project_tests",
+                        "tests",
+                        lambda: "ok",
+                        {},
+                        ToolPermission("test", "execute", True),
+                    ),
+                }
+
+            def describe(self):
+                return "- calculate: math\n- run_project_tests: tests"
+
+        cli = MiniAgentCLI(FakeCLIAgent(), Registry())
+
+        summary = cli.handle_slash_command("/tools")
+        full = cli.handle_slash_command("/tools all")
+
+        self.assertIn("local: 1", summary)
+        self.assertIn("test: 1", summary)
+        self.assertIn("requires approval", summary)
+        self.assertIn("use /tools all", summary)
+        self.assertEqual(full, "- calculate: math\n- run_project_tests: tests")
 
     def test_symbol_commands_require_arguments(self):
         registry = FakeCLIRegistry()
@@ -1076,8 +1138,219 @@ class SlashCommandNamesTests(unittest.TestCase):
         for name in MiniAgentCLI.slash_command_names():
             self.assertTrue(name.startswith("/"), name)
 
+    def test_interactive_command_metadata_covers_every_command(self):
+        from mini_agent.interactive_cli import COMMAND_META
+
+        missing = sorted(
+            command
+            for command in MiniAgentCLI.slash_command_names()
+            if command != "/" and command not in COMMAND_META
+        )
+
+        self.assertEqual(missing, [])
+
+    def test_help_mentions_every_command(self):
+        cli = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry())
+        help_text = cli.handle_slash_command("/help")
+
+        missing = [
+            command
+            for command in MiniAgentCLI.slash_command_names()
+            if command != "/" and command not in help_text
+        ]
+
+        self.assertEqual(missing, [])
+
 
 class InteractiveCLITests(unittest.TestCase):
+    def _spawn_nora_tty(self, rows=24, cols=80):
+        try:
+            import pexpect
+        except ImportError:
+            self.skipTest("pexpect is required for real TTY replay tests")
+
+        workdir = tempfile.TemporaryDirectory(prefix="nora-tty-test-")
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(PROJECT_ROOT)
+        for key in ("LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+            env.pop(key, None)
+        child = pexpect.spawn(
+            sys.executable,
+            ["-c", "from mini_agent.app import main; main()"],
+            cwd=workdir.name,
+            env=env,
+            dimensions=(rows, cols),
+            encoding="utf-8",
+            timeout=8,
+        )
+        child._nora_workdir = workdir
+        return child
+
+    def _read_tty_output(self, child, delay=0.35):
+        time.sleep(delay)
+        output = []
+        while True:
+            try:
+                output.append(child.read_nonblocking(size=8192, timeout=0.05))
+            except Exception:
+                break
+        return "".join(output)
+
+    def _close_tty(self, child):
+        workdir = getattr(child, "_nora_workdir", None)
+        try:
+            child.close(force=True)
+        finally:
+            if workdir is not None:
+                workdir.cleanup()
+
+    def _strip_ansi(self, text):
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+        text = re.sub(r"\x1b[()][A-Za-z0-9]", "", text)
+        return text.replace("\r", "")
+
+    def _render_ansi_screen(self, text, rows=24, cols=80):
+        screen = [[" " for _ in range(cols)] for _ in range(rows)]
+        row = 0
+        col = 0
+        index = 0
+
+        def clamp_cursor():
+            nonlocal row, col
+            row = max(0, min(rows - 1, row))
+            col = max(0, min(cols - 1, col))
+
+        while index < len(text):
+            char = text[index]
+            if char == "\x1b":
+                match = re.match(r"\x1b\[([0-9;?]*)([A-Za-z~])", text[index:])
+                if match:
+                    params = match.group(1).replace("?", "")
+                    command = match.group(2)
+                    values = [int(value) if value else 0 for value in params.split(";") if value != ""]
+                    count = values[0] if values else 1
+                    if count == 0:
+                        count = 1
+                    if command == "H":
+                        row = (values[0] - 1) if len(values) >= 1 and values[0] else 0
+                        col = (values[1] - 1) if len(values) >= 2 and values[1] else 0
+                    elif command == "A":
+                        row -= count
+                    elif command == "B":
+                        row += count
+                    elif command == "C":
+                        col += count
+                    elif command == "D":
+                        col -= count
+                    elif command == "J":
+                        if not values or values[0] in (0, 2):
+                            for clear_row in range(row, rows):
+                                start_col = col if clear_row == row else 0
+                                for clear_col in range(start_col, cols):
+                                    screen[clear_row][clear_col] = " "
+                    elif command == "K":
+                        for clear_col in range(col, cols):
+                            screen[row][clear_col] = " "
+                    clamp_cursor()
+                    index += len(match.group(0))
+                    continue
+                simple = re.match(r"\x1b[()][A-Za-z0-9]", text[index:])
+                if simple:
+                    index += len(simple.group(0))
+                    continue
+                index += 1
+                continue
+            if char == "\r":
+                col = 0
+            elif char == "\n":
+                row += 1
+                col = 0
+            elif char == "\b":
+                col = max(0, col - 1)
+            elif char >= " ":
+                screen[row][col] = char
+                col += 1
+                if col >= cols:
+                    col = cols - 1
+            clamp_cursor()
+            index += 1
+        return "\n".join("".join(line).rstrip() for line in screen)
+
+    def test_real_tty_startup_keeps_input_docked_at_bottom(self):
+        child = self._spawn_nora_tty(rows=24, cols=80)
+        try:
+            raw = self._read_tty_output(child, delay=1.0)
+        finally:
+            self._close_tty(child)
+        plain = self._strip_ansi(raw)
+        screen = self._render_ansi_screen(raw, rows=24, cols=80)
+
+        self.assertIn("Nora Code", screen)
+        self.assertIn("┌", screen)
+        self.assertIn("│> ", screen)
+        self.assertIn("└", screen)
+        self.assertIn("Ready", screen)
+        self.assertLess(screen.rfind("Nora Code"), screen.rfind("│> "))
+        self.assertLess(screen.rfind("│> "), screen.rfind("Ready"))
+
+    def test_real_tty_slash_second_level_stays_overlay_and_selectable(self):
+        child = self._spawn_nora_tty(rows=24, cols=80)
+        try:
+            raw = self._read_tty_output(child, delay=1.0)
+            child.send("/")
+            raw += self._read_tty_output(child)
+            child.send("\r")
+            raw += self._read_tty_output(child)
+            child.send("\x1b[B")
+            raw += self._read_tty_output(child, delay=0.2)
+        finally:
+            self._close_tty(child)
+        plain = self._strip_ansi(raw)
+        screen = self._render_ansi_screen(raw, rows=24, cols=80)
+
+        self.assertIn("/ commands", screen)
+        self.assertIn("Common", screen)
+        self.assertIn("/help", screen)
+        self.assertIn("> /wake", screen)
+        self.assertIn("Enter choose", screen)
+        self.assertNotIn("type to filter", screen)
+        self.assertNotIn("\n> /help", screen)
+
+    def test_real_tty_typing_does_not_move_input_above_bottom_region(self):
+        child = self._spawn_nora_tty(rows=24, cols=80)
+        try:
+            raw = self._read_tty_output(child, delay=1.0)
+            child.send("h")
+            raw += self._read_tty_output(child, delay=0.3)
+        finally:
+            self._close_tty(child)
+        plain = self._strip_ansi(raw)
+        screen = self._render_ansi_screen(raw, rows=24, cols=80)
+
+        self.assertIn("Nora Code", screen)
+        self.assertIn("│> h", screen)
+        self.assertLess(screen.rfind("Nora Code"), screen.rfind("│> h"))
+        self.assertLess(screen.rfind("│> h"), screen.rfind("Ready"))
+
+    def test_real_tty_approval_panel_fits_80x24_without_small_window_error(self):
+        child = self._spawn_nora_tty(rows=24, cols=80)
+        try:
+            raw = self._read_tty_output(child, delay=1.0)
+            child.send("/test git diff --check\r")
+            raw += self._read_tty_output(child, delay=1.0)
+        finally:
+            self._close_tty(child)
+        screen = self._render_ansi_screen(raw, rows=24, cols=80)
+
+        self.assertNotIn("Window too small", screen)
+        self.assertIn("Tool approval", screen)
+        self.assertIn("git diff --check", screen)
+        self.assertIn("Deny", screen)
+        self.assertIn("Always allow", screen)
+        self.assertIn("Enter confirm", screen)
+        self.assertIn("│> ", screen)
+        self.assertLess(screen.rfind("Tool approval"), screen.rfind("│> "))
+
     def test_tty_prompt_matches_raw_terminal_contract(self):
         from mini_agent import interactive_cli
 
@@ -1102,7 +1375,7 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIn("Ctrl-D exit", toolbar.value)
         self.assertNotIn("API key", toolbar.value)
 
-    def test_tty_startup_renders_restored_autosave_preview(self):
+    def test_tty_startup_keeps_banner_when_session_is_restored(self):
         from mini_agent.memory import ConversationMemory
         from mini_agent.session import SessionStore
         from mini_agent import interactive_cli
@@ -1125,11 +1398,12 @@ class InteractiveCLITests(unittest.TestCase):
             cli = interactive_cli.InteractiveCLI(agent, FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
             body = "".join(fragment for _, fragment in cli._render_body(max_lines=6, width=80))
 
+        self.assertIn("Nora Code", body)
         self.assertIn("restored previous session", body)
-        self.assertIn("last: old question", body)
-        self.assertIn("reply: old answer", body)
+        self.assertNotIn("last: old question", body)
+        self.assertNotIn("reply: old answer", body)
 
-    def test_tty_restored_history_preview_is_clipped_for_first_screen(self):
+    def test_tty_restored_history_notice_does_not_render_previous_messages(self):
         from mini_agent.memory import ConversationMemory
         from mini_agent.session import SessionStore
         from mini_agent import interactive_cli
@@ -1152,11 +1426,14 @@ class InteractiveCLITests(unittest.TestCase):
             cli = interactive_cli.InteractiveCLI(agent, FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
             body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
 
+        self.assertIn("Nora Code", body)
         self.assertIn("restored previous session", body)
-        self.assertIn("reply: old answer line 0", body)
+        self.assertIn("/session-load", body)
+        self.assertNotIn("old question", body)
+        self.assertNotIn("old answer line 0", body)
         self.assertNotIn("old answer line 19", body)
 
-    def test_tty_restored_history_hides_internal_tool_markup(self):
+    def test_tty_restored_startup_notice_hides_internal_tool_markup(self):
         from mini_agent.memory import ConversationMemory
         from mini_agent.session import SessionStore
         from mini_agent import interactive_cli
@@ -1184,11 +1461,13 @@ class InteractiveCLITests(unittest.TestCase):
             cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
             body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
 
-        self.assertIn("visible restored answer", body)
+        self.assertIn("Nora Code", body)
+        self.assertIn("restored previous session", body)
+        self.assertNotIn("visible restored answer", body)
         self.assertNotIn("DSML", body)
         self.assertNotIn("<tool_call>", body)
 
-    def test_tty_restored_history_skips_error_noise(self):
+    def test_tty_restored_startup_notice_skips_error_noise(self):
         from mini_agent.memory import ConversationMemory
         from mini_agent.session import SessionStore
         from mini_agent import interactive_cli
@@ -1212,12 +1491,14 @@ class InteractiveCLITests(unittest.TestCase):
             cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
             body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
 
-        self.assertIn("last: real question", body)
-        self.assertIn("reply: real answer", body)
+        self.assertIn("Nora Code", body)
+        self.assertIn("restored previous session", body)
+        self.assertNotIn("last: real question", body)
+        self.assertNotIn("reply: real answer", body)
         self.assertNotIn("h/exit", body)
         self.assertNotIn("codec can't decode", body)
 
-    def test_tty_restored_history_uses_latest_valid_pair(self):
+    def test_tty_restored_startup_notice_omits_latest_pair_preview(self):
         from mini_agent.memory import ConversationMemory
         from mini_agent.session import SessionStore
         from mini_agent import interactive_cli
@@ -1241,8 +1522,10 @@ class InteractiveCLITests(unittest.TestCase):
             cli = interactive_cli.InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
             body = "".join(fragment for _, fragment in cli._render_body(max_lines=8, width=80))
 
-        self.assertIn("last: useful question", body)
-        self.assertIn("reply: useful answer", body)
+        self.assertIn("Nora Code", body)
+        self.assertIn("restored previous session", body)
+        self.assertNotIn("last: useful question", body)
+        self.assertNotIn("reply: useful answer", body)
         self.assertNotIn("好的，再见", body)
 
     def test_tty_session_load_syncs_restored_memory_to_transcript(self):
@@ -1273,6 +1556,7 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIn("已恢复会话", transcript)
 
     def test_tty_exact_slash_opens_launcher_without_transcript_echo(self):
+        import unittest.mock
         from mini_agent import interactive_cli
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1282,7 +1566,8 @@ class InteractiveCLITests(unittest.TestCase):
                 text = "/"
 
             cli._handle_app_input(FakeBuffer())
-            panel = "".join(fragment for _, fragment in cli._render_slash_panel())
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(100, 30)):
+                panel = "".join(fragment for _, fragment in cli._render_slash_panel())
 
         self.assertEqual(cli._transcript, [])
         self.assertEqual(cli._current_input, "/")
@@ -1355,6 +1640,8 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIn("/ commands / Common", panel)
         self.assertIn("/wake", panel)
         self.assertIn("/status", panel)
+        self.assertIn("8 commands, Enter choose, Esc back", panel)
+        self.assertNotIn("8 commands, type to filter", panel)
         self.assertNotIn("current", "\n".join(cli._transcript))
 
     def test_tty_slash_launcher_has_own_selection_state(self):
@@ -1561,6 +1848,23 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIn("python3 evals/run_evals.py --filter tty_", panel)
         self.assertIn("格式检查", panel)
 
+    def test_tty_exact_argument_command_keeps_argument_panel_open(self):
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._current_input = "/repair"
+            repair_panel = "".join(fragment for _, fragment in cli._render_slash_panel())
+            cli._current_input = "/context"
+            context_panel = "".join(fragment for _, fragment in cli._render_slash_panel())
+
+        self.assertIn("<attempts>", repair_panel)
+        self.assertIn("单轮修复", repair_panel)
+        self.assertNotIn("<command>", repair_panel)
+        self.assertIn("<limit>", context_panel)
+        self.assertIn("摘要数量", context_panel)
+        self.assertNotIn("<prompt>", context_panel)
+
     def test_tty_slash_argument_quotes_values_with_spaces(self):
         from mini_agent import interactive_cli
 
@@ -1658,7 +1962,19 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIsInstance(cli._input_frame, Frame)
         self.assertEqual(cli._input_frame.title, "Nora")
 
-    def test_tty_standard_terminal_keeps_framed_input(self):
+    def test_tty_standard_terminal_keeps_framed_input_above_24_rows(self):
+        import unittest.mock
+        from prompt_toolkit.widgets import Frame
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(80, 25)):
+                cli._make_application()
+
+        self.assertIsInstance(cli._input_frame, Frame)
+
+    def test_tty_standard_24_row_terminal_keeps_framed_input(self):
         import unittest.mock
         from prompt_toolkit.widgets import Frame
         from mini_agent import interactive_cli
@@ -1682,6 +1998,19 @@ class InteractiveCLITests(unittest.TestCase):
 
         self.assertIs(children[-2], cli._input_frame.container)
         self.assertIn("_render_status", repr(children[-1]))
+
+    def test_tty_body_expands_to_keep_input_docked(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(100, 30)):
+                app = cli._make_application()
+            body_window = app.layout.container.children[2]
+
+        self.assertFalse(body_window.dont_extend_height())
+        self.assertIn("weight=1", repr(body_window.height))
 
     def test_tty_status_line_preserves_shortcuts(self):
         from mini_agent import interactive_cli
@@ -1812,7 +2141,7 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertIn("最后一行END", body)
         self.assertNotIn("中文测试" * 20, body)
 
-    def test_tty_layout_uses_compact_input_on_small_screens(self):
+    def test_tty_layout_uses_compact_input_on_tiny_screens(self):
         import unittest.mock
         from mini_agent import interactive_cli
 
@@ -2173,17 +2502,24 @@ class InteractiveCLITests(unittest.TestCase):
     def test_approval_card_lines_match_design_contract(self):
         from mini_agent.interactive_cli import _approval_lines
 
-        lines = "\n".join(_approval_lines("工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n原因: inspect project", selected=2))
+        lines = "\n".join(_approval_lines(
+            "工具需要确认: run_shell_command\n"
+            "权限: terminal/execute, 需要确认\n"
+            "动作: command: git diff --check\n"
+            "原因: inspect project",
+            selected=2,
+        ))
 
         self.assertIn("Tool approval", lines)
         self.assertIn("run_shell_command", lines)
         self.assertIn("execute", lines)
         self.assertIn("scope: terminal", lines)
+        self.assertIn("action: command: git diff --check", lines)
         self.assertIn("why: inspect project", lines)
         self.assertIn("risk:", lines)
         self.assertIn("  Allow once", lines)
         self.assertIn("  Deny", lines)
-        self.assertIn("> Always allow run_shell_command this session", lines)
+        self.assertIn("> Always allow this action this session", lines)
         self.assertIn("Esc/Ctrl-C deny", lines)
         self.assertNotIn("+", lines)
         self.assertNotIn("|", lines)
@@ -2220,6 +2556,75 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertFalse(any(line.startswith(("+", "|")) for line in lines))
         self.assertIn("查看项目根目录", "\n".join(lines))
         self.assertTrue(all(len(line) <= 72 for line in lines))
+
+    def test_registry_confirmation_prompt_includes_safe_action(self):
+        from mini_agent.registry import Tool, ToolPermission, ToolRegistry
+
+        registry = ToolRegistry(confirm_action=lambda prompt: True)
+        tool = Tool(
+            "run_project_tests",
+            "Run tests",
+            lambda **kwargs: "ok",
+            {},
+            ToolPermission(category="test", risk="execute", requires_confirmation=True),
+        )
+
+        prompt = registry._confirmation_prompt(
+            tool,
+            {
+                "command": "python3 evals/run_evals.py --filter tty_",
+                "reason": "cli slash command",
+            },
+        )
+
+        self.assertIn("动作: command: python3 evals/run_evals.py --filter tty_", prompt)
+        self.assertIn("原因: cli slash command", prompt)
+
+    def test_approval_scope_is_action_specific(self):
+        from mini_agent.interactive_cli import _approval_scope_key
+
+        first = _approval_scope_key(
+            "工具需要确认: run_project_tests\n"
+            "权限: test/execute, 需要确认\n"
+            "动作: command: git diff --check\n"
+            "原因: cli slash command"
+        )
+        second = _approval_scope_key(
+            "工具需要确认: run_project_tests\n"
+            "权限: test/execute, 需要确认\n"
+            "动作: command: python3 -m unittest discover -s tests\n"
+            "原因: cli slash command"
+        )
+
+        self.assertNotEqual(first, second)
+
+    def test_body_window_expands_for_standard_24_row_terminal(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        class FakeSize:
+            columns = 100
+            lines = 24
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cli = interactive_cli.InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+            cli._approval_state = {
+                "prompt": (
+                    "工具需要确认: run_project_tests\n"
+                    "权限: test/execute, 需要确认\n"
+                    "动作: command: git diff --check\n"
+                    "原因: cli slash command"
+                ),
+                "selected": 1,
+                "event": None,
+                "result": False,
+            }
+            with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=FakeSize()):
+                app = cli._make_application()
+
+        self.assertTrue(cli._is_compact_terminal())
+        body_window = app.layout.container.children[1]
+        self.assertFalse(body_window.dont_extend_height())
 
     def test_in_app_approval_ctrl_c_denies_without_exit(self):
         import threading
@@ -2291,7 +2696,7 @@ class InteractiveCLITests(unittest.TestCase):
                 return True
 
         interactive_cli._SESSION_ALLOWED_TOOLS.clear()
-        prompt = "工具需要确认: run_shell_command\n原因: inspect project"
+        prompt = "工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n动作: command: pwd\n原因: inspect project"
         with unittest.mock.patch.object(interactive_cli.sys, "stdout", FakeStdout()):
             with unittest.mock.patch.object(interactive_cli, "_run_approval_card", return_value="session") as card:
                 first = interactive_cli.selectable_confirm(prompt)
@@ -2302,6 +2707,29 @@ class InteractiveCLITests(unittest.TestCase):
         self.assertTrue(second)
         card.assert_called_once()
         second_card.assert_not_called()
+        interactive_cli._SESSION_ALLOWED_TOOLS.clear()
+
+    def test_selectable_confirm_session_choice_does_not_allow_different_action(self):
+        import unittest.mock
+        from mini_agent import interactive_cli
+
+        class FakeStdout:
+            def isatty(self):
+                return True
+
+        first_prompt = "工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n动作: command: pwd\n原因: inspect"
+        second_prompt = "工具需要确认: run_shell_command\n权限: terminal/execute, 需要确认\n动作: command: ls\n原因: inspect"
+        interactive_cli._SESSION_ALLOWED_TOOLS.clear()
+        with unittest.mock.patch.object(interactive_cli.sys, "stdout", FakeStdout()):
+            with unittest.mock.patch.object(interactive_cli, "_run_approval_card", return_value="session") as first_card:
+                first = interactive_cli.selectable_confirm(first_prompt)
+            with unittest.mock.patch.object(interactive_cli, "_run_approval_card", return_value=False) as second_card:
+                second = interactive_cli.selectable_confirm(second_prompt)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        first_card.assert_called_once()
+        second_card.assert_called_once()
         interactive_cli._SESSION_ALLOWED_TOOLS.clear()
 
 

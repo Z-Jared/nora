@@ -26,14 +26,37 @@ from mini_agent.tools_common import ALLOW_ONCE, ALWAYS_ALLOW_SESSION, DENY, conf
 
 
 COMMAND_META = {
+    "/audit": "审计报告",
     "/help": "命令索引",
     "/wake": "项目上下文",
     "/status": "Git 状态",
     "/diff": "查看改动",
+    "/staged": "暂存改动",
     "/changes": "改动摘要",
+    "/review-staged": "审查暂存",
+    "/check-commit": "提交检查",
+    "/branch": "当前分支",
+    "/log": "提交记录",
+    "/git-stage": "暂存文件",
+    "/git-unstage": "取消暂存",
+    "/git-commit": "提交改动",
+    "/git-branch-create": "创建分支",
     "/test": "运行测试",
     "/tasks": "任务列表",
+    "/task": "任务详情",
+    "/task-next": "推进任务",
+    "/task-history": "任务历史",
+    "/task-search": "搜索任务",
+    "/task-restore": "恢复任务",
+    "/dashboard": "任务概览",
+    "/durable-tasks": "持久任务",
+    "/durable-task": "持久任务详情",
     "/auto": "自动执行任务",
+    "/symbols": "符号列表",
+    "/symbol": "符号详情",
+    "/refs": "查找引用",
+    "/outline": "文件大纲",
+    "/repair": "修复循环",
     "/model": "模型设置",
     "/setup": "配置向导",
     "/config": "配置别名",
@@ -41,9 +64,17 @@ COMMAND_META = {
     "/permissions": "权限策略",
     "/tools": "工具列表",
     "/doctor": "诊断环境",
+    "/context": "上下文摘要",
+    "/context-search": "搜索上下文",
     "/session-list": "会话列表",
     "/session-save": "保存会话",
     "/session-load": "恢复会话",
+    "/traces": "Trace 列表",
+    "/trace": "Trace 详情",
+    "/logs": "工具日志",
+    "/processes": "进程列表",
+    "/process-start": "启动进程",
+    "/process-stop": "停止进程",
     "/exit": "退出 Nora",
 }
 COMMAND_LAUNCHER_ORDER = [
@@ -83,7 +114,7 @@ COMMAND_ARGUMENT_SPECS = {
     "/refs": [{"name": "symbol", "placeholder": "<symbol>", "meta": "查找引用", "type": "text"}],
     "/outline": [{"name": "path", "placeholder": "<path>", "meta": "源码文件路径", "type": "path"}],
     "/test": [{"name": "command", "placeholder": "<command>", "meta": "测试命令，可留空", "type": "test_command"}],
-    "/repair": [{"name": "command", "placeholder": "<command>", "meta": "失败命令", "type": "text"}],
+    "/repair": [{"name": "attempts", "placeholder": "<attempts>", "meta": "最大修复轮数", "type": "attempts"}],
     "/auto": [
         {"name": "steps", "placeholder": "<steps>", "meta": "最大步骤数", "type": "steps"},
         {"name": "goal", "placeholder": "<goal>", "meta": "任务目标，直接输入", "type": "text"},
@@ -93,16 +124,19 @@ COMMAND_ARGUMENT_SPECS = {
     "/task-search": [{"name": "query", "placeholder": "<query>", "meta": "搜索任务", "type": "text"}],
     "/task-restore": [{"name": "id", "placeholder": "<task-id>", "meta": "任务 ID", "type": "task_id"}],
     "/audit": [{"name": "limit", "placeholder": "<limit>", "meta": "结果数量", "type": "limit"}],
-    "/context": [{"name": "prompt", "placeholder": "<prompt>", "meta": "上下文请求", "type": "text"}],
+    "/context": [{"name": "limit", "placeholder": "<limit>", "meta": "摘要数量", "type": "limit"}],
     "/context-search": [{"name": "query", "placeholder": "<query>", "meta": "搜索上下文", "type": "text"}],
     "/git-stage": [{"name": "path", "placeholder": "<path>", "meta": "选择要暂存的文件", "type": "path"}],
     "/git-unstage": [{"name": "path", "placeholder": "<path>", "meta": "选择要取消暂存的文件", "type": "path"}],
     "/git-commit": [{"name": "message", "placeholder": "<message>", "meta": "提交信息，直接输入", "type": "text"}],
     "/git-branch-create": [{"name": "name", "placeholder": "<branch>", "meta": "新分支名", "type": "text"}],
-    "/process-start": [{"name": "command", "placeholder": "<command>", "meta": "进程配置", "type": "process_profile"}],
+    "/process-start": [{"name": "profile", "placeholder": "<profile>", "meta": "进程配置", "type": "process_profile"}],
     "/process-stop": [{"name": "id", "placeholder": "<process-id>", "meta": "进程 ID", "type": "process_id"}],
     "/session-save": [{"name": "name", "placeholder": "<name>", "meta": "会话名称", "type": "text"}],
     "/session-load": [{"name": "name", "placeholder": "<name>", "meta": "选择会话", "type": "session"}],
+    "/logs": [{"name": "limit", "placeholder": "<limit>", "meta": "日志数量", "type": "limit"}],
+    "/tasks": [{"name": "limit", "placeholder": "<limit>", "meta": "任务数量", "type": "limit"}],
+    "/traces": [{"name": "limit", "placeholder": "<limit>", "meta": "Trace 数量", "type": "limit"}],
     "/trace": [{"name": "id", "placeholder": "<trace-id>", "meta": "Trace ID", "type": "trace_id"}],
     "/durable-tasks": [{"name": "limit", "placeholder": "<limit>", "meta": "结果数量", "type": "limit"}],
     "/durable-task": [{"name": "id", "placeholder": "<task-id>", "meta": "Durable task ID", "type": "task_id"}],
@@ -126,11 +160,13 @@ TTY_STYLE = Style.from_dict(
 
 
 def _size_columns(size) -> int:
-    return getattr(size, "columns", size[0])
+    columns = getattr(size, "columns", None)
+    return columns if columns is not None else size[0]
 
 
 def _size_lines(size) -> int:
-    return getattr(size, "lines", size[1])
+    lines = getattr(size, "lines", None)
+    return lines if lines is not None else size[1]
 
 
 def _fit_line(text: str, width: Optional[int] = None) -> str:
@@ -269,6 +305,8 @@ def _argument_choices(command: str, spec: dict[str, str], cli: Optional["Interac
     arg_type = spec.get("type", "text")
     if arg_type == "steps":
         return [("3", "快速执行"), ("5", "均衡执行"), ("10", "更深入"), (placeholder, spec["meta"])]
+    if arg_type == "attempts":
+        return [("1", "单轮修复"), ("2", "默认修复"), ("3", "更深入"), (placeholder, spec["meta"])]
     if arg_type == "limit":
         return [("5", "少量结果"), ("10", "默认数量"), ("20", "更多结果"), (placeholder, spec["meta"])]
     if arg_type == "test_command":
@@ -414,6 +452,11 @@ def _is_exact_slash_command(text: str) -> bool:
     return stripped != "/" and stripped in MiniAgentCLI.slash_command_names()
 
 
+def _is_exact_argument_command(text: str) -> bool:
+    stripped = text.strip()
+    return stripped in COMMAND_ARGUMENT_SPECS and stripped in MiniAgentCLI.slash_command_names()
+
+
 def _join_left_right(left: str, right: str, width: Optional[int] = None) -> str:
     columns = width if width is not None else max(1, _size_columns(shutil.get_terminal_size(fallback=(100, 24))) - 1)
     right_width = get_cwidth(right)
@@ -485,6 +528,8 @@ def _parse_approval_prompt(prompt_text: str) -> dict[str, str]:
             permission = stripped.replace("权限:", "", 1).strip()
         elif stripped.startswith("原因:"):
             reason = stripped.replace("原因:", "", 1).strip()
+        elif stripped.startswith("动作:"):
+            action = stripped.replace("动作:", "", 1).strip()
         elif stripped.startswith("执行命令:"):
             action = stripped.replace("执行命令:", "", 1).strip()
         elif ":" in stripped and not action:
@@ -500,6 +545,15 @@ def _parse_approval_prompt(prompt_text: str) -> dict[str, str]:
         "reason": reason,
         "action": action,
     }
+
+
+def _approval_scope_key(prompt_text: str) -> str:
+    details = _parse_approval_prompt(prompt_text)
+    return "|".join([
+        details["tool"],
+        details["permission"],
+        details["action"],
+    ])
 
 
 def _permission_parts(permission: str) -> tuple[str, str]:
@@ -530,16 +584,16 @@ def _tool_name_from_confirmation(prompt_text: str) -> str:
 
 def selectable_confirm(prompt_text: str) -> bool:
     """TTY approval selector with non-TTY y/N fallback."""
-    tool_name = _tool_name_from_confirmation(prompt_text)
-    if tool_name and tool_name in _SESSION_ALLOWED_TOOLS:
+    approval_scope = _approval_scope_key(prompt_text)
+    if approval_scope and approval_scope in _SESSION_ALLOWED_TOOLS:
         return True
     if not sys.stdout.isatty():
         return confirm_in_terminal(prompt_text)
     try:
         result = _run_approval_card(prompt_text)
         if result == "session":
-            if tool_name:
-                _SESSION_ALLOWED_TOOLS.add(tool_name)
+            if approval_scope:
+                _SESSION_ALLOWED_TOOLS.add(approval_scope)
             return True
         return bool(result)
     except Exception:
@@ -564,11 +618,10 @@ def _approval_text(prompt_text: str) -> str:
 
 
 def _approval_lines(prompt_text: str, selected: int = 0) -> list[str]:
-    tool_name = _tool_name_from_confirmation(prompt_text) or "tool"
     choices = [
         ALLOW_ONCE.label,
         DENY.label,
-        f"Always allow {tool_name} this session",
+        "Always allow this action this session",
     ]
     body = _approval_text(prompt_text).splitlines()
     for index, label in enumerate(choices):
@@ -646,6 +699,7 @@ class InteractiveCLI:
         self.app: Optional[Application] = None
         self._input_frame = None
         self._transcript: list[str] = []
+        self._restored_session_notice: list[str] = []
         self._hydrate_transcript_from_memory()
         self._activity_lines: list[str] = []
         self._streaming_answer = ""
@@ -682,7 +736,7 @@ class InteractiveCLI:
         if restored and preview:
             preview = self._restored_session_preview(messages, restored)
             if preview:
-                self._transcript.extend(preview)
+                self._restored_session_notice = preview
             return
         for message in messages:
             role = message.get("role")
@@ -714,14 +768,9 @@ class InteractiveCLI:
                     user_text = user_content
                     break
             break
-        lines = [f"restored previous session ({restored} messages)"]
-        if user_text:
-            lines.append(f"last: {self._one_line_preview(user_text, 88)}")
-        if assistant_text:
-            lines.append(f"reply: {self._one_line_preview(assistant_text, 120)}")
-        if len(lines) == 1:
-            lines.append("previous context restored; use /session-list or /session-load for details")
-        return lines
+        return [
+            f"restored previous session ({restored} messages) · /session-load to view"
+        ]
 
     def _clip_restored_content(self, content: str, max_lines: int = 5, max_chars: int = 900) -> str:
         lines = [
@@ -976,6 +1025,8 @@ class InteractiveCLI:
     def _slash_active(self) -> bool:
         if self._slash_command:
             return bool(_argument_rows(self._slash_command, self._slash_arg_step, self))
+        if _is_exact_argument_command(self._current_input):
+            return bool(_argument_rows(self._current_input, 0, self))
         return bool(_slash_launcher_rows(self._current_input, self._slash_group)) and not _is_exact_slash_command(self._current_input)
 
     def _move_slash(self, delta: int) -> None:
@@ -989,6 +1040,8 @@ class InteractiveCLI:
     def _current_slash_rows(self) -> list[dict[str, str]]:
         if self._slash_command:
             return _argument_rows(self._slash_command, self._slash_arg_step, self)
+        if _is_exact_argument_command(self._current_input):
+            return _argument_rows(self._current_input, 0, self)
         return _slash_launcher_rows(self._current_input, self._slash_group)
 
     def _selected_slash_row(self) -> dict[str, str]:
@@ -1157,7 +1210,12 @@ class InteractiveCLI:
             rows.append("  no matching commands")
         elif len(matches) > limit:
             noun = "groups" if not self._slash_group and prefix == "/" else "commands"
-            action = "Enter open" if noun == "groups" else "type to filter"
+            if noun == "groups":
+                action = "Enter open"
+            elif self._slash_group or self._slash_command:
+                action = "Enter choose, Esc back"
+            else:
+                action = "type to filter"
             rows.append(f"  {len(matches)} {noun}, {action}")
         elif self._slash_group or self._slash_command:
             rows.append("  Enter choose, Esc back")
@@ -1182,24 +1240,45 @@ class InteractiveCLI:
         size = shutil.get_terminal_size(fallback=(100, 24))
         columns = _size_columns(size)
         lines = _size_lines(size)
-        return columns < 72 or lines < 20
+        return columns < 72 or lines <= 24
+
+    def _use_framed_input(self) -> bool:
+        size = shutil.get_terminal_size(fallback=(100, 24))
+        columns = _size_columns(size)
+        lines = _size_lines(size)
+        return columns >= 72 and lines >= 20
 
     def _panel_width(self) -> int:
         return min(72, max(36, self._terminal_columns()))
 
+    def _slash_panel_height(self) -> int:
+        rows = _size_lines(shutil.get_terminal_size(fallback=(100, 24)))
+        if rows <= 24:
+            return 8
+        return 8 if self._is_compact_terminal() else 10
+
+    def _approval_panel_height(self) -> int:
+        return _approval_panel_height()
+
     def _body_visible_line_limit(self) -> int:
         rows = _size_lines(shutil.get_terminal_size(fallback=(100, 24)))
-        reserved = 5 if self._is_compact_terminal() else 8
+        reserved = 5 if self._is_compact_terminal() else 7
         if self._approval_state is not None:
-            reserved += 8
+            reserved += min(8, self._approval_panel_height())
         if self._slash_active():
-            reserved += 8 if self._is_compact_terminal() else 10
+            reserved += self._slash_panel_height()
         return max(3, rows - reserved)
 
     def _transcript_visual_lines(self, width: Optional[int] = None) -> list[str]:
         lines = []
         if not self._transcript:
-            lines.extend(self._tty_banner().splitlines()[2:])
+            banner_lines = self._tty_banner().splitlines()[2:]
+            if self._approval_state is not None and self._is_compact_terminal():
+                banner_lines = banner_lines[:1]
+            lines.extend(banner_lines)
+            if self._restored_session_notice:
+                lines.append("")
+                lines.extend(self._restored_session_notice)
         else:
             for entry in self._transcript[-80:]:
                 lines.extend(str(entry).splitlines())
@@ -1470,8 +1549,8 @@ class InteractiveCLI:
             self._set_activity(f"done · {last_activity}")
 
     def _confirm_action(self, prompt_text: str) -> bool:
-        tool_name = _tool_name_from_confirmation(prompt_text)
-        if tool_name and tool_name in _SESSION_ALLOWED_TOOLS:
+        approval_scope = _approval_scope_key(prompt_text)
+        if approval_scope and approval_scope in _SESSION_ALLOWED_TOOLS:
             return True
         if not self.app or not getattr(self.app, "_is_running", False):
             return selectable_confirm(prompt_text)
@@ -1489,8 +1568,8 @@ class InteractiveCLI:
         self._approval_state = None
         self._status_message = ""
         if result == "session":
-            if tool_name:
-                _SESSION_ALLOWED_TOOLS.add(tool_name)
+            if approval_scope:
+                _SESSION_ALLOWED_TOOLS.add(approval_scope)
             result = True
         if self.app:
             self.app.invalidate()
@@ -1545,18 +1624,20 @@ class InteractiveCLI:
 
         bindings = self._make_bindings()
         compact = self._is_compact_terminal()
-        if compact:
+        framed_input = self._use_framed_input()
+        if not framed_input:
             self._input_frame = None
             input_container = input_box
-            slash_height = 8
-            approval_height = _approval_panel_height()
+            slash_height = self._slash_panel_height()
+            approval_height = self._approval_panel_height()
             spacer_height = 0
         else:
             self._input_frame = Frame(input_box, title="Nora", style="class:nora.input")
             input_container = self._input_frame
-            slash_height = 10
-            approval_height = _approval_panel_height()
-            spacer_height = 1
+            slash_height = self._slash_panel_height()
+            approval_height = self._approval_panel_height()
+            rows = _size_lines(shutil.get_terminal_size(fallback=(100, 24)))
+            spacer_height = 0 if rows <= 24 else 1
         slash_panel = ConditionalContainer(
             Window(
                 FormattedTextControl(self._render_slash_panel),
