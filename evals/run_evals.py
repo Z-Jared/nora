@@ -215,6 +215,12 @@ def main() -> int:
         EvalCase("voice_profile_rejects_secret_or_audio_sample", eval_voice_profile_rejects_secret_or_audio_sample),
         EvalCase("voice_profile_http_create_update_contract", eval_voice_profile_http_create_update_contract),
         EvalCase("voice_profile_webui_no_promotional_voice_copy", eval_voice_profile_webui_no_promotional_voice_copy),
+        # TASK-172B: TTS text fallback eval coverage
+        EvalCase("tts_text_fallback_available", eval_tts_text_fallback_available),
+        EvalCase("tts_preview_cost_transparent", eval_tts_preview_cost_transparent),
+        EvalCase("tts_preview_rejects_secret_text", eval_tts_preview_rejects_secret_text),
+        EvalCase("tts_preview_read_only_no_food_or_state_mutation", eval_tts_preview_read_only_no_food_or_state_mutation),
+        EvalCase("tts_webui_no_recording_or_background_copy", eval_tts_webui_no_recording_or_background_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3377,6 +3383,173 @@ def eval_voice_profile_webui_no_promotional_voice_copy():
     import re
     negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
     promotional = ["marketplace", "premium voice", "pay to speak", "buy voice"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in UI"
+
+
+# --- TASK-172B: TTS text fallback eval coverage ---
+
+
+def _skip_if_no_tts():
+    """Skip if TASK-172A TTS contract is not available."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_voice_preview'):
+            raise AttributeError("no voice preview endpoint")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-172A not integrated: TTS contract not available")
+
+
+def eval_tts_text_fallback_available():
+    """Text fallback is available without TTS provider configuration."""
+    _skip_if_no_tts()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # TTS preview should work even without TTS provider configured
+            status, body = _http_request("POST", port, "/pet/voice-preview", {
+                "pet_id": pet_id,
+                "text": "Hello, I am Nora!",
+            })
+            assert status == 200, f"text fallback not available: {status}, {body}"
+            # Should indicate text-only mode or return text content
+            assert "text" in str(body).lower() or "fallback" in str(body).lower() or "no_audio" in str(body).lower(), \
+                f"no text fallback indicator: {body}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_tts_preview_cost_transparent():
+    """TTS preview exposes deterministic cost metadata."""
+    _skip_if_no_tts()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            status, body = _http_request("POST", port, "/pet/voice-preview", {
+                "pet_id": pet_id,
+                "text": "Hello!",
+            })
+            assert status == 200, f"preview failed: {status}, {body}"
+            # Response should include cost information
+            raw = str(body).lower()
+            assert "cost" in raw, f"missing cost metadata: {body}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_tts_preview_rejects_secret_text():
+    """Secret-like preview text is rejected and not echoed."""
+    _skip_if_no_tts()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # Secret in text should be rejected
+            status, body = _http_request("POST", port, "/pet/voice-preview", {
+                "pet_id": pet_id,
+                "text": "my api key is sk-ant-secret-key-12345",
+            })
+            assert status >= 400 or "sk-ant-secret-key-12345" not in str(body), \
+                f"secret not rejected: {status}, {body}"
+            # Secret in other fields
+            status2, body2 = _http_request("POST", port, "/pet/voice-preview", {
+                "pet_id": pet_id,
+                "text": "hello",
+                "voice_id": "sk-ant-secret-key-12345",
+            })
+            assert status2 >= 400 or "sk-ant-secret-key-12345" not in str(body2), \
+                f"voice_id secret not rejected: {status2}, {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_tts_preview_read_only_no_food_or_state_mutation():
+    """TTS preview does not mutate food balance, pet state, activity, or relationship memory."""
+    _skip_if_no_tts()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            # Get state before preview
+            _, before = _http_request("GET", port, "/pet/current")
+            balance_before = before["state"]["compute_food_balance"]
+            # Get activity count before
+            _, act_before = _http_request("GET", port, f"/pet/activity?pet_id={pet_id}")
+            activity_before = act_before if isinstance(act_before, list) else act_before.get("events", act_before.get("activity", []))
+            activity_count_before = len(activity_before)
+            # Get relationship memory count before
+            _, mem_before = _http_request("GET", port, f"/pet/relationship-memory?pet_id={pet_id}")
+            memory_before = mem_before if isinstance(mem_before, list) else mem_before.get("memories", [])
+            memory_count_before = len(memory_before)
+            # Call preview multiple times
+            for _ in range(5):
+                _http_request("POST", port, "/pet/voice-preview", {"pet_id": pet_id, "text": "Hello!"})
+            # State should not change
+            _, after = _http_request("GET", port, "/pet/current")
+            balance_after = after["state"]["compute_food_balance"]
+            assert balance_before == balance_after, f"preview mutated balance: {balance_before} -> {balance_after}"
+            assert before["state"]["hunger"] == after["state"]["hunger"], "hunger changed"
+            assert before["state"]["energy"] == after["state"]["energy"], "energy changed"
+            assert before["state"]["mood"] == after["state"]["mood"], "mood changed"
+            # Activity should not increase
+            _, act_after = _http_request("GET", port, f"/pet/activity?pet_id={pet_id}")
+            activity_after = act_after if isinstance(act_after, list) else act_after.get("events", act_after.get("activity", []))
+            activity_count_after = len(activity_after)
+            assert activity_count_before == activity_count_after, \
+                f"preview added activity events: {activity_count_before} -> {activity_count_after}"
+            # Relationship memory should not increase
+            _, mem_after = _http_request("GET", port, f"/pet/relationship-memory?pet_id={pet_id}")
+            memory_after = mem_after if isinstance(mem_after, list) else mem_after.get("memories", [])
+            memory_count_after = len(memory_after)
+            assert memory_count_before == memory_count_after, \
+                f"preview added relationship memories: {memory_count_before} -> {memory_count_after}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_tts_webui_no_recording_or_background_copy():
+    """UI does not imply voice cloning, recording by default, always listening, or hidden background activity."""
+    _skip_if_no_tts()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
     for phrase in promotional:
         if phrase not in html:
             continue

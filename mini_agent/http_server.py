@@ -145,6 +145,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_pet_relationship_memory_create(body)
         elif path == "/pet/update-identity":
             self._handle_pet_update_identity(body)
+        elif path == "/pet/voice-preview":
+            self._handle_pet_voice_preview(body)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -599,6 +601,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                     "post": {"summary": "Record a relationship memory (shared_moment, preference, task_outcome)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "kind": {"type": "string", "enum": ["shared_moment", "preference", "task_outcome"]}, "summary": {"type": "string"}, "source": {"type": "string"}, "importance": {"type": "integer"}, "metadata": {"type": "object"}}, "required": ["pet_id", "kind", "summary"]}}}}, "responses": {"200": {"description": "Created memory"}}}
                 },
                 "/pet/update-identity": {"post": {"summary": "Update pet identity fields (name, species, personality_traits, relationship_role, speech_style, voice_profile, taste_profile, skills)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "name": {"type": "string"}, "species": {"type": "string"}, "personality_traits": {"type": "array", "items": {"type": "string"}}, "relationship_role": {"type": "string"}, "speech_style": {"type": "string"}, "voice_profile": {"type": "object"}, "taste_profile": {"type": "object"}, "skills": {"type": "array", "items": {"type": "string"}}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Updated pet record"}}}},
+                "/pet/voice-preview": {"post": {"summary": "Text-fallback voice preview — no audio, no state mutation, no food debit", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "text": {"type": "string"}}, "required": ["pet_id", "text"]}}}}, "responses": {"200": {"description": "Preview with text, cost, voice profile, mood context, no_audio_reason"}}}},
             },
         }
         self._json_response(200, spec)
@@ -932,6 +935,46 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "pet not found or invalid input"})
             return
         self._json_response(200, result.to_dict())
+
+    def _handle_pet_voice_preview(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pet_id = body.get("pet_id", "")
+        if not isinstance(pet_id, str) or not pet_id.strip():
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        pet_id = pet_id.strip()
+        text = body.get("text", "")
+        if not isinstance(text, str):
+            self._json_response(400, {"error": "text must be string"})
+            return
+        text = text.strip()
+        if not text:
+            self._json_response(400, {"error": "text required"})
+            return
+        # Reject overly long text
+        from mini_agent.tts import VOICE_PREVIEW_TEXT_MAX_LEN
+        if len(text) > VOICE_PREVIEW_TEXT_MAX_LEN:
+            self._json_response(400, {"error": "text too long", "max_length": VOICE_PREVIEW_TEXT_MAX_LEN})
+            return
+        # Reject secret-like text
+        from mini_agent.memory import is_sensitive_text
+        if is_sensitive_text(text):
+            self._json_response(400, {"error": "rejected sensitive text"})
+            return
+        pet = self.pet_store.get_pet(pet_id)
+        if not pet:
+            self._json_response(404, {"error": "pet not found"})
+            return
+        from mini_agent.tts import TextFallbackTTSAdapter
+        adapter = TextFallbackTTSAdapter()
+        preview = adapter.preview(
+            text=text,
+            voice_profile=pet.identity.voice_profile or None,
+            pet_state=pet.state.to_dict(),
+        )
+        self._json_response(200, preview)
 
 
 def create_server(

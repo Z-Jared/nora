@@ -2354,6 +2354,115 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertNotIn("sk-ant-secret-key-12345", str(body))
 
+    def test_voice_preview_basic(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "Hello, how are you?",
+        })
+        self.assertEqual(status, 200)
+        self.assertFalse(body["has_audio"])
+        self.assertEqual(body["source"], "text_fallback")
+        self.assertEqual(body["text"], "Hello, how are you?")
+        self.assertTrue(body["no_network_call"])
+        self.assertTrue(body["no_recording"])
+        self.assertIn("no_audio_reason", body)
+        self.assertIn("voice_profile", body)
+        self.assertIn("mood_context", body)
+        self.assertIn("cost_tokens", body)
+
+    def test_voice_preview_cost_deterministic(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.update_identity("pet_1", voice_profile={"speed": "normal"})
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "Hello!",
+        })
+        self.assertEqual(status, 200)
+        # "Hello!" = 6 chars, //10 = 0, * 1.0 = 0
+        self.assertEqual(body["cost_tokens"], 0)
+
+    def test_voice_preview_cost_with_longer_text(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "a" * 50,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["cost_tokens"], 5)  # 50 // 10 * 1.0
+
+    def test_voice_preview_mood_context(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        self.pet_store.feed_pet("pet_1", amount=100)  # improves mood/energy
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "hello",
+        })
+        self.assertEqual(status, 200)
+        self.assertIn("expression", body["mood_context"])
+
+    def test_voice_preview_rejects_empty_text(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "",
+        })
+        self.assertEqual(status, 400)
+
+    def test_voice_preview_rejects_missing_pet_id(self):
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "text": "hello",
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_voice_preview_rejects_secret_text(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "sk-ant-secret-key-12345",
+        })
+        self.assertEqual(status, 400)
+        self.assertNotIn("sk-ant-secret-key-12345", str(body))
+
+    def test_voice_preview_rejects_nonexistent_pet(self):
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_999", "text": "hello",
+        })
+        self.assertEqual(status, 404)
+
+    def test_voice_preview_in_docs(self):
+        status, body = self._request("GET", "/docs")
+        self.assertEqual(status, 200)
+        self.assertIn("/pet/voice-preview", body["paths"])
+
+    def test_voice_preview_no_state_mutation(self):
+        """Preview must not debit food or change pet state."""
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        balance_before = self.pet_store.get_pet("pet_1").state.compute_food_balance
+        self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": "hello world",
+        })
+        balance_after = self.pet_store.get_pet("pet_1").state.compute_food_balance
+        self.assertEqual(balance_before, balance_after)
+
+    def test_voice_preview_rejects_text_too_long(self):
+        self.pet_store.create_pet(name="Mochi")
+        long_text = "a" * 501
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": long_text,
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("text too long", body["error"])
+        self.assertEqual(body["max_length"], 500)
+        # Must not echo the raw long text
+        self.assertNotIn(long_text, str(body))
+
+    def test_voice_preview_accepts_text_at_max_length(self):
+        self.pet_store.create_pet(name="Mochi")
+        max_text = "a" * 500
+        status, body = self._request("POST", "/pet/voice-preview", {
+            "pet_id": "pet_1", "text": max_text,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["text"], max_text)
+
 
 class PetAuthHTTPServerTests(unittest.TestCase):
     """Tests for pet mutation auth when api_token is set."""

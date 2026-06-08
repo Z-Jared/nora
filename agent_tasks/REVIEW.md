@@ -1,72 +1,78 @@
-# TASK-171A/171B Review — Voice Profile v1 Contract + Eval Coverage
+# TASK-172A/172B Review — TTS Adapter Protocol with Text Fallback
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-171A implements Voice Profile v1 contract with recursive secret rejection. TASK-171B adds 5 deterministic evals covering the contract. PM verification passed (369 tests, 677 evals). All review criteria satisfied.
+TASK-172A implements a read-only `/pet/voice-preview` endpoint with deterministic text fallback. TASK-172B adds 5 evals covering cost transparency, secret rejection, and read-only behavior. All review criteria satisfied.
 
-## 1. Voice Profile v1 Contract
+## 1. Read-Only Behavior
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Allowed keys | ✅ | `_VOICE_PROFILE_ALLOWED_KEYS`: voice_id, speed, tone, pitch, expression_hints, speech_style_override |
-| Unsafe keys stripped | ✅ | `_VOICE_PROFILE_UNSAFE_KEYS`: audio_sample, speaker_embedding, clone_reference, api_key, secret, etc. |
-| Recursive secret rejection | ✅ | `_validate_profile_value()` recurses into dicts and lists; rejects ANY key/value containing secret-like text |
-| Enum validation | ✅ | speed ∈ {slow, normal, fast}, pitch ∈ {low, medium, high} |
-| String length bounded | ✅ | `_VOICE_PROFILE_STRING_MAX_LEN = 200` |
-| expression_hints bounded | ✅ | Only allowed keys (happy, tired, hungry, calm, excited, sad), string values only |
+| No food debit | ✅ | Handler calls `adapter.preview()` only — no `feed_pet` or `add_food` calls |
+| No state mutation | ✅ | Pet state read via `pet.state.to_dict()` but not modified |
+| No activity events | ✅ | `eval_tts_preview_read_only_no_food_or_state_mutation` verifies activity count unchanged after 5 preview calls |
+| No relationship memories | ✅ | Same eval verifies memory count unchanged |
+| No pet creation side effects | ✅ | Handler only reads existing pet via `get_pet(pet_id)` |
 
-## 2. HTTP Create/Update Contract
+## 2. Text Bounded at 500 Chars
 
-- `POST /pet/create` with `voice_profile` — validates via `_normalize_voice_profile()`, rejects if None returned
-- `POST /pet/update-identity` with `voice_profile` — same normalization, preserves state/food/memory
-- `eval_voice_profile_http_create_update_contract` verifies: create with profile → add food → update profile → food balance preserved, profile updated
+- `VOICE_PREVIEW_TEXT_MAX_LEN = 500` constant in `tts.py:18`
+- Handler checks `len(text) > VOICE_PREVIEW_TEXT_MAX_LEN` → 400 error
+- Error response: `{"error": "text too long", "max_length": 500}` — does NOT echo raw text
+- `test_voice_preview_rejects_text_too_long` verifies 501 chars → 400, no raw text in response
+- `test_voice_preview_accepts_text_at_max_length` verifies 500 chars → 200
 
-## 3. Recursive Secret Rejection (PM Probe Fix)
+## 3. Secret Rejection
 
-PM probe confirmed all 3 cases reject:
-- `unknown_field: [secret]` → 400
-- `speaker_embedding: [secret]` → 400
-- `expression_hints: {happy: {deep: secret}}` → 400
+- `is_sensitive_text(text)` check on input text → 400 `{"error": "rejected sensitive text"}`
+- `eval_tts_preview_rejects_secret_text` verifies:
+  - Secret in text body → rejected, not echoed
+  - Secret in voice_id field → rejected, not echoed
+- Handler does not echo raw secret text in any error response
 
-Claude A added 2 HTTP-level tests to lock this behavior at endpoint layer:
-- `test_create_pet_rejects_unknown_field_list_secret`
-- `test_create_pet_rejects_deep_nested_secret`
+## 4. No Real TTS / No Provider / No Audio
 
-## 4. Eval Coverage (5 evals)
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| No real TTS | ✅ | `TextFallbackTTSAdapter` always returns `audio_bytes=None` |
+| No provider/network call | ✅ | Adapter is purely deterministic, no imports of real TTS providers |
+| No audio bytes exposed | ✅ | `TTSResult.to_dict()` returns `has_audio: False`, never includes audio_bytes |
+| No recording/microphone | ✅ | Response includes `"no_recording": True` |
+| No audio URL | ✅ | No URL fields in response |
 
-| Eval | Coverage |
-|------|----------|
-| `voice_profile_default_no_cloning` | Default voice_id is local preset, not clone/recording reference |
-| `voice_profile_fields_bounded` | All fields bounded (key length ≤50, string ≤200, int range, list ≤20) |
-| `voice_profile_rejects_secret_or_audio_sample` | 7 rejection cases + 1 positive: secret in allowed key, unsafe key, audio_sample, nested dict, list, unknown field list, deep nesting |
-| `voice_profile_http_create_update_contract` | Create → add food → update voice → food preserved, profile updated |
-| `voice_profile_webui_no_promotional_voice_copy` | No cloning/recording/promotional copy in UI |
+## 5. Cost Transparency
 
-## 5. Scope Compliance
+- `estimate_voice_cost()` deterministic: `len(text) // 10 * speed_multiplier`
+- Speed multipliers: slow=1.2, normal=1.0, fast=0.8
+- Preview response includes `cost_tokens`, `voice_profile`, `mood_context`, `no_audio_reason`, `no_network_call`, `no_recording`
+- `eval_tts_preview_cost_transparent` verifies cost metadata present
 
-- No scope creep: stays within Phase 2 Voice Profile v1 boundaries
-- No TTS adapter implementation (deferred to PHASE2-02)
-- No voice cloning (explicitly rejected by unsafe keys and validation)
-- No recording references (forbidden in eval assertions)
-- No marketplace/billing (forbidden copy scan passes)
+## 6. Eval Quality (5 evals)
 
-## 6. Safety Boundary Verification
+| Eval | What it verifies |
+|------|-----------------|
+| `tts_preview_cost_transparent` | Cost metadata present in response |
+| `tts_preview_rejects_secret_text` | Secret text rejected, not echoed |
+| `tts_preview_read_only_no_food_or_state_mutation` | Food balance, hunger, energy, mood, activity count, memory count all unchanged |
+| (2 more) | Guard function and compatibility |
 
-| Boundary | Status | Evidence |
-|----------|--------|----------|
-| No cloning without consent | ✅ | Unsafe keys stripped, clone_reference rejected, voice_id validated |
-| No recording by default | ✅ | audio_sample/audio_url/recording in unsafe keys, forbidden in UI |
-| Cost transparency | ✅ | Voice Profile v1 is metadata only; cost transparency deferred to TTS adapter |
-| No manipulation | ✅ | `eval_voice_profile_webui_no_promotional_voice_copy` verifies no promotional copy |
+All evals use `_skip_if_no_tts()` guard — skip when TASK-172A absent, pass when present. Combined check: 5/5 PASS, 682 evals total, 274 unit tests OK.
+
+## 7. Scope Compliance
+
+- No real TTS provider integration (deferred to PHASE2-10)
+- No voice cloning
+- No recording/microphone access
+- No food debit or state mutation
+- No marketplace/billing language
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke → 369 tests OK
-python3 evals/run_evals.py → 677 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_http_server tests.test_webui_smoke → 274 tests OK
+python3 evals/run_evals.py → 682 passed, 0 failed, 0 skipped
 git diff --check → clean
-rg forbidden phrases → only negative eval assertions
-PM recursive probe → all 3 cases reject
+rg forbidden phrases → only negative safety assertions and tts.py docstring
 ```

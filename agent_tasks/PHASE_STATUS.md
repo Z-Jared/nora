@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 10%
+- Percent: 15%
 - Status: in progress
-- Current focus: TTS adapter boundary with text fallback, consent, and transparent cost before real audio.
+- Current focus: consent and cost gates for future real TTS/provider integration after text fallback boundary.
 
 ## Completed This Phase
 
@@ -53,17 +53,23 @@ Last updated: 2026-06-09
   - Unknown non-secret fields are stripped without storing unsupported voice data.
   - Deterministic coverage locks default no-cloning, bounded fields, recursive/list secret rejection, HTTP create/update preservation, and no promotional voice/payment/marketplace/background-listening copy.
   - Verification is green: 369 targeted tests OK, 677 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- TTS adapter boundary with deterministic text fallback:
+  - `mini_agent/tts.py` defines a local text-only `TextFallbackTTSAdapter`, deterministic `cost_tokens` estimate, bounded preview length, and state-derived mood context.
+  - `POST /pet/voice-preview` returns text fallback metadata with `has_audio: false`, no-audio reason, no network/provider call, no recording, voice profile summary, and mood context.
+  - Preview rejects missing, empty, non-string, secret-like, and over-500-character text without echoing secret or over-limit input.
+  - Preview is read-only: no compute food debit, no pet state mutation, no activity event, and no relationship-memory write.
+  - Deterministic coverage locks fallback availability, cost transparency, secret rejection/no echo, read-only behavior across food/state/activity/memory, and no recording/background/voice-cloning/payment/marketplace copy.
+  - Verification is green: 274 targeted tests OK, 682 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-172A: TTS adapter protocol with text fallback.
-- TASK-172B: TTS text fallback deterministic eval and safety coverage.
+- None currently assigned after TASK-172 integration.
 
 ## Next
 
-1. Wait for Claude A/B completion reports for TASK-172A/B.
-2. PM combines implementation plus eval coverage, runs targeted tests, `python3 evals/run_evals.py`, and `git diff --check`.
-3. Send approved candidate to reviewer before integration.
+1. Publish the next small Phase 2 task only after TASK-172 final commit is complete.
+2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+3. Next likely slice: consent/cost confirmation boundary for future real TTS, or Pet Room voice-preview UI surface without real audio/provider calls.
 
 ## Phase 1 Exit Criteria
 
@@ -109,11 +115,11 @@ Phase 2 start worker plan:
 
 - None for current Phase 2 A/B start.
 - Real billing/payment, 3D/VRM, voice deep work, marketplace, and cross-device native presence remain later-phase work.
-- Real TTS provider integration is blocked until adapter protocol, consent UI, and cost evals are complete.
+- Real TTS provider integration is blocked until explicit consent UI, provider boundary, and cost/food-debit evals are complete.
 
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 10% / Voice Profile v1 complete; TTS adapter boundary next
+- Phase 2 Voice & Presence: 15% / Voice Profile v1 and TTS text fallback boundary complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
