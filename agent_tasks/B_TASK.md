@@ -1,10 +1,10 @@
-# TASK-158: Pet room API/UI deterministic coverage
+# TASK-160: Nora-01 robot identity/UI deterministic coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Nora has pivoted to a customizable electronic pet agent. TASK-155/156 landed the deterministic pet backend foundation in `4d239bb`. Claude A owns TASK-157, which should add the local HTTP pet API and visible Pet Room MVP. Your job is to add deterministic coverage for that user-visible loop, or prepare focused tests/evals around the expected public API if TASK-157 is not present in your worktree yet.
+Nora has pivoted to a customizable electronic pet agent. TASK-157/158 added the Pet Room API/UI MVP in commit `93e495c`. Claude A owns TASK-159, which should make the default example character `Nora-01`, a robot electronic pet, and improve the visible Pet Room experience. Your job is to lock that public contract with deterministic coverage.
 
 Read first:
 
@@ -33,28 +33,40 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline coverage for the Pet Room API/UI loop.
+Add deterministic offline coverage for the Nora-01 robot default identity and living Pet Room redesign.
 
 Required coverage:
 
-1. HTTP API:
-   - `GET /pet/current` returns a bounded current/default pet.
-   - `POST /pet/create` creates identity fields without leaking sensitive input.
-   - `POST /pet/add-food` increases compute food balance.
-   - `POST /pet/feed` spends balance, improves state, and never allows negative balance.
-   - `POST /pet/care` updates mood/bond without consuming food.
-   - `GET /pet/activity?pet_id=...` returns bounded recent events.
-   - Mutation endpoints respect existing auth when `NORA_API_TOKEN` is configured.
+1. HTTP/default identity:
+   - `GET /pet/current` creates/returns `Nora-01` when no pet exists.
+   - Default species is robot/electronic-life oriented and is not fox/cat.
+   - Default identity includes bounded personality, relationship role, speech style, voice/taste profile, and skills.
+   - Custom `POST /pet/create` identities still work and are not forced to be robot.
 
 2. Web UI smoke:
-   - The page contains a Pet Room first-screen surface.
-   - It renders avatar/body placeholder, state metrics, food balance, action buttons, and activity/diary area.
-   - JS can load `/pet/current`, call feed/care/add-food, and update DOM state using mocked fetch.
-   - UI output must not render raw secret-like text.
+   - Pet Room contains stable robot/electronic-pet DOM markers/classes or text that tests can assert.
+   - Pet Room shows identity, state metrics, compute food balance, feeding controls, care controls, and activity/diary area.
+   - The default first-screen copy frames food as transparent compute food/token energy.
+   - The UI does not contain manipulative purchase pressure or pet-distress monetization copy.
 
 3. Evals:
-   - Add deterministic evals to `evals/run_evals.py` for the API/UI loop if TASK-157 is present.
-   - If TASK-157 is not present, add guarded evals or focused test scaffolding with explicit skip/dependency reporting.
+   - Add deterministic evals to `evals/run_evals.py` for the Nora-01 default identity and robot Pet Room contract if TASK-159 is present.
+   - If TASK-159 is missing in your worktree, add guarded evals or focused test scaffolding with explicit skip/dependency reporting.
+   - Preserve existing TASK-158 pet HTTP/UI evals and CLI/TTY evals.
+
+## Non-Goals
+
+- No product implementation except tiny testability fixes directly required by observed failures.
+- No real billing/payment.
+- No voice, Live2D, 3D, desktop/mobile native shell, or LLM calls.
+- No changes to unrelated CLI/TUI code.
+
+## Safety Boundaries
+
+- Tests/evals must prove default identity is not fox/cat.
+- Tests/evals must prove no raw API-key/token-like string is rendered by pet API/UI outputs.
+- Tests/evals must prove mutation auth and no-negative balance behavior do not regress.
+- Tests/evals must reject manipulative monetization copy such as forced purchase language, pet suffering threats, or hidden-cost wording.
 
 ## Scope
 
@@ -63,7 +75,7 @@ Primary files:
 - `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
 - `evals/run_evals.py`
-- `tests/test_pets.py` only if a small assertion is needed
+- `tests/test_pets.py` only if a small identity assertion is needed
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
@@ -73,25 +85,6 @@ Do not edit:
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-
-Avoid touching unrelated CLI/TUI code.
-
-## Non-Goals
-
-- No billing provider.
-- No voice.
-- No Live2D or 3D rigging.
-- No native desktop/mobile app.
-- No LLM calls.
-- No model-driven pet state mutation.
-- No feature implementation except tiny testability fixes directly required by observed failures.
-
-## Safety Boundaries
-
-- Tests/evals must prove model/chat output cannot directly mutate pet state.
-- Tests/evals must prove auth guards mutation endpoints.
-- Tests/evals must prove read tools do not mutate state except the documented first default-pet creation behavior of `GET /pet/current`.
-- Tests/evals must prove no raw API-key/token-like string is rendered by pet API/UI outputs.
 
 ## Verification
 
@@ -103,11 +96,11 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If TASK-157 is missing, run the most relevant targeted checks and report the dependency explicitly.
+If TASK-159 is missing, run the most relevant targeted checks and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-157 was present in your worktree.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-159 was present in your worktree.
 
 Then notify Codex PM:
 

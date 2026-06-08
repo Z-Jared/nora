@@ -1,10 +1,10 @@
-# TASK-157: Pet room MVP and local HTTP pet API
+# TASK-159: Nora-01 robot default identity and living Pet Room redesign
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora has pivoted to a customizable electronic pet agent. TASK-155/156 landed the deterministic pet backend foundation in `4d239bb`. The next product step must make the pet visible and usable in the local Web app.
+Nora has pivoted to a customizable electronic pet agent. TASK-157/158 added the first local Pet Room HTTP/API MVP in commit `93e495c`, but the current default pet is still `Nora / digital_cat`. Product direction now requires the default example character to be a robot electronic pet, not a fox/cat and not a generic dashboard mascot.
 
 Read first:
 
@@ -31,44 +31,46 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Build the first visible Pet Room MVP backed by deterministic local HTTP endpoints.
+Make the default visible pet identity and Pet Room experience match the new product direction: a robot electronic lifeform named `Nora-01`.
 
 Required behavior:
 
-1. HTTP API in `mini_agent/http_server.py`:
-   - `GET /pet/current`: return the current/default pet if present; if none exists, create a default bounded pet and return it.
-   - `POST /pet/create`: create a pet with identity fields supported by `PetStore.create_pet`.
-   - `POST /pet/add-food`: add local demo compute food to a pet using `PetStore.add_food`.
-   - `POST /pet/feed`: feed a pet using `PetStore.feed_pet`.
-   - `POST /pet/care`: perform `pat`, `comfort`, `rest`, or `play`.
-   - `GET /pet/activity?pet_id=...`: return recent activity events.
-   - Add pet feature flag to `/status`.
-   - Add concise docs entries to `/docs`.
+1. Default pet identity:
+   - `GET /pet/current` must create a default pet named `Nora-01` when no pet exists.
+   - Default species should be robot/electronic-life oriented, for example `robot_pet` or `electronic_robot`.
+   - Default identity should include bounded personality, relationship role, speech style, taste profile, voice profile, and skills that fit a customizable robot companion.
+   - Keep user-created custom identities fully supported.
 
-2. Web UI in `mini_agent/static/index.html`:
-   - Make the first viewport feel like a pet room, not an Agent OS dashboard.
-   - Show a modular 2D placeholder avatar or pet body built with HTML/CSS.
-   - Show pet name/species, hunger, energy, mood, bond, growth level, compute food balance.
-   - Add actions: feed, pat, rest/play or comfort, add local demo food.
-   - Show recent pet activity/diary.
-   - Keep existing chat/task/memory functionality usable, but do not let it dominate the first screen.
-   - Fit desktop and mobile without overlapping text or controls.
+2. Pet Room visual redesign:
+   - The first visible Pet Room should feel like a living electronic pet room, not a dashboard.
+   - Use a modular 2D HTML/CSS robot avatar placeholder. It should clearly read as robot/electronic pet without relying on a fox/cat visual.
+   - Show identity, hunger/energy/mood/bond/growth, compute food balance, and transparent food consumption.
+   - Keep actions: feed, pat, rest/play or comfort, add local demo food.
+   - Show recent activity/diary as the pet's life log.
+   - Keep chat/task/memory views usable but secondary.
+   - Mobile and desktop must not have overlapping text, clipped controls, or layout shift.
 
-3. Use the existing `PetStore` as the only state mutation path. Do not duplicate pet state rules in JS.
+3. Copy and commercial boundary:
+   - Food should be framed as compute food/token energy with transparent balance/estimated spend.
+   - Do not add manipulative payment copy or pet distress pressure.
+   - Do not implement real billing or purchase flows.
 
-## Product Constraints
+## Non-Goals
 
-- This is a local MVP room. It is acceptable to use a CSS/HTML 2D avatar placeholder.
-- Do not implement Live2D, 3D, voice, billing provider, mobile native app, or model-driven state deltas.
-- Do not add payment pressure copy. Food can be labeled as local demo compute food for this MVP.
-- Keep API output bounded and no-leak.
+- No Live2D/3D rigging.
+- No voice system.
+- No real payment provider.
+- No desktop/mobile native app.
+- No LLM-driven pet state mutation.
+- No marketplace or plugin pack UI.
 
 ## Safety Boundaries
 
-- Mutation endpoints must require existing HTTP auth when `NORA_API_TOKEN` is set.
-- `GET /pet/current` and `GET /pet/activity` must be read-safe except the explicit first default-pet creation behavior for `/pet/current`.
-- Model output must not mutate pet state.
-- Sensitive identity text must continue to be rejected by `PetStore`.
+- All pet state mutations must continue to use `PetStore`.
+- Mutation endpoints must keep existing HTTP auth behavior when `NORA_API_TOKEN` is set.
+- Default identity must not contain secret-like text.
+- UI/API output must remain bounded and no-leak.
+- Do not touch unrelated CLI/TUI code.
 
 ## Scope
 
@@ -76,7 +78,8 @@ Primary files:
 
 - `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
-- `tests/test_http_server.py` only for focused API coverage needed by your implementation
+- `tests/test_http_server.py` only for focused implementation-adjacent coverage
+- `tests/test_webui_smoke.py` only for focused implementation-adjacent coverage
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
@@ -86,8 +89,6 @@ Do not edit:
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-
-Avoid touching unrelated CLI/TUI code.
 
 ## Verification
 
@@ -103,7 +104,7 @@ If full evals fail because of pre-existing unrelated state, report the exact fai
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-158 needs to adjust tests for your API shape.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-160 needs to adjust tests for your public contract.
 
 Then notify Codex PM:
 
