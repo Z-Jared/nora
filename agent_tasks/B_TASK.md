@@ -1,10 +1,12 @@
-# TASK-174B: Voice consent boundary deterministic eval and safety coverage
+# TASK-175B: Expression state deterministic eval and safety coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is in progress. TASK-174A will add an explicit consent and cost confirmation boundary to the text-only voice preview flow. Phase 2 still uses A/B only; do not open or assume Claude C/D. Read first:
+Phase 2 is in progress. TASK-175A will add CSS-only expression state mapping from existing Pet Room state. Your job is deterministic eval/smoke/safety coverage only. Phase 2 still uses A/B only; do not open or assume Claude C/D.
+
+Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
@@ -16,53 +18,50 @@ Phase 2 is in progress. TASK-174A will add an explicit consent and cost confirma
 - `agent_tasks/PHASE_STATUS.md`
 - `evals/run_evals.py`
 - `tests/test_webui_smoke.py`
-- `tests/test_http_server.py`
 
 ## Goal
 
-Add deterministic eval/safety coverage for the voice preview consent and cost confirmation boundary that TASK-174A implements. Coverage should lock the public contract without implementing UI or modifying product files.
+Add deterministic coverage for CSS-only expression state mapping that TASK-175A implements. Coverage should lock the public contract without implementing the UI mapping yourself.
 
 Expected coverage areas:
 
-- Pet Room contains stable consent/cost boundary markers.
-- The preview UI does not call `/pet/voice-preview` when the confirmation checkbox is unchecked.
-- `/pet/voice-preview` exposes stable consent/cost/provider/no-audio/no-recording/read-only metadata.
-- The boundary copy makes text-only fallback, estimated cost, no provider/network call, no recording, and no food debit clear.
-- Dynamic preview text and metadata remain escaped and do not leak secret-like content.
-- UI copy does not imply voice cloning, recording by default, microphone use, always listening, hidden background activity, real payment, marketplace, or purchase pressure.
+- Pet Room exposes stable expression DOM markers/classes.
+- JS mapping derives expression from `mood`, `energy`, and `hunger`.
+- Missing/malformed state falls back to a bounded safe expression.
+- Expression update is read-only: no fetch, food debit, state mutation, activity write, relationship-memory write, microphone/camera/screen/location access, or provider call.
+- UI copy does not imply voice cloning, recording by default, microphone use, always listening, hidden background activity, real payment, marketplace, purchase pressure, or 3D/VRM scope drift.
 
 ## Scope
 
 Allowed files:
 
 - `evals/run_evals.py`
-- `tests/test_webui_smoke.py`
-- `tests/test_http_server.py` only if adding a narrowly targeted public-contract test
+- `tests/test_webui_smoke.py` only if adding narrowly targeted smoke tests
 - `agent_tasks/B_DONE.md`
 
 Do not edit implementation files:
 
 - `mini_agent/static/index.html`
-- `mini_agent/http_server.py`
 - `mini_agent/tts.py`
+- `mini_agent/http_server.py`
 - `mini_agent/pets.py`
 
 ## Required Coverage
 
-Add evals whose names include `voice_consent` or `voice_cost_confirmation`, for example:
+Add evals whose names include `expression_state` or `pet_expression`, for example:
 
-- `voice_consent_markers_present`
-- `voice_consent_unchecked_no_fetch`
-- `voice_cost_confirmation_metadata`
-- `voice_consent_no_recording_or_marketplace_copy`
+- `pet_expression_markers_present`
+- `expression_state_mapping_rules`
+- `expression_state_read_only_no_fetch`
+- `expression_state_no_voice_or_surveillance_copy`
 
-Guard evals so they can explain missing TASK-174A behavior during isolated worker runs, but after PM combines with TASK-174A they must be active/pass and not permanently skipped.
+Guard evals so they can explain missing TASK-175A behavior during isolated worker runs, but after PM combines with TASK-175A they must be active/pass and not permanently skipped.
 
 ## Non-Goals
 
-- Do not implement the consent UI or HTTP response fields.
-- Do not add real TTS, speech recognition, microphone access, audio playback, vendor adapters, PWA, desktop floating pet, billing, marketplace, or cloud sync.
-- Do not weaken existing pet, voice profile, TTS fallback, speech bubble, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
+- Do not implement the expression UI, CSS, or JS helper.
+- Do not add real TTS, speech recognition, microphone/camera/screen/location access, audio playback, vendor adapters, PWA, desktop floating pet, billing, marketplace, cloud sync, or 3D/VRM.
+- Do not weaken existing pet, voice profile, TTS fallback, speech bubble, voice consent, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
 - Do not add new Claude C/D worker files.
 
 ## Safety Boundaries
@@ -70,13 +69,14 @@ Guard evals so they can explain missing TASK-174A behavior during isolated worke
 - Eval scans may allow negative boundary statements, but must block promotional or enabling language for:
   - voice cloning
   - recording by default
-  - microphone or background listening claims
-  - always listening
+  - microphone/camera/screen/location access
+  - always/background listening
   - hidden cost
   - surprise food debit
   - subscription or purchase pressure
   - marketplace drift
-- Tests must not assert only that files exist; they must lock public behavior, mutation boundaries, or copy contracts.
+  - 3D/VRM implementation drift
+- Tests must not assert only that files exist; they must lock mapping behavior, read-only behavior, or copy contracts.
 - Do not include real secrets or credentials in fixtures.
 
 ## Verification
@@ -87,14 +87,14 @@ Run:
 python3 evals/run_evals.py
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
 git diff --check
-rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access" evals/run_evals.py tests/test_webui_smoke.py tests/test_http_server.py
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access" evals/run_evals.py tests/test_webui_smoke.py
 ```
 
 The `rg` command may find negative test/safety assertions only; explain any hits in `B_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-174B` and include:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-175B` and include:
 
 - Summary of eval/test coverage
 - Eval names added

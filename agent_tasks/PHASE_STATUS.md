@@ -77,7 +77,8 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None. TASK-174A/B are integrated; next tasks should target CSS-only expression state mapping and coverage.
+- TASK-175A: Pet Room CSS-only expression state mapping.
+- TASK-175B: Expression state deterministic eval and safety coverage.
 
 ## Next
 
