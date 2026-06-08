@@ -1,10 +1,10 @@
-# TASK-173B: Speech bubble deterministic eval and safety coverage
+# TASK-174B: Voice consent boundary deterministic eval and safety coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is in progress. TASK-172 added the TTS text fallback boundary. TASK-173A will add a Pet Room speech bubble UI surface. Phase 2 still uses A/B only; do not open or assume Claude C/D. Read first:
+Phase 2 is in progress. TASK-174A will add an explicit consent and cost confirmation boundary to the text-only voice preview flow. Phase 2 still uses A/B only; do not open or assume Claude C/D. Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
@@ -20,15 +20,16 @@ Phase 2 is in progress. TASK-172 added the TTS text fallback boundary. TASK-173A
 
 ## Goal
 
-Add deterministic eval/safety coverage for the Pet Room speech bubble text fallback surface that TASK-173A implements. Coverage should lock the user-visible contract without implementing UI or modifying product files.
+Add deterministic eval/safety coverage for the voice preview consent and cost confirmation boundary that TASK-174A implements. Coverage should lock the public contract without implementing UI or modifying product files.
 
 Expected coverage areas:
 
-- Pet Room contains stable speech bubble markers/classes/ids.
-- Speech bubble uses text fallback semantics and displays no-audio/no-provider/no-recording/cost metadata.
-- Dynamic preview text is escaped and does not leak secret-like content.
+- Pet Room contains stable consent/cost boundary markers.
+- The preview UI does not call `/pet/voice-preview` when the confirmation checkbox is unchecked.
+- `/pet/voice-preview` exposes stable consent/cost/provider/no-audio/no-recording/read-only metadata.
+- The boundary copy makes text-only fallback, estimated cost, no provider/network call, no recording, and no food debit clear.
+- Dynamic preview text and metadata remain escaped and do not leak secret-like content.
 - UI copy does not imply voice cloning, recording by default, microphone use, always listening, hidden background activity, real payment, marketplace, or purchase pressure.
-- Existing `/pet/voice-preview` remains read-only and no new UI code implies food debit.
 
 ## Scope
 
@@ -48,20 +49,20 @@ Do not edit implementation files:
 
 ## Required Coverage
 
-Add evals whose names include `speech_bubble` or `voice_preview_ui`, for example:
+Add evals whose names include `voice_consent` or `voice_cost_confirmation`, for example:
 
-- `speech_bubble_markers_present`
-- `voice_preview_ui_cost_and_no_audio_copy`
-- `speech_bubble_escapes_preview_text`
-- `speech_bubble_no_recording_or_marketplace_copy`
+- `voice_consent_markers_present`
+- `voice_consent_unchecked_no_fetch`
+- `voice_cost_confirmation_metadata`
+- `voice_consent_no_recording_or_marketplace_copy`
 
-Guard evals so they can explain missing TASK-173A behavior during isolated worker runs, but after PM combines with TASK-173A they must be active/pass and not permanently skipped.
+Guard evals so they can explain missing TASK-174A behavior during isolated worker runs, but after PM combines with TASK-174A they must be active/pass and not permanently skipped.
 
 ## Non-Goals
 
-- Do not implement speech bubble UI.
+- Do not implement the consent UI or HTTP response fields.
 - Do not add real TTS, speech recognition, microphone access, audio playback, vendor adapters, PWA, desktop floating pet, billing, marketplace, or cloud sync.
-- Do not weaken existing pet, voice profile, TTS fallback, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
+- Do not weaken existing pet, voice profile, TTS fallback, speech bubble, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
 - Do not add new Claude C/D worker files.
 
 ## Safety Boundaries
@@ -72,6 +73,7 @@ Guard evals so they can explain missing TASK-173A behavior during isolated worke
   - microphone or background listening claims
   - always listening
   - hidden cost
+  - surprise food debit
   - subscription or purchase pressure
   - marketplace drift
 - Tests must not assert only that files exist; they must lock public behavior, mutation boundaries, or copy contracts.
@@ -92,7 +94,7 @@ The `rg` command may find negative test/safety assertions only; explain any hits
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-173B` and include:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-174B` and include:
 
 - Summary of eval/test coverage
 - Eval names added

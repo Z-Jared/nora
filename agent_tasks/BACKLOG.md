@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-174A: Voice preview consent and cost confirmation boundary
+- 架构层: Voice/Expression System / Token Food Economy / Safety/Policy / Avatar/Room UI
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-173A、TASK-173B 完成并集成。
+- 目标: 在 `/pet/voice-preview` 和 Pet Room speech bubble 中加入显式同意与成本确认边界，为未来真实 TTS/provider/audio 做门禁，但当前仍保持 text-only fallback。
+- 非目标: 不实现真实 TTS、音频播放、录音、麦克风、provider adapter、food debit、PWA、桌面浮窗、3D/VRM、billing、marketplace、云同步或新 Claude C/D worker。
+- 安全边界: no voice cloning、no recording by default、no hidden background listening、no provider/network execution、no secret echo、no surprise cost、no food debit；未确认时不得调用 preview endpoint；动态文本必须 HTML escape。
+- 持久证据: `/pet/voice-preview` 返回稳定 consent/cost/provider/no-audio metadata；Pet Room 有 consent/cost DOM markers；未勾选确认时 UI 显示 bounded error 且不 fetch；确认后仍只展示 text fallback。
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
+- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` TTS Adapter Boundary、Safety Policy、Cost transparency checks；`mini_agent/tts.py`; `mini_agent/http_server.py`; `mini_agent/static/index.html`; `tests/test_http_server.py`; `tests/test_webui_smoke.py`.
+
+### TASK-174B: Voice consent boundary deterministic eval and safety coverage
+- 架构层: Eval/Review System / Voice/Expression System / Token Food Economy / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-173A、TASK-173B 完成并集成；与 TASK-174A 并行，但不得改实现文件。
+- 目标: 为 voice preview 显式同意与成本确认边界增加 deterministic eval，锁住 consent markers、unchecked no-fetch、cost transparency、provider/no-audio/no-recording metadata、read-only/no-food-debit，以及 no voice cloning/marketplace/payment drift。
+- 非目标: 不实现 UI、HTTP handler 或 TTS runtime，不修改 `mini_agent/static/index.html`、`mini_agent/http_server.py`、`mini_agent/tts.py`、`mini_agent/pets.py`，不增加真实 TTS、录音、PWA、桌面浮窗、支付或 marketplace。
+- 安全边界: eval 必须阻断 promotional voice cloning、recording by default、always/background listening、hidden cost、surprise food debit、purchase pressure、marketplace drift；不得通过弱断言只检查文件存在。
+- 持久证据: 新增 eval case 名称包含 `voice_consent` 或 `voice_cost_confirmation`; TASK-174A 合并后 eval 必须 active/pass，不能长期 skip。
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
+- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Safety Policy、Deterministic Eval And Test Plan、Cost transparency checks；`evals/run_evals.py`; `tests/test_webui_smoke.py`; `tests/test_http_server.py`.
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。

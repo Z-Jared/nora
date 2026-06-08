@@ -70,13 +70,14 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None. TASK-173A/B is approved and integrating.
+- TASK-174A: Voice preview consent and cost confirmation boundary.
+- TASK-174B: Voice consent boundary deterministic eval and safety coverage.
 
 ## Next
 
-1. Add explicit consent/cost confirmation boundary before any future real TTS/provider work.
-2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
-3. Re-evaluate Claude C/D only when independent low-conflict Web/PWA or desktop shell workstreams exist.
+1. Combine TASK-174A/B after worker completion and verify consent/cost confirmation boundary.
+2. After consent boundary lands, add CSS-only expression state mapping from mood/energy/hunger.
+3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
 
