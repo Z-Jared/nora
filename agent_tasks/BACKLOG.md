@@ -6,7 +6,7 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## Phase 1 Exit Gate
 
-这些任务是 Phase 1 完成后的硬门禁。`TASK-167` 已完成；PM 必须继续完成 `TASK-168`、`TASK-169`、`TASK-170`，不能直接进入 Phase 2。
+这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169` 已完成；PM 必须继续完成 `TASK-170`，不能直接进入 Phase 2。
 
 ### TASK-170: Phase 2 Voice & Presence technical plan
 - 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition / Safety/Policy
@@ -23,33 +23,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-168: Phase 1.5 Pet Room life-feel polish
-- 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-167 完成。
-- 目标: 把 Pet Room 从功能表单进一步打磨成“电子生命体房间”：更清晰的状态反馈、确定性互动、宠物日记/记忆反馈、身份影响展示。
-- 非目标: 不做真正语音、3D/VRM、Live2D asset pipeline、native desktop/mobile、支付或 marketplace。
-- 安全边界: 所有动态文本 escape；不加入 fake intimacy、guilt、loneliness pressure、hidden purchase pressure；不让模型输出直接改状态。
-- 持久证据: UI/HTML markers、pet activity or diary state、deterministic tests/evals、PM walkthrough notes。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; Pet Room visual/DOM smoke.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` MVP Product Shape / Avatar and Room.
-
-### TASK-169: Commercial model and no-manipulation audit
-- 架构层: Monetization/Billing / Safety/Policy / Token Food Economy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-167 完成。
-- 目标: 明确 Phase 1 后的商业化边界：Token Food、会员、扩展包的定位，并审查所有用户可见文案不诱导、不情绪勒索、不隐藏成本。
-- 非目标: 不接真实支付；不做 billing backend；不做 marketplace；不做价格实验。
-- 安全边界: 禁止“宠物痛苦/孤独/快死了”式付费压力；token cost、balance、local demo boundary 必须透明；不能暗示 voice cloning 或高级能力已经可用。
-- 持久证据: monetization boundary doc or section、no-manipulation checklist、deterministic copy evals。
-- 验证: `python3 evals/run_evals.py`; targeted text scan/eval for guilt, fake intimacy, hidden purchase, marketplace, voice cloning, and misleading token-food copy; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Monetization / Safety.
-
 ## 已完成
+
+### TASK-168: Phase 1.5 Pet Room life-feel polish ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 343 tests OK；`python3 evals/run_evals.py` 672 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: Pet Room 新增 deterministic mood summary、identity details、bounded room notice 和 Today diary；Today diary 合并 activity 与 relationship memory，并在记录 shared moment 后即时刷新；新增 6 个 Web UI smoke tests 锁住 DOM markers、mood summary、notice、diary empty/rendered states 和 HTML escaping。
+
+### TASK-169: Commercial model and no-manipulation audit ✅
+- 完成者: Claude B；按 PM 初审反馈修复 commercial scan 对审计文档的误报后，Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 343 tests OK；`python3 evals/run_evals.py` 672 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md`，明确 Token Food 是本地透明 compute energy、会员/扩展包仅为未来选项、Phase 1 无支付/checkout/marketplace/account billing；新增 context-aware `commercial_no_manipulation_scan` eval，扫描 README、Pet Room 和 audit doc，允许负面免责声明但阻断促销、情绪勒索、隐藏成本、voice cloning 和 marketplace pressure 文案。
 
 ### TASK-167: Phase 1 MVP release audit ✅
 - 完成者: Claude A；Codex PM 初审修正 stale eval 记录和 README demo path 后，CCB reviewer APPROVED。

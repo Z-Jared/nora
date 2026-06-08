@@ -208,6 +208,7 @@ def main() -> int:
         EvalCase("idedit_auth_enforced", eval_idedit_auth_enforced),
         EvalCase("idedit_webui_editor_markers", eval_idedit_webui_editor_markers),
         EvalCase("idedit_webui_no_marketplace_copy", eval_idedit_webui_no_marketplace_copy),
+        EvalCase("commercial_no_manipulation_scan", eval_commercial_no_manipulation_scan),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3100,6 +3101,63 @@ def eval_idedit_webui_no_marketplace_copy():
     ]
     for phrase in forbidden:
         assert phrase not in html, f"forbidden copy found: '{phrase}'"
+
+
+def eval_commercial_no_manipulation_scan():
+    """README, Pet Room, and audit doc contain no manipulative or misleading commercial copy."""
+    import re
+    # Phrases that should never appear in promotional/manipulative context
+    # Allowed in disclaimer/negative context (e.g., "no marketplace")
+    negation_pattern = re.compile(
+        r'(no|not|without|无|没有|未|禁止|never|none|不含|不提供|不支持|不实现|disclaimer|audit|boundary|审计|边界|not implemented|future|phase 2)',
+        re.IGNORECASE
+    )
+    promotional_forbidden = [
+        "buy now", "purchase required", "pay to", "limited time offer",
+        "your pet is suffering", "your pet will die", "your pet is hungry",
+        "top up now", "recharge to save", "pet is dying",
+        "forced purchase", "hidden cost", "auto-renew", "subscription required",
+        "buy more food", "purchase tokens", "top up to feed",
+        "misses you so much", "lonely without you", "feels abandoned",
+        "don't leave me", "needs you now",
+        "buy to unlock", "pay to remember", "premium memory",
+        "buy avatar", "purchase skin", "voice clone",
+        "premium identity", "unlock species", "pay to customize",
+        "nft sale", "token sale", "limited edition",
+        "checkout now", "subscribe now", "premium plan",
+    ]
+    # These are unconditionally forbidden (no disclaimer context makes them OK)
+    unconditional_forbidden = [
+        "your pet is suffering", "your pet will die",
+        "misses you so much", "lonely without you",
+        "don't leave me", "buy to unlock",
+        "voice clone", "nft sale",
+    ]
+    paths = [
+        ("README", PROJECT_ROOT / "README.md"),
+        ("Pet Room", PROJECT_ROOT / "mini_agent" / "static" / "index.html"),
+        ("Audit Doc", PROJECT_ROOT / "docs" / "knowledge" / "PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md"),
+    ]
+    for label, path in paths:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        text_lower = text.lower()
+        # Unconditionally forbidden — never allowed anywhere
+        for phrase in unconditional_forbidden:
+            assert phrase not in text_lower, f"{label} contains unconditionally forbidden '{phrase}'"
+        # Promotional forbidden — allowed if preceded by negation within 30 chars
+        for phrase in promotional_forbidden:
+            if phrase not in text_lower:
+                continue
+            # Find all occurrences
+            for match in re.finditer(re.escape(phrase), text_lower):
+                start = match.start()
+                # Check preceding 30 chars for negation
+                context_before = text_lower[max(0, start - 30):start]
+                if negation_pattern.search(context_before):
+                    continue  # OK — in negation context
+                assert False, f"{label} contains promotional '{phrase}' at pos {start}"
 
 
 def eval_cli_multiline_input():

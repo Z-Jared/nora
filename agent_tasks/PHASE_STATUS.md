@@ -5,9 +5,9 @@ Last updated: 2026-06-08
 ## Current Phase
 
 - Phase: Phase 1 - Pet Life MVP
-- Percent: 94%
+- Percent: 97%
 - Status: in progress
-- Current focus: Phase 1 Exit Gate life-feel polish and commercial/no-manipulation readiness.
+- Current focus: Phase 1 Exit Gate final Phase 2 Voice & Presence technical plan.
 
 ## Completed This Phase
 
@@ -34,16 +34,22 @@ Last updated: 2026-06-08
   - README documents the Phase 1 local Pet Room demo path.
   - Verification is green: 337 targeted tests OK, 671 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
   - Reviewer approved TASK-167 while keeping Phase 1 in Exit Gate until TASK-168/169/170 complete.
+- Phase 1.5 Pet Room life-feel polish:
+  - Pet Room now shows deterministic mood summary, identity details, bounded room notices, and a Today diary from activity plus relationship memory.
+  - Shared Moment creation refreshes both relationship memories and Today diary.
+  - Web UI smoke coverage locks life-feel markers, mood copy, room notices, diary rendering/empty state, and HTML escaping.
+- Commercial/no-manipulation audit:
+  - `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md` documents Token Food, future membership/expansion boundaries, local demo limits, and no-manipulation findings.
+  - `commercial_no_manipulation_scan` covers README, Pet Room, and audit doc with context-aware negative-disclaimer handling.
+  - Verification is green: 343 targeted tests OK, 672 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- Phase 1 Exit Gate is active. Release audit is complete; PM must still complete life-feel polish, commercial/no-manipulation audit, and Phase 2 technical plan before moving to Phase 2.
+- Phase 1 Exit Gate is active. Release audit, life-feel polish, and commercial/no-manipulation audit are complete; PM must still complete the Phase 2 technical plan before moving to Phase 2.
 
 ## Next
 
-1. TASK-168 Phase 1.5 Pet Room life-feel polish.
-2. TASK-169 Commercial model and no-manipulation audit.
-3. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
+1. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
 
 ## Phase 1 Exit Criteria
 
@@ -64,10 +70,10 @@ Phase 1 cannot be marked complete until all of these are true:
 
 After the Identity Editor tasks land, PM must complete these gate tasks before moving to Phase 2:
 
-1. Phase 1 MVP release audit: final tests/evals, first-use flow verification, docs/demo path, scoped release commit or tag candidate.
-2. Phase 1.5 Pet Room life-feel polish: make the room feel like a living pet surface through deterministic interactions, diary/memory feedback, and identity-driven presentation.
-3. Commercial model and no-manipulation audit: document token food, membership, and expansion-pack monetization while enforcing transparent cost and no emotional pressure.
-4. Phase 2 Voice & Presence technical plan: plan voice profile, TTS boundary, Web/PWA presence, desktop floating pet path, safety, consent, and cost controls.
+1. Phase 1 MVP release audit: complete.
+2. Phase 1.5 Pet Room life-feel polish: complete.
+3. Commercial model and no-manipulation audit: complete.
+4. Phase 2 Voice & Presence technical plan: pending; plan voice profile, TTS boundary, Web/PWA presence, desktop floating pet path, safety, consent, cost controls, and worker scaling.
 
 Phase 2 remains blocked until the Exit Gate Queue is complete and this file is updated to mark Phase 1 as complete.
 
@@ -93,7 +99,7 @@ Before Phase 2 starts, PM must decide and record the Claude worker plan:
 
 ## Four-Phase Overview
 
-- Phase 1 Pet Life MVP: 94% / in progress
+- Phase 1 Pet Life MVP: 97% / Exit Gate final planning
 - Phase 2 Voice & Presence: 0% / not started
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

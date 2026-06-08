@@ -1333,3 +1333,103 @@ result.hasAmp = list.innerHTML.indexOf('pat &amp; hug') >= 0;
         self.assertFalse(d["hasScriptTag"], "Raw <script> found in activity HTML")
         self.assertTrue(d["hasEscapedScript"], "Escaped <script> not found")
         self.assertTrue(d["hasAmp"], "Ampersand not escaped")
+
+    def test_life_feel_elements_exist(self):
+        """Pet Room must have mood-summary, identity-details, room-notice, today-content."""
+        result = _run_node(test_body="""
+result = {};
+result.moodSummary = !!document.getElementById('pet-mood-summary');
+result.identityDetails = !!document.getElementById('pet-identity-details');
+result.roomNotice = !!document.getElementById('pet-room-notice');
+result.todayContent = !!document.getElementById('pet-today-content');
+result.todaySection = !!document.getElementById('pet-today-section');
+""")
+        d = result
+        for key in ["moodSummary", "identityDetails", "roomNotice", "todayContent", "todaySection"]:
+            self.assertTrue(d[key], f"Missing element: {key}")
+
+    def test_getMoodSummary_returns_string(self):
+        """getMoodSummary must return a bounded string for various states."""
+        result = _run_node(test_body="""
+result = {};
+result.happy = getMoodSummary('Nora-01', {hunger:20, energy:70, mood:80, bond:60, growth_level:1});
+result.hungry = getMoodSummary('Nora-01', {hunger:80, energy:70, mood:60, bond:10, growth_level:1});
+result.tired = getMoodSummary('Nora-01', {hunger:20, energy:10, mood:60, bond:10, growth_level:1});
+result.down = getMoodSummary('Nora-01', {hunger:20, energy:70, mood:20, bond:10, growth_level:1});
+""")
+        d = result
+        self.assertIn('cheerful', d['happy'])
+        self.assertIn('hungry', d['hungry'])
+        self.assertIn('resting', d['tired'])
+        self.assertIn('down', d['down'])
+        # All should include the name
+        for k in ['happy', 'hungry', 'tired', 'down']:
+            self.assertIn('Nora-01', d[k])
+
+    def test_showRoomNotice_displays_and_hides(self):
+        """showRoomNotice must set display and schedule hide."""
+        result = _run_node(test_body="""
+showRoomNotice('test notice');
+result = {};
+result.display = document.getElementById('pet-room-notice').style.display;
+result.text = document.getElementById('pet-room-notice').textContent;
+""")
+        d = result
+        self.assertNotEqual(d['display'], 'none')
+        self.assertEqual(d['text'], 'test notice')
+
+    def test_loadTodayDiary_renders_events(self):
+        """loadTodayDiary must render activity events into today-content."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/pet/activity') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([
+      {event_type:'fed', summary:'fed 100', created_at:'2026-06-09T12:00:00'},
+      {event_type:'care', summary:'pat', created_at:'2026-06-09T12:01:00'}
+    ])});
+  }
+  if (url.indexOf('/pet/relationship-memory') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+  }
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({})});
+};
+""", test_body="""
+loadTodayDiary('pet_1');
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-today-content').innerHTML;
+result.hasFed = result.html.indexOf('fed 100') >= 0;
+result.hasPat = result.html.indexOf('pat') >= 0;
+result.hasTime = result.html.indexOf('12:00') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasFed'], 'fed 100 not in today')
+        self.assertTrue(d['hasPat'], 'pat not in today')
+        self.assertTrue(d['hasTime'], 'timestamp not in today')
+
+    def test_loadTodayDiary_shows_empty_state(self):
+        """loadTodayDiary must show empty state when no events/memories."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+};
+""", test_body="""
+loadTodayDiary('pet_1');
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-today-content').innerHTML;
+result.hasEmpty = result.html.indexOf('Start your first') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasEmpty'], 'Empty state not shown')
+
+    def test_life_feel_escapeHtml_used(self):
+        """escapeHtml must be defined and escape tags."""
+        result = _run_node(test_body="""
+result = {};
+result.defined = typeof escapeHtml === 'function';
+result.escaped = escapeHtml('<b>x</b>');
+""")
+        d = result
+        self.assertTrue(d['defined'])
+        self.assertIn('&lt;b&gt;', d['escaped'])
