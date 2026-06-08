@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 15%
 - Status: in progress
-- Current focus: consent and cost gates for future real TTS/provider integration after text fallback boundary.
+- Current focus: Pet Room speech bubble surface for text fallback voice preview, still without real audio/provider calls.
 
 ## Completed This Phase
 
@@ -63,13 +63,14 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None currently assigned after TASK-172 integration.
+- TASK-173A: Pet Room speech bubble text fallback surface.
+- TASK-173B: Speech bubble deterministic eval and safety coverage.
 
 ## Next
 
-1. Publish the next small Phase 2 task only after TASK-172 final commit is complete.
-2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
-3. Next likely slice: consent/cost confirmation boundary for future real TTS, or Pet Room voice-preview UI surface without real audio/provider calls.
+1. Combine TASK-173A/B after worker completion and verify speech bubble UI plus eval coverage.
+2. After speech bubble lands, add explicit consent/cost confirmation boundary before any future real TTS/provider work.
+3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
 

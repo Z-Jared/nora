@@ -1,10 +1,10 @@
-# TASK-172B: TTS text fallback deterministic eval and safety coverage
+# TASK-173B: Speech bubble deterministic eval and safety coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is in progress. Voice Profile v1 is integrated. Phase 2 still uses A/B only; do not open or assume Claude C/D because current voice/presence work still shares core files. Read first:
+Phase 2 is in progress. TASK-172 added the TTS text fallback boundary. TASK-173A will add a Pet Room speech bubble UI surface. Phase 2 still uses A/B only; do not open or assume Claude C/D. Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
@@ -15,54 +15,53 @@ Phase 2 is in progress. Voice Profile v1 is integrated. Phase 2 still uses A/B o
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
 - `evals/run_evals.py`
-- `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
+- `tests/test_http_server.py`
 
 ## Goal
 
-Add deterministic eval and safety coverage for the Phase 2 TTS adapter boundary and text fallback preview. Coverage should lock the public contract that TASK-172A implements without adding real TTS or changing product implementation files.
+Add deterministic eval/safety coverage for the Pet Room speech bubble text fallback surface that TASK-173A implements. Coverage should lock the user-visible contract without implementing UI or modifying product files.
 
 Expected coverage areas:
 
-- Text fallback is available without provider configuration.
-- Voice/TTS preview exposes deterministic cost and no-audio fallback metadata.
-- Secret-like preview text is rejected and not echoed.
-- Preview/read endpoints do not mutate food balance, pet state, activity, or relationship memory.
-- UI copy does not imply voice cloning, recording by default, always listening, hidden background activity, real payment, marketplace, or purchase pressure.
+- Pet Room contains stable speech bubble markers/classes/ids.
+- Speech bubble uses text fallback semantics and displays no-audio/no-provider/no-recording/cost metadata.
+- Dynamic preview text is escaped and does not leak secret-like content.
+- UI copy does not imply voice cloning, recording by default, microphone use, always listening, hidden background activity, real payment, marketplace, or purchase pressure.
+- Existing `/pet/voice-preview` remains read-only and no new UI code implies food debit.
 
 ## Scope
 
 Allowed files:
 
 - `evals/run_evals.py`
-- `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
+- `tests/test_http_server.py` only if adding a narrowly targeted public-contract test
 - `agent_tasks/B_DONE.md`
 
 Do not edit implementation files:
 
-- `mini_agent/tts.py`
-- `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
+- `mini_agent/http_server.py`
+- `mini_agent/tts.py`
 - `mini_agent/pets.py`
 
 ## Required Coverage
 
-Add evals whose names include `tts` or `voice_cost`, for example:
+Add evals whose names include `speech_bubble` or `voice_preview_ui`, for example:
 
-- `tts_text_fallback_available`
-- `tts_preview_cost_transparent`
-- `tts_preview_rejects_secret_text`
-- `tts_preview_read_only_no_food_or_state_mutation`
-- `tts_webui_no_recording_or_background_copy`
+- `speech_bubble_markers_present`
+- `voice_preview_ui_cost_and_no_audio_copy`
+- `speech_bubble_escapes_preview_text`
+- `speech_bubble_no_recording_or_marketplace_copy`
 
-Guard evals so they can explain missing TASK-172A behavior during isolated worker runs, but after PM combines with TASK-172A they must be active/pass and not permanently skipped.
+Guard evals so they can explain missing TASK-173A behavior during isolated worker runs, but after PM combines with TASK-173A they must be active/pass and not permanently skipped.
 
 ## Non-Goals
 
-- Do not implement TTS runtime behavior.
+- Do not implement speech bubble UI.
 - Do not add real TTS, speech recognition, microphone access, audio playback, vendor adapters, PWA, desktop floating pet, billing, marketplace, or cloud sync.
-- Do not weaken existing pet, voice profile, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
+- Do not weaken existing pet, voice profile, TTS fallback, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
 - Do not add new Claude C/D worker files.
 
 ## Safety Boundaries
@@ -70,7 +69,7 @@ Guard evals so they can explain missing TASK-172A behavior during isolated worke
 - Eval scans may allow negative boundary statements, but must block promotional or enabling language for:
   - voice cloning
   - recording by default
-  - hidden background listening
+  - microphone or background listening claims
   - always listening
   - hidden cost
   - subscription or purchase pressure
@@ -84,16 +83,16 @@ Run:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_http_server tests.test_webui_smoke
+python3 -m unittest tests.test_webui_smoke tests.test_http_server
 git diff --check
-rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes" evals/run_evals.py tests/test_http_server.py tests/test_webui_smoke.py
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access" evals/run_evals.py tests/test_webui_smoke.py tests/test_http_server.py
 ```
 
 The `rg` command may find negative test/safety assertions only; explain any hits in `B_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-172B` and include:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-173B` and include:
 
 - Summary of eval/test coverage
 - Eval names added
