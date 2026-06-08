@@ -1,14 +1,10 @@
-# TASK-155: Pet Identity / Pet State deterministic foundation
+# TASK-157: Pet room MVP and local HTTP pet API
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora's product direction has pivoted from an Agent OS control surface to a customizable electronic pet agent. The Agent OS runtime remains the hidden backend, but the first user-facing product loop is now:
-
-```text
-create pet -> see pet state -> feed token food -> care/chat -> pet remembers -> pet uses skills
-```
+Nora has pivoted to a customizable electronic pet agent. TASK-155/156 landed the deterministic pet backend foundation in `4d239bb`. The next product step must make the pet visible and usable in the local Web app.
 
 Read first:
 
@@ -16,12 +12,11 @@ Read first:
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
-- `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`
-- `mini_agent/database.py`
-- `mini_agent/durable_tasks.py`
-- `mini_agent/memory_records.py`
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_durable_tasks.py`
+- `mini_agent/pets.py`
+- `mini_agent/http_server.py`
+- `mini_agent/static/index.html`
+- `tests/test_http_server.py`
+- `tests/test_webui_smoke.py`
 
 ## Worktree Safety
 
@@ -36,98 +31,52 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Implement the first deterministic Pet Agent backend foundation.
+Build the first visible Pet Room MVP backed by deterministic local HTTP endpoints.
 
 Required behavior:
 
-1. Add `mini_agent/pets.py` with:
-   - `PetIdentity`
-   - `PetState`
-   - `FoodLedgerEntry`
-   - `PetActivityEvent`
-   - `PetRecord` or equivalent return wrapper
-   - `PetActionResult` or equivalent result wrapper
-   - `PetStore`
+1. HTTP API in `mini_agent/http_server.py`:
+   - `GET /pet/current`: return the current/default pet if present; if none exists, create a default bounded pet and return it.
+   - `POST /pet/create`: create a pet with identity fields supported by `PetStore.create_pet`.
+   - `POST /pet/add-food`: add local demo compute food to a pet using `PetStore.add_food`.
+   - `POST /pet/feed`: feed a pet using `PetStore.feed_pet`.
+   - `POST /pet/care`: perform `pat`, `comfort`, `rest`, or `play`.
+   - `GET /pet/activity?pet_id=...`: return recent activity events.
+   - Add pet feature flag to `/status`.
+   - Add concise docs entries to `/docs`.
 
-2. Support SQLite through `NoraDB` and JSONL fallback.
+2. Web UI in `mini_agent/static/index.html`:
+   - Make the first viewport feel like a pet room, not an Agent OS dashboard.
+   - Show a modular 2D placeholder avatar or pet body built with HTML/CSS.
+   - Show pet name/species, hunger, energy, mood, bond, growth level, compute food balance.
+   - Add actions: feed, pat, rest/play or comfort, add local demo food.
+   - Show recent pet activity/diary.
+   - Keep existing chat/task/memory functionality usable, but do not let it dominate the first screen.
+   - Fit desktop and mobile without overlapping text or controls.
 
-3. Add SQLite tables/indexes in `mini_agent/database.py`:
-   - `pets`
-   - `pet_states`
-   - `pet_food_ledger`
-   - `pet_activity_events`
+3. Use the existing `PetStore` as the only state mutation path. Do not duplicate pet state rules in JS.
 
-4. Implement deterministic store operations:
-   - `create_pet(...)`
-   - `get_pet(pet_id)`
-   - `list_pets(limit=20)`
-   - `add_food(pet_id, amount, kind="basic_food", reason="")`
-   - `feed_pet(pet_id, food_kind="basic_food", amount=100)`
-   - `care_pet(pet_id, action="pat")`
-   - `list_food_ledger(pet_id, limit=20)`
-   - `list_activity_events(pet_id, limit=20)`
+## Product Constraints
 
-5. Register pet tools in `build_default_registry()`:
-   - `create_pet`
-   - `get_pet`
-   - `list_pets`
-   - `add_pet_food`
-   - `feed_pet`
-   - `care_pet`
-   - `list_pet_activity`
+- This is a local MVP room. It is acceptable to use a CSS/HTML 2D avatar placeholder.
+- Do not implement Live2D, 3D, voice, billing provider, mobile native app, or model-driven state deltas.
+- Do not add payment pressure copy. Food can be labeled as local demo compute food for this MVP.
+- Keep API output bounded and no-leak.
 
-6. Attach `registry.pet_store = pet_store`.
+## Safety Boundaries
 
-## State Rules
-
-Initial default state:
-
-```text
-hunger = 30
-energy = 60
-mood = 60
-bond = 0
-growth_level = 1
-compute_food_balance = 0
-```
-
-Bounds:
-
-```text
-hunger, energy, mood, bond: 0..100
-growth_level: >= 1
-compute_food_balance: >= 0
-```
-
-Feeding:
-
-- Requires enough `compute_food_balance`.
-- Subtracts `amount` from `compute_food_balance`.
-- Reduces `hunger`.
-- Increases `energy`, `mood`, and `bond`.
-- Records a food ledger entry and activity event.
-- Must not allow negative balance.
-
-Care:
-
-- Supported actions: `pat`, `comfort`, `rest`, `play`.
-- Does not spend compute food.
-- Updates mood/bond/energy according to deterministic rules.
-- Records an activity event.
-
-Sensitive input:
-
-- Reject or safely bound sensitive pet identity text, reasons, and activity summaries.
-- Do not store API keys, tokens, `.env` contents, or secret-like strings.
+- Mutation endpoints must require existing HTTP auth when `NORA_API_TOKEN` is set.
+- `GET /pet/current` and `GET /pet/activity` must be read-safe except the explicit first default-pet creation behavior for `/pet/current`.
+- Model output must not mutate pet state.
+- Sensitive identity text must continue to be rejected by `PetStore`.
 
 ## Scope
 
 Primary files:
 
-- `mini_agent/pets.py`
-- `mini_agent/database.py`
-- `mini_agent/toolkits/registry_builder.py`
-- `tests/test_pets.py`
+- `mini_agent/http_server.py`
+- `mini_agent/static/index.html`
+- `tests/test_http_server.py` only for focused API coverage needed by your implementation
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
@@ -137,37 +86,24 @@ Do not edit:
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-- `mini_agent/static/`
 
-## Non-Goals
-
-- No billing provider.
-- No Web pet room.
-- No voice.
-- No Live2D or 3D avatar.
-- No desktop/mobile companion app.
-- No LLM-generated state deltas.
-- No model calls.
-- No changing existing durable task semantics.
+Avoid touching unrelated CLI/TUI code.
 
 ## Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_pets tests.test_mini_agent
+python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
+python3 evals/run_evals.py
 git diff --check
 ```
 
-If feasible, also run:
-
-```bash
-python3 -m unittest discover tests
-```
+If full evals fail because of pre-existing unrelated state, report the exact failure and still run the targeted API/UI tests.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-156 depends on anything you left incomplete.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-158 needs to adjust tests for your API shape.
 
 Then notify Codex PM:
 

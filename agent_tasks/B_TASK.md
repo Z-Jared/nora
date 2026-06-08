@@ -1,10 +1,10 @@
-# TASK-156: Pet foundation deterministic eval and safety coverage
+# TASK-158: Pet room API/UI deterministic coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Nora is pivoting to a customizable electronic pet agent. Claude A owns TASK-155, the first deterministic pet backend foundation. Your job is to add deterministic eval and safety coverage for that foundation, or prepare the eval patch and report the dependency clearly if TASK-155 is not present in your worktree yet.
+Nora has pivoted to a customizable electronic pet agent. TASK-155/156 landed the deterministic pet backend foundation in `4d239bb`. Claude A owns TASK-157, which should add the local HTTP pet API and visible Pet Room MVP. Your job is to add deterministic coverage for that user-visible loop, or prepare focused tests/evals around the expected public API if TASK-157 is not present in your worktree yet.
 
 Read first:
 
@@ -12,12 +12,13 @@ Read first:
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
-- `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`
 - `agent_tasks/A_TASK.md`
+- `mini_agent/pets.py`
+- `mini_agent/http_server.py`
+- `mini_agent/static/index.html`
+- `tests/test_http_server.py`
+- `tests/test_webui_smoke.py`
 - `evals/run_evals.py`
-- `tests/test_pets.py` if present
-- `mini_agent/pets.py` if present
-- `mini_agent/toolkits/registry_builder.py`
 
 ## Worktree Safety
 
@@ -32,74 +33,37 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline eval coverage for the Pet Agent foundation.
+Add deterministic offline coverage for the Pet Room API/UI loop.
 
-Required eval coverage:
+Required coverage:
 
-1. `pet_create_and_get`
-   - create pet through registry
-   - get pet through registry
-   - output includes bounded identity and default state
+1. HTTP API:
+   - `GET /pet/current` returns a bounded current/default pet.
+   - `POST /pet/create` creates identity fields without leaking sensitive input.
+   - `POST /pet/add-food` increases compute food balance.
+   - `POST /pet/feed` spends balance, improves state, and never allows negative balance.
+   - `POST /pet/care` updates mood/bond without consuming food.
+   - `GET /pet/activity?pet_id=...` returns bounded recent events.
+   - Mutation endpoints respect existing auth when `NORA_API_TOKEN` is configured.
 
-2. `pet_feed_requires_balance`
-   - create pet
-   - attempt feed without food
-   - result is safe failure with `insufficient_compute_food`
-   - balance remains zero
+2. Web UI smoke:
+   - The page contains a Pet Room first-screen surface.
+   - It renders avatar/body placeholder, state metrics, food balance, action buttons, and activity/diary area.
+   - JS can load `/pet/current`, call feed/care/add-food, and update DOM state using mocked fetch.
+   - UI output must not render raw secret-like text.
 
-3. `pet_food_ledger_no_negative_balance`
-   - add food
-   - feed part of balance
-   - attempt overfeed
-   - balance never goes negative
-   - ledger contains bounded entries
-
-4. `pet_care_free_state_change`
-   - care action updates mood/bond
-   - care does not consume compute food
-
-5. `pet_registry_permissions`
-   - assert exact permissions:
-     - `create_pet`: `pet/write`
-     - `get_pet`: `pet/read`
-     - `list_pets`: `pet/read`
-     - `add_pet_food`: `pet/write`
-     - `feed_pet`: `pet/write`
-     - `care_pet`: `pet/write`
-     - `list_pet_activity`: `pet/read`
-
-6. `pet_read_tools_no_mutation`
-   - read/list tools do not mutate pet state, food ledger, or activity count
-
-7. `pet_sensitive_name_rejected`
-   - secret-like pet names or reasons are rejected or safely redacted
-   - raw secret does not appear in output
-
-8. `pet_activity_bounded_no_secret_leak`
-   - activity output is bounded
-   - raw API keys/tokens/.env-like strings do not appear
-
-## Coordination
-
-TASK-156 depends on TASK-155 for full green integration.
-
-If your worktree does not contain `mini_agent/pets.py` or pet registry tools:
-
-- Do not invent a conflicting pet implementation.
-- Prepare evals around the expected public API only if practical.
-- Otherwise write the exact blocker in `agent_tasks/B_DONE.md`.
-
-If TASK-155 is present:
-
-- Add evals to `evals/run_evals.py`.
-- Add narrowly scoped unit assertions to `tests/test_pets.py` only if needed for behavior that evals cannot cover cleanly.
+3. Evals:
+   - Add deterministic evals to `evals/run_evals.py` for the API/UI loop if TASK-157 is present.
+   - If TASK-157 is not present, add guarded evals or focused test scaffolding with explicit skip/dependency reporting.
 
 ## Scope
 
 Primary files:
 
+- `tests/test_http_server.py`
+- `tests/test_webui_smoke.py`
 - `evals/run_evals.py`
-- `tests/test_pets.py` only if needed
+- `tests/test_pets.py` only if a small assertion is needed
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
@@ -109,32 +73,41 @@ Do not edit:
 - `CODEX_TERMINAL_HANDOFF.md`
 - `designs/`
 - `assets/`
-- `mini_agent/static/`
+
+Avoid touching unrelated CLI/TUI code.
 
 ## Non-Goals
 
-- No feature implementation unless required to make evals observe an existing TASK-155 API.
 - No billing provider.
-- No Web room UI.
-- No voice/avatar/desktop/mobile work.
+- No voice.
+- No Live2D or 3D rigging.
+- No native desktop/mobile app.
 - No LLM calls.
 - No model-driven pet state mutation.
+- No feature implementation except tiny testability fixes directly required by observed failures.
+
+## Safety Boundaries
+
+- Tests/evals must prove model/chat output cannot directly mutate pet state.
+- Tests/evals must prove auth guards mutation endpoints.
+- Tests/evals must prove read tools do not mutate state except the documented first default-pet creation behavior of `GET /pet/current`.
+- Tests/evals must prove no raw API-key/token-like string is rendered by pet API/UI outputs.
 
 ## Verification
 
 Run:
 
 ```bash
+python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
 python3 evals/run_evals.py
-python3 -m unittest tests.test_pets tests.test_mini_agent
 git diff --check
 ```
 
-If full evals cannot run because TASK-155 is missing, run the most relevant targeted checks and report the dependency explicitly.
+If TASK-157 is missing, run the most relevant targeted checks and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-155 was present in your worktree.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-157 was present in your worktree.
 
 Then notify Codex PM:
 

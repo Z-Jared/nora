@@ -37,11 +37,29 @@
 9. 更新 BACKLOG.md：
    - 把完成的任务移到「已完成」
    - 更新任务描述或添加新发现的任务
-10. **架构优化检查**：
+10. **向用户汇报阶段进度**：
+   - 每次 PM 初审、Reviewer 处理、集成或提交完成后，都必须告诉用户当前项目阶段进度。
+   - 汇报必须包含：当前阶段、阶段百分比、刚完成/正在进行/下一步、4 个阶段总览。
+   - 如果审查未通过，也要说明阶段进度是否不变，以及阻塞项是什么。
+   - 默认格式：
+     ```text
+     当前阶段: Phase 1 - Pet Life MVP
+     Phase 1 进度: xx%
+     刚完成: ...
+     正在进行: ...
+     下一步: ...
+
+     阶段总览:
+     - Phase 1 Pet Life MVP: xx% / 进行中
+     - Phase 2 Voice & Presence: 0% / 未开始
+     - Phase 3 Skill Runtime Reframing: 0% / 未开始
+     - Phase 4 Platform & Marketplace: 0% / 未开始
+     ```
+11. **架构优化检查**：
    - 根据 completion report、review findings、测试/eval 结果、用户反馈和 radar 信号，判断是否需要更新 `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
    - 如果只是候选方向，写入 PM 候选建议或 radar，不直接扩大当前任务 scope
    - 如果是稳定架构决策，同步更新 `docs/knowledge/DECISIONS.md`；如果新窗口必须继承，同步更新 `docs/knowledge/PROJECT_WAKEUP.md`
-11. 回到步骤 1，分配下一个任务
+12. 回到步骤 1，分配下一个任务
 
 ## 任务生成流程
 
@@ -148,6 +166,23 @@ PM 发送给 reviewer 时应包含：
 审查完成：
 ```
 /ask claude-a 审查通过。BACKLOG.md 已更新，请查看下一个任务。
+```
+
+给用户的审查完成汇报必须附带阶段进度：
+```
+审查完成：[任务/提交/结论]
+
+当前阶段: Phase 1 - Pet Life MVP
+Phase 1 进度: xx%
+刚完成: ...
+正在进行: ...
+下一步: ...
+
+阶段总览:
+- Phase 1 Pet Life MVP: xx% / 进行中
+- Phase 2 Voice & Presence: 0% / 未开始
+- Phase 3 Skill Runtime Reframing: 0% / 未开始
+- Phase 4 Platform & Marketplace: 0% / 未开始
 ```
 
 生成任务后通知用户：
