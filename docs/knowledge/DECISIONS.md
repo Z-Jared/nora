@@ -1,5 +1,32 @@
 # Nora Development Decisions
 
+## 2026-06-08: Product North Star Pivots To Customizable Electronic Pet Agent
+
+Nora's product direction pivots from an Agent OS control surface to a customizable electronic pet agent. The existing Agent OS / Durable Runtime work remains useful as the hidden runtime, but the default user-facing product should become a pet room, identity, feeding, voice, memory, growth, and skill experience.
+
+The new product formula is:
+
+```text
+Nora Pet Agent
+  = customizable electronic lifeform
+  + token food economy
+  + multimodal brain
+  + 2D/Live2D avatar and room
+  + voice and expression system
+  + agent skill runtime
+  + long-term relationship memory
+```
+
+Implication:
+
+- Treat `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` as the product-direction contract for the pivot.
+- User-facing work should prioritize pet identity, pet room, feeding, life state, voice, relationship memory, avatar expression, and skill use through the pet metaphor.
+- Existing durable tasks, tools, traces, policy hooks, model routing, skill manifests, and plugin manifests should be reframed as pet runtime internals: shared goals, skills, diary, safety boundaries, thinking modes, skill packs, and equipment.
+- Food represents token-backed compute energy. The product must show balance and estimated cost clearly and must not use pet distress to manipulate payment.
+- Multimodal models may power cognition, voice, vision, screen understanding, and expression proposals, but deterministic systems must own balances, payments, life state, memory writes, permissions, and commercial rules.
+- MVP avatar work should start with modular 2D / Live2D-style expression rather than blocking on full 3D. 3D/VRM, AR, and immersive rooms are later-stage expansions.
+- PM-generated tasks for this pivot should name the affected layer: Pet Identity, Pet State Engine, Token Food Economy, Avatar/Room UI, Voice/Expression System, Multimodal Cognition, Skill Runtime, Memory/Relationship System, Monetization/Billing, Safety/Policy, or Cross-Device Presence.
+
 ## 2026-06-05: Framework Architecture Should Be Continuously Optimized
 
 Nora's framework architecture is a living contract, not a one-time document. Codex PM and reviewer loops should continuously refine it from implementation evidence, eval results, review findings, user feedback, and frontier agent platform signals.

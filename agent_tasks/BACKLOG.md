@@ -6,6 +6,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-155: Pet Identity / Pet State deterministic foundation
+- 架构层: Pet Identity / Pet State Engine / Token Food Economy / Skill Runtime
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`
+- 目标: Add the first deterministic pet backend foundation: pet identity, state, token food ledger, feed/care transitions, and registry tools.
+- 非目标: No billing provider, no Web room UI, no voice, no Live2D/3D, no desktop/mobile app, no LLM-driven state mutation.
+- 安全边界: Model output must not control balances or state; reject sensitive pet identity text; read tools must not mutate; feed must not allow negative balance; outputs must be bounded and no-leak.
+- 持久证据: SQLite/JSONL pet identity/state, food ledger entries, activity events, registry tool outputs, unit tests.
+- 验证: `python3 -m unittest tests.test_pets tests.test_mini_agent`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`, `mini_agent/durable_tasks.py`, `mini_agent/memory_records.py`, `mini_agent/toolkits/registry_builder.py`.
+
+### TASK-156: Pet foundation deterministic eval and safety coverage
+- 架构层: Pet State Engine / Token Food Economy / Eval/Review System / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude B
+- 依赖: TASK-155 implementation. If TASK-155 is not present in your worktree, prepare eval specifications/tests where possible and report the dependency explicitly.
+- 目标: Add deterministic eval coverage for pet creation, feed/care transitions, token food no-negative-balance, read-only no-mutation, no-leak behavior, and registry permissions.
+- 非目标: No runtime feature changes unless needed for testability; no UI, billing, voice, avatar, or model integration.
+- 安全边界: Eval must prove sensitive names/reasons are rejected or redacted, balances cannot go negative, read tools do not mutate, and registry outputs do not leak raw secrets.
+- 持久证据: New eval cases in `evals/run_evals.py`, focused unit assertions if needed, exact pass/fail report.
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_pets tests.test_mini_agent`; `git diff --check`.
+- 参考: `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`, `evals/run_evals.py`, `tests/test_pets.py`.
+
 ## 已完成
 
 ### TASK-153: Nora TTY raw terminal interaction layer v1

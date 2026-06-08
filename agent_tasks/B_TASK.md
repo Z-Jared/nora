@@ -1,38 +1,23 @@
-# TASK-154: TTY permissions selector and regression coverage
+# TASK-156: Pet foundation deterministic eval and safety coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-The user reported three remaining real terminal UX gaps:
-
-- `/` does not wake a command picker before Enter
-- permissions still ask for manual `y/N` input instead of selectable options
-- status/model information should live near the prompt, not as repeated printed footer text
-
-Claude A owns TASK-153: the new TTY/raw terminal frontend. Your task is to make the behavior testable and cover the permission-selector side without bypassing safety.
-
-Pencil design reference:
-
-- File: `pencil-new.pen`
-- Node: `kdiWB`
-- Name: `Nora CLI TUI Raw Terminal Mock v2`
+Nora is pivoting to a customizable electronic pet agent. Claude A owns TASK-155, the first deterministic pet backend foundation. Your job is to add deterministic eval and safety coverage for that foundation, or prepare the eval patch and report the dependency clearly if TASK-155 is not present in your worktree yet.
 
 Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
-- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
-- `docs/knowledge/CHAT_INDEX.md`
-- `agent_tasks/BACKLOG.md`
+- `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
+- `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`
 - `agent_tasks/A_TASK.md`
-- `mini_agent/app.py`
-- `mini_agent/cli.py`
-- `mini_agent/registry.py`
-- `mini_agent/tools_common.py`
-- `tests/test_cli.py`
 - `evals/run_evals.py`
+- `tests/test_pets.py` if present
+- `mini_agent/pets.py` if present
+- `mini_agent/toolkits/registry_builder.py`
 
 ## Worktree Safety
 
@@ -47,44 +32,74 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic coverage for Nora's TTY/raw terminal contract and, where the hook point is available, implement or integrate selectable permission confirmation.
+Add deterministic offline eval coverage for the Pet Agent foundation.
 
-Required coverage:
+Required eval coverage:
 
-1. Mode selection
-   - TTY mode chooses the interactive frontend.
-   - non-TTY/redirected stdin chooses legacy `MiniAgentCLI`.
-   - legacy pipes remain deterministic.
+1. `pet_create_and_get`
+   - create pet through registry
+   - get pet through registry
+   - output includes bounded identity and default state
 
-2. Slash command metadata
-   - command completion source includes `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/permissions`, `/doctor`, `/status`, `/test`, `/tools`, `/exit`
-   - command descriptions are short and do not leak config/secrets
+2. `pet_feed_requires_balance`
+   - create pet
+   - attempt feed without food
+   - result is safe failure with `insufficient_compute_food`
+   - balance remains zero
 
-3. Permission UX
-   - TTY permission prompt exposes selectable labels:
-     - `Allow once`
-     - `Deny`
-     - optionally `Always allow this tool this session` if implemented
-   - non-TTY fallback still supports existing `y/N` behavior
-   - tests must prove denied approval still blocks the tool call
-   - do not add auto-approval
+3. `pet_food_ledger_no_negative_balance`
+   - add food
+   - feed part of balance
+   - attempt overfeed
+   - balance never goes negative
+   - ledger contains bounded entries
 
-4. Status/lifecycle
-   - TTY mode does not append repeated model footer lines after every response
-   - TTY thinking/status does not expose hidden reasoning or raw prompts
-   - legacy non-TTY lifecycle remains compatible with existing evals unless PM integrates a deliberate contract update
+4. `pet_care_free_state_change`
+   - care action updates mood/bond
+   - care does not consume compute food
 
-5. Safety
-   - no API key, raw `.env`, raw prompt status line, hidden reasoning marker, or raw JSON payload leaks in completion labels, toolbar/status helpers, permission prompts, or eval surfaces
+5. `pet_registry_permissions`
+   - assert exact permissions:
+     - `create_pet`: `pet/write`
+     - `get_pet`: `pet/read`
+     - `list_pets`: `pet/read`
+     - `add_pet_food`: `pet/write`
+     - `feed_pet`: `pet/write`
+     - `care_pet`: `pet/write`
+     - `list_pet_activity`: `pet/read`
+
+6. `pet_read_tools_no_mutation`
+   - read/list tools do not mutate pet state, food ledger, or activity count
+
+7. `pet_sensitive_name_rejected`
+   - secret-like pet names or reasons are rejected or safely redacted
+   - raw secret does not appear in output
+
+8. `pet_activity_bounded_no_secret_leak`
+   - activity output is bounded
+   - raw API keys/tokens/.env-like strings do not appear
+
+## Coordination
+
+TASK-156 depends on TASK-155 for full green integration.
+
+If your worktree does not contain `mini_agent/pets.py` or pet registry tools:
+
+- Do not invent a conflicting pet implementation.
+- Prepare evals around the expected public API only if practical.
+- Otherwise write the exact blocker in `agent_tasks/B_DONE.md`.
+
+If TASK-155 is present:
+
+- Add evals to `evals/run_evals.py`.
+- Add narrowly scoped unit assertions to `tests/test_pets.py` only if needed for behavior that evals cannot cover cleanly.
 
 ## Scope
 
 Primary files:
 
-- `tests/test_cli.py`
 - `evals/run_evals.py`
-- `mini_agent/registry.py` / `mini_agent/tools_common.py` only if needed for a clean confirmation hook
-- `mini_agent/interactive_cli.py` only if created by TASK-153 and you need narrow integration tests
+- `tests/test_pets.py` only if needed
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
@@ -96,15 +111,14 @@ Do not edit:
 - `assets/`
 - `mini_agent/static/`
 
-## Coordination
+## Non-Goals
 
-TASK-154 depends on TASK-153 for full green integration. If your worktree does not contain the interactive frontend yet:
-
-- prepare tests/evals around stable helper APIs if possible
-- avoid inventing a conflicting frontend
-- clearly report any dependency/blocker in `agent_tasks/B_DONE.md`
-
-If you can implement the permission selector independently, keep it behind an injectable confirmation function so Claude A's frontend can call it without changing backend permission semantics.
+- No feature implementation unless required to make evals observe an existing TASK-155 API.
+- No billing provider.
+- No Web room UI.
+- No voice/avatar/desktop/mobile work.
+- No LLM calls.
+- No model-driven pet state mutation.
 
 ## Verification
 
@@ -112,15 +126,15 @@ Run:
 
 ```bash
 python3 evals/run_evals.py
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_pets tests.test_mini_agent
 git diff --check
 ```
 
-If full evals cannot pass because TASK-153 is not integrated in your worktree, run the most relevant targeted tests and report the dependency explicitly.
+If full evals cannot run because TASK-155 is missing, run the most relevant targeted checks and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-153 was present in your worktree.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-155 was present in your worktree.
 
 Then notify Codex PM:
 

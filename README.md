@@ -1,6 +1,8 @@
 # Nora
 
-Nora 的长期目标是成为本地优先的 Agent OS / Durable Runtime：一个可以承载代码、文件、浏览器、终端、记忆和多代理工作流的可审计执行层。当前版本先提供个人 AI 助手和 coding agent 工作台能力，并逐步向持久任务、可恢复执行、事件追踪、权限内核、上下文编译和多 agent 调度演进。
+Nora 正在从本地 Agent OS / Durable Runtime 转向一个可自定义身份的电子宠物 Agent：用户可以定义它的外形、性格、声音、口味和技能，给它喂 token-backed 食物，让它陪伴、成长、记住共同经历，并通过 agent 技能帮助完成真实任务。
+
+现有本地 runtime 仍然是 Nora 的技术底座：代码、文件、浏览器、终端、记忆、权限、任务、trace、skill/plugin 和模型路由能力会逐步被包装成宠物的技能、记忆、日记、安全边界和思考模式。短期版本仍保留 CLI、HTTP server、Web UI 和 coding agent 工作台能力；新的产品开发重点是 Pet Identity、Pet State、Token Food、宠物房间、语音/形象表达和关系记忆。
 
 ## 当前能力
 

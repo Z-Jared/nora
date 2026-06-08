@@ -1,36 +1,27 @@
-# TASK-153: Nora TTY raw terminal interaction layer v1
+# TASK-155: Pet Identity / Pet State deterministic foundation
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-The recent CLI UX work only polished printed output. The user has now explicitly asked for the real terminal interaction layer:
+Nora's product direction has pivoted from an Agent OS control surface to a customizable electronic pet agent. The Agent OS runtime remains the hidden backend, but the first user-facing product loop is now:
 
-- input should behave like Claude Code/Codex and stay owned by the bottom prompt area in manual TTY use
-- typing `/` should open commands before pressing Enter
-- command options must support up/down selection and Tab completion
-- model/cwd/status belongs near the prompt, not printed after every reply
-- thinking/status should be visible while the model works, without exposing hidden reasoning
-- non-TTY scripts and tests must keep the existing `input()`/`print()` path
-
-Pencil design reference:
-
-- File: `pencil-new.pen`
-- Node: `kdiWB`
-- Name: `Nora CLI TUI Raw Terminal Mock v2`
+```text
+create pet -> see pet state -> feed token food -> care/chat -> pet remembers -> pet uses skills
+```
 
 Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
-- `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md`
-- `docs/knowledge/CHAT_INDEX.md`
-- `agent_tasks/BACKLOG.md`
-- `mini_agent/app.py`
-- `mini_agent/cli.py`
-- `mini_agent/registry.py`
-- `pyproject.toml`
+- `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
+- `docs/superpowers/plans/2026-06-08-pet-life-mvp-foundation.md`
+- `mini_agent/database.py`
+- `mini_agent/durable_tasks.py`
+- `mini_agent/memory_records.py`
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_durable_tasks.py`
 
 ## Worktree Safety
 
@@ -45,50 +36,98 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add a first real TTY/raw terminal frontend layer for manual `nora` sessions.
+Implement the first deterministic Pet Agent backend foundation.
 
-Expected architecture:
+Required behavior:
 
-- Keep `MiniAgentCLI` as the legacy non-TTY fallback and as the core slash-command handler.
-- Add a new focused module, likely `mini_agent/interactive_cli.py`.
-- In `mini_agent/app.py`, choose:
-  - TTY stdin/stdout: new interactive frontend
-  - non-TTY, redirected stdin, tests, pipes: existing `MiniAgentCLI.run()`
-- Use `prompt_toolkit` or an equivalent small terminal library if needed. If you add a dependency, update both `pyproject.toml` and `setup.py` if setup metadata requires it.
+1. Add `mini_agent/pets.py` with:
+   - `PetIdentity`
+   - `PetState`
+   - `FoodLedgerEntry`
+   - `PetActivityEvent`
+   - `PetRecord` or equivalent return wrapper
+   - `PetActionResult` or equivalent result wrapper
+   - `PetStore`
 
-Required TTY behavior:
+2. Support SQLite through `NoraDB` and JSONL fallback.
 
-1. Prompt and toolbar
-   - prompt text stays visually minimal: `> `
-   - bottom toolbar shows compact status such as model/cwd/local-first
-   - toolbar/status is not appended to chat history after every response
+3. Add SQLite tables/indexes in `mini_agent/database.py`:
+   - `pets`
+   - `pet_states`
+   - `pet_food_ledger`
+   - `pet_activity_events`
 
-2. Slash command launcher
-   - typing `/` opens command completions before Enter
-   - command list should come from one registry/helper, not hard-coded in multiple unrelated places
-   - include at least `/`, `/help`, `/wake`, `/model`, `/setup`, `/workers`, `/permissions`, `/doctor`, `/status`, `/test`, `/tools`, `/exit`
-   - up/down selection and Tab completion should work through the terminal library
+4. Implement deterministic store operations:
+   - `create_pet(...)`
+   - `get_pet(pet_id)`
+   - `list_pets(limit=20)`
+   - `add_food(pet_id, amount, kind="basic_food", reason="")`
+   - `feed_pet(pet_id, food_kind="basic_food", amount=100)`
+   - `care_pet(pet_id, action="pat")`
+   - `list_food_ledger(pet_id, limit=20)`
+   - `list_activity_events(pet_id, limit=20)`
 
-3. Thinking/status
-   - while `agent.run(...)` is executing, show a compact transient status such as `Working...` or `Thinking...`
-   - do not print repeated lifecycle noise into the transcript in TTY mode
-   - do not expose hidden reasoning, raw prompts, raw tool payloads, or secrets
+5. Register pet tools in `build_default_registry()`:
+   - `create_pet`
+   - `get_pet`
+   - `list_pets`
+   - `add_pet_food`
+   - `feed_pet`
+   - `care_pet`
+   - `list_pet_activity`
 
-4. Fallback compatibility
-   - `printf '/model\nexit\n' | nora` must still use the existing legacy CLI path
-   - existing CLI unit tests that instantiate `MiniAgentCLI` should keep working
-   - do not remove `Working...` / `Done.` from legacy non-TTY behavior unless tests are intentionally updated by PM
+6. Attach `registry.pet_store = pet_store`.
+
+## State Rules
+
+Initial default state:
+
+```text
+hunger = 30
+energy = 60
+mood = 60
+bond = 0
+growth_level = 1
+compute_food_balance = 0
+```
+
+Bounds:
+
+```text
+hunger, energy, mood, bond: 0..100
+growth_level: >= 1
+compute_food_balance: >= 0
+```
+
+Feeding:
+
+- Requires enough `compute_food_balance`.
+- Subtracts `amount` from `compute_food_balance`.
+- Reduces `hunger`.
+- Increases `energy`, `mood`, and `bond`.
+- Records a food ledger entry and activity event.
+- Must not allow negative balance.
+
+Care:
+
+- Supported actions: `pat`, `comfort`, `rest`, `play`.
+- Does not spend compute food.
+- Updates mood/bond/energy according to deterministic rules.
+- Records an activity event.
+
+Sensitive input:
+
+- Reject or safely bound sensitive pet identity text, reasons, and activity summaries.
+- Do not store API keys, tokens, `.env` contents, or secret-like strings.
 
 ## Scope
 
 Primary files:
 
-- `mini_agent/interactive_cli.py` or similarly named new module
-- `mini_agent/app.py`
-- `mini_agent/cli.py` only for reusable slash command metadata/helpers
-- `pyproject.toml`
-- `setup.py` if dependency metadata exists there
-- `tests/test_cli.py`
+- `mini_agent/pets.py`
+- `mini_agent/database.py`
+- `mini_agent/toolkits/registry_builder.py`
+- `tests/test_pets.py`
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
@@ -102,36 +141,33 @@ Do not edit:
 
 ## Non-Goals
 
-- No fullscreen dashboard.
-- No curses-style custom renderer if a lighter prompt-session approach works.
-- No Web UI changes.
-- No model provider/router semantic changes.
-- No hidden reasoning display.
-- No auto-approval of tools.
-- No broad rewrite of `MiniAgentCLI`.
+- No billing provider.
+- No Web pet room.
+- No voice.
+- No Live2D or 3D avatar.
+- No desktop/mobile companion app.
+- No LLM-generated state deltas.
+- No model calls.
+- No changing existing durable task semantics.
 
 ## Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_cli tests.test_config tests.test_mini_agent
+python3 -m unittest tests.test_pets tests.test_mini_agent
 git diff --check
 ```
 
-If feasible, also run a manual TTY smoke:
+If feasible, also run:
 
 ```bash
-nora
+python3 -m unittest discover tests
 ```
-
-Check `/` completion, arrow navigation, Tab completion, normal chat status, and `/exit`.
-
-If the local installed `nora` is stale, report the exact install command needed instead of silently assuming success.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and any manual TTY observations.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-156 depends on anything you left incomplete.
 
 Then notify Codex PM:
 

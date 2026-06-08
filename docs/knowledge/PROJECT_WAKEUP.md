@@ -1,24 +1,42 @@
 # Nora Project Wakeup
 
-Last updated: 2026-06-05
+Last updated: 2026-06-08
 
 ## Mission
 
-Nora is being built to catch and eventually surpass Claude Code and Codex by becoming an Agent OS / Durable Runtime, not just a local coding assistant.
+Nora is pivoting toward a customizable electronic pet agent: a digital lifeform each user can define, feed, talk to, grow with, and ask for real help.
 
-The project direction is not "chatbot plus tools" and not merely "coding agent plus UI." Nora should evolve into a local-first operating layer for durable agents: persistent task state, resumable execution, event-sourced traces, permissioned tools, worker scheduling, review gates, context compilation, and fast adaptation to current AI agent research.
+The user-facing product direction is not "chatbot plus avatar" and not merely "Agent OS dashboard." Nora should feel like a living pet companion with identity, hunger, energy, mood, bond, taste, voice, room presence, and long-term relationship memory.
 
-Nora should also become a professional agent platform that can serve personal and enterprise users across industries. The long-term architecture is:
+The existing Agent OS / Durable Runtime work remains important, but it becomes the hidden runtime that powers the pet's skills, memory, safety, tasks, and tool execution. The long-term product architecture is:
 
 ```text
-Nora = Agent OS Core + Skill Packs + Plugin Runtime + Capability Router
+Nora Pet Agent
+  = customizable electronic lifeform
+  + token food economy
+  + multimodal brain
+  + 2D/Live2D avatar and room
+  + voice and expression system
+  + agent skill runtime
+  + long-term relationship memory
 ```
 
-Industry ability should be embedded as a system mechanism, not as one giant prompt. Skill packs teach Nora how an industry works; plugins let Nora operate industry tools through permissioned, auditable connectors.
+The pet should be commercially viable: food represents token-backed compute energy, membership expands memory/voice/room/pet slots, and skill/avatar/voice/plugin packs create marketplace upside. Nora must not use pet distress to manipulate purchases; token balance and estimated consumption must be transparent.
 
 ## Target Architecture North Star
 
-Use `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` as the architecture north star. Every major task should be judged by whether it advances Nora toward:
+Use `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` as the product-direction contract for the pivot. Every major user-facing task should be judged by whether it advances Nora toward:
+
+- A pet room as the first screen.
+- User-defined pet identity, appearance, personality, voice, taste, relationship role, and skills.
+- Deterministic pet state: hunger, energy, mood, bond, growth, compute food balance, and relationship memories.
+- Token-backed food economy with transparent balance and estimated cost.
+- Multimodal cognition for text, voice, image, and screen understanding.
+- Voice and expression systems tied to the pet identity.
+- Agent skills presented as pet abilities rather than raw tools.
+- Cross-device pet presence on desktop, phone, tablet, and web.
+
+Use `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` and `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` as runtime contracts underneath the pet product. Runtime work remains valuable when it supports:
 
 - Durable tasks that can pause, resume, replay, inspect, and recover.
 - A runtime kernel with scheduler, event log, state store, permission manager, tool broker, context compiler, and model router.
@@ -26,7 +44,7 @@ Use `docs/knowledge/AGENT_OS_DURABLE_RUNTIME.md` as the architecture north star.
 - Multi-agent execution with isolated workers, review gates, and deterministic handoff artifacts.
 - Auditable local-first operation where every model call, tool call, file edit, test, approval, and error is traceable.
 
-Use `docs/knowledge/NORA_FRAMEWORK_ARCHITECTURE.md` as the framework contract for task design. PM-generated tasks must name the architecture layer they affect, include non-goals, safety boundaries, durable evidence, verification, and references to the relevant architecture section.
+PM-generated tasks for the pivot must name the product layer they affect: Pet Identity, Pet State Engine, Token Food Economy, Avatar/Room UI, Voice/Expression System, Multimodal Cognition, Skill Runtime, Memory/Relationship System, Monetization/Billing, Safety/Policy, or Cross-Device Presence. Runtime-heavy tasks should still reference the relevant Agent OS architecture layer.
 
 ## Current Operating Model
 
@@ -57,7 +75,11 @@ Do not assume this state is still current. Verify before editing.
 
 ## Recent Decisions
 
-- Nora's north star is Agent OS / Durable Runtime, above ordinary coding-agent or RAG-app positioning.
+- Nora's product north star is now a customizable electronic pet agent. Agent OS / Durable Runtime becomes the hidden runtime foundation rather than the default user-facing product.
+- The first user impression should be a pet room and living companion, not a terminal, task dashboard, or raw tool list.
+- Food represents token-backed compute energy. The pet remains alive and available for light care when balance is empty, but expensive chat, voice, screen, coding, research, browser, and plugin actions require compute food.
+- Multimodal models are feasible as the pet's cognition layer, but deterministic systems must own balances, payments, life state, permissions, and durable memory writes.
+- MVP avatar work should start with modular 2D / Live2D-style expression. Full 3D/VRM, AR, and immersive rooms are later-stage expansions.
 - Nora should keep lightweight RAG as an auxiliary feature, not as the core coding-agent brain.
 - Code understanding should prioritize agentic search, AST/symbol search, import/call relationships, task-specific context compilation, trace memory, and review gates.
 - Nora should support industry and professional workflows through modular skill packs plus governed plugins/connectors. Skill packs provide terminology, workflows, templates, risk boundaries, and evals. Plugins provide external system access with auth, permissions, sensitivity labels, confirmation rules, and event logging.
@@ -71,42 +93,41 @@ Do not assume this state is still current. Verify before editing.
 
 ## Current Product Maturity
 
-Nora is a usable local alpha approaching beta:
+Nora is a usable local agent-runtime alpha, but it is not yet a pet product:
 
 - CLI, HTTP server, Web UI, SSE, WebSocket, OpenAPI docs.
 - OpenAI-compatible, Anthropic, and Gemini providers.
 - Toolkits, permission categories, file/Git/shell/browser/web/RAG/log/process tools.
 - Short-term memory, long-term memory, task management, session save/load.
-- Durable task/worker runtime primitives: worker registry/heartbeat/claim/auto-dispatch, lifecycle pause/resume/cancel, checkpoints, recovery planning, recovery events, and timeline inspection.
+- Durable task/worker runtime primitives: worker registry/heartbeat/claim/auto-dispatch, lifecycle pause/resume/cancel, checkpoints, recovery planning, recovery events, timeline inspection, policy hook inspection, plugin/skill manifest inspection, capability routing, and model routing inspection.
 - Worker lifecycle planning, guarded run-once automation, and guarded scheduler tick v1 have landed; the next step is turning scheduler ticks into a policy-backed loop with retry/backoff and blocked-reason explanations.
-- A large Python test suite; recent full run reported 1982 tests passing, and deterministic evals reported 312 passed.
+- A large Python test suite and deterministic eval suite.
 
-Main gap versus an Agent OS / Durable Runtime:
+Main gap versus the Pet Agent direction:
 
-- Deeper runtime execution semantics beyond state tools: actual isolated worker execution, automatic scheduling, replay, and rollback.
-- Worker isolation, sandboxing, scheduling, and merge workflow.
-- Permission kernel, policy hooks, review gates, and rollback.
-- Evaluation harness for real coding and operating-system-like agent tasks.
-- Real model routing and cost/latency/reliability policy.
-- UI redesign for inspecting tasks, traces, workers, approvals, diffs, tests, recovery points, and timelines.
-- Skill pack runtime for industry-specific professional workflows.
-- Plugin runtime and capability routing for external industry tools.
+- No Pet Identity schema yet.
+- No Pet State Engine for hunger, energy, mood, bond, taste, growth, and compute food.
+- No token food balance, feeding flow, estimated consumption, or billing boundary.
+- No pet room as first screen.
+- No avatar, room, animation, or expression system.
+- No voice profile or speech conversation layer.
+- Agent tools are still exposed as tools instead of pet skills.
+- Memory is not yet relationship-centered.
+- Desktop/mobile presence is not designed or implemented.
 
 ## Near-Term Priority
 
-Shift from feature accumulation to deeper agent-runtime foundations:
+Shift from Agent OS feature accumulation to Pet Agent MVP foundations:
 
-1. Finish worker lifecycle planner/run-once work, then promote it into a scheduler loop that can periodically plan, dry-run, safely execute closeouts, dispatch eligible work, retry with backoff, and explain blocked work.
-2. Add a hook and policy kernel for filesystem, shell, browser, network, Git, plugin, model, test, handoff, compact, commit, and high-risk actions.
-3. Upgrade durable events into graph-shaped traces/spans for task, worker, model, tool, plugin, approval, review, test, handoff, and recovery activity.
-4. Add plugin manifests and runtime foundations: auth, tool schemas, permission mapping, sensitivity labels, confirmation rules, output bounding, and event logging.
-5. Add skill manifests and context-compiler integration for industry workflows: terminology, workflows, templates, deliverable formats, required plugins, risk boundaries, and evals.
-6. Add capability routing that chooses skills, plugins, model policy, risk level, and expected deliverables from the user's goal.
-7. Redesign the UI into an Agent OS dashboard for task state, traces, approvals, workers, leases/workspaces, timelines, checkpoints, recovery plans, diffs, tests, plugin permissions, and enabled skills.
-8. Build end-to-end durable-runtime evals, not only unit-level registry behavior.
-9. Add minimal model routing by task type, tool-calling quality, cost, latency, context length, reliability, and risk level.
-
-Initial skill pack priority should stay close to Nora's strengths: software engineering, product/project management, research/consulting, spreadsheet/finance/operations analysis, and content creation. Higher-risk domains such as legal, healthcare, investment, tax, and regulated finance need stronger source tracking, disclaimers, human confirmation, and policy gates.
+1. Define `PetIdentity` and `PetState` schemas.
+2. Build deterministic state transitions for feed, care, chat, rest, and work.
+3. Add token food economy: balance, food types, feeding, cost estimation, recharge/API-key/local-model boundary, and no-manipulation rules.
+4. Build the pet room MVP with avatar placeholder, food bowl, status, interaction buttons, activity log, and skill shelf.
+5. Add relationship memory events for shared moments, taste preferences, task completion, and user preferences.
+6. Add voice profile and preset voice/tone parameters.
+7. Reframe existing tools as pet skills, starting with low-risk read-only skills and explicit permission prompts.
+8. Add desktop floating pet and mobile widget/notification design after the room loop is usable.
+9. Keep runtime safety, policy hooks, traces, model routing, and plugin/skill manifests as internal infrastructure that supports the pet product.
 
 ## Startup Protocol For A Fresh Window
 
