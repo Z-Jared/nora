@@ -1433,3 +1433,143 @@ result.escaped = escapeHtml('<b>x</b>');
         d = result
         self.assertTrue(d['defined'])
         self.assertIn('&lt;b&gt;', d['escaped'])
+
+    def test_speech_bubble_elements_exist(self):
+        """Speech bubble area, bubble, text, meta, input, button, error must exist."""
+        result = _run_node(test_body="""
+result = {};
+result.area = !!document.getElementById('speech-bubble-area');
+result.bubble = !!document.getElementById('speech-bubble');
+result.text = !!document.getElementById('speech-bubble-text');
+result.meta = !!document.getElementById('speech-bubble-meta');
+result.input = !!document.getElementById('speech-preview-input');
+result.btn = !!document.getElementById('speech-preview-btn');
+result.error = !!document.getElementById('speech-bubble-error');
+""")
+        d = result
+        for key in ['area', 'bubble', 'text', 'meta', 'input', 'btn', 'error']:
+            self.assertTrue(d[key], f'Missing element: {key}')
+
+    def test_speech_bubble_hidden_by_default(self):
+        """Speech bubble must not have visible class by default."""
+        result = _run_node(test_body="""
+result = {};
+result.hasClass = document.getElementById('speech-bubble').classList.contains('visible');
+""")
+        d = result
+        self.assertFalse(d['hasClass'])
+
+    def test_speech_preview_calls_endpoint(self):
+        """Preview button must call /pet/voice-preview with pet_id and text."""
+        result = _run_node(setup_js="""
+var _lastFetch = null;
+_fetchHandler = function(url, opts) {
+  _lastFetch = {url: url, body: opts && opts.body ? JSON.parse(opts.body) : null};
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
+    text:'Hello!', has_audio:false, source:'text_fallback', cost_tokens:0,
+    voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
+    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true
+  })});
+};
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
+document.getElementById('speech-preview-input').value = 'Hello!';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.url = _lastFetch ? _lastFetch.url : null;
+result.petId = _lastFetch && _lastFetch.body ? _lastFetch.body.pet_id : null;
+result.text = _lastFetch && _lastFetch.body ? _lastFetch.body.text : null;
+result.bubbleVisible = document.getElementById('speech-bubble').classList.contains('visible');
+result.bubbleText = document.getElementById('speech-bubble-text').textContent;
+""")
+        d = result
+        self.assertEqual(d['url'], '/pet/voice-preview')
+        self.assertEqual(d['petId'], 'pet_1')
+        self.assertEqual(d['text'], 'Hello!')
+        self.assertTrue(d['bubbleVisible'])
+        self.assertEqual(d['bubbleText'], 'Hello!')
+
+    def test_speech_preview_shows_meta_tags(self):
+        """Preview must display cost, no-audio, no-network, no-recording tags."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
+    text:'hi', has_audio:false, source:'text_fallback', cost_tokens:2,
+    voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
+    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true
+  })});
+};
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
+document.getElementById('speech-preview-input').value = 'hi';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
+""")
+        d = result
+        self.assertIn('cost: 2 tokens', d['metaHtml'])
+        self.assertIn('audio: no', d['metaHtml'])
+        self.assertIn('no network', d['metaHtml'])
+        self.assertIn('no recording', d['metaHtml'])
+
+    def test_speech_preview_empty_shows_error(self):
+        """Empty input must show error, not call endpoint."""
+        result = _run_node(setup_js="""
+var _fetchCalled = false;
+_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+_fetchCalled = false;
+document.getElementById('speech-preview-input').value = '';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.error = document.getElementById('speech-bubble-error').textContent;
+result.fetchCalled = _fetchCalled;
+""")
+        d = result
+        self.assertIn('Enter text', d['error'])
+        self.assertFalse(d['fetchCalled'])
+
+    def test_speech_preview_too_long_shows_error(self):
+        """Over-limit input must show error, not call endpoint."""
+        result = _run_node(setup_js="""
+var _fetchCalled = false;
+_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+_fetchCalled = false;
+document.getElementById('speech-preview-input').value = 'x'.repeat(501);
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.error = document.getElementById('speech-bubble-error').textContent;
+result.fetchCalled = _fetchCalled;
+""")
+        d = result
+        self.assertIn('too long', d['error'])
+        self.assertFalse(d['fetchCalled'])
+
+    def test_speech_preview_no_pet_does_nothing(self):
+        """Without currentPet, preview must not call endpoint."""
+        result = _run_node(setup_js="""
+var _fetchCalled = false;
+_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
+""", test_body="""
+currentPet = null;
+_fetchCalled = false;
+document.getElementById('speech-preview-input').value = 'hello';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.fetchCalled = _fetchCalled;
+""")
+        d = result
+        self.assertFalse(d['fetchCalled'])

@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-173A: Pet Room speech bubble text fallback surface
-- 架构层: Voice/Expression System / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-172A、TASK-172B 完成并集成。
-- 目标: 在 Pet Room 中接入 text fallback voice-preview 的用户可见 speech bubble surface，让 Nora 能以安全文本气泡预览未来语音输出，而不是只暴露 HTTP endpoint。
-- 非目标: 不实现真实 TTS、音频播放、录音、麦克风、provider adapter、PWA、桌面浮窗、3D/VRM、billing、marketplace、云同步或新 Claude C/D worker。
-- 安全边界: no voice cloning、no recording by default、no hidden background listening、no provider/network execution、no secret echo、no food debit、动态文本必须 HTML escape。
-- 持久证据: Pet Room DOM 中有 speech bubble/status markers；UI 调用 `/pet/voice-preview` 时只展示 text fallback/no-audio/cost metadata；失败时显示 bounded error；不写 activity/relationship memory。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Web/PWA Presence Path；`mini_agent/static/index.html`; `mini_agent/http_server.py`; `tests/test_webui_smoke.py`.
-
-### TASK-173B: Speech bubble deterministic eval and safety coverage
-- 架构层: Eval/Review System / Voice/Expression System / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-172A、TASK-172B 完成并集成；与 TASK-173A 并行，但不得改实现文件。
-- 目标: 为 Pet Room speech bubble text fallback surface 增加 deterministic eval，锁住 speech bubble markers、HTML escaping/no secret leak、no audio/provider/recording claims、cost/no-audio metadata visibility 和 no purchase/marketplace drift。
-- 非目标: 不实现 UI 或 TTS runtime，不修改 `mini_agent/static/index.html`、`mini_agent/http_server.py`、`mini_agent/tts.py`，不增加真实 TTS、录音、PWA、桌面浮窗、支付或 marketplace。
-- 安全边界: eval 必须阻断 promotional voice cloning、recording by default、always/background listening、hidden cost、purchase pressure、marketplace drift；不得通过弱断言只检查文件存在。
-- 持久证据: 新增 eval case 名称包含 `speech_bubble` 或 `voice_preview_ui`; TASK-173A 合并后 eval 必须 active/pass，不能长期 skip。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Web/PWA Presence Path、Deterministic Eval And Test Plan；`evals/run_evals.py`; `tests/test_webui_smoke.py`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-173A: Pet Room speech bubble text fallback surface ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 281 tests OK；`python3 evals/run_evals.py` 686 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面安全断言。
+- 内容: Pet Room 新增 text-only speech bubble surface，包含 `speech-bubble-area`、`speech-bubble`、`speech-bubble-text`、`speech-bubble-meta`、`speech-preview-input`、`speech-preview-btn`、`speech-bubble-error` 等稳定 DOM markers；UI 调用 `/pet/voice-preview`，展示 fallback text、cost/no-audio/no-network/no-recording metadata 和 bounded error；动态文本使用 DOM text API 或 escape helper，不增加真实 TTS、音频、录音、provider/network 调用、food debit、activity 或 relationship-memory mutation。
+
+### TASK-173B: Speech bubble deterministic eval and safety coverage ✅
+- 完成者: Claude B；PM 初审要求补强弱断言后，4 个 speech bubble eval 在 TASK-173A 合并候选上 active/pass；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 686 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 281 tests OK；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面安全断言。
+- 内容: 新增/补强 `speech_bubble` / `voice_preview_ui` deterministic eval，要求全部 speech bubble DOM markers、cost/no-audio/no-provider/no-recording metadata、`speech-bubble-text` fail-closed `textContent` 契约、meta HTML escaping、preview request 包含 `pet_id` 和 `text`，并阻断 voice cloning、recording by default、background listening、marketplace、payment/purchase-pressure copy drift。
 
 ### TASK-172A: TTS adapter protocol with text fallback ✅
 - 完成者: Claude A；按 PM 初审反馈补上 500 字符 preview 上限并修复 `PetAuthHTTPServerTests` class boundary 后，Codex PM 初审和 reviewer gate 均通过。

@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 15%
+- Percent: 20%
 - Status: in progress
-- Current focus: Pet Room speech bubble surface for text fallback voice preview, still without real audio/provider calls.
+- Current focus: Explicit consent and cost confirmation boundary before any future real TTS/provider work.
 
 ## Completed This Phase
 
@@ -60,17 +60,23 @@ Last updated: 2026-06-09
   - Preview is read-only: no compute food debit, no pet state mutation, no activity event, and no relationship-memory write.
   - Deterministic coverage locks fallback availability, cost transparency, secret rejection/no echo, read-only behavior across food/state/activity/memory, and no recording/background/voice-cloning/payment/marketplace copy.
   - Verification is green: 274 targeted tests OK, 682 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room speech bubble text fallback surface:
+  - Pet Room now exposes a visible text-only speech bubble near the robot avatar.
+  - The preview control calls `POST /pet/voice-preview` and displays fallback text plus cost/no-audio/no-network/no-recording metadata.
+  - UI errors are bounded and avoid raw secret or over-limit text echo.
+  - Dynamic speech text uses DOM text APIs, while generated meta tags use escaping before HTML insertion.
+  - Deterministic coverage locks all speech bubble DOM markers, preview request shape, text escaping, metadata visibility, and no voice-cloning/recording/background-listening/marketplace/payment copy drift.
+  - Verification is green: 281 targeted tests OK, 686 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-173A: Pet Room speech bubble text fallback surface.
-- TASK-173B: Speech bubble deterministic eval and safety coverage.
+- None. TASK-173A/B is approved and integrating.
 
 ## Next
 
-1. Combine TASK-173A/B after worker completion and verify speech bubble UI plus eval coverage.
-2. After speech bubble lands, add explicit consent/cost confirmation boundary before any future real TTS/provider work.
-3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+1. Add explicit consent/cost confirmation boundary before any future real TTS/provider work.
+2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+3. Re-evaluate Claude C/D only when independent low-conflict Web/PWA or desktop shell workstreams exist.
 
 ## Phase 1 Exit Criteria
 
@@ -121,6 +127,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 15% / Voice Profile v1 and TTS text fallback boundary complete
+- Phase 2 Voice & Presence: 20% / Voice Profile, TTS text fallback, and Pet Room speech bubble preview complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

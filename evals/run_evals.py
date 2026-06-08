@@ -221,6 +221,11 @@ def main() -> int:
         EvalCase("tts_preview_rejects_secret_text", eval_tts_preview_rejects_secret_text),
         EvalCase("tts_preview_read_only_no_food_or_state_mutation", eval_tts_preview_read_only_no_food_or_state_mutation),
         EvalCase("tts_webui_no_recording_or_background_copy", eval_tts_webui_no_recording_or_background_copy),
+        # TASK-173B: Speech bubble eval coverage
+        EvalCase("speech_bubble_markers_present", eval_speech_bubble_markers_present),
+        EvalCase("voice_preview_ui_cost_and_no_audio_copy", eval_voice_preview_ui_cost_and_no_audio_copy),
+        EvalCase("speech_bubble_escapes_preview_text", eval_speech_bubble_escapes_preview_text),
+        EvalCase("speech_bubble_no_recording_or_marketplace_copy", eval_speech_bubble_no_recording_or_marketplace_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3558,6 +3563,106 @@ def eval_tts_webui_no_recording_or_background_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in UI"
+
+
+# --- TASK-173B: Speech bubble eval coverage ---
+
+
+def _skip_if_no_speech_bubble():
+    """Skip if TASK-173A speech bubble is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+        if "speech-bubble" not in html and "speech_bubble" not in html and "voice-preview" not in html:
+            raise AttributeError("no speech bubble markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-173A not integrated: speech bubble not available")
+
+
+def eval_speech_bubble_markers_present():
+    """Pet Room contains all required speech bubble DOM markers."""
+    _skip_if_no_speech_bubble()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "speech-bubble-area", "speech-bubble", "speech-bubble-text",
+        "speech-bubble-meta", "speech-preview-input", "speech-preview-btn",
+        "speech-bubble-error", "/pet/voice-preview",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required speech bubble markers: {missing}"
+
+
+def eval_voice_preview_ui_cost_and_no_audio_copy():
+    """Speech bubble displays cost, text-only/no-audio, no-network/provider, and no-recording metadata."""
+    _skip_if_no_speech_bubble()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Must have cost indicator
+    cost_markers = ["cost", "food cost", "token cost"]
+    has_cost = any(m in html for m in cost_markers)
+    assert has_cost, "Speech bubble missing cost metadata"
+    # Must have no-audio/text-only indicator
+    no_audio_markers = ["no_audio", "no-audio", "text fallback", "text-only", "text only"]
+    has_no_audio = any(m in html for m in no_audio_markers)
+    assert has_no_audio, "Speech bubble missing no-audio/text-only indicator"
+    # Must have no-network/provider indicator
+    no_network_markers = ["no provider", "no_network", "no network", "no tts", "local only"]
+    has_no_network = any(m in html for m in no_network_markers)
+    assert has_no_network, "Speech bubble missing no-network/provider indicator"
+    # Must have no-recording indicator
+    no_recording_markers = ["no recording", "no_recording", "not recorded", "no mic"]
+    has_no_recording = any(m in html for m in no_recording_markers)
+    assert has_no_recording, "Speech bubble missing no-recording indicator"
+
+
+def eval_speech_bubble_escapes_preview_text():
+    """Speech bubble text uses textContent; meta tags use escapeHtml if innerHTML; preview request includes pet_id+text."""
+    _skip_if_no_speech_bubble()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find JS code that references the speech-bubble-text element
+    text_path = re.search(r"""getelementbyid\(['"]speech-bubble-text['"]\)[\s\S]{0,2000}""", html)
+    assert text_path, "speech-bubble-text JS rendering path not found"
+    text_section = text_path.group(0)
+    assert "textcontent" in text_section or "innertext" in text_section, \
+        "speech-bubble-text must use textContent/innerText, not raw innerHTML"
+    # Find meta tag rendering path
+    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", html)
+    if meta_path:
+        meta_section = meta_path.group(0)
+        if "innerhtml" in meta_section:
+            assert "escapehtml" in meta_section or "escape_html" in meta_section, \
+                "speech-bubble-meta uses innerHTML without escapeHtml"
+    # Preview request must include pet_id and text
+    preview_req = re.search(r'/pet/voice-preview[\s\S]{0,500}', html)
+    assert preview_req, "voice-preview request path not found"
+    req_section = preview_req.group(0)
+    assert "pet_id" in req_section, "voice-preview request missing pet_id"
+    assert "text" in req_section, "voice-preview request missing text"
+
+
+def eval_speech_bubble_no_recording_or_marketplace_copy():
+    """Speech bubble UI does not imply recording, microphone, marketplace, or purchase pressure."""
+    _skip_if_no_speech_bubble()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "listening in background",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in speech bubble UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in speech bubble UI"
 
 
 def eval_cli_multiline_input():

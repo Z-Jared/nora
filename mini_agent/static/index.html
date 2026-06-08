@@ -260,6 +260,18 @@ button{border:0;cursor:pointer}
 .pet-today-item:last-child{border-bottom:0}
 .pet-today-item .today-time{color:var(--muted);font-size:10px;margin-right:8px}
 .pet-today-item .today-text{color:var(--ink)}
+.speech-bubble-area{margin-top:16px;margin-bottom:20px}
+.speech-bubble{position:relative;border:2px solid #b0bec5;border-radius:16px;background:linear-gradient(135deg,#eceff1,#cfd8dc);padding:14px 18px;font-size:14px;line-height:1.6;color:var(--ink);max-width:480px;min-height:24px;display:none;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.speech-bubble.visible{display:block}
+.speech-bubble::before{content:'';position:absolute;bottom:-10px;left:32px;width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:10px solid #cfd8dc}
+.speech-bubble::after{content:'';position:absolute;bottom:-12px;left:33px;width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-top:9px solid #b0bec5}
+.speech-bubble-text{margin-bottom:8px;white-space:pre-wrap;word-break:break-word}
+.speech-bubble-meta{font-size:10px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
+.speech-bubble-meta .meta-tag{display:inline-block;padding:1px 6px;border:1px solid var(--line);border-radius:999px;background:var(--card)}
+.speech-bubble-error{color:#c62828;font-size:12px;margin-top:4px}
+.speech-preview-row{display:flex;gap:8px;align-items:center;margin-top:10px}
+.speech-preview-input{flex:1;height:36px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;font-size:13px;outline:none}
+.speech-preview-input:focus{border-color:var(--accent)}
 @keyframes fade-notice{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .pet-activity-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
 .pet-activity-list{display:grid;gap:8px;max-height:300px;overflow:auto}
@@ -421,6 +433,17 @@ button{border:0;cursor:pointer}
               <div class="pet-mood-summary" id="pet-mood-summary"></div>
               <div class="pet-identity-details" id="pet-identity-details"></div>
             </div>
+          </div>
+          <div class="speech-bubble-area" id="speech-bubble-area">
+            <div class="speech-bubble" id="speech-bubble">
+              <div class="speech-bubble-text" id="speech-bubble-text"></div>
+              <div class="speech-bubble-meta" id="speech-bubble-meta"></div>
+            </div>
+            <div class="speech-preview-row">
+              <input class="speech-preview-input" id="speech-preview-input" type="text" placeholder="Type text for Nora to preview..." maxlength="500">
+              <button class="pet-action-btn" id="speech-preview-btn" type="button">Preview</button>
+            </div>
+            <div class="speech-bubble-error" id="speech-bubble-error"></div>
           </div>
           <div class="pet-stats" id="pet-stats">
             <div class="pet-stat hunger"><div class="label">Hunger</div><div class="value" id="stat-hunger">—</div><div class="bar"><div class="bar-fill" id="bar-hunger"></div></div></div>
@@ -823,6 +846,46 @@ button{border:0;cursor:pointer}
     if(!currentPet) return;
     var amt = parseInt(document.getElementById('pet-food-amount').value)||500;
     petAction('/pet/add-food', {pet_id:currentPet.pet_id, amount:amt, reason:'local demo'}, this);
+  };
+  // Speech bubble preview
+  document.getElementById('speech-preview-btn').onclick = function(){
+    if(!currentPet) return;
+    var input = document.getElementById('speech-preview-input');
+    var text = input.value.trim();
+    var errorEl = document.getElementById('speech-bubble-error');
+    var bubbleEl = document.getElementById('speech-bubble');
+    var textEl = document.getElementById('speech-bubble-text');
+    var metaEl = document.getElementById('speech-bubble-meta');
+    errorEl.textContent = '';
+    if(!text){ errorEl.textContent = 'Enter text to preview.'; return; }
+    if(text.length > 500){ errorEl.textContent = 'Text too long (max 500).'; return; }
+    fetch('/pet/voice-preview', {
+      method:'POST', headers:authHeaders(),
+      body:JSON.stringify({pet_id:currentPet.pet_id, text:text})
+    }).then(function(r){
+      if(handleAuthError(r)) throw new Error('auth');
+      return r.json();
+    }).then(function(result){
+      if(result.error){
+        errorEl.textContent = result.error;
+        bubbleEl.classList.remove('visible');
+        return;
+      }
+      textEl.textContent = result.text || '';
+      // Build meta tags
+      var tags = [];
+      tags.push('cost: ' + (result.cost_tokens || 0) + ' tokens');
+      tags.push(result.has_audio ? 'audio: yes' : 'audio: no (text only)');
+      if(result.no_network_call) tags.push('no network');
+      if(result.no_recording) tags.push('no recording');
+      metaEl.innerHTML = tags.map(function(t){
+        return '<span class="meta-tag">' + escapeHtml(t) + '</span>';
+      }).join('');
+      bubbleEl.classList.add('visible');
+    }).catch(function(){
+      errorEl.textContent = 'Preview failed.';
+      bubbleEl.classList.remove('visible');
+    });
   };
   document.getElementById('pet-memory-moment-btn').onclick = function(){
     if(!currentPet) return;
