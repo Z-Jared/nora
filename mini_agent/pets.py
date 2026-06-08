@@ -116,6 +116,89 @@ def _validate_dict_values(**fields) -> Optional[str]:
     return None
 
 
+# --- Voice Profile v1 contract ---
+
+_VOICE_PROFILE_ALLOWED_KEYS = {
+    "voice_id", "speed", "tone", "pitch", "expression_hints", "speech_style_override",
+}
+_VOICE_PROFILE_STRING_MAX_LEN = 200
+_VOICE_PROFILE_EXPRESSION_HINT_KEYS = {"happy", "tired", "hungry", "calm", "excited", "sad"}
+_VOICE_PROFILE_SPEEDS = {"slow", "normal", "fast"}
+_VOICE_PROFILE_PITCHES = {"low", "medium", "high"}
+# Unsafe keys that must be stripped (not just rejected)
+_VOICE_PROFILE_UNSAFE_KEYS = {
+    "audio_sample", "audio_samples", "speaker_embedding", "speaker_embeddings",
+    "clone_reference", "clone_id", "real_voice", "api_key", "secret", "credential",
+    "embedding", "embeddings", "wav", "mp3", "audio_url", "recording",
+}
+
+
+def _normalize_voice_profile(profile: Optional[dict]) -> Optional[dict]:
+    """Normalize and validate a Voice Profile v1 dict.
+
+    - Returns None if input is not a dict (caller treats as validation failure).
+    - Rejects entire profile if ANY key name or value contains secret-like text.
+    - Strips unknown and unsafe keys (only after secret check passes).
+    - Validates string lengths and known enum values.
+    - Validates expression_hints sub-dict.
+    - Returns cleaned dict or None on validation failure.
+    """
+    if profile is None:
+        return None
+    if not isinstance(profile, dict):
+        return None
+
+    # Phase 1: recursive secret-like check on ALL keys and leaf values
+    # Reuses _validate_profile_value which recurses into dicts and lists.
+    for key, value in profile.items():
+        if is_sensitive_text(str(key)):
+            return None
+        if key in _VOICE_PROFILE_UNSAFE_KEYS:
+            return None
+        if _validate_profile_value(f"voice_profile.{key}", value) is not None:
+            return None
+
+    # Phase 2: strip unsafe and unknown keys, validate allowed fields
+    result = {}
+    for key, value in profile.items():
+        # Strip unsafe keys
+        if key in _VOICE_PROFILE_UNSAFE_KEYS:
+            continue
+        # Only allow known keys
+        if key not in _VOICE_PROFILE_ALLOWED_KEYS:
+            continue
+        # Validate string values
+        if isinstance(value, str):
+            if len(value) > _VOICE_PROFILE_STRING_MAX_LEN:
+                return None
+            result[key] = value
+        elif isinstance(value, dict) and key == "expression_hints":
+            # Validate expression_hints sub-dict
+            cleaned_hints = {}
+            for hint_key, hint_val in value.items():
+                if hint_key not in _VOICE_PROFILE_EXPRESSION_HINT_KEYS:
+                    continue
+                if not isinstance(hint_val, str):
+                    continue
+                if len(hint_val) > _VOICE_PROFILE_STRING_MAX_LEN:
+                    continue
+                cleaned_hints[hint_key] = hint_val
+            result[key] = cleaned_hints
+        elif value is None and key == "speech_style_override":
+            result[key] = None
+        else:
+            # Reject unexpected types
+            return None
+
+    # Validate known enum fields
+    if "speed" in result and result["speed"] not in _VOICE_PROFILE_SPEEDS:
+        return None
+    if "pitch" in result and result["pitch"] not in _VOICE_PROFILE_PITCHES:
+        return None
+
+    return result
+
+
 @dataclass
 class PetIdentity:
     pet_id: str
@@ -545,8 +628,11 @@ class PetStore:
         )
         if err:
             raise ValueError(err)
+        # Normalize voice profile with v1 contract
+        normalized_vp = _normalize_voice_profile(voice_profile)
+        if voice_profile is not None and normalized_vp is None:
+            raise ValueError("invalid voice_profile: rejected unsafe or invalid fields")
         err = _validate_dict_values(
-            voice_profile=voice_profile or {},
             taste_profile=taste_profile or {},
         )
         if err:
@@ -562,7 +648,7 @@ class PetStore:
             personality_traits=personality_traits or [],
             relationship_role=relationship_role,
             speech_style=speech_style,
-            voice_profile=voice_profile or {},
+            voice_profile=normalized_vp or {},
             taste_profile=taste_profile or {},
             skills=skills or [],
             created_at=now,
@@ -658,11 +744,10 @@ class PetStore:
                 raise ValueError(err)
 
         if voice_profile is not None:
-            if not isinstance(voice_profile, dict):
-                return None
-            err = _validate_dict_values(voice_profile=voice_profile)
-            if err:
-                raise ValueError(err)
+            normalized_vp = _normalize_voice_profile(voice_profile)
+            if normalized_vp is None:
+                raise ValueError("invalid voice_profile: rejected unsafe or invalid fields")
+            voice_profile = normalized_vp
 
         if taste_profile is not None:
             if not isinstance(taste_profile, dict):

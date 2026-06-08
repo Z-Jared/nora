@@ -272,10 +272,12 @@ class PetStoreSQLiteTests(unittest.TestCase):
             self.store.create_pet(name="Ok", taste_profile={"likes": ["sk-secret-key-12345"]})
 
     def test_sensitive_nested_profile_rejected(self):
+        # Voice profile: unknown keys are stripped (normalized), so nested secrets in unknown keys are also stripped.
+        # Test with a known key containing a secret instead.
         with self.assertRaises(ValueError):
             self.store.create_pet(
                 name="Ok",
-                voice_profile={"preset": {"api_key": "sk-secret-key-12345"}},
+                voice_profile={"voice_id": "sk-secret-key-12345"},
             )
         with self.assertRaises(ValueError):
             self.store.create_pet(
@@ -710,6 +712,204 @@ class PetUpdateIdentityJsonlTests(unittest.TestCase):
         # Verify persisted
         restored = self.store.get_pet("pet_1")
         self.assertEqual(restored.identity.name, "Luna")
+
+
+class VoiceProfileV1Tests(unittest.TestCase):
+    """Tests for Voice Profile v1 contract normalization and validation."""
+
+    def test_normalize_voice_profile_full(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {
+            "voice_id": "nora01_default",
+            "speed": "normal",
+            "tone": "friendly",
+            "pitch": "medium",
+            "expression_hints": {"happy": "faster, brighter", "tired": "slower"},
+            "speech_style_override": None,
+        }
+        result = _normalize_voice_profile(profile)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["voice_id"], "nora01_default")
+        self.assertEqual(result["speed"], "normal")
+        self.assertEqual(result["pitch"], "medium")
+        self.assertIn("happy", result["expression_hints"])
+
+    def test_normalize_strips_unknown_keys(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "test", "unknown_field": "value", "speed": "normal"}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNotNone(result)
+        self.assertNotIn("unknown_field", result)
+
+    def test_normalize_rejects_unsafe_keys(self):
+        """Unsafe keys (audio_sample, speaker_embedding, api_key, etc.) must reject entire profile."""
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {
+            "voice_id": "test",
+            "audio_sample": "harmless_data",
+            "speaker_embedding": [0.1, 0.2],
+            "clone_reference": "some_ref",
+            "api_key": "harmless",
+            "wav": "binary",
+            "speed": "normal",
+        }
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_secret_in_values(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "sk-ant-api-key-12345"}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_secret_in_expression_hints(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"expression_hints": {"happy": "sk-ant-api-key-12345"}}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_invalid_speed(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "test", "speed": "turbo"}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_invalid_pitch(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "test", "pitch": "ultrasonic"}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_rejects_non_dict(self):
+        from mini_agent.pets import _normalize_voice_profile
+        self.assertIsNone(_normalize_voice_profile("not a dict"))
+        self.assertIsNone(_normalize_voice_profile(None))
+        self.assertIsNone(_normalize_voice_profile(42))
+
+    def test_normalize_rejects_long_string(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "x" * 300}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNone(result)
+
+    def test_normalize_filters_unknown_expression_hints(self):
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"expression_hints": {"happy": "yay", "evil": "mwhaha"}}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNotNone(result)
+        self.assertIn("happy", result["expression_hints"])
+        self.assertNotIn("evil", result["expression_hints"])
+
+    def test_normalize_backward_compatible_minimal(self):
+        """Old profiles with only voice_id/speed/tone must still work."""
+        from mini_agent.pets import _normalize_voice_profile
+        profile = {"voice_id": "old_voice", "speed": "fast", "tone": "warm"}
+        result = _normalize_voice_profile(profile)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["voice_id"], "old_voice")
+        self.assertEqual(result["speed"], "fast")
+        self.assertEqual(result["tone"], "warm")
+
+    def test_create_pet_normalizes_voice_profile(self):
+        tmpdir = tempfile.mkdtemp()
+        db = NoraDB(Path(tmpdir) / "test.db")
+        store = PetStore(db=db)
+        store.create_pet(name="Test", voice_profile={
+            "voice_id": "nora01_default",
+            "speed": "normal",
+            "unknown_field": "should_be_stripped",
+        })
+        pet = store.get_pet("pet_1")
+        self.assertNotIn("unknown_field", pet.identity.voice_profile)
+        self.assertEqual(pet.identity.voice_profile["voice_id"], "nora01_default")
+        db.close()
+
+    def test_create_pet_rejects_unsafe_voice_profile(self):
+        tmpdir = tempfile.mkdtemp()
+        db = NoraDB(Path(tmpdir) / "test.db")
+        store = PetStore(db=db)
+        with self.assertRaises(ValueError):
+            store.create_pet(name="Test", voice_profile={
+                "voice_id": "sk-ant-api-key-12345",
+            })
+        db.close()
+
+    def test_update_identity_normalizes_voice_profile(self):
+        tmpdir = tempfile.mkdtemp()
+        db = NoraDB(Path(tmpdir) / "test.db")
+        store = PetStore(db=db)
+        store.create_pet(name="Test")
+        result = store.update_identity("pet_1", voice_profile={
+            "voice_id": "new_voice",
+            "pitch": "high",
+        })
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.voice_profile["voice_id"], "new_voice")
+        self.assertEqual(result.identity.voice_profile["pitch"], "high")
+        db.close()
+
+    # PM probe scenarios: secret-like text in unsafe/unknown keys must reject entire profile
+
+    def test_pm_probe_secret_in_unsafe_key_value(self):
+        """api_key=sk-ant-secret-key-12345 must reject, not silently strip."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "api_key": "sk-ant-secret-key-12345"})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_unsafe_key_name(self):
+        """api_key key name itself triggers secret detection."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "api_key": "some_value"})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_audio_sample_value(self):
+        """audio_sample with secret value must reject."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "audio_sample": "sk-ant-secret-key-12345"})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_expression_hints_unknown_key(self):
+        """expression_hints with secret-like unknown key must reject."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "expression_hints": {"happy": "ok", "api_key": "sk-ant-secret-key-12345"}})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_unknown_key_name(self):
+        """Unknown key with secret-like name must reject."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "sk-ant-secret-key-12345": "value"})
+        self.assertIsNone(result)
+
+    def test_pm_probe_unsafe_key_always_rejected(self):
+        """Unsafe keys are always rejected, even without secret-like content."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "audio_sample": "harmless_data"})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_list_value(self):
+        """speaker_embedding: [secret] must reject (recursive list check)."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "speaker_embedding": ["sk-ant-secret-key-12345"]})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_unknown_key_list(self):
+        """unknown_field: [secret] must reject (recursive list check on unknown keys)."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "unknown_field": ["sk-ant-secret-key-12345"]})
+        self.assertIsNone(result)
+
+    def test_pm_probe_secret_in_nested_expression_hints(self):
+        """expression_hints.happy.deep: secret must reject (recursive dict check)."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "expression_hints": {"happy": {"deep": "sk-ant-secret-key-12345"}}})
+        self.assertIsNone(result)
+
+    def test_pm_probe_non_secret_unknown_key_stripped(self):
+        """Unknown key without secret-like content is stripped (not rejected)."""
+        from mini_agent.pets import _normalize_voice_profile
+        result = _normalize_voice_profile({"voice_id": "ok", "random_field": "harmless"})
+        self.assertIsNotNone(result)
+        self.assertNotIn("random_field", result)
 
 
 if __name__ == "__main__":

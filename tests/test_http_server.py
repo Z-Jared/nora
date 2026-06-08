@@ -2336,6 +2336,24 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("/pet/update-identity", body["paths"])
 
+    def test_create_pet_rejects_unknown_field_list_secret(self):
+        """PM probe: unknown_field with secret list must return 400, not 200."""
+        status, body = self._request("POST", "/pet/create", {
+            "name": "TestPet",
+            "voice_profile": {"voice_id": "ok", "unknown_field": ["sk-ant-secret-key-12345"]},
+        })
+        self.assertEqual(status, 400)
+        self.assertNotIn("sk-ant-secret-key-12345", str(body))
+
+    def test_create_pet_rejects_deep_nested_secret(self):
+        """PM probe: expression_hints with nested secret dict must return 400."""
+        status, body = self._request("POST", "/pet/create", {
+            "name": "TestPet",
+            "voice_profile": {"voice_id": "ok", "expression_hints": {"happy": {"deep": "sk-ant-secret-key-12345"}}},
+        })
+        self.assertEqual(status, 400)
+        self.assertNotIn("sk-ant-secret-key-12345", str(body))
+
 
 class PetAuthHTTPServerTests(unittest.TestCase):
     """Tests for pet mutation auth when api_token is set."""

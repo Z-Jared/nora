@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-171A: Voice Profile v1 contract implementation
-- 架构层: Voice/Expression System / Pet Identity / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-170A、TASK-170B 完成并集成。
-- 目标: 实现 Voice Profile v1 的确定性契约，使 `PetStore.create_pet()`、`PetStore.update_identity()`、`POST /pet/create`、`POST /pet/update-identity` 能接受并规范化 bounded voice profile fields：`voice_id`、`speed`、`tone`、`pitch`、`expression_hints`、`speech_style_override`，同时保留现有 state/food/memory。
-- 非目标: 不实现 TTS、语音合成、录音、麦克风、PWA、桌面浮窗、3D/VRM、支付、marketplace、云同步或 vendor adapter。
-- 安全边界: voice profile 是本地 preset/metadata，不是 voice cloning；拒绝 audio sample、speaker embedding、real-person clone hints、secret-like values、过长字段、非 dict/list 结构；不得打印 API key 或 provider secret。
-- 持久证据: bounded `voice_profile` 写入 pet identity persistence；HTTP response 返回规范化 profile；activity/state/food/memory 不被 identity update 清空。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `git diff --check`; targeted copy scan for cloning/recording/marketplace/payment wording。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Voice Profile v1 Data Contract；`mini_agent/pets.py`; `mini_agent/http_server.py`; `mini_agent/static/index.html`.
-
-### TASK-171B: Voice Profile v1 deterministic eval and safety coverage
-- 架构层: Eval/Review System / Voice/Expression System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-170A、TASK-170B 完成并集成；与 TASK-171A 并行，但不得改实现文件。
-- 目标: 为 Voice Profile v1 增加 deterministic eval/safety coverage，覆盖 default no-cloning、bounded fields、secret rejection、HTTP create/update contract、Pet Room/Identity Editor copy 不宣传 cloning/recording/payment/marketplace。
-- 非目标: 不实现 Voice Profile runtime，不修改 `mini_agent/pets.py`、`mini_agent/http_server.py`、`mini_agent/static/index.html`，不增加真实 TTS、录音、PWA、桌面浮窗、支付或 marketplace。
-- 安全边界: eval 必须允许负面边界语句但阻断 promotional cloning、recording by default、background listening、hidden cost、purchase pressure；不得通过弱断言只检查文件存在。
-- 持久证据: 新增 eval case 名称包含 `voice_profile`; eval 在 TASK-171A 合并后 active/pass，不能长期 skip；必要时增加 smoke/unit 断言但不改产品实现。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Deterministic Eval And Test Plan；`evals/run_evals.py`; `tests/test_pets.py`; `tests/test_http_server.py`; `tests/test_webui_smoke.py`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-171A: Voice Profile v1 contract implementation ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 369 tests OK；`python3 evals/run_evals.py` 677 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 断言；PM recursive probe 通过。
+- 内容: 新增 Voice Profile v1 规范化契约，`PetStore.create_pet()` 和 `PetStore.update_identity()` 接受 bounded `voice_profile` 字段：`voice_id`、`speed`、`tone`、`pitch`、`expression_hints`、`speech_style_override`；保留 state/food/activity/relationship memory；递归拒绝 secret-like key/value、audio sample、speaker embedding、clone reference、provider credential 等 unsafe fields；unknown non-secret fields stripped。
+
+### TASK-171B: Voice Profile v1 deterministic eval and safety coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 677 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 369 tests OK；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 断言。
+- 内容: 新增 5 个 `voice_profile` deterministic eval，覆盖 default no-cloning、bounded fields、secret/audio-sample rejection、HTTP create/update contract、Pet Room/Identity Editor no promotional voice/payment/marketplace/background-listening copy；补强 nested dict、list 和 unknown-field secret rejection 覆盖。
 
 ### TASK-170A: Phase 2 Voice & Presence product technical plan ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

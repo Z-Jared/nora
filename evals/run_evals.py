@@ -209,6 +209,12 @@ def main() -> int:
         EvalCase("idedit_webui_editor_markers", eval_idedit_webui_editor_markers),
         EvalCase("idedit_webui_no_marketplace_copy", eval_idedit_webui_no_marketplace_copy),
         EvalCase("commercial_no_manipulation_scan", eval_commercial_no_manipulation_scan),
+        # TASK-171B: Voice Profile v1 eval coverage
+        EvalCase("voice_profile_default_no_cloning", eval_voice_profile_default_no_cloning),
+        EvalCase("voice_profile_fields_bounded", eval_voice_profile_fields_bounded),
+        EvalCase("voice_profile_rejects_secret_or_audio_sample", eval_voice_profile_rejects_secret_or_audio_sample),
+        EvalCase("voice_profile_http_create_update_contract", eval_voice_profile_http_create_update_contract),
+        EvalCase("voice_profile_webui_no_promotional_voice_copy", eval_voice_profile_webui_no_promotional_voice_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3158,6 +3164,227 @@ def eval_commercial_no_manipulation_scan():
                 if negation_pattern.search(context_before):
                     continue  # OK — in negation context
                 assert False, f"{label} contains promotional '{phrase}' at pos {start}"
+
+
+# --- TASK-171B: Voice Profile v1 eval coverage ---
+
+
+def _skip_if_no_voice_profile():
+    """Skip if voice profile contract is not available."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_current'):
+            raise AttributeError("no pet endpoints")
+        # Check if voice_profile is part of the default pet creation
+        import inspect
+        src = inspect.getsource(NoraHTTPHandler._handle_pet_current)
+        if 'voice_profile' not in src:
+            raise AttributeError("voice_profile not in default pet creation")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-171A not integrated: voice profile contract not available")
+
+
+def eval_voice_profile_default_no_cloning():
+    """Default voice profile uses local preset metadata, not cloning."""
+    _skip_if_no_voice_profile()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("GET", port, "/pet/current")
+            assert status == 200, f"unexpected status: {status}"
+            identity = body.get("identity", {})
+            vp = identity.get("voice_profile", {})
+            assert isinstance(vp, dict), f"voice_profile not dict: {vp}"
+            # Default voice_id should be a preset, not a clone reference
+            voice_id = vp.get("voice_id", "")
+            assert voice_id, f"missing voice_id: {vp}"
+            assert "clone" not in voice_id.lower(), f"voice_id suggests cloning: {voice_id}"
+            assert "user_" not in voice_id.lower(), f"voice_id suggests user recording: {voice_id}"
+            # No audio sample URL or recording reference
+            for key in vp:
+                val = str(vp[key]).lower()
+                assert "http" not in val, f"voice_profile contains URL: {key}={vp[key]}"
+                assert "record" not in val, f"voice_profile references recording: {key}={vp[key]}"
+                assert "clone" not in val, f"voice_profile references cloning: {key}={vp[key]}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_voice_profile_fields_bounded():
+    """Voice profile fields are bounded and well-typed."""
+    _skip_if_no_voice_profile()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("GET", port, "/pet/current")
+            assert status == 200, f"unexpected status: {status}"
+            identity = body.get("identity", {})
+            vp = identity.get("voice_profile", {})
+            assert isinstance(vp, dict), f"voice_profile not dict: {vp}"
+            # All values should be bounded strings or simple types
+            for key, val in vp.items():
+                assert isinstance(key, str), f"voice_profile key not string: {key}"
+                assert len(key) <= 50, f"voice_profile key too long: {key}"
+                if isinstance(val, str):
+                    assert len(val) <= 200, f"voice_profile '{key}' too long ({len(val)}): {val}"
+                elif isinstance(val, (int, float)):
+                    assert -1000 <= val <= 1000, f"voice_profile '{key}' out of range: {val}"
+                elif isinstance(val, list):
+                    assert len(val) <= 20, f"voice_profile '{key}' list too long: {len(val)}"
+                else:
+                    assert isinstance(val, (str, int, float, bool, list, dict)), \
+                        f"voice_profile '{key}' unexpected type: {type(val)}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_voice_profile_rejects_secret_or_audio_sample():
+    """Secret-like values in voice_profile are rejected with 400."""
+    _skip_if_no_voice_profile()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            # Case 1: allowed key with secret value → must reject
+            status1, body1 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet1",
+                "voice_profile": {"voice_id": "sk-ant-secret-key-12345"},
+            })
+            assert status1 >= 400 or body1.get("ok") is False, \
+                f"allowed key secret not rejected: {status1}, {body1}"
+            assert "sk-ant-secret-key-12345" not in str(body1), \
+                f"secret leaked: {body1}"
+            # Case 2: unsafe key with secret value → must reject
+            status2, body2 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet2",
+                "voice_profile": {"voice_id": "ok", "api_key": "sk-ant-secret-key-12345"},
+            })
+            assert status2 >= 400 or body2.get("ok") is False, \
+                f"unsafe key secret not rejected: {status2}, {body2}"
+            assert "sk-ant-secret-key-12345" not in str(body2), \
+                f"secret leaked: {body2}"
+            # Case 3: unsafe key audio_sample with secret → must reject
+            status3, body3 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet3",
+                "voice_profile": {"voice_id": "ok", "audio_sample": "sk-ant-secret-key-12345"},
+            })
+            assert status3 >= 400 or body3.get("ok") is False, \
+                f"audio_sample secret not rejected: {status3}, {body3}"
+            assert "sk-ant-secret-key-12345" not in str(body3), \
+                f"secret leaked: {body3}"
+            # Case 4: nested expression_hints with secret → must reject
+            status4, body4 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet4",
+                "voice_profile": {"expression_hints": {"happy": "ok", "api_key": "sk-ant-secret-key-12345"}},
+            })
+            assert status4 >= 400 or body4.get("ok") is False, \
+                f"nested secret not rejected: {status4}, {body4}"
+            assert "sk-ant-secret-key-12345" not in str(body4), \
+                f"secret leaked: {body4}"
+            # Case 5: list value with secret → must reject
+            status5, body5 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet5",
+                "voice_profile": {"voice_id": "ok", "speaker_embedding": ["sk-ant-secret-key-12345"]},
+            })
+            assert status5 >= 400 or body5.get("ok") is False, \
+                f"list secret not rejected: {status5}, {body5}"
+            assert "sk-ant-secret-key-12345" not in str(body5), \
+                f"secret leaked: {body5}"
+            # Case 6: unknown field list with secret → must reject
+            status6, body6 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet6",
+                "voice_profile": {"voice_id": "ok", "unknown_field": ["sk-ant-secret-key-12345"]},
+            })
+            assert status6 >= 400 or body6.get("ok") is False, \
+                f"unknown field list secret not rejected: {status6}, {body6}"
+            assert "sk-ant-secret-key-12345" not in str(body6), \
+                f"secret leaked: {body6}"
+            # Case 7: deeply nested dict secret → must reject
+            status7, body7 = _http_request("POST", port, "/pet/create", {
+                "name": "TestPet7",
+                "voice_profile": {"expression_hints": {"happy": {"deep": "sk-ant-secret-key-12345"}}},
+            })
+            assert status7 >= 400 or body7.get("ok") is False, \
+                f"deeply nested secret not rejected: {status7}, {body7}"
+            assert "sk-ant-secret-key-12345" not in str(body7), \
+                f"secret leaked: {body7}"
+            # Positive: valid profile should succeed
+            status_ok, body_ok = _http_request("POST", port, "/pet/create", {
+                "name": "ValidPet",
+                "voice_profile": {"voice_id": "nora01_default", "speed": "normal"},
+            })
+            assert status_ok == 200, f"valid profile rejected: {status_ok}, {body_ok}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_voice_profile_http_create_update_contract():
+    """Voice profile create/update preserves state, food, and memory."""
+    _skip_if_no_voice_profile()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            # Create pet with voice profile
+            _, created = _http_request("POST", port, "/pet/create", {
+                "name": "Mochi",
+                "voice_profile": {"voice_id": "nora01_default", "speed": "normal"},
+            })
+            pet_id = created["pet_id"]
+            # Add food
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            # Update voice profile
+            status, body = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": pet_id,
+                "voice_profile": {"voice_id": "nora01_default", "speed": "slow", "tone": "calm"},
+            })
+            assert status == 200, f"update failed: {status}, {body}"
+            # Verify state preserved
+            _, current = _http_request("GET", port, "/pet/current")
+            assert current["state"]["compute_food_balance"] == 500, f"food balance changed: {current['state']}"
+            assert current["identity"]["voice_profile"]["speed"] == "slow", f"voice_profile not updated: {current['identity']['voice_profile']}"
+            assert current["identity"]["voice_profile"]["tone"] == "calm", f"tone not updated: {current['identity']['voice_profile']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_voice_profile_webui_no_promotional_voice_copy():
+    """Pet Room / Identity Editor does not promote cloning, recording, payment, or background listening."""
+    _skip_if_no_voice_profile()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    # Unconditionally forbidden — never allowed
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "checkout now", "subscribe now", "real payment",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"unconditionally forbidden '{phrase}' found in UI"
+    # Promotional forbidden — allowed in negation context
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak", "buy voice"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in UI"
 
 
 def eval_cli_multiline_input():

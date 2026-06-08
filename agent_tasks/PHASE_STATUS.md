@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 5%
+- Percent: 10%
 - Status: in progress
-- Current focus: Voice Profile v1 identity contract and deterministic safety/eval coverage.
+- Current focus: TTS adapter boundary with text fallback, consent, and transparent cost before real audio.
 
 ## Completed This Phase
 
@@ -46,17 +46,23 @@ Last updated: 2026-06-09
   - `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` documents Voice Profile v1, TTS adapter boundary, Web/PWA presence path, desktop floating pet prerequisites, safety policy, eval plan, task candidates, and worker scaling.
   - Phase 2 starts with A/B only; Claude C/D are deferred until independent low-conflict workstreams exist.
   - Verification is green: 343 targeted tests OK, 672 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Voice Profile v1 identity contract:
+  - `PetStore.create_pet()` and `PetStore.update_identity()` normalize bounded local voice metadata fields.
+  - Allowed fields are `voice_id`, `speed`, `tone`, `pitch`, `expression_hints`, and `speech_style_override`.
+  - Unsafe audio sample, speaker embedding, clone reference, provider credential, and secret-like nested values are rejected recursively.
+  - Unknown non-secret fields are stripped without storing unsupported voice data.
+  - Deterministic coverage locks default no-cloning, bounded fields, recursive/list secret rejection, HTTP create/update preservation, and no promotional voice/payment/marketplace/background-listening copy.
+  - Verification is green: 369 targeted tests OK, 677 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-171A: Voice Profile v1 contract implementation.
-- TASK-171B: Voice Profile v1 deterministic eval and safety coverage.
+- None assigned after TASK-171 integration.
 
 ## Next
 
-1. Wait for Claude A/B completion reports for TASK-171A/B.
-2. PM combines implementation plus eval coverage, runs targeted unit tests, `python3 evals/run_evals.py`, and `git diff --check`.
-3. Send approved candidate to reviewer before integration.
+1. Publish the next Phase 2 small tasks from `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`, likely TTS adapter boundary/text fallback plus deterministic consent/cost coverage.
+2. Continue A/B only unless Web/PWA presence or TTS adapter work becomes independent enough to avoid core-file conflicts.
+3. Reassess Claude C/D only when there are 3+ low-conflict workstreams with separate task/DONE files and clean synchronized worktrees.
 
 ## Phase 1 Exit Criteria
 
@@ -107,6 +113,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 5% / Voice Profile v1 in progress
+- Phase 2 Voice & Presence: 10% / Voice Profile v1 complete; TTS adapter boundary next
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

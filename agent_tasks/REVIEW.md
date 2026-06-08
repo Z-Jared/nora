@@ -1,71 +1,72 @@
-# TASK-170A/B Review — Phase 2 Voice & Presence Plan
+# TASK-171A/171B Review — Voice Profile v1 Contract + Eval Coverage
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-170A (Claude A: product/technical plan) and TASK-170B (Claude B: safety/eval/scaling plan) are well-scoped Phase 2 preparation documents. The combined plan at `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` complies with PM_LOOP.md gate protocols and maintains all safety boundaries.
+TASK-171A implements Voice Profile v1 contract with recursive secret rejection. TASK-171B adds 5 deterministic evals covering the contract. PM verification passed (369 tests, 677 evals). All review criteria satisfied.
 
-## Review Findings
+## 1. Voice Profile v1 Contract
 
-### 1. PM_LOOP.md Compliance
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Allowed keys | ✅ | `_VOICE_PROFILE_ALLOWED_KEYS`: voice_id, speed, tone, pitch, expression_hints, speech_style_override |
+| Unsafe keys stripped | ✅ | `_VOICE_PROFILE_UNSAFE_KEYS`: audio_sample, speaker_embedding, clone_reference, api_key, secret, etc. |
+| Recursive secret rejection | ✅ | `_validate_profile_value()` recurses into dicts and lists; rejects ANY key/value containing secret-like text |
+| Enum validation | ✅ | speed ∈ {slow, normal, fast}, pitch ∈ {low, medium, high} |
+| String length bounded | ✅ | `_VOICE_PROFILE_STRING_MAX_LEN = 200` |
+| expression_hints bounded | ✅ | Only allowed keys (happy, tired, hungry, calm, excited, sad), string values only |
 
-| Protocol | Status | Evidence |
-|----------|--------|----------|
-| Phase 1 Exit Gate §1 (no premature Phase 2 features) | ✅ | Plan explicitly scopes Phase 2 to Voice Profile v1, TTS adapter boundary, Web/PWA presence, CSS idle signals. No voice cloning, 3D/VRM, marketplace, billing, or native code. |
-| Phase 1 Exit Gate §6 (Phase 2 tech plan) | ✅ | Voice Profile v1 data contract, TTS adapter boundary with text fallback, Web/PWA presence path, desktop prerequisites, safety policy, eval plan, task candidates all documented. |
-| Phase 2 Worker Scaling §1 (default A/B) | ✅ | Plan recommends A/B only at Phase 2 start. |
-| Phase 2 Worker Scaling §2 (3+ low-conflict workflows for C/D) | ✅ | "Do not open Claude C/D at Phase 2 start" with explicit conditions: 3+ independent workstreams, low file overlap, clean worktrees, PHASE_STATUS.md recording. |
-| Phase 2 Worker Scaling §5 (no blind parallelism) | ✅ | "initial voice/profile/presence work shares core files and would likely increase merge conflict risk" |
+## 2. HTTP Create/Update Contract
 
-### 2. Safety Boundaries
+- `POST /pet/create` with `voice_profile` — validates via `_normalize_voice_profile()`, rejects if None returned
+- `POST /pet/update-identity` with `voice_profile` — same normalization, preserves state/food/memory
+- `eval_voice_profile_http_create_update_contract` verifies: create with profile → add food → update profile → food balance preserved, profile updated
+
+## 3. Recursive Secret Rejection (PM Probe Fix)
+
+PM probe confirmed all 3 cases reject:
+- `unknown_field: [secret]` → 400
+- `speaker_embedding: [secret]` → 400
+- `expression_hints: {happy: {deep: secret}}` → 400
+
+Claude A added 2 HTTP-level tests to lock this behavior at endpoint layer:
+- `test_create_pet_rejects_unknown_field_list_secret`
+- `test_create_pet_rejects_deep_nested_secret`
+
+## 4. Eval Coverage (5 evals)
+
+| Eval | Coverage |
+|------|----------|
+| `voice_profile_default_no_cloning` | Default voice_id is local preset, not clone/recording reference |
+| `voice_profile_fields_bounded` | All fields bounded (key length ≤50, string ≤200, int range, list ≤20) |
+| `voice_profile_rejects_secret_or_audio_sample` | 7 rejection cases + 1 positive: secret in allowed key, unsafe key, audio_sample, nested dict, list, unknown field list, deep nesting |
+| `voice_profile_http_create_update_contract` | Create → add food → update voice → food preserved, profile updated |
+| `voice_profile_webui_no_promotional_voice_copy` | No cloning/recording/promotional copy in UI |
+
+## 5. Scope Compliance
+
+- No scope creep: stays within Phase 2 Voice Profile v1 boundaries
+- No TTS adapter implementation (deferred to PHASE2-02)
+- No voice cloning (explicitly rejected by unsafe keys and validation)
+- No recording references (forbidden in eval assertions)
+- No marketplace/billing (forbidden copy scan passes)
+
+## 6. Safety Boundary Verification
 
 | Boundary | Status | Evidence |
 |----------|--------|----------|
-| No cloning without consent | ✅ | "default is no voice cloning", "must require explicit consent, clear disclosure, revocation" |
-| No recording by default | ✅ | "No recording by default", "No hidden background listening" |
-| Cost transparency | ✅ | "estimate before speak", "voice cost in food-status", "no surprise charges" |
-| No manipulation | ✅ | "no pressure, no dependency framing, no purchase manipulation" |
-| No background surveillance | ✅ | "no always-on surveillance", "transparent data flow", "local-first default" |
-| Phase 2 starts with consent/fallback/cost | ✅ | "Phase 2 implementation must start with consent, fallback, and cost transparency foundations before any user-visible audio feature" |
-
-`rg` scan confirms only negative boundary statements match forbidden phrases.
-
-### 3. Phase 2 Task Candidates
-
-**First wave (7 tasks):** All small (S/M), verifiable, and implementable without deep voice/native/marketplace work:
-- PHASE2-01–05: Claude A product tasks (voice profile, TTS adapter, speech bubble, expression CSS, consent/cost)
-- PHASE2-06–07: Claude B eval/safety tasks
-
-**Later wave (3 tasks):** Properly blocked by prerequisites:
-- PHASE2-08: PWA offline (blocked by Web presence loop stable)
-- PHASE2-09: Desktop floating pet (blocked by Web/PWA presence reviewed)
-- PHASE2-10: Real TTS provider (blocked by adapter protocol + consent UI + cost evals)
-
-No task directly jumps to deep voice, native desktop, or marketplace. ✅
-
-### 4. Worker Scaling Recommendation
-
-**Start with A/B only — reasonable.** Initial voice/profile/presence work shares `pets.py`, `server.py`, `index.html`, and eval files. Opening C/D immediately would increase merge conflict risk before boundaries stabilize. The plan documents clear conditions for later C/D expansion.
-
-### 5. No Misleading Claims or Boundary Violations
-
-- No "already implemented" claims for Phase 2 features
-- No hidden costs, promotional copy, or subscription pressure
-- No real payment, marketplace, or billing language
-- No voice cloning presented as default or easy
-- All Phase 2 work framed as opt-in, consent-based, cost-transparent
+| No cloning without consent | ✅ | Unsafe keys stripped, clone_reference rejected, voice_id validated |
+| No recording by default | ✅ | audio_sample/audio_url/recording in unsafe keys, forbidden in UI |
+| Cost transparency | ✅ | Voice Profile v1 is metadata only; cost transparency deferred to TTS adapter |
+| No manipulation | ✅ | `eval_voice_profile_webui_no_promotional_voice_copy` verifies no promotional copy |
 
 ## Verification
 
-- 343 unit tests OK, 672 evals passed, 0 skipped
-- `git diff --check` clean
-- `rg` forbidden phrases: only negative boundary statements found
-
-## Condition for Integration
-
-After approval, PM should:
-1. Update `PHASE_STATUS.md` to mark Phase 1 Exit Gate planning complete
-2. Record Phase 2 worker plan (A/B only)
-3. Add PHASE2-01 through PHASE2-07 to `BACKLOG.md`
-4. Begin Phase 2 with PHASE2-01 (Voice Profile v1 validation)
+```
+python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke → 369 tests OK
+python3 evals/run_evals.py → 677 passed, 0 failed, 0 skipped
+git diff --check → clean
+rg forbidden phrases → only negative eval assertions
+PM recursive probe → all 3 cases reject
+```
