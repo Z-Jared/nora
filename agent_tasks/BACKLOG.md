@@ -6,6 +6,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
+### TASK-161: Token food economy estimate and transparent spend loop
+- 架构层: Token Food Economy / Pet State Engine / Safety/Policy / Monetization/Billing
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: TASK-159/160 committed in `fa3c15a`.
+- 目标: 将 Pet Room 的 demo food 推进为透明 token food 经济 MVP：提供确定性的消耗估算、余额状态、可执行/余额不足解释，并让喂食与工作消耗边界更接近商业模型。
+- 非目标: 不接入真实支付、不扣真实 API 账单、不做会员/订阅、不做支付页、不允许模型输出直接改余额、不做复杂计费后台。
+- 安全边界: 所有余额 mutation 仍只能走 `PetStore`；估算必须 deterministic；余额不足不能使用宠物痛苦或情绪勒索文案；API/UI 不泄漏 token/API key；mutation endpoints 保持现有 auth。
+- 持久证据: HTTP JSON estimate/status responses、food ledger/activity events、Pet Room UI balance/cost hints、bounded insufficient-balance response。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_http_server.py`.
+
+### TASK-162: Token food economy deterministic coverage
+- 架构层: Eval/Review System / Token Food Economy / Safety/Policy / Monetization/Billing
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude B
+- 依赖: TASK-161 implementation. If TASK-161 is not present in your worktree, add guarded evals or focused failing/skipped tests around the expected contract and report the dependency.
+- 目标: 为 token food 估算、透明余额/消耗、余额不足解释、no-manipulation 文案和 no-secret/no-negative/auth 边界增加 deterministic unit/smoke/eval 覆盖。
+- 非目标: 不实现产品功能，除非是被测试暴露的极小 testability 修复；不接入真实支付、订阅、第三方 billing 或 LLM 调用。
+- 安全边界: 覆盖估算只读不 mutation、余额不足不扣余额、food ledger 不允许负数、付费/充值文案不诱导、不泄漏 raw secret、mutation auth 不回归。
+- 持久证据: HTTP tests、Web UI smoke tests、deterministic eval cases、精确 pass/fail report。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`.
+
 ## 已完成
 
 ### TASK-159: Nora-01 robot default identity and living Pet Room redesign ✅

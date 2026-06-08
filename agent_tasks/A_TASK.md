@@ -1,10 +1,10 @@
-# TASK-159: Nora-01 robot default identity and living Pet Room redesign
+# TASK-161: Token food economy estimate and transparent spend loop
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora has pivoted to a customizable electronic pet agent. TASK-157/158 added the first local Pet Room HTTP/API MVP in commit `93e495c`, but the current default pet is still `Nora / digital_cat`. Product direction now requires the default example character to be a robot electronic pet, not a fox/cat and not a generic dashboard mascot.
+Nora is now a customizable electronic pet agent. TASK-159/160 made the default example pet `Nora-01`, a robot electronic pet, and the Pet Room already shows Compute Food / Token Energy. The next product step is to make token food feel like a real transparent compute-energy loop rather than only a demo add/feed button.
 
 Read first:
 
@@ -31,45 +31,44 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Make the default visible pet identity and Pet Room experience match the new product direction: a robot electronic lifeform named `Nora-01`.
+Build a deterministic Token Food Economy MVP around transparent cost estimate, balance, and insufficient-balance explanation.
 
 Required behavior:
 
-1. Default pet identity:
-   - `GET /pet/current` must create a default pet named `Nora-01` when no pet exists.
-   - Default species should be robot/electronic-life oriented, for example `robot_pet` or `electronic_robot`.
-   - Default identity should include bounded personality, relationship role, speech style, taste profile, voice profile, and skills that fit a customizable robot companion.
-   - Keep user-created custom identities fully supported.
+1. HTTP/API:
+   - Add a read-only endpoint for pet food/compute status or estimate, for example `GET /pet/food-status?pet_id=...&action=chat|voice|work|feed`.
+   - The response should include current balance, estimated cost, whether the action can run, short reason label, and safe user-facing copy.
+   - Estimate must be deterministic and bounded. Suggested MVP costs: feed=100, chat=25, voice=80, work=150. Pick a small clear policy and document it in code/docs.
+   - Balance insufficient responses must not mutate state.
+   - Existing `/pet/feed` behavior should keep no-negative balance and clear insufficient-compute-food behavior.
+   - Add concise docs entry to `/docs`.
 
-2. Pet Room visual redesign:
-   - The first visible Pet Room should feel like a living electronic pet room, not a dashboard.
-   - Use a modular 2D HTML/CSS robot avatar placeholder. It should clearly read as robot/electronic pet without relying on a fox/cat visual.
-   - Show identity, hunger/energy/mood/bond/growth, compute food balance, and transparent food consumption.
-   - Keep actions: feed, pat, rest/play or comfort, add local demo food.
-   - Show recent activity/diary as the pet's life log.
-   - Keep chat/task/memory views usable but secondary.
-   - Mobile and desktop must not have overlapping text, clipped controls, or layout shift.
+2. Pet Room UI:
+   - Show transparent balance and estimated costs for feed/chat/voice/work in the Pet Room.
+   - Show a non-manipulative insufficient-balance explanation when feed/work cannot run.
+   - Keep "Add Demo Tokens/Food" local-only framing; do not create a purchase flow.
+   - Avoid pet suffering, threat, urgency, hidden-cost, or emotional blackmail language.
 
-3. Copy and commercial boundary:
-   - Food should be framed as compute food/token energy with transparent balance/estimated spend.
-   - Do not add manipulative payment copy or pet distress pressure.
-   - Do not implement real billing or purchase flows.
+3. Runtime/product boundary:
+   - This is not real billing. It is the local deterministic contract for future commercial food/token economy.
+   - Model output must not control balance, estimates, or payment state.
 
 ## Non-Goals
 
-- No Live2D/3D rigging.
-- No voice system.
 - No real payment provider.
-- No desktop/mobile native app.
-- No LLM-driven pet state mutation.
-- No marketplace or plugin pack UI.
+- No subscription/membership.
+- No checkout/recharge page.
+- No actual OpenAI/Anthropic/Gemini usage accounting.
+- No LLM calls.
+- No voice implementation.
+- No marketplace.
 
 ## Safety Boundaries
 
-- All pet state mutations must continue to use `PetStore`.
-- Mutation endpoints must keep existing HTTP auth behavior when `NORA_API_TOKEN` is set.
-- Default identity must not contain secret-like text.
-- UI/API output must remain bounded and no-leak.
+- State mutations must continue to go through `PetStore`.
+- New estimate/status endpoint must be read-only.
+- Mutation endpoints must retain existing HTTP auth behavior when `NORA_API_TOKEN` is set.
+- No secret-like text should be stored or rendered.
 - Do not touch unrelated CLI/TUI code.
 
 ## Scope
@@ -104,7 +103,7 @@ If full evals fail because of pre-existing unrelated state, report the exact fai
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-160 needs to adjust tests for your public contract.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-162 needs to adjust tests for your public contract.
 
 Then notify Codex PM:
 

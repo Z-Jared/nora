@@ -1,10 +1,10 @@
-# TASK-160: Nora-01 robot identity/UI deterministic coverage
+# TASK-162: Token food economy deterministic coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Nora has pivoted to a customizable electronic pet agent. TASK-157/158 added the Pet Room API/UI MVP in commit `93e495c`. Claude A owns TASK-159, which should make the default example character `Nora-01`, a robot electronic pet, and improve the visible Pet Room experience. Your job is to lock that public contract with deterministic coverage.
+Nora is now a customizable electronic pet agent. TASK-161 should add a deterministic Token Food Economy MVP: transparent food/token balance, cost estimates, can-run checks, and non-manipulative insufficient-balance explanations. Your job is to lock that public contract with deterministic coverage.
 
 Read first:
 
@@ -33,40 +33,40 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline coverage for the Nora-01 robot default identity and living Pet Room redesign.
+Add deterministic offline coverage for token food estimate/status and transparent spend boundaries.
 
 Required coverage:
 
-1. HTTP/default identity:
-   - `GET /pet/current` creates/returns `Nora-01` when no pet exists.
-   - Default species is robot/electronic-life oriented and is not fox/cat.
-   - Default identity includes bounded personality, relationship role, speech style, voice/taste profile, and skills.
-   - Custom `POST /pet/create` identities still work and are not forced to be robot.
+1. HTTP/API:
+   - Food estimate/status endpoint is read-only and bounded.
+   - Response includes balance, estimated cost, `can_run`/equivalent, reason label, and safe copy.
+   - Known actions have deterministic costs.
+   - Unknown/bad actions are bounded and do not leak raw secret-like input.
+   - Insufficient balance does not mutate state or create negative ledger entries.
+   - Existing mutation auth and no-negative feed behavior remain covered.
 
 2. Web UI smoke:
-   - Pet Room contains stable robot/electronic-pet DOM markers/classes or text that tests can assert.
-   - Pet Room shows identity, state metrics, compute food balance, feeding controls, care controls, and activity/diary area.
-   - The default first-screen copy frames food as transparent compute food/token energy.
-   - The UI does not contain manipulative purchase pressure or pet-distress monetization copy.
+   - Pet Room shows balance and estimated costs.
+   - Insufficient-balance copy is present and non-manipulative.
+   - UI does not contain purchase pressure, suffering threats, hidden-cost wording, or raw secret-like text.
 
 3. Evals:
-   - Add deterministic evals to `evals/run_evals.py` for the Nora-01 default identity and robot Pet Room contract if TASK-159 is present.
-   - If TASK-159 is missing in your worktree, add guarded evals or focused test scaffolding with explicit skip/dependency reporting.
-   - Preserve existing TASK-158 pet HTTP/UI evals and CLI/TTY evals.
+   - Add deterministic evals to `evals/run_evals.py` if TASK-161 is present.
+   - If TASK-161 is missing in your worktree, add guarded evals or focused test scaffolding with explicit skip/dependency reporting.
+   - Preserve existing pet/Nora-01/CLI/TTY evals.
 
 ## Non-Goals
 
 - No product implementation except tiny testability fixes directly required by observed failures.
-- No real billing/payment.
-- No voice, Live2D, 3D, desktop/mobile native shell, or LLM calls.
+- No real payment, subscription, third-party billing, voice, Live2D, 3D, desktop/mobile native shell, or LLM calls.
 - No changes to unrelated CLI/TUI code.
 
 ## Safety Boundaries
 
-- Tests/evals must prove default identity is not fox/cat.
-- Tests/evals must prove no raw API-key/token-like string is rendered by pet API/UI outputs.
-- Tests/evals must prove mutation auth and no-negative balance behavior do not regress.
+- Tests/evals must prove estimate/status is read-only.
+- Tests/evals must prove insufficient balance does not spend food.
 - Tests/evals must reject manipulative monetization copy such as forced purchase language, pet suffering threats, or hidden-cost wording.
+- Tests/evals must prove no raw API-key/token-like string is rendered by pet API/UI outputs.
 
 ## Scope
 
@@ -75,7 +75,7 @@ Primary files:
 - `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
 - `evals/run_evals.py`
-- `tests/test_pets.py` only if a small identity assertion is needed
+- `tests/test_pets.py` only if a small economy assertion is needed
 - `agent_tasks/B_DONE.md`
 
 Do not edit:
@@ -96,11 +96,11 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If TASK-159 is missing, run the most relevant targeted checks and report the dependency explicitly.
+If TASK-161 is missing, run the most relevant targeted checks and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-159 was present in your worktree.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-161 was present in your worktree.
 
 Then notify Codex PM:
 
