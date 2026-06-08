@@ -8,30 +8,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167` 已完成；PM 必须继续完成 `TASK-168`、`TASK-169`、`TASK-170`，不能直接进入 Phase 2。
 
-### TASK-168: Phase 1.5 Pet Room life-feel polish
-- 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
-- 优先级: high
-- 预计: 1-2 hours
-- 依赖: TASK-167 完成。
-- 目标: 把 Pet Room 从功能表单进一步打磨成“电子生命体房间”：更清晰的状态反馈、确定性互动、宠物日记/记忆反馈、身份影响展示。
-- 非目标: 不做真正语音、3D/VRM、Live2D asset pipeline、native desktop/mobile、支付或 marketplace。
-- 安全边界: 所有动态文本 escape；不加入 fake intimacy、guilt、loneliness pressure、hidden purchase pressure；不让模型输出直接改状态。
-- 持久证据: UI/HTML markers、pet activity or diary state、deterministic tests/evals、PM walkthrough notes。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; Pet Room visual/DOM smoke.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` MVP Product Shape / Avatar and Room.
-
-### TASK-169: Commercial model and no-manipulation audit
-- 架构层: Monetization/Billing / Safety/Policy / Token Food Economy
-- 优先级: high
-- 预计: 1 hour
-- 依赖: TASK-167 完成。
-- 目标: 明确 Phase 1 后的商业化边界：Token Food、会员、扩展包的定位，并审查所有用户可见文案不诱导、不情绪勒索、不隐藏成本。
-- 非目标: 不接真实支付；不做 billing backend；不做 marketplace；不做价格实验。
-- 安全边界: 禁止“宠物痛苦/孤独/快死了”式付费压力；token cost、balance、local demo boundary 必须透明；不能暗示 voice cloning 或高级能力已经可用。
-- 持久证据: monetization boundary doc or section、no-manipulation checklist、deterministic copy evals。
-- 验证: `python3 evals/run_evals.py`; targeted text scan/eval for guilt, fake intimacy, hidden purchase, marketplace, voice cloning, and misleading token-food copy; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Monetization / Safety.
-
 ### TASK-170: Phase 2 Voice & Presence technical plan
 - 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition / Safety/Policy
 - 优先级: medium
@@ -46,6 +22,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Voice and Expression / Cross-Device Presence.
 
 ## 进行中
+
+### TASK-168: Phase 1.5 Pet Room life-feel polish
+- 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: TASK-167 完成。
+- 目标: 把 Pet Room 从功能表单进一步打磨成“电子生命体房间”：更清晰的状态反馈、确定性互动、宠物日记/记忆反馈、身份影响展示。
+- 非目标: 不做真正语音、3D/VRM、Live2D asset pipeline、native desktop/mobile、支付或 marketplace。
+- 安全边界: 所有动态文本 escape；不加入 fake intimacy、guilt、loneliness pressure、hidden purchase pressure；不让模型输出直接改状态。
+- 持久证据: UI/HTML markers、pet activity or diary state、deterministic tests/evals、PM walkthrough notes。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; Pet Room visual/DOM smoke.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` MVP Product Shape / Avatar and Room.
+
+### TASK-169: Commercial model and no-manipulation audit
+- 架构层: Monetization/Billing / Safety/Policy / Token Food Economy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-167 完成。
+- 目标: 明确 Phase 1 后的商业化边界：Token Food、会员、扩展包的定位，并审查所有用户可见文案不诱导、不情绪勒索、不隐藏成本。
+- 非目标: 不接真实支付；不做 billing backend；不做 marketplace；不做价格实验。
+- 安全边界: 禁止“宠物痛苦/孤独/快死了”式付费压力；token cost、balance、local demo boundary 必须透明；不能暗示 voice cloning 或高级能力已经可用。
+- 持久证据: monetization boundary doc or section、no-manipulation checklist、deterministic copy evals。
+- 验证: `python3 evals/run_evals.py`; targeted text scan/eval for guilt, fake intimacy, hidden purchase, marketplace, voice cloning, and misleading token-food copy; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Monetization / Safety.
 
 ## 已完成
 

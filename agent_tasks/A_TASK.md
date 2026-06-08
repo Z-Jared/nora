@@ -1,10 +1,10 @@
-# TASK-167: Phase 1 MVP release audit
+# TASK-168: Phase 1.5 Pet Room life-feel polish
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora is now in Phase 1 Exit Gate after Identity Editor landed. Your job is to audit whether Phase 1 Pet Life MVP can be considered release-ready as a local customizable electronic pet agent.
+Nora is now in Phase 1 Exit Gate. TASK-167 release audit is integrated and reviewer-approved, but Phase 1 cannot move to Phase 2 until the remaining Exit Gate tasks are complete. Your job is to make the existing Pet Room feel more like a living electronic pet surface through deterministic UI/state feedback, without starting Phase 2 voice/presence work.
 
 Read first:
 
@@ -12,35 +12,54 @@ Read first:
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
+- `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`
 - `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
 - `mini_agent/static/index.html`
-- README or any relevant demo docs if present
+- `tests/test_webui_smoke.py`
+- `tests/test_pets.py`
+- `tests/test_http_server.py`
 
 ## Goal
 
-Perform a Phase 1 MVP release audit.
+Polish the Phase 1 Pet Room life-feel while staying deterministic and local.
 
-Verify the first-use pet loop:
+Implement a narrow vertical slice that improves at least three of these:
 
-1. Open or inspect Pet Room and confirm Nora-01/current pet, state, token food, activity, and memory surfaces are visible.
-2. Confirm Identity Editor can edit name, species, relationship role, speech style, personality traits, skills, voice profile, and taste profile.
-3. Confirm compute food add/feed/status paths show transparent balance and estimates.
-4. Confirm care/feed/relationship memory paths create visible state, activity, or memory feedback.
-5. Confirm user-visible copy has no fake intimacy, guilt, loneliness pressure, hidden purchase pressure, marketplace pressure, or voice-cloning claims.
+1. A clearer pet mood/status summary that reads from deterministic `hunger`, `energy`, `mood`, `bond`, and `growth` state.
+2. More visible feedback after Feed/Care/Shared Moment actions, such as a bounded room notice or diary-style latest activity surface.
+3. Identity-driven presentation, for example showing relationship role, speech style, taste profile, or skills in the room without requiring the editor to be open.
+4. A small "pet diary" or "today with Nora" surface derived from existing activity/memory data.
+5. Better first-use empty states that explain local demo boundaries without purchase pressure.
 
-## Allowed Changes
+The result should help a first-time user feel "this is my configurable electronic pet" rather than "this is a form/dashboard".
 
+## Scope
+
+Allowed files:
+
+- `mini_agent/static/index.html`
+- `tests/test_webui_smoke.py`
+- `tests/test_pets.py` or `tests/test_http_server.py` only if you add a tiny deterministic API/state helper that is directly required
 - `agent_tasks/A_DONE.md`
-- Optional small audit document, such as `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`
-- Minimal README/demo documentation if the Phase 1 local MVP path is missing
+
+Keep changes small and product-facing.
 
 ## Non-Goals
 
-- Do not implement Phase 2 voice or presence features.
-- Do not implement 3D/VRM, real payments, marketplace, account sync, native desktop, or native mobile.
-- Do not modify product/runtime code unless you find a tiny documentation/test naming issue; report real product blockers in `A_DONE.md`.
+- Do not implement real voice, TTS, speech recognition, desktop presence, mobile/PWA, 3D/VRM, Live2D asset pipeline, real billing, marketplace, account sync, or cloud sync.
+- Do not redesign the whole Web UI or return to Agent OS dashboard work.
+- Do not add model calls. All pet state and room feedback must be deterministic.
+- Do not edit `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `agent_tasks/REVIEW.md`, `CODEX_TERMINAL_HANDOFF.md`, `designs/`, or untracked design exports.
+
+## Safety Boundaries
+
+- Escape all dynamic text before rendering.
+- Do not add fake intimacy, guilt, loneliness pressure, suffering/death language, hidden purchase pressure, marketplace pressure, or voice-cloning claims.
+- Do not make compute food feel like a coercive payment gate; keep local demo boundaries transparent.
+- Do not let model output directly mutate pet state.
+- Keep token food cost language precise and bounded.
 
 ## Verification
 
@@ -56,12 +75,12 @@ If full evals fail because of unrelated baseline state, report exact failures an
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-167` and include:
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-168` and include:
 
-- Whether the first-use flow passed
-- Whether Phase 1 can be sealed or which blockers remain
-- Whether PM should proceed to `TASK-168`
+- What life-feel surfaces changed
+- How the result remains deterministic and Phase-1-only
 - Exact command results
+- Any remaining blockers or UX gaps
 
 Then notify Codex PM:
 
