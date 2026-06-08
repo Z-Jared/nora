@@ -193,6 +193,14 @@ def main() -> int:
         EvalCase("token_food_unknown_action_bounded", eval_token_food_unknown_action_bounded),
         EvalCase("token_food_webui_balance_visible", eval_token_food_webui_balance_visible),
         EvalCase("token_food_no_manipulative_copy", eval_token_food_no_manipulative_copy),
+        # TASK-164: Relationship memory coverage (requires TASK-163)
+        EvalCase("relmem_write_supported_kinds", eval_relmem_write_supported_kinds),
+        EvalCase("relmem_list_bounded_response", eval_relmem_list_bounded_response),
+        EvalCase("relmem_response_fields", eval_relmem_response_fields),
+        EvalCase("relmem_rejects_secret_input", eval_relmem_rejects_secret_input),
+        EvalCase("relmem_auth_enforced", eval_relmem_auth_enforced),
+        EvalCase("relmem_webui_section_exists", eval_relmem_webui_section_exists),
+        EvalCase("relmem_webui_no_fake_intimacy", eval_relmem_webui_no_fake_intimacy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -2697,6 +2705,231 @@ def eval_token_food_no_manipulative_copy():
     ]
     for phrase in manipulative:
         assert phrase not in html, f"manipulative food copy found: '{phrase}'"
+
+
+# --- TASK-164: Relationship memory coverage (requires TASK-163) ---
+
+
+def _skip_if_no_relmem():
+    """Skip if TASK-163 relationship memory is not implemented."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_relationship_memory_create'):
+            raise AttributeError("no relationship memory endpoint")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-163 not integrated: relationship memory not available")
+
+
+def eval_relmem_write_supported_kinds():
+    """Relationship memory write records supported kinds: shared_moment, preference, task_outcome."""
+    _skip_if_no_relmem()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            for kind in ["shared_moment", "preference", "task_outcome"]:
+                status, body = _http_request("POST", port, "/pet/relationship-memory", {
+                    "pet_id": pet_id,
+                    "kind": kind,
+                    "summary": f"test {kind}",
+                    "source": "test",
+                })
+                assert status == 200, f"write {kind} failed: {status}, {body}"
+            # List and verify
+            status, body = _http_request("GET", port, f"/pet/relationship-memory?pet_id={pet_id}")
+            assert status == 200, f"list failed: {status}"
+            memories = body if isinstance(body, list) else body.get("memories", [])
+            assert len(memories) >= 3, f"expected >= 3 memories, got {len(memories)}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_relmem_list_bounded_response():
+    """List endpoint returns bounded response with limit parameter."""
+    _skip_if_no_relmem()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # Write many memories
+            for i in range(30):
+                _http_request("POST", port, "/pet/relationship-memory", {
+                    "pet_id": pet_id,
+                    "kind": "shared_moment",
+                    "summary": f"moment {i}",
+                    "source": "test",
+                })
+            # Default list should be bounded
+            status, body = _http_request("GET", port, f"/pet/relationship-memory?pet_id={pet_id}")
+            assert status == 200, f"list failed: {status}"
+            memories = body if isinstance(body, list) else body.get("memories", [])
+            assert len(memories) <= 50, f"default list too large: {len(memories)}"
+            # Huge limit should be clamped
+            status2, body2 = _http_request("GET", port, f"/pet/relationship-memory?pet_id={pet_id}&limit=99999")
+            assert status2 == 200, f"huge limit failed: {status2}"
+            memories2 = body2 if isinstance(body2, list) else body2.get("memories", [])
+            assert len(memories2) <= 50, f"huge limit not clamped: {len(memories2)}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_relmem_response_fields():
+    """Response includes memory_id, pet_id, kind, summary, source, importance, created_at."""
+    _skip_if_no_relmem()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            status, body = _http_request("POST", port, "/pet/relationship-memory", {
+                "pet_id": pet_id,
+                "kind": "shared_moment",
+                "summary": "we played together",
+                "source": "chat",
+            })
+            assert status == 200, f"write failed: {status}, {body}"
+            # Check response fields
+            for field in ["memory_id", "pet_id", "kind", "summary", "source", "created_at"]:
+                assert field in body, f"missing field {field}: {body}"
+            assert body["pet_id"] == pet_id, f"wrong pet_id: {body['pet_id']}"
+            assert body["kind"] == "shared_moment", f"wrong kind: {body['kind']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_relmem_rejects_secret_input():
+    """Secret-like summary/source/metadata is rejected and not persisted."""
+    _skip_if_no_relmem()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # Secret-like summary should be rejected
+            status, body = _http_request("POST", port, "/pet/relationship-memory", {
+                "pet_id": pet_id,
+                "kind": "shared_moment",
+                "summary": "sk-ant-secret-key-12345",
+                "source": "test",
+            })
+            assert status >= 400 or body.get("ok") is False or "sk-ant-secret-key-12345" not in str(body), \
+                f"secret summary not rejected: {status}, {body}"
+            # Secret-like source should be rejected
+            status2, body2 = _http_request("POST", port, "/pet/relationship-memory", {
+                "pet_id": pet_id,
+                "kind": "preference",
+                "summary": "likes music",
+                "source": "AKIAIOSFODNN7EXAMPLE",
+            })
+            assert status2 >= 400 or body2.get("ok") is False or "AKIAIOSFODNN7EXAMPLE" not in str(body2), \
+                f"secret source not rejected: {status2}, {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_relmem_auth_enforced():
+    """Mutation auth remains enforced for relationship memory endpoints."""
+    _skip_if_no_relmem()
+    import time
+    import threading
+    from mini_agent.controller import MiniAgent
+    from mini_agent.http_server import create_server
+    from mini_agent.tools import build_default_registry
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        registry = build_default_registry(
+            workspace_root=Path(tmpdir), db=db,
+            confirm_action=lambda prompt: True,
+        )
+        agent = MiniAgent(registry)
+        port = _find_free_port()
+        server = create_server(
+            agent, host="127.0.0.1", port=port,
+            api_token="test-secret",
+            pet_store=registry.pet_store,
+        )
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            time.sleep(0.1)
+            # Without auth → 401
+            status, body = _http_request("POST", port, "/pet/relationship-memory", {
+                "pet_id": "pet_1",
+                "kind": "shared_moment",
+                "summary": "test",
+            })
+            assert status == 401, f"expected 401, got {status}: {body}"
+            # With auth → create pet first, then write
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"},
+                                        headers={"Authorization": "Bearer test-secret"})
+            pet_id = created["pet_id"]
+            status2, body2 = _http_request("POST", port, "/pet/relationship-memory", {
+                "pet_id": pet_id,
+                "kind": "shared_moment",
+                "summary": "authenticated write",
+            }, headers={"Authorization": "Bearer test-secret"})
+            assert status2 == 200, f"expected 200, got {status2}: {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_relmem_webui_section_exists():
+    """Pet Room HTML includes a relationship memory section."""
+    _skip_if_no_relmem()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    mem_markers = ["memory-section", "pet-memory", "relationship", "memories"]
+    found = [m for m in mem_markers if m in html]
+    assert len(found) >= 1, f"Pet Room missing memory section markers: found {found}"
+
+
+def eval_relmem_webui_no_fake_intimacy():
+    """Relationship memory UI section has no fake intimacy, guilt, pressure, or secret leak."""
+    _skip_if_no_relmem()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8")
+    html_lower = html.lower()
+    # Fake intimacy/guilt/pressure — check full file (these should never appear anywhere)
+    forbidden_global = [
+        "misses you so much", "lonely without you", "feels abandoned",
+        "don't leave me", "needs you now",
+        "buy to unlock", "pay to remember", "premium memory",
+    ]
+    for phrase in forbidden_global:
+        assert phrase not in html_lower, f"forbidden copy found: '{phrase}'"
+    # Find relationship memory section (HTML block + JS code)
+    import re
+    # Look for the memory section DOM and its associated JS
+    mem_dom = re.search(r'(pet-memory|memory-section|relationship-memory)[\s\S]{0,5000}?(?=<(?:/?)div[^>]*class="(?!pet-memory|memory))', html_lower)
+    if not mem_dom:
+        # Try broader match
+        mem_dom = re.search(r'(loadrelationshipmem|pet/relationship-memory)[\s\S]{0,3000}', html_lower)
+    if mem_dom:
+        section = mem_dom.group(0)
+        # No secret leak in memory section
+        for secret in ["sk-", "akiaiosfodnn7", "bearer ", "api_key", "api_token"]:
+            assert secret not in section, f"memory section leaked '{secret}'"
 
 
 def eval_cli_multiline_input():

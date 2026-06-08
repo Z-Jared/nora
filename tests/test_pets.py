@@ -457,5 +457,143 @@ class PetRegistryToolTests(unittest.TestCase):
         self.assertIsNotNone(self.registry.pet_store)
 
 
+class PetRelationshipMemoryTests(unittest.TestCase):
+    """Tests for PetRelationshipMemory store operations."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.store = PetStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_add_shared_moment(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory(
+            "pet_1", kind="shared_moment",
+            summary="First walk in the park",
+            source="pet_room", importance=7,
+        )
+        self.assertIsNotNone(mem)
+        self.assertEqual(mem.kind, "shared_moment")
+        self.assertEqual(mem.importance, 7)
+        self.assertIn("park", mem.summary)
+
+    def test_add_preference(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="preference", summary="Likes quiet mornings")
+        self.assertIsNotNone(mem)
+        self.assertEqual(mem.kind, "preference")
+
+    def test_add_task_outcome(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="task_outcome", summary="Completed workspace setup")
+        self.assertIsNotNone(mem)
+        self.assertEqual(mem.kind, "task_outcome")
+
+    def test_list_memories_most_recent_first(self):
+        self.store.create_pet(name="Mochi")
+        self.store.add_relationship_memory("pet_1", "shared_moment", "first moment")
+        self.store.add_relationship_memory("pet_1", "shared_moment", "second moment")
+        mems = self.store.list_relationship_memories("pet_1")
+        self.assertEqual(len(mems), 2)
+        self.assertEqual(mems[0].summary, "second moment")
+        self.assertEqual(mems[1].summary, "first moment")
+
+    def test_list_memories_respects_limit(self):
+        self.store.create_pet(name="Mochi")
+        for i in range(10):
+            self.store.add_relationship_memory("pet_1", "shared_moment", f"moment {i}")
+        mems = self.store.list_relationship_memories("pet_1", limit=3)
+        self.assertEqual(len(mems), 3)
+
+    def test_list_memories_limit_clamped(self):
+        self.store.create_pet(name="Mochi")
+        for i in range(60):
+            self.store.add_relationship_memory("pet_1", "shared_moment", f"moment {i}")
+        mems = self.store.list_relationship_memories("pet_1", limit=999)
+        self.assertLessEqual(len(mems), 50)
+
+    def test_rejects_invalid_kind(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="invalid", summary="test")
+        self.assertIsNone(mem)
+
+    def test_rejects_empty_summary(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="")
+        self.assertIsNone(mem)
+
+    def test_rejects_secret_summary(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="sk-secret-key-12345")
+        self.assertIsNone(mem)
+
+    def test_rejects_secret_source(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="ok", source="sk-secret-key-12345")
+        self.assertIsNone(mem)
+
+    def test_rejects_secret_metadata_value(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="ok", metadata={"key": "sk-secret-key-12345"})
+        self.assertIsNone(mem)
+
+    def test_rejects_missing_pet(self):
+        mem = self.store.add_relationship_memory("pet_999", kind="shared_moment", summary="test")
+        self.assertIsNone(mem)
+
+    def test_summary_truncated(self):
+        self.store.create_pet(name="Mochi")
+        long_summary = "x" * 1000
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary=long_summary)
+        self.assertIsNotNone(mem)
+        self.assertLessEqual(len(mem.summary), 500)
+
+    def test_importance_clamped(self):
+        self.store.create_pet(name="Mochi")
+        mem = self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="test", importance=100)
+        self.assertIsNotNone(mem)
+        self.assertEqual(mem.importance, 10)
+
+    def test_records_activity_event(self):
+        self.store.create_pet(name="Mochi")
+        self.store.add_relationship_memory("pet_1", kind="shared_moment", summary="test moment")
+        events = self.store.list_activity_events("pet_1")
+        self.assertTrue(any(e.event_type == "relationship_memory" for e in events))
+
+    def test_memory_round_trip(self):
+        from mini_agent.pets import PetRelationshipMemory
+        mem = PetRelationshipMemory(
+            memory_id="rmem_1", pet_id="pet_1", kind="shared_moment",
+            summary="test", source="src", importance=5,
+            metadata={"key": "value"}, created_at="2026-06-09T00:00:00",
+        )
+        d = mem.to_dict()
+        self.assertIn("metadata_json", d)
+        restored = PetRelationshipMemory.from_dict(mem.to_dict())
+        self.assertEqual(restored.summary, "test")
+        self.assertEqual(restored.metadata["key"], "value")
+
+
+class PetRelationshipMemoryJsonlTests(unittest.TestCase):
+    """Tests for PetRelationshipMemory JSONL fallback."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.jsonl_path = Path(self.tmpdir) / "pet_data"
+        self.store = PetStore(jsonl_path=self.jsonl_path)
+
+    def test_add_and_list(self):
+        self.store.create_pet(name="Mochi")
+        self.store.add_relationship_memory("pet_1", "shared_moment", "first moment")
+        self.store.add_relationship_memory("pet_1", "preference", "likes rain")
+        mems = self.store.list_relationship_memories("pet_1")
+        self.assertEqual(len(mems), 2)
+        self.assertEqual(mems[0].kind, "preference")  # most recent first
+        self.assertEqual(mems[1].kind, "shared_moment")
+
+
 if __name__ == "__main__":
     unittest.main()

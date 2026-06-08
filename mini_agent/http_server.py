@@ -85,6 +85,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_pet_activity(parsed)
         elif path == "/pet/food-status":
             self._handle_pet_food_status(parsed)
+        elif path == "/pet/relationship-memory":
+            self._handle_pet_relationship_memory_list(parsed)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -139,6 +141,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_pet_feed(body)
         elif path == "/pet/care":
             self._handle_pet_care(body)
+        elif path == "/pet/relationship-memory":
+            self._handle_pet_relationship_memory_create(body)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -588,6 +592,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/pet/care": {"post": {"summary": "Care for a pet (pat/comfort/rest/play)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "action": {"type": "string"}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Result"}}}},
                 "/pet/activity": {"get": {"summary": "Get recent pet activity events", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}], "responses": {"200": {"description": "Activity list"}}}},
                 "/pet/food-status": {"get": {"summary": "Check compute food balance and cost estimate for an action (feed/chat/voice/work)", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}, {"name": "action", "in": "query", "required": False, "schema": {"type": "string", "enum": ["feed", "chat", "voice", "work"]}}], "responses": {"200": {"description": "Food status with balance, cost, can_run, shortfall, reason_label, message"}}}},
+                "/pet/relationship-memory": {
+                    "get": {"summary": "List recent relationship memories for a pet", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}, {"name": "limit", "in": "query", "required": False, "schema": {"type": "integer"}}], "responses": {"200": {"description": "Memory list"}}},
+                    "post": {"summary": "Record a relationship memory (shared_moment, preference, task_outcome)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "kind": {"type": "string", "enum": ["shared_moment", "preference", "task_outcome"]}, "summary": {"type": "string"}, "source": {"type": "string"}, "importance": {"type": "integer"}, "metadata": {"type": "object"}}, "required": ["pet_id", "kind", "summary"]}}}}, "responses": {"200": {"description": "Created memory"}}}
+                },
             },
         }
         self._json_response(200, spec)
@@ -830,6 +838,61 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             return
         result = self.pet_store.care_pet(pet_id, action=action)
         self._json_response(200, result.to_dict())
+
+    def _handle_pet_relationship_memory_list(self, parsed) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        params = parse_qs(parsed.query)
+        pet_id = params.get("pet_id", [""])[0]
+        if not pet_id:
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        limit = 20
+        raw_limit = params.get("limit", ["20"])[0]
+        try:
+            limit = int(raw_limit)
+        except (ValueError, TypeError):
+            limit = 20
+        limit = max(1, min(50, limit))
+        memories = self.pet_store.list_relationship_memories(pet_id, limit=limit)
+        self._json_response(200, [m.to_dict() for m in memories])
+
+    def _handle_pet_relationship_memory_create(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pet_id = body.get("pet_id", "")
+        if not isinstance(pet_id, str) or not pet_id.strip():
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        pet_id = pet_id.strip()
+        kind = body.get("kind", "")
+        if not isinstance(kind, str) or kind not in ("shared_moment", "preference", "task_outcome"):
+            self._json_response(400, {"error": "invalid kind", "valid_kinds": ["shared_moment", "preference", "task_outcome"]})
+            return
+        summary = body.get("summary", "")
+        if not isinstance(summary, str) or not summary.strip():
+            self._json_response(400, {"error": "summary required"})
+            return
+        source = body.get("source", "")
+        if not isinstance(source, str):
+            source = ""
+        importance = body.get("importance", 5)
+        if not isinstance(importance, int):
+            importance = 5
+        metadata = body.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            self._json_response(400, {"error": "metadata must be dict"})
+            return
+        mem = self.pet_store.add_relationship_memory(
+            pet_id, kind=kind, summary=summary, source=source,
+            importance=importance, metadata=metadata,
+        )
+        if mem is None:
+            self._json_response(400, {"error": "rejected: invalid input, secret-like text, or pet not found"})
+            return
+        self._json_response(200, mem.to_dict())
 
 
 def create_server(

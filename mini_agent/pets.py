@@ -230,6 +230,49 @@ class PetActivityEvent:
         )
 
 
+_RELATIONSHIP_MEMORY_KINDS = ("shared_moment", "preference", "task_outcome")
+_RELATIONSHIP_MEMORY_PREFIX = "rmem_"
+_RELATIONSHIP_MEMORY_SUMMARY_MAX = 500
+_RELATIONSHIP_MEMORY_SOURCE_MAX = 200
+
+
+@dataclass
+class PetRelationshipMemory:
+    memory_id: str
+    pet_id: str
+    kind: str
+    summary: str
+    source: str = ""
+    importance: int = 5
+    metadata: dict = field(default_factory=dict)
+    created_at: str = ""
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["metadata_json"] = json.dumps(d.pop("metadata", {}), ensure_ascii=False)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PetRelationshipMemory:
+        meta = data.get("metadata")
+        if meta is None:
+            raw = data.get("metadata_json", "{}")
+            if isinstance(raw, str):
+                meta = json.loads(raw)
+            else:
+                meta = raw or {}
+        return cls(
+            memory_id=data["memory_id"],
+            pet_id=data["pet_id"],
+            kind=data["kind"],
+            summary=data["summary"],
+            source=data.get("source", ""),
+            importance=data.get("importance", 5),
+            metadata=meta,
+            created_at=data.get("created_at", ""),
+        )
+
+
 @dataclass
 class PetRecord:
     """Combined identity + state return wrapper."""
@@ -312,6 +355,19 @@ def _row_to_activity_event(row) -> PetActivityEvent:
         summary=row[3],
         metadata=json.loads(row[4]) if row[4] else {},
         created_at=row[5],
+    )
+
+
+def _row_to_relationship_memory(row) -> PetRelationshipMemory:
+    return PetRelationshipMemory(
+        memory_id=row[0],
+        pet_id=row[1],
+        kind=row[2],
+        summary=row[3],
+        source=row[4],
+        importance=row[5],
+        metadata=json.loads(row[6]) if row[6] else {},
+        created_at=row[7],
     )
 
 
@@ -822,4 +878,145 @@ class PetStore:
         events_file = self._jsonl_path / "pet_activity_events.jsonl"
         all_events = read_jsonl(events_file)
         matching = [PetActivityEvent.from_dict(e) for e in all_events if e.get("pet_id") == pet_id]
-        return matching[-limit:]
+        return list(reversed(matching[-limit:]))
+
+    # --- Relationship memory ---
+
+    def _next_memory_id(self) -> str:
+        if self._db:
+            rows = self._db.conn.execute("SELECT memory_id FROM pet_relationship_memories").fetchall()
+            max_id = 0
+            for row in rows:
+                raw = str(row[0])
+                if raw.startswith(_RELATIONSHIP_MEMORY_PREFIX):
+                    try:
+                        max_id = max(max_id, int(raw[len(_RELATIONSHIP_MEMORY_PREFIX):]))
+                    except ValueError:
+                        pass
+            return f"{_RELATIONSHIP_MEMORY_PREFIX}{max_id + 1}"
+        max_id = 0
+        if self._jsonl_path:
+            mem_file = self._jsonl_path / "pet_relationship_memories.jsonl"
+            for entry in read_jsonl(mem_file):
+                raw = str(entry.get("memory_id", ""))
+                if raw.startswith(_RELATIONSHIP_MEMORY_PREFIX):
+                    try:
+                        max_id = max(max_id, int(raw[len(_RELATIONSHIP_MEMORY_PREFIX):]))
+                    except ValueError:
+                        pass
+        return f"{_RELATIONSHIP_MEMORY_PREFIX}{max_id + 1}"
+
+    def add_relationship_memory(
+        self,
+        pet_id: str,
+        kind: str,
+        summary: str,
+        source: str = "",
+        importance: int = 5,
+        metadata: Optional[dict] = None,
+    ) -> Optional[PetRelationshipMemory]:
+        """Record a relationship memory. Returns None if validation fails."""
+        # Validate kind
+        if kind not in _RELATIONSHIP_MEMORY_KINDS:
+            return None
+        # Validate and bound summary
+        if not summary or not isinstance(summary, str):
+            return None
+        summary = summary.strip()[:_RELATIONSHIP_MEMORY_SUMMARY_MAX]
+        if not summary:
+            return None
+        # Reject secret-like text
+        if is_sensitive_text(summary):
+            return None
+        # Validate and bound source
+        if source and isinstance(source, str):
+            source = source.strip()[:_RELATIONSHIP_MEMORY_SOURCE_MAX]
+            if is_sensitive_text(source):
+                return None
+        else:
+            source = ""
+        # Validate importance
+        if not isinstance(importance, int):
+            importance = 5
+        importance = max(1, min(10, importance))
+        # Validate metadata
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            return None
+        # Reject secret-like text in metadata values
+        for k, v in metadata.items():
+            if isinstance(v, str) and is_sensitive_text(v):
+                return None
+        # Check pet exists
+        pet = self.get_pet(pet_id)
+        if not pet:
+            return None
+
+        now = self._now()
+        memory_id = self._next_memory_id()
+        mem = PetRelationshipMemory(
+            memory_id=memory_id,
+            pet_id=pet_id,
+            kind=kind,
+            summary=summary,
+            source=source,
+            importance=importance,
+            metadata=metadata,
+            created_at=now,
+        )
+
+        if self._db:
+            self._db.conn.execute(
+                "INSERT INTO pet_relationship_memories "
+                "(memory_id, pet_id, kind, summary, source, importance, metadata_json, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (mem.memory_id, mem.pet_id, mem.kind, mem.summary, mem.source,
+                 mem.importance, json.dumps(mem.metadata, ensure_ascii=False), mem.created_at),
+            )
+            self._db.conn.commit()
+        else:
+            if self._jsonl_path:
+                self._jsonl_path.mkdir(parents=True, exist_ok=True)
+                mem_file = self._jsonl_path / "pet_relationship_memories.jsonl"
+                with open(mem_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(mem.to_dict(), ensure_ascii=False) + "\n")
+
+        # Also record as activity event
+        event = PetActivityEvent(
+            event_id=self._next_event_id(),
+            pet_id=pet_id,
+            event_type="relationship_memory",
+            summary=f"{kind}: {summary[:80]}",
+            metadata={"kind": kind, "memory_id": memory_id},
+            created_at=now,
+        )
+        if self._db:
+            self._db.conn.execute(
+                "INSERT INTO pet_activity_events (event_id, pet_id, event_type, summary, metadata_json, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (event.event_id, event.pet_id, event.event_type, event.summary,
+                 json.dumps(event.metadata, ensure_ascii=False), event.created_at),
+            )
+            self._db.conn.commit()
+        else:
+            self._save_jsonl_event(event)
+
+        return mem
+
+    def list_relationship_memories(self, pet_id: str, limit: int = 20) -> list[PetRelationshipMemory]:
+        """List relationship memories for a pet, most recent first."""
+        limit = max(1, min(50, limit))
+        if self._db:
+            rows = self._db.conn.execute(
+                "SELECT * FROM pet_relationship_memories WHERE pet_id = ? ORDER BY created_at DESC LIMIT ?",
+                (pet_id, limit),
+            ).fetchall()
+            return [_row_to_relationship_memory(row) for row in rows]
+        # JSONL fallback
+        if not self._jsonl_path:
+            return []
+        mem_file = self._jsonl_path / "pet_relationship_memories.jsonl"
+        all_mems = read_jsonl(mem_file)
+        matching = [PetRelationshipMemory.from_dict(m) for m in all_mems if m.get("pet_id") == pet_id]
+        return list(reversed(matching[-limit:]))

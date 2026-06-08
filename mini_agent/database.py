@@ -148,6 +148,17 @@ CREATE TABLE IF NOT EXISTS pet_activity_events (
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pet_relationship_memories (
+    memory_id TEXT PRIMARY KEY,
+    pet_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    importance INTEGER NOT NULL DEFAULT 5,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEXES = """
@@ -177,6 +188,10 @@ CREATE INDEX IF NOT EXISTS idx_pet_food_pet ON pet_food_ledger(pet_id);
 CREATE INDEX IF NOT EXISTS idx_pet_food_created ON pet_food_ledger(created_at);
 CREATE INDEX IF NOT EXISTS idx_pet_activity_pet ON pet_activity_events(pet_id);
 CREATE INDEX IF NOT EXISTS idx_pet_activity_created ON pet_activity_events(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_pet_rmem_pet ON pet_relationship_memories(pet_id);
+CREATE INDEX IF NOT EXISTS idx_pet_rmem_kind ON pet_relationship_memories(kind);
+CREATE INDEX IF NOT EXISTS idx_pet_rmem_created ON pet_relationship_memories(created_at);
 """
 
 

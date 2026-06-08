@@ -2204,6 +2204,91 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("/pet/food-status", body["paths"])
 
+    def test_relationship_memory_create_and_list(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "shared_moment",
+            "summary": "First time exploring the garden together",
+            "source": "pet_room", "importance": 7,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["kind"], "shared_moment")
+        self.assertEqual(body["importance"], 7)
+        self.assertIn("garden", body["summary"])
+
+        status, body = self._request("GET", "/pet/relationship-memory?pet_id=pet_1")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["kind"], "shared_moment")
+
+    def test_relationship_memory_create_preference(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "preference",
+            "summary": "Enjoys quiet morning chats",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["kind"], "preference")
+
+    def test_relationship_memory_create_task_outcome(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "task_outcome",
+            "summary": "Successfully organized the workspace",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["kind"], "task_outcome")
+
+    def test_relationship_memory_rejects_invalid_kind(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "invalid_kind", "summary": "test",
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("invalid kind", body["error"])
+        self.assertIn("valid_kinds", body)
+
+    def test_relationship_memory_rejects_empty_summary(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "shared_moment", "summary": "",
+        })
+        self.assertEqual(status, 400)
+
+    def test_relationship_memory_rejects_secret_summary(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "pet_id": "pet_1", "kind": "shared_moment",
+            "summary": "sk-secret-key-12345",
+        })
+        self.assertEqual(status, 400)
+        self.assertNotIn("sk-secret-key-12345", str(body))
+
+    def test_relationship_memory_rejects_missing_pet_id(self):
+        status, body = self._request("POST", "/pet/relationship-memory", {
+            "kind": "shared_moment", "summary": "test",
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_relationship_memory_list_requires_pet_id(self):
+        status, body = self._request("GET", "/pet/relationship-memory")
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_relationship_memory_list_limit_bounded(self):
+        self.pet_store.create_pet(name="Mochi")
+        for i in range(60):
+            self.pet_store.add_relationship_memory("pet_1", "shared_moment", f"moment {i}")
+        status, body = self._request("GET", "/pet/relationship-memory?pet_id=pet_1&limit=999")
+        self.assertEqual(status, 200)
+        self.assertLessEqual(len(body), 50)
+
+    def test_relationship_memory_in_docs(self):
+        status, body = self._request("GET", "/docs")
+        self.assertEqual(status, 200)
+        self.assertIn("/pet/relationship-memory", body["paths"])
+
 
 class PetAuthHTTPServerTests(unittest.TestCase):
     """Tests for pet mutation auth when api_token is set."""

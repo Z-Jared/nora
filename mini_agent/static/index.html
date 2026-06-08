@@ -255,6 +255,14 @@ button{border:0;cursor:pointer}
 .pet-event .type{font-weight:800;color:var(--ink)}
 .pet-event .summary{color:var(--muted);flex:1;margin:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pet-event .time{color:var(--muted);font-size:11px;white-space:nowrap}
+.pet-memory-section{margin-top:24px}
+.pet-memory-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
+.pet-memory-actions{margin-bottom:12px}
+.pet-memory-list{display:grid;gap:8px;max-height:300px;overflow:auto}
+.pet-memory-item{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px 12px;font-size:12px}
+.pet-memory-item .kind{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--accent);font-weight:800;margin-bottom:4px}
+.pet-memory-item .mem-summary{color:var(--ink);margin-bottom:4px;line-height:1.5}
+.pet-memory-item .mem-meta{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}
 .pet-loading{text-align:center;color:var(--muted);padding:40px;font-size:14px}
 @media (max-width:820px){
   .pet-avatar-area{flex-direction:column;text-align:center}
@@ -418,6 +426,15 @@ button{border:0;cursor:pointer}
               <div class="pet-loading">No activity yet.</div>
             </div>
           </div>
+          <div class="pet-memory-section">
+            <h3>Relationship Memories</h3>
+            <div class="pet-memory-actions">
+              <button class="pet-action-btn" id="pet-memory-moment-btn" type="button">Record Shared Moment</button>
+            </div>
+            <div class="pet-memory-list" id="pet-memory-list">
+              <div class="pet-loading">No memories yet.</div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="thread-head" id="thread-head">
@@ -578,6 +595,7 @@ button{border:0;cursor:pointer}
       petContentEl.style.display = '';
       renderPet(pet);
       loadPetActivity(pet.pet_id);
+      loadRelationshipMemories(pet.pet_id);
     }).catch(function(){
       petLoadingEl.textContent = 'Failed to load pet.';
     });
@@ -691,6 +709,39 @@ button{border:0;cursor:pointer}
     var amt = parseInt(document.getElementById('pet-food-amount').value)||500;
     petAction('/pet/add-food', {pet_id:currentPet.pet_id, amount:amt, reason:'local demo'}, this);
   };
+  document.getElementById('pet-memory-moment-btn').onclick = function(){
+    if(!currentPet) return;
+    var summary = prompt('Describe the shared moment:');
+    if(!summary || !summary.trim()) return;
+    fetch('/pet/relationship-memory', {
+      method:'POST', headers:authHeaders(),
+      body:JSON.stringify({pet_id:currentPet.pet_id, kind:'shared_moment', summary:summary.trim(), source:'pet_room_demo'})
+    }).then(function(r){
+      if(handleAuthError(r)) throw new Error('auth');
+      return r.json();
+    }).then(function(result){
+      if(!result.error) loadRelationshipMemories(currentPet.pet_id);
+    }).catch(function(){});
+  };
+
+  function loadRelationshipMemories(petId){
+    fetch('/pet/relationship-memory?pet_id='+encodeURIComponent(petId), {headers:authHeaders()}).then(function(r){
+      if(handleAuthError(r)) throw new Error('auth');
+      return r.json();
+    }).then(function(memories){
+      var list = document.getElementById('pet-memory-list');
+      if(!list) return;
+      if(!memories.length){list.innerHTML='<div class="pet-loading">No memories yet.</div>';return;}
+      list.innerHTML = memories.map(function(m){
+        var t = m.created_at ? escapeHtml(m.created_at.substring(11,16)) : '';
+        return '<div class="pet-memory-item">'
+          + '<div class="kind">' + escapeHtml(m.kind) + '</div>'
+          + '<div class="mem-summary">' + escapeHtml(m.summary) + '</div>'
+          + '<div class="mem-meta"><span>importance: '+m.importance+'</span><span>'+t+'</span></div>'
+          + '</div>';
+      }).join('');
+    }).catch(function(){});
+  }
 
   navChatEl.onclick = function(){switchView('chat')};
   navPetEl.onclick = function(){switchView('pet')};

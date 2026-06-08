@@ -5,9 +5,9 @@ Last updated: 2026-06-08
 ## Current Phase
 
 - Phase: Phase 1 - Pet Life MVP
-- Percent: 84%
+- Percent: 88%
 - Status: in progress
-- Current focus: Relationship Memory MVP.
+- Current focus: Identity Editor and deeper Pet Room interaction.
 
 ## Completed This Phase
 
@@ -19,18 +19,21 @@ Last updated: 2026-06-08
   - Deterministic local MVP costs: feed=100, chat=25, voice=80, work=150.
   - Pet Room transparent balance and estimated cost display.
   - Guarded no-secret/no-negative/no-manipulative-copy coverage.
+- Relationship Memory MVP:
+  - `POST /pet/relationship-memory` and `GET /pet/relationship-memory` local HTTP API.
+  - Bounded `shared_moment` / `preference` / `task_outcome` records.
+  - Pet Room relationship memory section with escaped rendering.
+  - Guarded no-secret/no-fake-intimacy/no-auth-regression coverage.
 
 ## In Progress
 
-- Phase 1 remains focused on turning the pet from a room demo into a usable relationship loop.
-- TASK-163 is assigned to Claude A.
-- TASK-164 is assigned to Claude B.
+- Phase 1 remains focused on making the pet configurable and more interactive after the relationship loop landed.
 
 ## Next
 
-1. TASK-163: Relationship Memory MVP for pet shared moments.
-2. TASK-164: Relationship Memory deterministic coverage.
-3. After that, Identity Editor and deeper Pet Room interaction.
+1. Identity Editor MVP: editable pet name/species/personality/voice/taste/skills through API and Pet Room.
+2. Pet Room interaction depth: richer deterministic actions that feed mood/bond/activity/memory.
+3. Skill-as-pet-ability framing for low-risk read-only tools.
 
 ## Blockers
 
@@ -39,7 +42,7 @@ Last updated: 2026-06-08
 
 ## Four-Phase Overview
 
-- Phase 1 Pet Life MVP: 84% / in progress
+- Phase 1 Pet Life MVP: 88% / in progress
 - Phase 2 Voice & Presence: 0% / not started
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
