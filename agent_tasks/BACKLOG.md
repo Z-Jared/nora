@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-163: Relationship memory MVP for pet shared moments
+- 架构层: Memory/Relationship System / Pet State Engine / Avatar/Room UI / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: TASK-161/162 committed in `88a9d2a`.
+- 目标: 为电子宠物增加 relationship memory MVP：宠物可以记录 bounded shared moments / preferences / task outcomes，并通过 HTTP/Pet Room 读取最近关系记忆，让任务结果进入关系循环。
+- 非目标: 不做向量 RAG、不接入外部 memory provider、不调用 LLM、不做复杂个性化推荐、不做跨设备同步、不改现有 CLI/TUI。
+- 安全边界: memory 写入必须拒绝 secret-like text；输出 bounded；接口 mutation 保持 auth；模型输出不能直接写入 memory；HTML 必须 escape；不泄漏 API key/token/raw secret。
+- 持久证据: relationship memory records 或 pet activity events、HTTP JSON responses、Pet Room visible memory section、unit tests。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_http_server.py`, `tests/test_webui_smoke.py`.
+
+### TASK-164: Relationship memory deterministic coverage
+- 架构层: Eval/Review System / Memory/Relationship System / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude B
+- 依赖: TASK-163 implementation. If TASK-163 is absent, add guarded evals or focused skip scaffolding around the expected contract and report the dependency.
+- 目标: 为 relationship memory MVP 增加 deterministic coverage，锁住记忆写入/读取、bounded/no-secret/no-html-injection、Pet Room 展示和与 token food/identity 现有契约的兼容性。
+- 非目标: 不实现产品功能，除非是被测试暴露的极小 testability 修复；不接入外部 memory、LLM、RAG、voice、3D 或 marketplace。
+- 安全边界: eval 必须证明 secret-like text 不会保存或渲染；HTML injection 不会执行；unknown/bad memory kind bounded；mutation auth 不回归；现有 token food eval 不 skip。
+- 持久证据: deterministic eval cases、HTTP/UI smoke assertions、精确 pass/fail report。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`.
+
 ## 进行中
 
 ## 已完成

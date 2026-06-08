@@ -7,7 +7,7 @@ Last updated: 2026-06-08
 - Phase: Phase 1 - Pet Life MVP
 - Percent: 84%
 - Status: in progress
-- Current focus: Relationship Memory, Identity Editor, and deeper Pet Room interaction after the token food estimate/status loop.
+- Current focus: Relationship Memory MVP.
 
 ## Completed This Phase
 
@@ -27,9 +27,9 @@ Last updated: 2026-06-08
 
 ## Next
 
-1. Relationship Memory: record shared moments, task outcomes, taste/preferences, and user-specific pet memories.
-2. Identity Editor: let users safely customize pet identity, role, tone, taste, and visible traits.
-3. Pet Room interaction depth: richer care/chat/work actions, life log clarity, and better status feedback.
+1. TASK-163: Relationship Memory MVP for pet shared moments.
+2. TASK-164: Relationship Memory deterministic coverage.
+3. After that, Identity Editor and deeper Pet Room interaction.
 
 ## Blockers
 

@@ -1,10 +1,10 @@
-# TASK-161: Token food economy estimate and transparent spend loop
+# TASK-163: Relationship memory MVP for pet shared moments
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora is now a customizable electronic pet agent. TASK-159/160 made the default example pet `Nora-01`, a robot electronic pet, and the Pet Room already shows Compute Food / Token Energy. The next product step is to make token food feel like a real transparent compute-energy loop rather than only a demo add/feed button.
+Nora is now a customizable electronic pet agent. TASK-161/162 completed the transparent token food estimate/status loop. The next Phase 1 priority is Relationship Memory: task results, preferences, and shared moments should become part of the pet relationship, not just transient UI text.
 
 Read first:
 
@@ -31,54 +31,59 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Build a deterministic Token Food Economy MVP around transparent cost estimate, balance, and insufficient-balance explanation.
+Build a deterministic Relationship Memory MVP for the pet loop.
 
 Required behavior:
 
-1. HTTP/API:
-   - Add a read-only endpoint for pet food/compute status or estimate, for example `GET /pet/food-status?pet_id=...&action=chat|voice|work|feed`.
-   - The response should include current balance, estimated cost, whether the action can run, short reason label, and safe user-facing copy.
-   - Estimate must be deterministic and bounded. Suggested MVP costs: feed=100, chat=25, voice=80, work=150. Pick a small clear policy and document it in code/docs.
-   - Balance insufficient responses must not mutate state.
-   - Existing `/pet/feed` behavior should keep no-negative balance and clear insufficient-compute-food behavior.
+1. Pet memory model/store:
+   - Add a bounded relationship memory record type, for example `PetRelationshipMemory`.
+   - Suggested fields: `memory_id`, `pet_id`, `kind`, `summary`, `source`, `importance`, `metadata`, `created_at`.
+   - Supported `kind` should be a small deterministic set such as `shared_moment`, `preference`, `task_outcome`.
+   - Reject secret-like text in summary, source, kind, and metadata values.
+   - Bound summary/source lengths and list/read limits.
+   - Use existing pet persistence patterns in `PetStore`; keep JSONL/SQLite behavior consistent with nearby pet records.
+
+2. HTTP/API:
+   - Add `POST /pet/relationship-memory` to record a memory.
+   - Add `GET /pet/relationship-memory?pet_id=...&limit=...` to list recent memories.
+   - Mutation endpoint must retain auth when `NORA_API_TOKEN` is set.
+   - Responses must be bounded and not leak raw secret-like input.
    - Add concise docs entry to `/docs`.
 
-2. Pet Room UI:
-   - Show transparent balance and estimated costs for feed/chat/voice/work in the Pet Room.
-   - Show a non-manipulative insufficient-balance explanation when feed/work cannot run.
-   - Keep "Add Demo Tokens/Food" local-only framing; do not create a purchase flow.
-   - Avoid pet suffering, threat, urgency, hidden-cost, or emotional blackmail language.
-
-3. Runtime/product boundary:
-   - This is not real billing. It is the local deterministic contract for future commercial food/token economy.
-   - Model output must not control balance, estimates, or payment state.
+3. Pet Room UI:
+   - Add a small relationship memory section in Pet Room.
+   - Show recent memory summaries safely.
+   - Include a local-only demo/shared moment control or use existing action flow to create one.
+   - Escape all rendered memory text.
+   - Avoid fake intimacy, guilt, urgency, or manipulative copy.
 
 ## Non-Goals
 
-- No real payment provider.
-- No subscription/membership.
-- No checkout/recharge page.
-- No actual OpenAI/Anthropic/Gemini usage accounting.
+- No vector RAG.
+- No external memory provider.
 - No LLM calls.
-- No voice implementation.
-- No marketplace.
+- No cross-device sync.
+- No voice, 3D/VRM, marketplace, or billing work.
+- No CLI/TUI redesign.
 
 ## Safety Boundaries
 
-- State mutations must continue to go through `PetStore`.
-- New estimate/status endpoint must be read-only.
-- Mutation endpoints must retain existing HTTP auth behavior when `NORA_API_TOKEN` is set.
-- No secret-like text should be stored or rendered.
-- Do not touch unrelated CLI/TUI code.
+- Model output must not directly write memory.
+- Secret-like text must be rejected before persistence.
+- HTML must escape memory content.
+- Mutation endpoints must honor existing HTTP auth behavior.
+- Do not touch unrelated CLI/TUI/runtime code.
 
 ## Scope
 
 Primary files:
 
+- `mini_agent/pets.py`
 - `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
-- `tests/test_http_server.py` only for focused implementation-adjacent coverage
-- `tests/test_webui_smoke.py` only for focused implementation-adjacent coverage
+- `tests/test_pets.py`
+- `tests/test_http_server.py`
+- `tests/test_webui_smoke.py`
 - `agent_tasks/A_DONE.md`
 
 Do not edit:
@@ -103,7 +108,7 @@ If full evals fail because of pre-existing unrelated state, report the exact fai
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-162 needs to adjust tests for your public contract.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the public contract TASK-164 should lock.
 
 Then notify Codex PM:
 
