@@ -1213,3 +1213,123 @@ result.statePanelHtml = _elements['state-panel'].innerHTML;
         self.assertEqual(result["finishCalls"], 0)
         self.assertEqual(result["stateText"], "error")
         self.assertIn("Task summary is required.", result["statePanelHtml"])
+
+
+class PetRoomSmokeTests(unittest.TestCase):
+    """Smoke tests for Pet Room UI wiring."""
+
+    def test_pet_room_elements_exist(self):
+        result = _run_node(test_body="""
+result = {};
+result.petRoom = !!document.getElementById('pet-room');
+result.petAvatar = !!document.getElementById('pet-avatar');
+result.petName = !!document.getElementById('pet-name');
+result.petStats = !!document.getElementById('pet-stats');
+result.petFeedBtn = !!document.getElementById('pet-feed-btn');
+result.petPatBtn = !!document.getElementById('pet-pat-btn');
+result.petComfortBtn = !!document.getElementById('pet-comfort-btn');
+result.petRestBtn = !!document.getElementById('pet-rest-btn');
+result.petPlayBtn = !!document.getElementById('pet-play-btn');
+result.petAddFoodBtn = !!document.getElementById('pet-add-food-btn');
+result.petActivityList = !!document.getElementById('pet-activity-list');
+result.navPet = !!document.getElementById('nav-pet');
+result.navChat = !!document.getElementById('nav-chat');
+""")
+        d = result
+        for key in ["petRoom", "petAvatar", "petName", "petStats", "petFeedBtn",
+                     "petPatBtn", "petComfortBtn", "petRestBtn", "petPlayBtn",
+                     "petAddFoodBtn", "petActivityList", "navPet", "navChat"]:
+            self.assertTrue(d[key], f"Missing element: {key}")
+
+    def test_pet_action_sends_post_with_body(self):
+        result = _run_node(setup_js="""
+let _fetchCalls = [];
+_fetchHandler = function(url, opts) {
+  _fetchCalls.push({url: url, method: opts && opts.method, body: opts && opts.body});
+  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve({ok:true, state:{hunger:20,energy:70,mood:70,bond:10,growth_level:1,compute_food_balance:400}})});
+};
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
+_fetchCalls = [];
+petAction('/pet/feed', {pet_id:'pet_1', amount:100}, null);
+await new Promise(function(resolve){ setTimeout(resolve, 300); });
+result = {};
+var postCalls = _fetchCalls.filter(function(c){ return c.method === 'POST'; });
+result.postCallCount = postCalls.length;
+result.postUrl = postCalls.length > 0 ? postCalls[0].url : '';
+result.hasBody = postCalls.length > 0 && !!postCalls[0].body;
+""")
+        d = result
+        self.assertGreaterEqual(d["postCallCount"], 1)
+        self.assertEqual(d["postUrl"], "/pet/feed")
+        self.assertTrue(d["hasBody"])
+
+    def test_switch_view_shows_pet_room(self):
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve({pet_id:'pet_1', identity:{name:'Test',species:'cat',personality_traits:[],speech_style:''}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}})});
+};
+""", test_body="""
+result = {};
+result.initialPetDisplay = document.getElementById('pet-room').style.display || 'none';
+switchView('pet');
+result.petDisplay = document.getElementById('pet-room').style.display;
+result.petActive = document.getElementById('nav-pet').classList.contains('active');
+result.chatNotActive = !document.getElementById('nav-chat').classList.contains('active');
+result.threadHidden = document.getElementById('thread-head').style.display;
+result.messagesHidden = document.getElementById('messages-wrap').style.display;
+switchView('chat');
+result.chatAfterSwitch = document.getElementById('nav-chat').classList.contains('active');
+result.petAfterSwitch = !document.getElementById('nav-pet').classList.contains('active');
+""")
+        d = result
+        self.assertEqual(d["initialPetDisplay"], "none")
+        self.assertEqual(d["petDisplay"], "block")
+        self.assertTrue(d["petActive"])
+        self.assertTrue(d["chatNotActive"])
+        self.assertEqual(d["threadHidden"], "none")
+        self.assertEqual(d["messagesHidden"], "none")
+        self.assertTrue(d["chatAfterSwitch"])
+        self.assertTrue(d["petAfterSwitch"])
+
+    def test_escape_html_escapes_tags(self):
+        result = _run_node(test_body="""
+result = {};
+result.escaped = escapeHtml('<img onerror=alert(1) src=x>');
+result.normal = escapeHtml('hello world');
+result.amp = escapeHtml('a&b');
+result.quote = escapeHtml('a"b');
+""")
+        d = result
+        self.assertIn("&lt;img", d["escaped"])
+        self.assertNotIn("<img", d["escaped"])
+        self.assertEqual(d["normal"], "hello world")
+        self.assertEqual(d["amp"], "a&amp;b")
+        self.assertEqual(d["quote"], "a&quot;b")
+
+    def test_activity_rendering_escapes_html(self):
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/pet/activity') === 0) {
+    return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve([
+      {event_type: 'fed', summary: '<script>alert(1)</script>', created_at: '2026-06-09T12:00:00'},
+      {event_type: 'care', summary: 'pat & hug', created_at: '2026-06-09T12:01:00'}
+    ])});
+  }
+  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve({})});
+};
+""", test_body="""
+currentPet = {pet_id:'pet_1'};
+loadPetActivity('pet_1');
+await new Promise(function(resolve){ setTimeout(resolve, 300); });
+var list = document.getElementById('pet-activity-list');
+result = {};
+result.html = list.innerHTML;
+result.hasScriptTag = list.innerHTML.indexOf('<script>') >= 0;
+result.hasEscapedScript = list.innerHTML.indexOf('&lt;script&gt;') >= 0;
+result.hasAmp = list.innerHTML.indexOf('pat &amp; hug') >= 0;
+""")
+        d = result
+        self.assertFalse(d["hasScriptTag"], "Raw <script> found in activity HTML")
+        self.assertTrue(d["hasEscapedScript"], "Escaped <script> not found")
+        self.assertTrue(d["hasAmp"], "Ampersand not escaped")

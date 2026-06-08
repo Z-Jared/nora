@@ -1851,5 +1851,373 @@ class HTTPMemoryAuthTests(unittest.TestCase):
         self.assertIn("unauthorized", body["error"])
 
 
+class PetHTTPServerTests(unittest.TestCase):
+    """Tests for pet HTTP API endpoints."""
+
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        from mini_agent.database import NoraDB
+        from mini_agent.pets import PetStore
+        db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.pet_store = PetStore(db=db)
+        self.agent = MiniAgent(build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=db,
+        ))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            pet_store=self.pet_store,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_pet_current_creates_default(self):
+        status, body = self._request("GET", "/pet/current")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Nora")
+        self.assertEqual(body["identity"]["species"], "digital_cat")
+        self.assertEqual(body["pet_id"], "pet_1")
+
+    def test_pet_current_returns_existing(self):
+        self.pet_store.create_pet(name="Mochi", species="cat")
+        status, body = self._request("GET", "/pet/current")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Mochi")
+
+    def test_pet_create(self):
+        status, body = self._request("POST", "/pet/create", {"name": "Luna", "species": "digital_bunny"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Luna")
+        self.assertEqual(body["identity"]["species"], "digital_bunny")
+        self.assertEqual(body["state"]["hunger"], 30)
+
+    def test_pet_create_requires_name(self):
+        status, body = self._request("POST", "/pet/create", {})
+        self.assertEqual(status, 400)
+        self.assertIn("name required", body["error"])
+
+    def test_pet_create_rejects_sensitive_name(self):
+        status, body = self._request("POST", "/pet/create", {"name": "sk-secret-key-12345"})
+        self.assertEqual(status, 400)
+
+    def test_pet_add_food(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/add-food", {"pet_id": "pet_1", "amount": 500, "reason": "demo"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["state"]["compute_food_balance"], 500)
+
+    def test_pet_add_food_rejects_bad_amount(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/add-food", {"pet_id": "pet_1", "amount": -10})
+        self.assertEqual(status, 400)
+
+    def test_pet_add_food_requires_pet_id(self):
+        status, body = self._request("POST", "/pet/add-food", {"amount": 100})
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_pet_feed(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": 100})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["state"]["compute_food_balance"], 400)
+        self.assertLess(body["state"]["hunger"], 30)
+
+    def test_pet_feed_insufficient_balance(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": 100})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["reason_label"], "insufficient_compute_food")
+
+    def test_pet_care(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/care", {"pet_id": "pet_1", "action": "pat"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertGreater(body["state"]["mood"], 60)
+        self.assertGreater(body["state"]["bond"], 0)
+
+    def test_pet_care_invalid_action(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/care", {"pet_id": "pet_1", "action": "invalid"})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["reason_label"], "invalid_care_action")
+
+    def test_pet_activity(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.care_pet("pet_1", action="pat")
+        self.pet_store.care_pet("pet_1", action="play")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, list)
+        self.assertTrue(len(body) >= 2)
+        event_types = [e["event_type"] for e in body]
+        self.assertIn("care", event_types)
+
+    def test_pet_activity_requires_pet_id(self):
+        status, body = self._request("GET", "/pet/activity")
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_pet_activity_huge_limit_bounded(self):
+        self.pet_store.create_pet(name="Mochi")
+        for i in range(60):
+            self.pet_store.care_pet("pet_1", action="pat")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1&limit=99999")
+        self.assertEqual(status, 200)
+        self.assertLessEqual(len(body), 50)
+
+    def test_pet_activity_negative_limit_clamped(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.care_pet("pet_1", action="pat")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1&limit=-5")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, list)
+        self.assertGreaterEqual(len(body), 1)
+
+    def test_pet_activity_zero_limit_clamped(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.care_pet("pet_1", action="pat")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1&limit=0")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, list)
+
+    def test_pet_activity_string_limit_no_crash(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.care_pet("pet_1", action="pat")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1&limit=abc")
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, list)
+
+    def test_status_shows_pet_feature(self):
+        status, body = self._request("GET", "/status")
+        self.assertEqual(status, 200)
+        self.assertIn("pets", body["features"])
+        self.assertTrue(body["features"]["pets"])
+
+    def test_docs_includes_pet_endpoints(self):
+        status, body = self._request("GET", "/docs")
+        self.assertEqual(status, 200)
+        self.assertIn("/pet/current", body["paths"])
+        self.assertIn("/pet/create", body["paths"])
+        self.assertIn("/pet/feed", body["paths"])
+        self.assertIn("/pet/care", body["paths"])
+        self.assertIn("/pet/activity", body["paths"])
+
+    def test_pet_create_with_full_identity(self):
+        status, body = self._request("POST", "/pet/create", {
+            "name": "Luna",
+            "species": "digital_bunny",
+            "personality_traits": ["shy", "curious"],
+            "relationship_role": "companion",
+            "speech_style": "soft",
+            "voice_profile": {"voice_id": "gentle_1", "speed": "slow"},
+            "taste_profile": {"likes": ["carrots"], "dislikes": ["loud"]},
+            "skills": ["hop", "snuggle"],
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Luna")
+        self.assertEqual(body["identity"]["voice_profile"]["voice_id"], "gentle_1")
+        self.assertEqual(body["identity"]["taste_profile"]["likes"], ["carrots"])
+        self.assertEqual(body["identity"]["skills"], ["hop", "snuggle"])
+
+    def test_pet_create_rejects_sensitive_voice_profile(self):
+        status, body = self._request("POST", "/pet/create", {
+            "name": "Ok",
+            "voice_profile": {"voice_id": "sk-secret-key-12345"},
+        })
+        self.assertEqual(status, 400)
+
+    def test_pet_feed_rejects_string_amount(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": "100"})
+        self.assertEqual(status, 400)
+        self.assertIn("positive integer", body["error"])
+
+    def test_pet_feed_rejects_zero_amount(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": 0})
+        self.assertEqual(status, 400)
+
+    def test_pet_feed_rejects_bool_amount(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": True})
+        self.assertEqual(status, 400)
+        self.assertIn("positive integer", body["error"])
+
+    def test_pet_add_food_rejects_bool_amount(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/add-food", {"pet_id": "pet_1", "amount": True})
+        self.assertEqual(status, 400)
+
+    def test_pet_create_rejects_non_string_name(self):
+        status, body = self._request("POST", "/pet/create", {"name": 123})
+        self.assertEqual(status, 400)
+
+    def test_pet_create_rejects_non_list_personality(self):
+        status, body = self._request("POST", "/pet/create", {"name": "Ok", "personality_traits": "not-a-list"})
+        self.assertEqual(status, 400)
+        self.assertIn("personality_traits must be list", body["error"])
+
+    def test_pet_create_rejects_non_dict_voice_profile(self):
+        status, body = self._request("POST", "/pet/create", {"name": "Ok", "voice_profile": "not-a-dict"})
+        self.assertEqual(status, 400)
+        self.assertIn("voice_profile must be dict", body["error"])
+
+    def test_pet_feed_rejects_non_string_pet_id(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/feed", {"pet_id": 123, "amount": 100})
+        self.assertEqual(status, 400)
+
+    def test_pet_care_rejects_non_string_action(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/care", {"pet_id": "pet_1", "action": 123})
+        self.assertEqual(status, 400)
+        self.assertIn("action must be string", body["error"])
+
+
+class PetAuthHTTPServerTests(unittest.TestCase):
+    """Tests for pet mutation auth when api_token is set."""
+
+    def setUp(self):
+        self.port = _find_free_port()
+        self.tmpdir = tempfile.mkdtemp()
+        from mini_agent.database import NoraDB
+        from mini_agent.pets import PetStore
+        db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.pet_store = PetStore(db=db)
+        self.agent = MiniAgent(build_default_registry(
+            notes_path=Path(self.tmpdir) / "notes.txt",
+            db=db,
+        ))
+        self.server = create_server(
+            self.agent,
+            host="127.0.0.1",
+            port=self.port,
+            pet_store=self.pet_store,
+            api_token="test-secret",
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=2)
+        self.server.server_close()
+
+    def _request(self, method, path, body=None, headers=None):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        try:
+            with urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read().decode("utf-8"))
+
+    def test_pet_current_unauthenticated_ok(self):
+        """GET /pet/current does not require auth."""
+        status, body = self._request("GET", "/pet/current")
+        self.assertEqual(status, 200)
+        self.assertIn("pet_id", body)
+
+    def test_pet_activity_unauthenticated_ok(self):
+        """GET /pet/activity does not require auth."""
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("GET", "/pet/activity?pet_id=pet_1")
+        self.assertEqual(status, 200)
+
+    def test_pet_create_rejected_without_auth(self):
+        status, body = self._request("POST", "/pet/create", {"name": "Luna"})
+        self.assertEqual(status, 401)
+
+    def test_pet_create_accepted_with_auth(self):
+        status, body = self._request(
+            "POST", "/pet/create", {"name": "Luna"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Luna")
+
+    def test_pet_add_food_rejected_without_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/add-food", {"pet_id": "pet_1", "amount": 100})
+        self.assertEqual(status, 401)
+
+    def test_pet_add_food_accepted_with_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request(
+            "POST", "/pet/add-food", {"pet_id": "pet_1", "amount": 100},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+    def test_pet_feed_rejected_without_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request("POST", "/pet/feed", {"pet_id": "pet_1", "amount": 100})
+        self.assertEqual(status, 401)
+
+    def test_pet_feed_accepted_with_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request(
+            "POST", "/pet/feed", {"pet_id": "pet_1", "amount": 100},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+    def test_pet_care_rejected_without_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/care", {"pet_id": "pet_1", "action": "pat"})
+        self.assertEqual(status, 401)
+
+    def test_pet_care_accepted_with_auth(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request(
+            "POST", "/pet/care", {"pet_id": "pet_1", "action": "pat"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

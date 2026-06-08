@@ -6,33 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-157: Pet room MVP and local HTTP pet API
-- 架构层: Avatar/Room UI / Pet State Engine / Token Food Economy / Skill Runtime
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-155/156 completed in `4d239bb`.
-- 目标: Add the first visible pet room MVP in the existing local Web UI, backed by deterministic pet HTTP endpoints for current pet, create, feed, care, add local demo food, and activity.
-- 非目标: No billing provider, no voice, no Live2D/3D rigging, no desktop/mobile native app, no LLM-driven state mutation, no marketplace.
-- 安全边界: Pet state mutations must use `PetStore`; model output must not control balance/state; mutation endpoints require existing HTTP auth when `NORA_API_TOKEN` is set; no secret-like text may be persisted or rendered; no manipulative payment copy.
-- 持久证据: SQLite pet identity/state, food ledger, activity events, HTTP JSON responses, visible pet room UI controls/state/activity.
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_webui_smoke.py`.
-
-### TASK-158: Pet room API/UI deterministic coverage
-- 架构层: Eval/Review System / Safety/Policy / Avatar/Room UI / Token Food Economy
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude B
-- 依赖: TASK-157 implementation. If TASK-157 is not present in your worktree, prepare focused failing tests/evals around the expected public API and report the dependency.
-- 目标: Add deterministic unit, smoke, and eval coverage for the pet room API/UI loop: create/current pet, feed/care, local demo food, activity rendering, auth boundaries, no negative balance, and no secret leak.
-- 非目标: No feature implementation except tiny testability fixes approved by observed failures; no billing, voice, Live2D/3D, native desktop/mobile, or LLM calls.
-- 安全边界: Tests/evals must prove mutation endpoints respect auth, read endpoints do not mutate, balance cannot go negative, and UI/API outputs do not leak raw secrets.
-- 持久证据: HTTP tests, Web UI JS smoke tests, deterministic eval cases, exact pass/fail report.
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`, `tests/test_webui_smoke.py`.
-
 ## 已完成
+
+### TASK-157: Pet room MVP and local HTTP pet API ✅
+- 完成者: Claude A；Codex PM 集成时保留 `/pet/activity` limit clamp 修复（1..50）和安全类型校验。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 276 tests OK；`python3 evals/run_evals.py` 637 passed, 0 failed, 0 skipped（合并 TASK-158 后）；`git diff --check` OK。
+- 内容: 新增 local HTTP pet API：`/pet/current`、`/pet/create`、`/pet/add-food`、`/pet/feed`、`/pet/care`、`/pet/activity`；将 `PetStore` 接入 server；Web UI 新增 Pet Room、宠物状态、喂食/互动/添加 demo food、活动日志；mutation endpoints 继承 HTTP auth，活动日志 HTML escape，API type validation 返回 400。
+
+### TASK-158: Pet room API/UI deterministic coverage ✅
+- 完成者: Claude B；Codex PM 手工合入 eval，避免覆盖主仓库既有 TTY eval 改动，并收紧部分断言。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: B 单独 worktree `python3 evals/run_evals.py` 624 passed, 0 failed, 13 skipped；合并 TASK-157 后主仓库 `python3 evals/run_evals.py` 637 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 13 个 deterministic pet HTTP/UI eval，覆盖 current/create/add-food/feed/care/activity/auth/no-secret、Pet Room controls/auth header、activity HTML injection 防护、invalid amount type、invalid identity shape；TASK-157 缺失时安全 skip，合并后全部 active/pass。
 
 ### TASK-155: Pet Identity / Pet State deterministic foundation ✅
 - 完成者: Claude A；Codex PM 集成时补强 nested `voice_profile`/`taste_profile` secret validation，并将 `voice_profile`、`taste_profile`、`skills` 暴露到 `create_pet` registry tool。

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,7 @@ from mini_agent.mcp_server import (
 from mini_agent.plugins import inspect_manifest_json, inspect_manifest
 from mini_agent.registry import ToolPermission, ToolRegistry
 try:
-    import mini_agent.pets
+    from mini_agent.pets import PetStore, PetIdentity, PetState
     HAS_PETS = True
 except ImportError:
     HAS_PETS = False
@@ -136,15 +137,23 @@ def main() -> int:
         EvalCase("tty_slash_argument_levels", eval_tty_slash_argument_levels),
         EvalCase("tty_body_wrap_tail", eval_tty_body_wrap_tail),
         EvalCase("tty_body_scroll_history", eval_tty_body_scroll_history),
+        EvalCase("tty_framed_input_24_rows", eval_tty_framed_input_24_rows),
         EvalCase("tty_input_history", eval_tty_input_history),
         EvalCase("tty_multiline_paste_normalization", eval_tty_multiline_paste_normalization),
         EvalCase("tty_cancel_ignores_late_result", eval_tty_cancel_ignores_late_result),
         EvalCase("tty_permission_selector_wiring", eval_tty_permission_selector_wiring),
+        EvalCase("tty_command_metadata_complete", eval_tty_command_metadata_complete),
+        EvalCase("tty_slash_argument_contracts", eval_tty_slash_argument_contracts),
+        EvalCase("tty_approval_action_scope", eval_tty_approval_action_scope),
         EvalCase("tty_worker_errors_render", eval_tty_worker_errors_render),
         EvalCase("tty_autosave_restores_previous_session", eval_tty_autosave_restores_previous_session),
         EvalCase("tty_restored_history_renders_in_body", eval_tty_restored_history_renders_in_body),
         EvalCase("tty_run_events_tool_activity", eval_tty_run_events_tool_activity),
         EvalCase("tty_run_events_streaming_answer", eval_tty_run_events_streaming_answer),
+        EvalCase("tty_real_screen_startup_bottom_input", eval_tty_real_screen_startup_bottom_input),
+        EvalCase("tty_real_screen_slash_second_level", eval_tty_real_screen_slash_second_level),
+        EvalCase("tty_real_screen_typing_keeps_bottom_input", eval_tty_real_screen_typing_keeps_bottom_input),
+        EvalCase("tty_real_screen_approval_fits_80x24", eval_tty_real_screen_approval_fits_80x24),
         EvalCase("selectable_confirm_allow_deny_choices", eval_selectable_confirm_allow_deny_choices),
         EvalCase("permission_deny_blocks_tool", eval_permission_deny_blocks_tool),
         # TASK-156: Pet foundation deterministic eval coverage
@@ -156,11 +165,26 @@ def main() -> int:
         EvalCase("pet_read_tools_no_mutation", eval_pet_read_tools_no_mutation),
         EvalCase("pet_sensitive_name_rejected", eval_pet_sensitive_name_rejected),
         EvalCase("pet_activity_bounded_no_secret_leak", eval_pet_activity_bounded_no_secret_leak),
+        # TASK-158: Pet room API/UI eval coverage (requires TASK-157)
+        EvalCase("pet_http_current_returns_default", eval_pet_http_current_returns_default),
+        EvalCase("pet_http_create_identity_safe", eval_pet_http_create_identity_safe),
+        EvalCase("pet_http_add_food_increases_balance", eval_pet_http_add_food_increases_balance),
+        EvalCase("pet_http_feed_no_negative_balance", eval_pet_http_feed_no_negative_balance),
+        EvalCase("pet_http_care_free_state_change", eval_pet_http_care_free_state_change),
+        EvalCase("pet_http_activity_bounded", eval_pet_http_activity_bounded),
+        EvalCase("pet_http_auth_guards_mutation", eval_pet_http_auth_guards_mutation),
+        EvalCase("pet_http_no_secret_leak", eval_pet_http_no_secret_leak),
+        EvalCase("pet_webui_room_controls_present", eval_pet_webui_room_controls_present),
+        EvalCase("pet_webui_auth_header_wiring", eval_pet_webui_auth_header_wiring),
+        EvalCase("pet_activity_no_html_injection", eval_pet_activity_no_html_injection),
+        EvalCase("pet_http_rejects_invalid_amount_type", eval_pet_http_rejects_invalid_amount_type),
+        EvalCase("pet_http_rejects_invalid_identity_shape", eval_pet_http_rejects_invalid_identity_shape),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
         EvalCase("slash_launcher_no_model_call", eval_slash_launcher_no_model_call),
         EvalCase("slash_launcher_no_raw_json", eval_slash_launcher_no_raw_json),
+        EvalCase("cli_tools_summary_compact", eval_cli_tools_summary_compact),
         # TASK-144: CLI slash surfaces v4 eval coverage
         EvalCase("slash_launcher_v4_compact", eval_slash_launcher_v4_compact),
         EvalCase("slash_help_v4_concise", eval_slash_help_v4_concise),
@@ -1247,6 +1271,8 @@ def eval_tty_slash_argument_levels():
     assert "<goal>" in second, f"second arg missing: {second}"
     assert FakeEvent.App.current_buffer.text == "/auto 3 <goal>", f"final template not filled: {FakeEvent.App.current_buffer.text}"
     assert cli._worker_thread is None, "argument drilldown should not execute immediately"
+    assert "Enter choose, Esc back" in first, f"truncated second-level menu lacks navigation hint: {first}"
+    assert "type to filter" not in first, f"second-level menu should not use root filter hint: {first}"
 
 
 def eval_tty_body_wrap_tail():
@@ -1284,6 +1310,22 @@ def eval_tty_body_scroll_history():
     assert "line 69" in older and "line 79" not in older, f"page up failed: {older}"
     assert "new final line" not in after_append, f"manual scroll should hold position: {after_append}"
     assert "new final line" in returned, f"page down did not return to latest: {returned}"
+
+
+def eval_tty_framed_input_24_rows():
+    """A normal 80x24 terminal keeps the framed bottom input instead of falling back to a raw prompt."""
+    import unittest.mock
+
+    from prompt_toolkit.widgets import Frame
+    from mini_agent import interactive_cli
+    from mini_agent.interactive_cli import InteractiveCLI
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cli = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        with unittest.mock.patch.object(interactive_cli.shutil, "get_terminal_size", return_value=(80, 24)):
+            cli._make_application()
+
+    assert isinstance(cli._input_frame, Frame), "80x24 terminal should keep framed input"
 
 
 def eval_tty_input_history():
@@ -1356,6 +1398,75 @@ def eval_tty_permission_selector_wiring():
     assert registry.confirm_action == cli._confirm_action, "InteractiveCLI did not wire in-app confirm handler"
 
 
+def eval_tty_command_metadata_complete():
+    """Every backend slash command has TTY metadata and appears in /help."""
+    from mini_agent.interactive_cli import COMMAND_META
+
+    commands = [command for command in MiniAgentCLI.slash_command_names() if command != "/"]
+    missing_meta = [command for command in commands if command not in COMMAND_META]
+    help_text = MiniAgentCLI(FakeCLIAgent(), FakeCLIRegistry()).handle_slash_command("/help")
+    missing_help = [command for command in commands if command not in help_text]
+
+    assert not missing_meta, f"commands missing TTY metadata: {missing_meta}"
+    assert not missing_help, f"commands missing from /help: {missing_help}"
+    assert len(help_text) < 1800, f"/help too long after complete coverage: {len(help_text)}"
+
+
+def eval_tty_slash_argument_contracts():
+    """TTY argument specs match backend command semantics for known mismatch-prone commands."""
+    from mini_agent.interactive_cli import COMMAND_ARGUMENT_SPECS, InteractiveCLI, _command_template
+
+    registry = FakeCLIRegistry()
+    cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+    assert COMMAND_ARGUMENT_SPECS["/repair"][0]["placeholder"] == "<attempts>"
+    assert _command_template("/repair", ["3"]) == "/repair 3"
+    result = cli.handle_slash_command("/repair 3")
+    assert registry.calls[-1] == ("run_repair_loop", {"max_attempts": 3}), registry.calls[-1]
+    assert "called run_repair_loop" in result
+
+    assert COMMAND_ARGUMENT_SPECS["/context"][0]["placeholder"] == "<limit>"
+    cli.handle_slash_command("/context 5")
+    assert registry.calls[-1] == ("list_context_summaries", {"max_results": 5}), registry.calls[-1]
+
+    for command in ["/logs", "/tasks", "/traces"]:
+        assert command in COMMAND_ARGUMENT_SPECS, f"{command} missing limit argument spec"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tty = InteractiveCLI(FakeCLIAgent(), FakeCLIRegistry(), root=Path(tmpdir))
+        tty._current_input = "/repair"
+        repair_panel = "".join(fragment for _, fragment in tty._render_slash_panel())
+        tty._current_input = "/context"
+        context_panel = "".join(fragment for _, fragment in tty._render_slash_panel())
+    assert "<attempts>" in repair_panel and "<command>" not in repair_panel, repair_panel
+    assert "<limit>" in context_panel and "<prompt>" not in context_panel, context_panel
+
+
+def eval_tty_approval_action_scope():
+    """Approval cards show concrete action and session allow scope is action-specific."""
+    from mini_agent.interactive_cli import _approval_lines, _approval_scope_key
+    from mini_agent.registry import Tool
+
+    registry = ToolRegistry(confirm_action=lambda prompt: True)
+    tool = Tool(
+        "run_project_tests",
+        "Run tests",
+        lambda **kwargs: "ok",
+        {},
+        ToolPermission(category="test", risk="execute", requires_confirmation=True),
+    )
+    first = registry._confirmation_prompt(tool, {"command": "git diff --check", "reason": "cli slash command"})
+    second = registry._confirmation_prompt(
+        tool,
+        {"command": "python3 -m unittest discover -s tests", "reason": "cli slash command"},
+    )
+    rendered = "\n".join(_approval_lines(first, selected=1))
+
+    assert "action: command: git diff --check" in rendered, rendered
+    assert "why: cli slash command" in rendered, rendered
+    assert _approval_scope_key(first) != _approval_scope_key(second), "session approval key is too broad"
+
+
 def eval_tty_worker_errors_render():
     """TTY worker thread errors render into the transcript instead of leaking tracebacks."""
     from mini_agent.interactive_cli import InteractiveCLI
@@ -1406,7 +1517,7 @@ def eval_tty_autosave_restores_previous_session():
 
 
 def eval_tty_restored_history_renders_in_body():
-    """TTY startup renders a concise restored autosave preview above the fixed input."""
+    """TTY startup keeps the Nora empty state and renders only a compact restored-session notice."""
     from mini_agent.interactive_cli import InteractiveCLI
     from mini_agent.memory import ConversationMemory
     from mini_agent.session import SessionStore
@@ -1432,9 +1543,11 @@ def eval_tty_restored_history_renders_in_body():
         cli = InteractiveCLI(MemoryAgent(), FakeCLIRegistry(), root=Path(tmpdir), session_store=store)
         body = "".join(fragment for _, fragment in cli._render_body(max_lines=10, width=80))
 
+    assert "Nora Code" in body, f"startup identity missing after restore: {body}"
     assert "restored previous session" in body, f"restore marker missing: {body}"
-    assert "last: old tty question" in body, f"user preview missing: {body}"
-    assert "reply: old tty answer 0" in body, f"assistant preview missing: {body}"
+    assert "/session-load" in body, f"explicit restore action missing: {body}"
+    assert "last: old tty question" not in body, f"user preview should not cover startup: {body}"
+    assert "reply: old tty answer 0" not in body, f"assistant preview should not cover startup: {body}"
     assert "h/exit" not in body, f"mistyped exit polluted restore preview: {body}"
     assert "codec can't decode" not in body, f"error noise polluted restore preview: {body}"
     assert "好的，再见" not in body, f"exit reply polluted restore preview: {body}"
@@ -1507,6 +1620,192 @@ def eval_tty_run_events_streaming_answer():
     assert transcript.count("stream answer") == 1, f"final answer duplicated in transcript: {transcript}"
 
 
+def _spawn_real_tty_nora(rows=24, cols=80):
+    try:
+        import pexpect
+    except ImportError as error:
+        raise AssertionError("pexpect is required for real TTY evals") from error
+
+    workdir = tempfile.TemporaryDirectory(prefix="nora-tty-eval-")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    for key in ("LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+        env.pop(key, None)
+    child = pexpect.spawn(
+        sys.executable,
+        ["-c", "from mini_agent.app import main; main()"],
+        cwd=workdir.name,
+        env=env,
+        dimensions=(rows, cols),
+        encoding="utf-8",
+        timeout=8,
+    )
+    child._nora_workdir = workdir
+    return child
+
+
+def _read_real_tty(child, delay=0.35):
+    import time
+
+    time.sleep(delay)
+    output = []
+    while True:
+        try:
+            output.append(child.read_nonblocking(size=8192, timeout=0.05))
+        except Exception:
+            break
+    return "".join(output)
+
+
+def _close_real_tty(child):
+    workdir = getattr(child, "_nora_workdir", None)
+    try:
+        child.close(force=True)
+    finally:
+        if workdir is not None:
+            workdir.cleanup()
+
+
+def _ansi_screen(text: str, rows=24, cols=80) -> str:
+    screen = [[" " for _ in range(cols)] for _ in range(rows)]
+    row = 0
+    col = 0
+    index = 0
+
+    def clamp_cursor():
+        nonlocal row, col
+        row = max(0, min(rows - 1, row))
+        col = max(0, min(cols - 1, col))
+
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b":
+            match = re.match(r"\x1b\[([0-9;?]*)([A-Za-z~])", text[index:])
+            if match:
+                params = match.group(1).replace("?", "")
+                command = match.group(2)
+                values = [int(value) if value else 0 for value in params.split(";") if value != ""]
+                count = values[0] if values else 1
+                if count == 0:
+                    count = 1
+                if command == "H":
+                    row = (values[0] - 1) if len(values) >= 1 and values[0] else 0
+                    col = (values[1] - 1) if len(values) >= 2 and values[1] else 0
+                elif command == "A":
+                    row -= count
+                elif command == "B":
+                    row += count
+                elif command == "C":
+                    col += count
+                elif command == "D":
+                    col -= count
+                elif command == "J":
+                    if not values or values[0] in (0, 2):
+                        for clear_row in range(row, rows):
+                            start_col = col if clear_row == row else 0
+                            for clear_col in range(start_col, cols):
+                                screen[clear_row][clear_col] = " "
+                elif command == "K":
+                    for clear_col in range(col, cols):
+                        screen[row][clear_col] = " "
+                clamp_cursor()
+                index += len(match.group(0))
+                continue
+            simple = re.match(r"\x1b[()][A-Za-z0-9]", text[index:])
+            if simple:
+                index += len(simple.group(0))
+                continue
+            index += 1
+            continue
+        if char == "\r":
+            col = 0
+        elif char == "\n":
+            row += 1
+            col = 0
+        elif char == "\b":
+            col = max(0, col - 1)
+        elif char >= " ":
+            screen[row][col] = char
+            col += 1
+            if col >= cols:
+                col = cols - 1
+        clamp_cursor()
+        index += 1
+    return "\n".join("".join(line).rstrip() for line in screen)
+
+
+def eval_tty_real_screen_startup_bottom_input():
+    """Real 80x24 TTY startup keeps Nora identity above a bottom-docked input."""
+    child = _spawn_real_tty_nora(rows=24, cols=80)
+    try:
+        raw = _read_real_tty(child, delay=1.0)
+    finally:
+        _close_real_tty(child)
+    screen = _ansi_screen(raw, rows=24, cols=80)
+
+    assert "Nora Code" in screen, f"startup identity missing: {screen}"
+    assert "│> " in screen, f"framed input missing: {screen}"
+    assert "Ready" in screen, f"bottom status missing: {screen}"
+    assert screen.rfind("Nora Code") < screen.rfind("│> ") < screen.rfind("Ready"), screen
+
+
+def eval_tty_real_screen_slash_second_level():
+    """Real 80x24 TTY slash menu keeps second-level navigation in the overlay."""
+    child = _spawn_real_tty_nora(rows=24, cols=80)
+    try:
+        raw = _read_real_tty(child, delay=1.0)
+        child.send("/")
+        raw += _read_real_tty(child)
+        child.send("\r")
+        raw += _read_real_tty(child)
+        child.send("\x1b[B")
+        raw += _read_real_tty(child, delay=0.2)
+    finally:
+        _close_real_tty(child)
+    screen = _ansi_screen(raw, rows=24, cols=80)
+
+    assert "/ commands" in screen, f"slash overlay missing: {screen}"
+    assert "/help" in screen and "> /wake" in screen, f"second-level selection missing: {screen}"
+    assert "Enter choose" in screen, f"second-level navigation hint missing: {screen}"
+    assert "type to filter" not in screen, f"second-level menu regressed to filter hint: {screen}"
+
+
+def eval_tty_real_screen_typing_keeps_bottom_input():
+    """Real 80x24 TTY typing updates the bottom input without pulling it into the body."""
+    child = _spawn_real_tty_nora(rows=24, cols=80)
+    try:
+        raw = _read_real_tty(child, delay=1.0)
+        child.send("h")
+        raw += _read_real_tty(child, delay=0.3)
+    finally:
+        _close_real_tty(child)
+    screen = _ansi_screen(raw, rows=24, cols=80)
+
+    assert "Nora Code" in screen, f"startup identity missing after typing: {screen}"
+    assert "│> h" in screen, f"typed text not in framed bottom input: {screen}"
+    assert screen.rfind("Nora Code") < screen.rfind("│> h") < screen.rfind("Ready"), screen
+
+
+def eval_tty_real_screen_approval_fits_80x24():
+    """Real 80x24 TTY approval panel renders above input without the small-window fallback."""
+    child = _spawn_real_tty_nora(rows=24, cols=80)
+    try:
+        raw = _read_real_tty(child, delay=1.0)
+        child.send("/test git diff --check\r")
+        raw += _read_real_tty(child, delay=1.0)
+    finally:
+        _close_real_tty(child)
+    screen = _ansi_screen(raw, rows=24, cols=80)
+
+    assert "Window too small" not in screen, f"approval layout overflowed 80x24: {screen}"
+    assert "Tool approval" in screen, f"approval title missing: {screen}"
+    assert "git diff --check" in screen, f"approval action missing: {screen}"
+    assert "Deny" in screen, f"approval choices missing: {screen}"
+    assert "Always allow" in screen, f"session choice missing: {screen}"
+    assert "Enter confirm" in screen, f"approval hint missing: {screen}"
+    assert screen.rfind("Tool approval") < screen.rfind("│> "), screen
+
+
 def eval_selectable_confirm_allow_deny_choices():
     """selectable_confirm presents allow/deny choices and obeys selection."""
     from mini_agent.tools_common import ALLOW_ONCE, DENY, selectable_confirm
@@ -1524,6 +1823,32 @@ def eval_selectable_confirm_allow_deny_choices():
 
     denied = selectable_confirm("Tool needs approval", choices=[ALLOW_ONCE, DENY], input_func=lambda prompt: "2")
     assert denied is False, "Deny should block"
+
+
+def eval_cli_tools_summary_compact():
+    """/tools defaults to a compact grouped summary; /tools all keeps the full registry listing."""
+    registry = ToolRegistry()
+    registry.register(
+        "calculate",
+        "math",
+        lambda: "ok",
+        permission=ToolPermission(category="local", risk="read"),
+    )
+    registry.register(
+        "run_project_tests",
+        "tests",
+        lambda: "ok",
+        permission=ToolPermission(category="test", risk="execute", requires_confirmation=True),
+    )
+    cli = MiniAgentCLI(FakeCLIAgent(), registry)
+
+    summary = cli.handle_slash_command("/tools")
+    full = cli.handle_slash_command("/tools all")
+
+    assert "local: 1" in summary and "test: 1" in summary, summary
+    assert "requires approval" in summary, summary
+    assert "use /tools all" in summary, summary
+    assert "- calculate: math" in full and "- run_project_tests: tests" in full, full
 
 
 def eval_permission_deny_blocks_tool():
@@ -1705,6 +2030,356 @@ def eval_pet_activity_bounded_no_secret_leak():
                 assert secret not in activity, f"activity leaked {secret}: {activity[:300]}"
         finally:
             db.close()
+
+
+# --- TASK-158: Pet room API/UI eval coverage (requires TASK-157) ---
+
+
+def _skip_if_no_pet_http():
+    """Skip if pet HTTP endpoints are not available."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, "_handle_pet_current"):
+            raise AttributeError("no pet endpoints")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-157 not integrated: pet HTTP endpoints not available")
+
+
+def _make_pet_http_server(tmpdir):
+    """Create a test HTTP server with pet support."""
+    import threading
+    from mini_agent.controller import MiniAgent
+    from mini_agent.http_server import create_server
+    from mini_agent.tools import build_default_registry
+
+    db = NoraDB(Path(tmpdir) / "test.db")
+    registry = build_default_registry(
+        workspace_root=Path(tmpdir),
+        db=db,
+        confirm_action=lambda prompt: True,
+    )
+    agent = MiniAgent(registry)
+    port = _find_free_port()
+    server = create_server(
+        agent,
+        host="127.0.0.1",
+        port=port,
+        pet_store=registry.pet_store,
+    )
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    return server, thread, port, db
+
+
+def _find_free_port():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _http_request(method, port, path, body=None, headers=None):
+    import urllib.error
+    from urllib.request import Request, urlopen
+    url = f"http://127.0.0.1:{port}{path}"
+    data = json.dumps(body).encode("utf-8") if body else None
+    req = Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
+def eval_pet_http_current_returns_default():
+    """GET /pet/current returns a bounded default pet."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("GET", port, "/pet/current")
+            assert status == 200, f"unexpected status: {status}"
+            assert "pet_id" in body, f"missing pet_id: {body}"
+            assert "identity" in body, f"missing identity: {body}"
+            assert "state" in body, f"missing state: {body}"
+            assert body["identity"]["name"], f"missing name in identity: {body['identity']}"
+            assert body["state"]["compute_food_balance"] == 0, f"unexpected balance: {body['state']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_create_identity_safe():
+    """POST /pet/create creates identity without leaking sensitive input."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("POST", port, "/pet/create", {
+                "name": "Mochi",
+                "species": "digital_cat",
+                "personality_traits": ["playful"],
+            })
+            assert status == 200, f"unexpected status: {status}, body: {body}"
+            assert body["identity"]["name"] == "Mochi", f"wrong name: {body}"
+            assert body["identity"]["species"] == "digital_cat", f"wrong species: {body}"
+            assert body["pet_id"], f"missing pet_id: {body}"
+            status2, body2 = _http_request("POST", port, "/pet/create", {
+                "name": "sk-ant-secret-key-12345",
+            })
+            assert status2 == 400, f"sensitive name should be rejected: {status2}, {body2}"
+            assert "sk-ant-secret-key-12345" not in str(body2), f"secret leaked: {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_add_food_increases_balance():
+    """POST /pet/add-food increases compute food balance."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            status, body = _http_request("POST", port, "/pet/add-food", {
+                "pet_id": pet_id,
+                "amount": 500,
+                "kind": "basic_food",
+                "reason": "daily grant",
+            })
+            assert status == 200, f"unexpected status: {status}"
+            assert body["state"]["compute_food_balance"] == 500, f"wrong balance: {body['state']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_feed_no_negative_balance():
+    """POST /pet/feed spends balance, never allows negative."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 200})
+            _http_request("POST", port, "/pet/feed", {"pet_id": pet_id, "amount": 150})
+            status, body = _http_request("POST", port, "/pet/feed", {"pet_id": pet_id, "amount": 100})
+            assert status == 200, f"unexpected status: {status}"
+            assert body.get("ok") is False, f"overfeed allowed: {body}"
+            assert body.get("reason_label") == "insufficient_compute_food", body
+            _, current = _http_request("GET", port, "/pet/current")
+            assert current["state"]["compute_food_balance"] == 50, f"wrong balance: {current['state']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_care_free_state_change():
+    """POST /pet/care updates mood/bond without consuming food."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _, before = _http_request("GET", port, "/pet/current")
+            _http_request("POST", port, "/pet/care", {"pet_id": pet_id, "action": "pat"})
+            _, after = _http_request("GET", port, "/pet/current")
+            assert after["state"]["compute_food_balance"] == 0, f"care consumed food: {after['state']}"
+            assert after["state"]["mood"] >= before["state"]["mood"], "mood should not decrease"
+            assert after["state"]["bond"] >= before["state"]["bond"], "bond should not decrease"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_activity_bounded():
+    """GET /pet/activity clamps limit and returns bounded events."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            for _ in range(20):
+                _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 100})
+                _http_request("POST", port, "/pet/feed", {"pet_id": pet_id, "amount": 5})
+            for _ in range(10):
+                _http_request("POST", port, "/pet/care", {"pet_id": pet_id, "action": "pat"})
+            for suffix in ("", "&limit=99999", "&limit=0", "&limit=-5", "&limit=abc"):
+                status, body = _http_request("GET", port, f"/pet/activity?pet_id={pet_id}{suffix}")
+                assert status == 200, f"{suffix or 'default'} limit: unexpected status: {status}"
+                assert isinstance(body, list), f"expected list, got {type(body)}: {str(body)[:200]}"
+                assert len(body) <= 50, f"{suffix or 'default'} limit returned {len(body)} events"
+                raw = str(body)
+                for secret in ["sk-", "AKIA", "Bearer "]:
+                    assert secret not in raw, f"activity leaked '{secret}'"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_auth_guards_mutation():
+    """Mutation endpoints respect auth when NORA_API_TOKEN is configured."""
+    _skip_if_no_pet_http()
+    import threading
+    import time
+    from mini_agent.controller import MiniAgent
+    from mini_agent.http_server import create_server
+    from mini_agent.tools import build_default_registry
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        registry = build_default_registry(
+            workspace_root=Path(tmpdir), db=db,
+            confirm_action=lambda prompt: True,
+        )
+        agent = MiniAgent(registry)
+        port = _find_free_port()
+        server = create_server(
+            agent, host="127.0.0.1", port=port,
+            api_token="test-secret",
+            pet_store=registry.pet_store,
+        )
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            assert status == 401, f"expected 401, got {status}: {body}"
+            status, body = _http_request(
+                "POST",
+                port,
+                "/pet/create",
+                {"name": "Mochi"},
+                headers={"Authorization": "Bearer test-secret"},
+            )
+            assert status == 200, f"expected 200, got {status}: {body}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_no_secret_leak():
+    """Pet API outputs never leak API keys or tokens."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            _http_request("POST", port, "/pet/feed", {"pet_id": pet_id, "amount": 100})
+            _, current = _http_request("GET", port, "/pet/current")
+            _, activity = _http_request("GET", port, f"/pet/activity?pet_id={pet_id}")
+            for output in [str(current), str(activity)]:
+                for secret in ["sk-", "AKIA", "Bearer ", "eyJ", "api_key", "api_token"]:
+                    assert secret not in output.lower(), f"pet output leaked '{secret}': {output[:300]}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_webui_room_controls_present():
+    """Pet Room HTML contains avatar/body placeholder, state metrics, food balance, action buttons, activity area."""
+    _skip_if_no_pet_http()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    pet_markers = ["pet-room", "pet-avatar", "pet-stat", "pet-food", "pet-activity", "pet-feed-btn", "pet-pat-btn"]
+    found = [m for m in pet_markers if m in html]
+    assert len(found) >= 5, f"Pet Room UI missing too many markers: found {found}"
+
+
+def eval_pet_webui_auth_header_wiring():
+    """Pet Room JS uses auth headers when calling /pet/* endpoints."""
+    _skip_if_no_pet_http()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8")
+    assert "/pet/" in html, "no /pet/ endpoints referenced in HTML"
+    assert "authHeaders()" in html, "Pet Room fetch calls should use auth headers"
+
+
+def eval_pet_activity_no_html_injection():
+    """Pet activity rendering escapes HTML/script markers in event summaries."""
+    _skip_if_no_pet_http()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8")
+    match = re.search(r"function\s+loadPetActivity\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}", html)
+    if not match:
+        raise unittest.SkipTest("loadPetActivity function not found in HTML")
+    fn_body = match.group(1)
+    uses_innerhtml_raw = "innerHTML" in fn_body and ("summary" in fn_body or "event_type" in fn_body)
+    uses_textcontent = "textContent" in fn_body
+    uses_escapehtml = "escapeHtml" in fn_body or "escape_html" in fn_body
+    if uses_innerhtml_raw:
+        assert uses_escapehtml or uses_textcontent, "activity rendering uses innerHTML with raw event data without escaping"
+
+
+def eval_pet_http_rejects_invalid_amount_type():
+    """POST /pet/add-food and /pet/feed reject non-integer amount types."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            for amount in ["not_a_number", True, -100, 1.5]:
+                status, body = _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": amount})
+                assert status >= 400 or body.get("ok") is False, f"amount not rejected: {amount!r}, {status}, {body}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_pet_http_rejects_invalid_identity_shape():
+    """POST /pet/create rejects invalid identity field shapes."""
+    _skip_if_no_pet_http()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            cases = [
+                {"name": ""},
+                {"species": "cat"},
+                {"name": "Mochi", "personality_traits": "not_a_list"},
+            ]
+            for body in cases:
+                status, response = _http_request("POST", port, "/pet/create", body)
+                assert status >= 400 or response.get("ok") is False, f"identity shape not rejected: {status}, {response}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
 
 
 def eval_cli_multiline_input():
@@ -2491,7 +3166,7 @@ def eval_slash_help_v4_concise():
         for old_marker in ["Nora 命令帮助", "推荐开始:", "代码理解与测试:", "任务、记忆与上下文:", "自主执行:"]:
             assert old_marker not in result, f"old help marker leaked: {old_marker}"
         assert not result.lstrip().startswith(("{", "[")), f"help returned raw JSON: {result[:100]}"
-        assert "sk-" not in result, f"possible secret in help: {result[:200]}"
+        assert not re.search(r"sk-[A-Za-z0-9_-]{8,}", result), f"possible secret in help: {result[:200]}"
         assert len(result) < 1800, f"help text too long for v4 ({len(result)} chars): {result[:200]}"
 
 

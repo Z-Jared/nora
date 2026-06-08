@@ -35,6 +35,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     llm_has_api_key: bool = False
     llm_required_env: list = []
     llm_env_alternatives: dict = {}
+    pet_store: Any = None
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -78,6 +79,10 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_session_list()
         elif path == "/docs":
             self._handle_docs()
+        elif path == "/pet/current":
+            self._handle_pet_current()
+        elif path == "/pet/activity":
+            self._handle_pet_activity(parsed)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -124,6 +129,14 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_session_save(body)
         elif path == "/session/load":
             self._handle_session_load(body)
+        elif path == "/pet/create":
+            self._handle_pet_create(body)
+        elif path == "/pet/add-food":
+            self._handle_pet_add_food(body)
+        elif path == "/pet/feed":
+            self._handle_pet_feed(body)
+        elif path == "/pet/care":
+            self._handle_pet_care(body)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -520,6 +533,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "tasks": self.task_manager is not None,
                 "memory": self.long_term_memory is not None,
                 "websocket": True,
+                "pets": self.pet_store is not None,
             },
             "runtime": {
                 "python": sys.version.split()[0],
@@ -565,6 +579,12 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/memory/delete": {"post": {"summary": "Delete a long-term memory", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]}}}}, "responses": {"200": {"description": "Deleted"}}}},
                 "/ws": {"get": {"summary": "WebSocket endpoint for bidirectional real-time chat", "description": "Upgrade to WebSocket. Send JSON messages with type=chat, ping, session_save, session_load."}},
                 "/docs": {"get": {"summary": "This endpoint", "responses": {"200": {"description": "OpenAPI spec"}}}},
+                "/pet/current": {"get": {"summary": "Get current pet (creates default if none exists)", "responses": {"200": {"description": "Pet record"}}}},
+                "/pet/create": {"post": {"summary": "Create a new pet", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"name": {"type": "string"}, "species": {"type": "string"}, "personality_traits": {"type": "array", "items": {"type": "string"}}, "relationship_role": {"type": "string"}, "speech_style": {"type": "string"}, "voice_profile": {"type": "object", "description": "Voice config dict, e.g. {voice_id, speed}"}, "taste_profile": {"type": "object", "description": "Taste config dict, e.g. {likes, dislikes}"}, "skills": {"type": "array", "items": {"type": "string"}}}, "required": ["name"]}}}}, "responses": {"200": {"description": "Created pet"}}}},
+                "/pet/add-food": {"post": {"summary": "Add compute food to a pet", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "amount": {"type": "integer"}, "reason": {"type": "string"}}, "required": ["pet_id", "amount"]}}}}, "responses": {"200": {"description": "Result"}}}},
+                "/pet/feed": {"post": {"summary": "Feed a pet", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "amount": {"type": "integer"}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Result"}}}},
+                "/pet/care": {"post": {"summary": "Care for a pet (pat/comfort/rest/play)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "action": {"type": "string"}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Result"}}}},
+                "/pet/activity": {"get": {"summary": "Get recent pet activity events", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}], "responses": {"200": {"description": "Activity list"}}}},
             },
         }
         self._json_response(200, spec)
@@ -604,6 +624,163 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    # --- Pet endpoints ---
+
+    def _handle_pet_current(self) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pets = self.pet_store.list_pets(limit=1)
+        if pets:
+            self._json_response(200, pets[0].to_dict())
+            return
+        # Create default pet if none exists
+        try:
+            pet = self.pet_store.create_pet(
+                name="Nora",
+                species="digital_cat",
+                personality_traits=["curious", "gentle"],
+                relationship_role="companion",
+                speech_style="warm",
+            )
+            self._json_response(200, pet.to_dict())
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_pet_activity(self, parsed) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        params = parse_qs(parsed.query)
+        pet_id = params.get("pet_id", [""])[0]
+        if not pet_id:
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        limit = 20
+        raw_limit = params.get("limit", ["20"])[0]
+        try:
+            limit = int(raw_limit)
+        except (ValueError, TypeError):
+            limit = 20
+        limit = max(1, min(50, limit))
+        events = self.pet_store.list_activity_events(pet_id, limit=limit)
+        self._json_response(200, [e.to_dict() for e in events])
+
+    def _handle_pet_create(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        name = body.get("name", "")
+        if not isinstance(name, str) or not name.strip():
+            self._json_response(400, {"error": "name required"})
+            return
+        name = name.strip()
+        # Type-check optional fields
+        species = body.get("species", "digital_pet")
+        if not isinstance(species, str):
+            self._json_response(400, {"error": "species must be string"})
+            return
+        rel = body.get("relationship_role", "companion")
+        if not isinstance(rel, str):
+            self._json_response(400, {"error": "relationship_role must be string"})
+            return
+        style = body.get("speech_style", "")
+        if not isinstance(style, str):
+            self._json_response(400, {"error": "speech_style must be string"})
+            return
+        pt = body.get("personality_traits")
+        if pt is not None and not isinstance(pt, list):
+            self._json_response(400, {"error": "personality_traits must be list"})
+            return
+        skills = body.get("skills")
+        if skills is not None and not isinstance(skills, list):
+            self._json_response(400, {"error": "skills must be list"})
+            return
+        vp = body.get("voice_profile")
+        if vp is not None and not isinstance(vp, dict):
+            self._json_response(400, {"error": "voice_profile must be dict"})
+            return
+        tp = body.get("taste_profile")
+        if tp is not None and not isinstance(tp, dict):
+            self._json_response(400, {"error": "taste_profile must be dict"})
+            return
+        try:
+            pet = self.pet_store.create_pet(
+                name=name,
+                species=species,
+                personality_traits=pt,
+                relationship_role=rel,
+                speech_style=style,
+                voice_profile=vp,
+                taste_profile=tp,
+                skills=skills,
+            )
+            self._json_response(200, pet.to_dict())
+        except ValueError as e:
+            self._json_response(400, {"error": str(e)})
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_pet_add_food(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pet_id = body.get("pet_id", "")
+        if not isinstance(pet_id, str) or not pet_id.strip():
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        pet_id = pet_id.strip()
+        amount = body.get("amount", 0)
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+            self._json_response(400, {"error": "amount must be positive integer"})
+            return
+        kind = body.get("kind", "basic_food")
+        if not isinstance(kind, str):
+            self._json_response(400, {"error": "kind must be string"})
+            return
+        reason = body.get("reason", "local demo")
+        if not isinstance(reason, str):
+            self._json_response(400, {"error": "reason must be string"})
+            return
+        result = self.pet_store.add_food(pet_id, amount=amount, kind=kind, reason=reason)
+        self._json_response(200, result.to_dict())
+
+    def _handle_pet_feed(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pet_id = body.get("pet_id", "")
+        if not isinstance(pet_id, str) or not pet_id.strip():
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        pet_id = pet_id.strip()
+        amount = body.get("amount", 100)
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+            self._json_response(400, {"error": "amount must be positive integer"})
+            return
+        food_kind = body.get("food_kind", "basic_food")
+        if not isinstance(food_kind, str):
+            self._json_response(400, {"error": "food_kind must be string"})
+            return
+        result = self.pet_store.feed_pet(pet_id, food_kind=food_kind, amount=amount)
+        self._json_response(200, result.to_dict())
+
+    def _handle_pet_care(self, body: dict) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        pet_id = body.get("pet_id", "")
+        if not isinstance(pet_id, str) or not pet_id.strip():
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        pet_id = pet_id.strip()
+        action = body.get("action", "pat")
+        if not isinstance(action, str):
+            self._json_response(400, {"error": "action must be string"})
+            return
+        result = self.pet_store.care_pet(pet_id, action=action)
+        self._json_response(200, result.to_dict())
+
 
 def create_server(
     agent: MiniAgent,
@@ -624,6 +801,7 @@ def create_server(
     llm_has_api_key: bool = False,
     llm_required_env: Optional[list[str]] = None,
     llm_env_alternatives: Optional[dict[str, str]] = None,
+    pet_store=None,
 ) -> HTTPServer:
     NoraHTTPHandler.agent = agent
     NoraHTTPHandler.session_store = session_store
@@ -641,4 +819,5 @@ def create_server(
     NoraHTTPHandler.llm_has_api_key = llm_has_api_key
     NoraHTTPHandler.llm_required_env = llm_required_env or []
     NoraHTTPHandler.llm_env_alternatives = llm_env_alternatives or {}
+    NoraHTTPHandler.pet_store = pet_store
     return HTTPServer((host, port), NoraHTTPHandler)
