@@ -5,9 +5,9 @@ Last updated: 2026-06-08
 ## Current Phase
 
 - Phase: Phase 1 - Pet Life MVP
-- Percent: 92%
+- Percent: 94%
 - Status: in progress
-- Current focus: Phase 1 Exit Gate release audit and life-feel readiness.
+- Current focus: Phase 1 Exit Gate life-feel polish and commercial/no-manipulation readiness.
 
 ## Completed This Phase
 
@@ -29,17 +29,21 @@ Last updated: 2026-06-08
   - Pet Room Identity Editor for name/species/role/style/traits/skills/voice/taste.
   - Preserves pet_id, created_at, pet state, compute food, activity, and relationship memories.
   - Guarded no-secret/no-auth/no-marketplace/no-voice-cloning coverage.
+- Phase 1 MVP release audit:
+  - `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md` documents first-use flow, safety, no-manipulation checks, and verification.
+  - README documents the Phase 1 local Pet Room demo path.
+  - Verification is green: 337 targeted tests OK, 671 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+  - Reviewer approved TASK-167 while keeping Phase 1 in Exit Gate until TASK-168/169/170 complete.
 
 ## In Progress
 
-- Phase 1 Exit Gate is now active. Identity Editor has landed; PM must complete release audit, life-feel polish, commercial/no-manipulation audit, and Phase 2 technical plan before moving to Phase 2.
+- Phase 1 Exit Gate is active. Release audit is complete; PM must still complete life-feel polish, commercial/no-manipulation audit, and Phase 2 technical plan before moving to Phase 2.
 
 ## Next
 
-1. TASK-167 Phase 1 MVP release audit.
-2. TASK-168 Phase 1.5 Pet Room life-feel polish.
-3. TASK-169 Commercial model and no-manipulation audit.
-4. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
+1. TASK-168 Phase 1.5 Pet Room life-feel polish.
+2. TASK-169 Commercial model and no-manipulation audit.
+3. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
 
 ## Phase 1 Exit Criteria
 
@@ -89,7 +93,7 @@ Before Phase 2 starts, PM must decide and record the Claude worker plan:
 
 ## Four-Phase Overview
 
-- Phase 1 Pet Life MVP: 92% / in progress
+- Phase 1 Pet Life MVP: 94% / in progress
 - Phase 2 Voice & Presence: 0% / not started
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

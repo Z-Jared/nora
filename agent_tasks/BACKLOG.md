@@ -4,22 +4,9 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-167: Phase 1 MVP release audit
-- 架构层: Eval/Review System / Pet Identity / Pet State Engine / Token Food Economy / Memory/Relationship System / Avatar/Room UI
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-165 和 TASK-166 已集成。
-- 目标: 对 Phase 1 Pet Life MVP 做封版审查，验证首次使用闭环、测试/eval 状态、README/demo 路径和阶段完成证据。
-- 非目标: 不新增 Phase 2 voice/presence 功能；不做 3D/VRM、支付、marketplace、账号云同步。
-- 安全边界: 不修改用户数据；不隐藏 baseline failure；不把未验证体验标记为完成；不提交无关未跟踪设计稿。
-- 持久证据: PM release audit report、更新后的 `agent_tasks/PHASE_STATUS.md`、必要 README/demo 文档、测试/eval 输出。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; 手动或自动 first-use flow walkthrough。
-- 参考: `agent_tasks/PHASE_STATUS.md` Phase 1 Exit Criteria, `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`.
-
 ## Phase 1 Exit Gate
 
-这些任务是 Phase 1 完成后的硬门禁。`TASK-167` 已转入「待分配」；PM 必须先完成 Exit Gate，不能直接进入 Phase 2。
+这些任务是 Phase 1 完成后的硬门禁。`TASK-167` 已完成；PM 必须继续完成 `TASK-168`、`TASK-169`、`TASK-170`，不能直接进入 Phase 2。
 
 ### TASK-168: Phase 1.5 Pet Room life-feel polish
 - 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
@@ -61,6 +48,12 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-167: Phase 1 MVP release audit ✅
+- 完成者: Claude A；Codex PM 初审修正 stale eval 记录和 README demo path 后，CCB reviewer APPROVED。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 337 tests OK；`python3 evals/run_evals.py` 671 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`，审查 Phase 1 first-use pet loop、Identity Editor、Token Food、care/memory loop、安全/反诱导文案和 README demo path；README 新增 Phase 1 Pet Room 本地体验路径；明确 Phase 1 仍处于 Exit Gate，后续还需 TASK-168、TASK-169、TASK-170，不能直接进入 Phase 2。
 
 ### TASK-165: Identity Editor MVP for pet customization ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

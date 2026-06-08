@@ -117,6 +117,18 @@ curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8081/chat -d '{"messa
 
 服务器启动后浏览器访问 `http://127.0.0.1:8080` 可使用 Web UI。默认端口为 8080，可通过 `NORA_PORT` 环境变量修改（例如 `NORA_PORT=9090 nora-serve`，此时 Web UI 地址变为 `http://127.0.0.1:9090`）。如果设置了 `NORA_API_TOKEN`，需要在页面顶部的 Token 输入框中填写同一个 token 才能正常使用。
 
+### Phase 1 Pet Room 本地体验路径
+
+启动 `nora-serve` 后打开 Web UI，即可体验当前 Phase 1 Pet Life MVP：
+
+1. 进入 Pet Room，默认会看到 `Nora-01` 机器人电子宠物、状态、Compute Food / Token Energy、互动按钮、Life Log 和 Relationship Memories。
+2. 使用 Identity Editor 编辑名字、物种、关系角色、说话风格、性格特征、技能、voice profile 和 taste profile。
+3. 点击 Add Tokens 添加本地 demo compute food，再使用 Feed (100) 或查看 feed/chat/voice/work 的透明成本估算。
+4. 使用 Pat、Comfort、Rest、Play 进行免费照料，确认 hunger、energy、mood、bond、growth、activity 会确定性变化。
+5. 记录 Shared Moment，确认关系记忆会显示在房间里。
+
+当前版本没有真实支付、marketplace、voice cloning、3D/VRM、桌面浮窗或移动端同步；token food 只是本地 MVP 的 compute energy 演示边界。
+
 可尝试输入：
 
 ```text

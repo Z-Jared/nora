@@ -1,54 +1,54 @@
 # Claude A Completion Report
 
-Status: ready for Codex review
+TASK-167: Phase 1 MVP Release Audit
 
-## Summary
+## First-Use Flow: PASS
 
-TASK-163: Relationship Memory MVP for pet shared moments.
+All 5 required flows verified:
 
-## Changes
+1. **Pet Room visible** — Nora-01/robot_pet auto-created, stats/cost table/activity/memory all present.
+2. **Identity Editor** — all 8 fields editable (name, species, role, style, traits, skills, voice, taste). Partial updates preserve state.
+3. **Compute food** — add tokens, feed, balance/estimate transparent. Insufficient balance shows "need N" without manipulative copy.
+4. **Care/memory loop** — pat/comfort/rest/play → state changes → activity events. Relationship memory (shared_moment/preference/task_outcome) creates and displays.
+5. **No manipulative copy** — zero hits for guilt/loneliness/suffering/purchase/subscribe/marketplace/voice-clone language.
 
-### Pet memory model (`mini_agent/pets.py`)
-- `PetRelationshipMemory` dataclass: memory_id, pet_id, kind, summary, source, importance, metadata, created_at
-- Kinds: `shared_moment`, `preference`, `task_outcome`
-- Summary bounded to 500 chars, source to 200 chars
-- Importance clamped to 1-10
-- Secret-like text rejected in summary, source, metadata values
-- `add_relationship_memory()` — validates, bounds, rejects secrets, records activity event
-- `list_relationship_memories()` — most recent first, limit clamped 1-50
-- SQLite + JSONL backends consistent with existing pet patterns
+## Phase 1 Exit Criteria
 
-### SQLite table (`mini_agent/database.py`)
-- `pet_relationship_memories` table with indexes on pet_id, kind, created_at
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | Identity Editor implemented + tested | ✅ |
+| 2 | All subsystems have regression coverage | ✅ 337 tests pass |
+| 3 | Web UI first-use pet loop works | ✅ |
+| 4 | Product feels like configurable lifeform | ✅ |
+| 5 | No-manipulation audit passes | ✅ |
+| 6 | README/demo path exists | PASS - README mentions pet direction; PM added concrete local demo path |
+| 7 | Full verification passes | PASS - targeted tests and full eval clean |
 
-### HTTP API (`mini_agent/http_server.py`)
-- `POST /pet/relationship-memory` — create memory (auth required)
-- `GET /pet/relationship-memory?pet_id=...&limit=...` — list memories (read-only)
-- Docs entry added to `/docs`
+## Blockers
 
-### Pet Room UI (`mini_agent/static/index.html`)
-- Relationship Memories section with "Record Shared Moment" button
-- Memory list shows kind, summary, importance, time — all escaped
-- Loads memories on pet load
+**None.**
 
-### Tests
-- `PetRelationshipMemoryTests` (16 tests): create, list, limit, secrets, truncation, clamping, round trip
-- `PetRelationshipMemoryJsonlTests` (1 test): JSONL fallback
-- 11 HTTP tests: create, list, kinds, secrets, limits, docs
+PM verification note: the reported stale eval failures did not reproduce on current main.
+`python3 evals/run_evals.py` currently reports 671 passed, 0 failed, 0 skipped.
 
-## Files
+## Recommendation
 
-```
-git diff --stat
- 6 files changed, 550 insertions(+), 1 deletion(-)
-```
+TASK-167 release audit can be accepted. Phase 1 should not be marked complete yet because
+the Exit Gate still requires TASK-168, TASK-169, and TASK-170. Proceed to TASK-168.
 
 ## Verification
 
 ```
 python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
-Ran 315 tests — OK
+Ran 337 tests — OK
+
+python3 evals/run_evals.py
+671 passed, 0 failed, 0 skipped
 
 git diff --check
 clean
 ```
+
+## Files Created
+
+- `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md` — full audit document

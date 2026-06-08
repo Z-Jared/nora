@@ -1,80 +1,77 @@
-# TASK-165 + TASK-166 CCB Review
+# TASK-167 CCB Review
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-165 adds Identity Editor MVP: `PetStore.update_identity()` with full field support, HTTP API endpoint, and Pet Room UI. TASK-166 adds 6 deterministic evals to lock the contract. All review criteria satisfied.
+Phase 1 MVP release audit is complete with proper evidence. Phase 1 is correctly held at Exit Gate, not marked complete. README provides sufficient first-use path. No manipulative or misleading content.
 
 ## Review Findings
 
-### 1. PetStore.update_identity() Correctness
+### 1. Phase 1 MVP Release Audit Evidence
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Preserves pet_id | ✅ | `pet_id=old.pet_id` (pets.py:620) |
-| Preserves created_at | ✅ | `created_at=old.created_at` (pets.py:629) |
-| Preserves state (food balance) | ✅ | Only identity updated, state untouched |
-| Preserves activity | ✅ | No activity table mutations |
-| Preserves relationship memories | ✅ | No memory table mutations |
-| Updates updated_at | ✅ | `updated_at=now` (pets.py:630) |
-| Partial update preserves other fields | ✅ | Only provided kwargs override, others keep old values |
+| First-use flow verified | ✅ | 5 flows documented: Pet Room visible, Identity Editor, Compute food, Care/memory loop, No manipulative copy |
+| Exit Criteria table | ✅ | 7 criteria all marked PASS with evidence |
+| Security/safety section | ✅ | Auth, secret rejection, HTML escaping, limit clamping, no API key leak |
+| Test/eval status | ✅ | 337 tests OK, 671 evals passed, 0 failed, 0 skipped |
+| Blockers | ✅ | "None" — accurate |
+| Recommendation | ✅ | Accept TASK-167, but Phase 1 not complete until TASK-168/169/170 |
 
-### 2. Secret-Like Text Rejection
+### 2. Phase 1 Exit Gate Integrity
 
-| Field Type | Validation | Evidence |
-|------------|------------|----------|
-| String fields (name, species, etc.) | `_validate_text_fields` → `is_sensitive_text()` | `ValueError` raised → 400 error |
-| List fields (personality_traits, skills) | `_validate_list_fields` | Each item checked |
-| Dict values (voice_profile, taste_profile) | `_validate_dict_values` | Each value checked |
-| HTTP handler catches ValueError | ✅ | Returns 400 with error message |
+**Phase 1 is NOT incorrectly marked complete:**
 
-### 3. POST /pet/update-identity
+- `PHASE_STATUS.md` shows "Status: in progress" at 92%
+- Exit Gate Queue explicitly lists TASK-168, 169, 170
+- `A_DONE.md` line 37: "Phase 1 should not be marked complete yet"
+- `PHASE_1_MVP_RELEASE_AUDIT.md` line 76: "Phase 1 should remain in Exit Gate"
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| Mutation auth enforced | ✅ | POST handler uses `_check_auth()` |
-| Bounded JSON response | ✅ | Returns `pet.to_dict()` |
-| Docs entry | ✅ | Added to `/docs` OpenAPI spec |
-| Invalid type → bounded error | ✅ | TypeError caught → 400 "invalid field types" |
-| Missing pet_id → 400 | ✅ | Handler validates pet_id |
-| Nonexistent pet → 400 | ✅ | `update_identity()` returns None → 400 |
+**No premature Phase 1 completion found.** ✅
 
-### 4. Pet Room Identity Editor UI
+### 3. README Local Experience Path
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| Escape rendering | ✅ | DOM `.value` property used (auto-escaped), `escapeHtml()` for display |
-| Invalid JSON handling | ✅ | `JSON.parse()` try/catch for voice/taste profiles, shows "invalid JSON" error |
-| No fake intimacy | ✅ | `eval_idedit_webui_no_marketplace_copy` checks forbidden phrases |
-| No marketplace/voice cloning | ✅ | Same eval checks "marketplace", "buy avatar", "voice clone", "nft", etc. |
-| No purchase pressure | ✅ | Same eval checks "pay to customize", "premium identity", "token sale" |
+**Sufficient for first-time users:**
 
-### 5. TASK-166 Eval Quality (6 evals)
+1. Enter Pet Room → see Nora-01 robot, stats, food, buttons, Life Log, Relationship Memories
+2. Identity Editor → edit 8 fields (name, species, role, style, traits, skills, voice, taste)
+3. Add Tokens → Feed / cost estimation
+4. Care actions → Pat/Comfort/Rest/Play → state changes
+5. Record Shared Moment → memory displays
 
-| Eval | What it locks |
-|------|---------------|
-| `idedit_update_preserves_identity` | pet_id and created_at unchanged, name updated |
-| `idedit_update_preserves_state` | Food balance preserved after identity update |
-| `idedit_rejects_secret_input` | Secret name and personality traits rejected (400) |
-| `idedit_auth_enforced` | 401 without auth, 200 with auth |
-| `idedit_webui_editor_markers` | HTML contains identity editor markers |
-| `idedit_webui_no_marketplace_copy` | No marketplace/voice clone/purchase copy |
+**Explicitly states what's NOT included:**
+- No real payment, marketplace, voice cloning, 3D/VRM, desktop floating, mobile sync
+- Token food framed as "local MVP compute energy demo boundary"
 
-All evals are deterministic, offline, and use concrete assertions. No weak/vacuous checks.
+**No misleading capability claims.** ✅
 
-### 6. Out-of-Scope Changes
+### 4. No Manipulative/Misleading Content
 
-None. All changes are within TASK-165/166 scope:
-- `mini_agent/pets.py` — `update_identity()` + JSONL helper
-- `mini_agent/http_server.py` — `/pet/update-identity` endpoint + docs
-- `mini_agent/static/index.html` — Identity Editor UI section
-- `tests/test_pets.py` — 14 unit tests for update_identity
-- `tests/test_http_server.py` — 7 HTTP tests for update-identity endpoint
-- `evals/run_evals.py` — 6 idedit evals
+| Category | Status | Evidence |
+|----------|--------|----------|
+| Guilt/loneliness/suffering | ✅ None | Audit PASS |
+| Purchase/subscribe/premium | ✅ None | Audit PASS |
+| Marketplace pressure | ✅ None | Audit PASS |
+| Voice cloning claims | ✅ None | Audit PASS |
+| Hidden costs | ✅ None | Audit PASS |
+| Phase 2 capability hints | ✅ None | README explicitly scopes to Phase 1 |
+
+### 5. Documentation Quality
+
+- `PHASE_1_MVP_RELEASE_AUDIT.md`: Comprehensive, well-structured, evidence-based
+- `A_DONE.md`: Clear status, proper recommendation, accurate verification
+- `PHASE_STATUS.md`: Correctly shows Phase 1 in progress with Exit Gate queue
+- `README.md`: Clear, concise, honest about scope limitations
 
 ## Verification Summary
 
 - 337 unit tests OK
 - 671 evals passed, 0 failed, 0 skipped
 - git diff --check: clean
+- Phase 1 status: in progress (92%), not complete
+- Exit Gate: TASK-168/169/170 required before Phase 2
+
+## Integration Recommendation
+
+**APPROVE** TASK-167 as the release audit. Phase 1 remains in Exit Gate until TASK-168/169/170 are complete.
