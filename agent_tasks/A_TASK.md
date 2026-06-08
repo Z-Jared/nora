@@ -1,10 +1,10 @@
-# TASK-168: Phase 1.5 Pet Room life-feel polish
+# TASK-170A: Phase 2 Voice & Presence product technical plan
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora is now in Phase 1 Exit Gate. TASK-167 release audit is integrated and reviewer-approved, but Phase 1 cannot move to Phase 2 until the remaining Exit Gate tasks are complete. Your job is to make the existing Pet Room feel more like a living electronic pet surface through deterministic UI/state feedback, without starting Phase 2 voice/presence work.
+Nora is in the final Phase 1 Exit Gate. TASK-167, TASK-168, and TASK-169 are integrated and reviewer-approved. Phase 2 must not start until this planning task is reviewed, integrated, and `agent_tasks/PHASE_STATUS.md` is updated by Codex PM.
 
 Read first:
 
@@ -13,74 +13,71 @@ Read first:
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
 - `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`
+- `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md`
 - `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
+- `mini_agent/pets.py`
+- `mini_agent/server.py`
 - `mini_agent/static/index.html`
-- `tests/test_webui_smoke.py`
-- `tests/test_pets.py`
-- `tests/test_http_server.py`
 
 ## Goal
 
-Polish the Phase 1 Pet Room life-feel while staying deterministic and local.
+Draft the product and technical plan for Phase 2 Voice & Presence, focused on low-risk, consent-based next steps.
 
-Implement a narrow vertical slice that improves at least three of these:
+Create or update a small planning document:
 
-1. A clearer pet mood/status summary that reads from deterministic `hunger`, `energy`, `mood`, `bond`, and `growth` state.
-2. More visible feedback after Feed/Care/Shared Moment actions, such as a bounded room notice or diary-style latest activity surface.
-3. Identity-driven presentation, for example showing relationship role, speech style, taste profile, or skills in the room without requiring the editor to be open.
-4. A small "pet diary" or "today with Nora" surface derived from existing activity/memory data.
-5. Better first-use empty states that explain local demo boundaries without purchase pressure.
+- `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`
 
-The result should help a first-time user feel "this is my configurable electronic pet" rather than "this is a form/dashboard".
+Your section must cover:
+
+1. Voice Profile v1 data contract: identity fields, tone/speech style, expression hints, no real voice cloning.
+2. TTS adapter boundary: interface shape, local/demo fallback, no secrets in docs, no network implementation in Phase 1 exit gate.
+3. Web/PWA presence path: what can be implemented first in Web UI without native desktop/mobile.
+4. Desktop floating pet path: prototype boundaries and prerequisites, not implementation.
+5. Task candidates for Phase 2 product implementation, split into small verifiable tasks.
 
 ## Scope
 
 Allowed files:
 
-- `mini_agent/static/index.html`
-- `tests/test_webui_smoke.py`
-- `tests/test_pets.py` or `tests/test_http_server.py` only if you add a tiny deterministic API/state helper that is directly required
+- `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`
 - `agent_tasks/A_DONE.md`
 
-Keep changes small and product-facing.
+Coordinate implicitly with Claude B by keeping your work product-focused. Claude B owns safety/eval/worker-scaling sections.
 
 ## Non-Goals
 
-- Do not implement real voice, TTS, speech recognition, desktop presence, mobile/PWA, 3D/VRM, Live2D asset pipeline, real billing, marketplace, account sync, or cloud sync.
-- Do not redesign the whole Web UI or return to Agent OS dashboard work.
-- Do not add model calls. All pet state and room feedback must be deterministic.
-- Do not edit `agent_tasks/B_TASK.md`, `agent_tasks/B_DONE.md`, `agent_tasks/REVIEW.md`, `CODEX_TERMINAL_HANDOFF.md`, `designs/`, or untracked design exports.
+- Do not implement voice, TTS, speech recognition, desktop app, PWA, native mobile, 3D/VRM, billing, marketplace, or account sync.
+- Do not edit source code, tests, evals, `BACKLOG.md`, `PHASE_STATUS.md`, `B_TASK.md`, `B_DONE.md`, or `REVIEW.md`.
+- Do not add API keys, model credentials, vendor-specific secrets, or claims that Phase 2 features already exist.
 
 ## Safety Boundaries
 
-- Escape all dynamic text before rendering.
-- Do not add fake intimacy, guilt, loneliness pressure, suffering/death language, hidden purchase pressure, marketplace pressure, or voice-cloning claims.
-- Do not make compute food feel like a coercive payment gate; keep local demo boundaries transparent.
-- Do not let model output directly mutate pet state.
-- Keep token food cost language precise and bounded.
+- Voice cloning is excluded by default.
+- Any TTS/voice action must require user consent, transparent cost estimate, no recording by default, and clear local demo fallback.
+- Cross-device presence must not imply cloud sync or background tracking.
+- Keep commercial language non-manipulative and consistent with TASK-169.
 
 ## Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
-python3 evals/run_evals.py
 git diff --check
+rg -n "voice clone|clone voice|real payment|checkout now|subscribe now|marketplace" docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md
 ```
 
-If full evals fail because of unrelated baseline state, report exact failures and still run targeted tests.
+The `rg` command may find negative boundary statements only; explain any hits in `A_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-168` and include:
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-170A` and include:
 
-- What life-feel surfaces changed
-- How the result remains deterministic and Phase-1-only
+- Summary of the product/technical plan sections you wrote
+- Phase 2 task candidates you proposed
 - Exact command results
-- Any remaining blockers or UX gaps
+- Any coordination notes for Claude B / Codex PM
 
 Then notify Codex PM:
 

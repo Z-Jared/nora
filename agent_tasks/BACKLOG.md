@@ -6,22 +6,35 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## Phase 1 Exit Gate
 
-这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169` 已完成；PM 必须继续完成 `TASK-170`，不能直接进入 Phase 2。
-
-### TASK-170: Phase 2 Voice & Presence technical plan
-- 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition / Safety/Policy
-- 优先级: medium
-- 预计: 1 hour
-- 依赖: TASK-167、TASK-168、TASK-169 完成。
-- 目标: 在进入 Phase 2 前产出技术计划，把 Voice Profile v1、TTS 接入边界、Web/PWA presence、桌面浮窗路径、成本/同意/安全边界拆成可验证小任务，并明确是否自动增开 Claude C/D 等额外 worker 线程。
-- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM 或 marketplace。
-- 安全边界: voice cloning 必须默认排除；TTS/voice 需有 consent、cost estimate、secret/no-recording boundary；cross-device presence 不能默认同步隐私数据。
-- Worker 扩容规则: 默认 A/B；如果 Voice Profile、eval/safety、Web/PWA presence、TTS/desktop prototype 能拆成低冲突文件边界，则 PM 必须配置并派发 Claude C/D；如果边界不清晰，先生成架构切分任务，不盲目加线程。
-- 持久证据: Phase 2 task candidates、updated `PHASE_STATUS.md` transition note、PM approval criteria、worker scaling plan（active workers、职责、文件边界、阻塞项）。
-- 验证: 文档审查；任务具备架构层、非目标、安全边界、持久证据和验证路径；worker scaling plan 明确是否开 C/D 以及原因；`git diff --check`。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Voice and Expression / Cross-Device Presence.
+这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169` 已完成；PM 已将 `TASK-170` 拆成 `TASK-170A`/`TASK-170B` 并行计划任务，不能直接进入 Phase 2。
 
 ## 进行中
+
+### TASK-170A: Phase 2 Voice & Presence product technical plan
+- 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition
+- 优先级: medium
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-167、TASK-168、TASK-169 完成。
+- 目标: 在进入 Phase 2 前产出产品/技术计划，定义 Voice Profile v1、TTS adapter boundary、Web/PWA presence、desktop floating pet path 和 Phase 2 产品实现小任务。
+- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM、支付或 marketplace。
+- 安全边界: voice cloning 默认排除；TTS/voice 需有 consent、cost estimate、secret/no-recording boundary；cross-device presence 不默认同步隐私数据。
+- 持久证据: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` 产品/技术 sections、Phase 2 task candidates。
+- 验证: `git diff --check`；targeted copy scan；文档审查。
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Voice and Expression / Cross-Device Presence.
+
+### TASK-170B: Phase 2 safety, eval, and worker-scaling plan
+- 架构层: Safety/Policy / Eval/Review System / Voice/Expression System / Cross-Device Presence
+- 优先级: medium
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-167、TASK-168、TASK-169 完成。
+- 目标: 在进入 Phase 2 前产出 safety/eval/worker-scaling plan，明确 no-cloning-without-consent、no-recording-by-default、成本透明、presence 隐私边界、eval 覆盖和是否自动增开 Claude C/D。
+- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM、支付或 marketplace。
+- 安全边界: 不允许隐藏录音、后台监听、情绪勒索、购买诱导或未声明云同步；新增 worker 必须有清晰文件边界。
+- 持久证据: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` safety/eval/scaling sections、PM approval criteria、worker ownership plan。
+- 验证: `git diff --check`；targeted copy scan；文档审查。
+- 参考: `agent_tasks/PM_LOOP.md` Phase 2 Worker Scaling Protocol；`docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Safety / Voice / Presence.
 
 ## 已完成
 

@@ -1,10 +1,10 @@
-# TASK-169: Commercial model and no-manipulation audit
+# TASK-170B: Phase 2 safety, eval, and worker-scaling plan
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Nora is in Phase 1 Exit Gate. TASK-167 release audit is integrated and reviewer-approved. Your job is to audit and document the commercial model boundaries for Token Food, membership, and expansion packs while proving Phase 1 user-visible copy avoids manipulation and misleading claims.
+Nora is in the final Phase 1 Exit Gate. TASK-167, TASK-168, and TASK-169 are integrated and reviewer-approved. Phase 2 must not start until this planning task is reviewed, integrated, and `agent_tasks/PHASE_STATUS.md` is updated by Codex PM.
 
 Read first:
 
@@ -13,90 +13,81 @@ Read first:
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
 - `docs/knowledge/PHASE_1_MVP_RELEASE_AUDIT.md`
+- `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md`
 - `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
-- `README.md`
-- `mini_agent/static/index.html`
 - `evals/run_evals.py`
-
-## Worktree Safety
-
-Before editing, run:
-
-```bash
-git status --short --branch
-git log --oneline --decorate -5
-```
-
-If your worktree is dirty before you edit, stop and write the conflict in `agent_tasks/B_DONE.md`.
+- `tests/test_webui_smoke.py`
 
 ## Goal
 
-Create a Phase 1 commercial/no-manipulation audit and add deterministic coverage or a targeted scan that locks the boundary.
+Draft the Phase 2 safety, eval, and worker-scaling plan for Voice & Presence.
 
-Required output:
+Create or update the same planning document as Claude A:
 
-1. Document the Phase 1 commercial model boundary:
-   - Token Food = transparent compute energy metaphor.
-   - Membership/expansion packs are future business options, not implemented Phase 1 claims.
-   - Local demo has no real payment, checkout, marketplace, or account billing.
-   - Pet remains available for light care even with no compute food.
-2. Audit user-visible copy in README and Pet Room for:
-   - guilt, loneliness pressure, suffering/death pressure
-   - fake intimacy
-   - hidden costs
-   - purchase/subscribe/premium/checkout pressure
-   - marketplace/avatar pack pressure
-   - voice cloning or unsupported Phase 2 claims
-3. Add deterministic evidence:
-   - Prefer a small doc such as `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md`.
-   - Add targeted eval coverage in `evals/run_evals.py` if there is not already sufficient copy-safety coverage for README + Pet Room.
-   - If adding evals risks broad conflict, write a documented targeted scan command and evidence in the audit doc instead.
+- `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`
+
+Your section must cover:
+
+1. Safety policy for voice/TTS/presence:
+   - no voice cloning without explicit consent; default is no cloning
+   - no recording by default
+   - no hidden background listening
+   - transparent cost estimate before voice/TTS actions
+   - no emotional pressure, dependency, or purchase manipulation
+2. Deterministic eval and test plan:
+   - voice profile contract evals
+   - no-secret/no-recording/no-cloning copy scans
+   - Web/PWA presence smoke tests
+   - cost transparency checks
+3. Phase 2 worker scaling plan:
+   - decide whether PM should keep A/B only or open Claude C/D
+   - propose file boundaries and ownership for each worker
+   - identify conflict risks and when not to add workers
+4. Reviewer/PM approval criteria before switching `PHASE_STATUS.md` to Phase 2.
 
 ## Scope
 
 Allowed files:
 
-- `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md`
-- `evals/run_evals.py` only for narrow deterministic copy-safety evals
-- `README.md` or `mini_agent/static/index.html` only if you find a small misleading copy issue that must be corrected
+- `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`
 - `agent_tasks/B_DONE.md`
+
+Coordinate implicitly with Claude A by keeping your work safety/eval/scaling-focused. Claude A owns product/technical path sections.
 
 ## Non-Goals
 
-- Do not implement real billing, payment, checkout, subscription, marketplace, avatar packs, voice features, voice cloning, desktop/mobile presence, 3D/VRM, or account/cloud sync.
-- Do not change token food mechanics or pet state mechanics unless you find a copy-only safety bug.
-- Do not edit `agent_tasks/A_TASK.md`, `agent_tasks/A_DONE.md`, `agent_tasks/REVIEW.md`, `CODEX_TERMINAL_HANDOFF.md`, `designs/`, or untracked design exports.
+- Do not implement voice, TTS, speech recognition, desktop app, PWA, native mobile, 3D/VRM, billing, marketplace, or account sync.
+- Do not edit source code, tests, evals, `BACKLOG.md`, `PHASE_STATUS.md`, `A_TASK.md`, `A_DONE.md`, or `REVIEW.md`.
+- Do not add API keys, model credentials, vendor-specific secrets, or claims that Phase 2 features already exist.
 
 ## Safety Boundaries
 
-- Commercial language must not use pet distress, loneliness, guilt, scarcity, fake love, or emotional dependency to drive spending.
-- Costs, balances, local demo boundaries, and unsupported future features must be explicit.
-- No voice cloning claims or prompts to clone a real person's voice.
-- Do not hide eval failures or weaken existing safety evals.
+- Treat voice and presence as higher-risk surfaces.
+- Keep all claims framed as plans, not shipped features.
+- Preserve TASK-169 commercial/no-manipulation boundaries.
+- Worker-scaling recommendations must avoid parallel edits to the same core files unless the plan first splits architecture boundaries.
 
 ## Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
-python3 evals/run_evals.py
 git diff --check
+rg -n "voice clone|clone voice|record by default|background listening|checkout now|subscribe now|marketplace" docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md
 ```
 
-Also run a targeted text scan for forbidden commercial/manipulative phrases across README, Pet Room, and new audit doc, and report the exact command.
+The `rg` command may find negative boundary statements only; explain any hits in `B_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-169` and include:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-170B` and include:
 
-- Commercial model boundary summary
-- No-manipulation findings
-- Any copy/eval/doc changes
+- Summary of the safety/eval/scaling plan sections you wrote
+- Your worker-scaling recommendation for Phase 2
 - Exact command results
-- Whether PM may proceed toward TASK-170 after TASK-168 is also complete
+- Any coordination notes for Claude A / Codex PM
 
 Then notify Codex PM:
 
