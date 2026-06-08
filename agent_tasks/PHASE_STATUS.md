@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 0%
-- Status: ready to start
-- Current focus: Voice Profile v1, TTS adapter boundary with text fallback, Web/PWA presence, and safety/eval foundations.
+- Percent: 5%
+- Status: in progress
+- Current focus: Voice Profile v1 identity contract and deterministic safety/eval coverage.
 
 ## Completed This Phase
 
@@ -49,13 +49,14 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- No Phase 2 implementation tasks are active yet. PM should publish the first Phase 2 A/B task pair after committing the Phase 1 Exit Gate integration.
+- TASK-171A: Voice Profile v1 contract implementation.
+- TASK-171B: Voice Profile v1 deterministic eval and safety coverage.
 
 ## Next
 
-1. Publish first Phase 2 task pair from `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`:
-   - Claude A: Voice Profile v1 validation / identity contract implementation.
-   - Claude B: Voice Profile deterministic eval and safety copy coverage.
+1. Wait for Claude A/B completion reports for TASK-171A/B.
+2. PM combines implementation plus eval coverage, runs targeted unit tests, `python3 evals/run_evals.py`, and `git diff --check`.
+3. Send approved candidate to reviewer before integration.
 
 ## Phase 1 Exit Criteria
 
@@ -99,13 +100,13 @@ Phase 2 start worker plan:
 
 ## Blockers
 
-- None for Phase 2 planning.
+- None for current Phase 2 A/B start.
 - Real billing/payment, 3D/VRM, voice deep work, marketplace, and cross-device native presence remain later-phase work.
 - Real TTS provider integration is blocked until adapter protocol, consent UI, and cost evals are complete.
 
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 0% / ready to start
+- Phase 2 Voice & Presence: 5% / Voice Profile v1 in progress
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
