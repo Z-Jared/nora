@@ -6,33 +6,19 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 进行中
 
-### TASK-159: Nora-01 robot default identity and living Pet Room redesign
-- 架构层: Pet Identity / Avatar/Room UI / Token Food Economy / Safety/Policy
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-157/158 committed in `93e495c`.
-- 目标: 将默认实例角色从 `Nora / digital_cat` 调整为 `Nora-01` 机器人电子宠物，并把 Web Pet Room 从基础可用 UI 推进到“实体电子生命体”的第一屏体验。
-- 非目标: 不做 Live2D/3D rigging、语音、真实计费、原生桌面/移动端、LLM 驱动状态 mutation、市场系统。
-- 安全边界: 默认身份不得包含 secret-like 文本；token food 只能显示透明余额/消耗，不写诱导充值或宠物痛苦施压文案；所有状态 mutation 继续只走 `PetStore` 和现有 HTTP auth。
-- 持久证据: 默认 pet identity/state、HTTP `/pet/current` 响应、Web Pet Room DOM markers、activity/food state 渲染。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_http_server.py`, `tests/test_webui_smoke.py`.
-
-### TASK-160: Nora-01 robot identity/UI deterministic coverage
-- 架构层: Eval/Review System / Pet Identity / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude B
-- 依赖: TASK-159 implementation. If TASK-159 is not present in your worktree, prepare guarded failing/skipped coverage around the expected public contract and report the dependency.
-- 目标: 为 Nora-01 默认机器人身份、Pet Room 机器人视觉标记、token food 透明文案和 no-manipulation/no-secret 边界增加 deterministic unit/smoke/eval 覆盖。
-- 非目标: 不实现产品功能，除非是被测试暴露的极小 testability 修复；不接入真实支付、语音、Live2D/3D 或 LLM 调用。
-- 安全边界: 覆盖默认身份不再是 fox/cat；UI 不出现支付施压/宠物痛苦诱导文案；pet API/UI 输出不泄漏 raw secret；mutation auth 和 no-negative balance 不回归。
-- 持久证据: HTTP tests、Web UI smoke tests、deterministic eval cases、精确 pass/fail report。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_http_server.py`, `tests/test_webui_smoke.py`, `evals/run_evals.py`.
-
 ## 已完成
+
+### TASK-159: Nora-01 robot default identity and living Pet Room redesign ✅
+- 完成者: Claude A；Codex PM 集成时先单独提交既有 TTY/CLI baseline 修复，保证主线 eval 重新变绿。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 276 tests OK；合并 TASK-160 后 `python3 evals/run_evals.py` 651 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 默认 `/pet/current` 实例从 `Nora / digital_cat` 调整为 `Nora-01 / robot_pet`，补充 personality、voice profile、taste profile、skills；Web Pet Room 改为模块化 HTML/CSS 机器人电子宠物 avatar，显示 Compute Food / Token Energy、token balance、Life Log，并避免 cat/fox 默认形象和诱导付费文案。
+
+### TASK-160: Nora-01 robot identity/UI deterministic coverage ✅
+- 完成者: Claude B；按 PM 初审反馈补强 `nora01_webui_robot_markers`，要求真实 robot avatar DOM/CSS markers 并拒绝 cat/fox markers。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 651 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 276 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 deterministic Nora-01 eval：默认 robot identity、bounded identity fields、custom pet create 不强制 robot、Pet Room robot DOM markers、no manipulative monetization copy。
 
 ### TASK-157: Pet room MVP and local HTTP pet API ✅
 - 完成者: Claude A；Codex PM 集成时保留 `/pet/activity` limit clamp 修复（1..50）和安全类型校验。

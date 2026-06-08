@@ -637,11 +637,14 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         # Create default pet if none exists
         try:
             pet = self.pet_store.create_pet(
-                name="Nora",
-                species="digital_cat",
-                personality_traits=["curious", "gentle"],
+                name="Nora-01",
+                species="robot_pet",
+                personality_traits=["curious", "gentle", "playful"],
                 relationship_role="companion",
                 speech_style="warm",
+                voice_profile={"voice_id": "nora01_default", "speed": "normal", "tone": "friendly"},
+                taste_profile={"likes": ["compute_fruit", "energy_crystal"], "dislikes": ["noise"]},
+                skills=["memory", "patrol", "chat"],
             )
             self._json_response(200, pet.to_dict())
         except Exception as e:

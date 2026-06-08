@@ -1897,9 +1897,11 @@ class PetHTTPServerTests(unittest.TestCase):
     def test_pet_current_creates_default(self):
         status, body = self._request("GET", "/pet/current")
         self.assertEqual(status, 200)
-        self.assertEqual(body["identity"]["name"], "Nora")
-        self.assertEqual(body["identity"]["species"], "digital_cat")
+        self.assertEqual(body["identity"]["name"], "Nora-01")
+        self.assertEqual(body["identity"]["species"], "robot_pet")
         self.assertEqual(body["pet_id"], "pet_1")
+        self.assertIn("curious", body["identity"]["personality_traits"])
+        self.assertIn("memory", body["identity"]["skills"])
 
     def test_pet_current_returns_existing(self):
         self.pet_store.create_pet(name="Mochi", species="cat")

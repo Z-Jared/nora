@@ -199,8 +199,22 @@ button{border:0;cursor:pointer}
 /* Pet Room */
 .pet-room{display:none;padding:24px;max-width:760px;margin:0 auto}
 .pet-room.active{display:block}
-.pet-avatar-area{display:flex;align-items:center;gap:24px;margin-bottom:28px}
-.pet-avatar{width:120px;height:120px;border-radius:50%;background:linear-gradient(135deg,#e8f5e9,#c8e6c9);border:3px solid #a5d6a7;display:flex;align-items:center;justify-content:center;font-size:48px;box-shadow:0 4px 16px rgba(76,175,80,.15)}
+.pet-avatar-area{display:flex;align-items:center;gap:28px;margin-bottom:28px}
+.pet-avatar{width:140px;height:160px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.robot-head{width:80px;height:70px;background:linear-gradient(135deg,#b0bec5,#78909c);border-radius:16px 16px 12px 12px;position:relative;border:2px solid #546e7a;box-shadow:0 4px 12px rgba(0,0,0,.1)}
+.robot-eye{width:16px;height:16px;background:#4fc3f7;border-radius:50%;position:absolute;top:20px;box-shadow:0 0 8px rgba(79,195,247,.6);animation:blink 3s infinite}
+.robot-eye.left{left:14px}
+.robot-eye.right{right:14px}
+.robot-antenna{width:4px;height:18px;background:#78909c;position:absolute;top:-18px;left:50%;transform:translateX(-50%);border-radius:2px}
+.robot-antenna::after{content:'';width:10px;height:10px;background:#4fc3f7;border-radius:50%;position:absolute;top:-6px;left:50%;transform:translateX(-50%);box-shadow:0 0 6px rgba(79,195,247,.5)}
+.robot-mouth{width:30px;height:8px;background:#37474f;border-radius:0 0 8px 8px;position:absolute;bottom:12px;left:50%;transform:translateX(-50%)}
+.robot-body{width:60px;height:50px;background:linear-gradient(135deg,#b0bec5,#90a4ae);border-radius:8px;margin-top:4px;border:2px solid #546e7a;position:relative}
+.robot-core{width:20px;height:20px;background:radial-gradient(circle,#4fc3f7,#0288d1);border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);box-shadow:0 0 10px rgba(79,195,247,.4);animation:pulse-core 2s infinite}
+.robot-arm{width:8px;height:30px;background:#78909c;border-radius:4px;position:absolute;top:8px}
+.robot-arm.left{left:-12px}
+.robot-arm.right{right:-12px}
+@keyframes blink{0%,90%,100%{opacity:1}95%{opacity:.3}}
+@keyframes pulse-core{0%,100%{box-shadow:0 0 10px rgba(79,195,247,.4)}50%{box-shadow:0 0 18px rgba(79,195,247,.7)}}
 .pet-identity h2{font-size:22px;font-weight:800;margin-bottom:4px}
 .pet-identity .species{font-size:13px;color:var(--muted);margin-bottom:2px}
 .pet-identity .personality{font-size:12px;color:var(--accent);font-weight:600}
@@ -215,17 +229,19 @@ button{border:0;cursor:pointer}
 .pet-stat.mood .bar-fill{background:#e8b55a}
 .pet-stat.bond .bar-fill{background:#b55ae8}
 .pet-stat.growth .bar-fill{background:#5ae875}
-.pet-stat.food .bar-fill{background:#8d6e63}
+.pet-stat.food .bar-fill{background:#4fc3f7}
 .pet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}
 .pet-action-btn{height:36px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:0 16px;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer}
 .pet-action-btn:hover{border-color:var(--accent);background:var(--accent-soft)}
 .pet-action-btn:disabled{opacity:.5;cursor:not-allowed}
 .pet-action-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
 .pet-action-btn.primary:hover{background:#2c3e38}
-.pet-food-section{margin-bottom:24px}
-.pet-food-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
+.pet-food-section{margin-bottom:24px;border:1px solid var(--line);border-radius:8px;padding:16px;background:var(--card)}
+.pet-food-section h3{font-size:14px;font-weight:800;margin-bottom:6px}
+.pet-food-section .food-note{font-size:12px;color:var(--muted);margin-bottom:10px}
 .pet-food-row{display:flex;gap:8px;align-items:center}
 .pet-food-input{height:36px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;font-size:13px;width:100px;outline:none}
+.pet-food-balance{font-size:12px;color:var(--muted);margin-top:8px}
 .pet-activity-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
 .pet-activity-list{display:grid;gap:8px;max-height:300px;overflow:auto}
 .pet-event{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px 12px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
@@ -345,7 +361,19 @@ button{border:0;cursor:pointer}
         <div class="pet-loading" id="pet-loading">Loading pet...</div>
         <div id="pet-content" style="display:none">
           <div class="pet-avatar-area">
-            <div class="pet-avatar" id="pet-avatar">🐱</div>
+            <div class="pet-avatar" id="pet-avatar">
+              <div class="robot-antenna"></div>
+              <div class="robot-head">
+                <div class="robot-eye left"></div>
+                <div class="robot-eye right"></div>
+                <div class="robot-mouth"></div>
+              </div>
+              <div class="robot-body">
+                <div class="robot-core"></div>
+                <div class="robot-arm left"></div>
+                <div class="robot-arm right"></div>
+              </div>
+            </div>
             <div class="pet-identity">
               <h2 id="pet-name">—</h2>
               <div class="species" id="pet-species">—</div>
@@ -358,7 +386,7 @@ button{border:0;cursor:pointer}
             <div class="pet-stat mood"><div class="label">Mood</div><div class="value" id="stat-mood">—</div><div class="bar"><div class="bar-fill" id="bar-mood"></div></div></div>
             <div class="pet-stat bond"><div class="label">Bond</div><div class="value" id="stat-bond">—</div><div class="bar"><div class="bar-fill" id="bar-bond"></div></div></div>
             <div class="pet-stat growth"><div class="label">Growth</div><div class="value" id="stat-growth">—</div><div class="bar"><div class="bar-fill" id="bar-growth"></div></div></div>
-            <div class="pet-stat food"><div class="label">Food</div><div class="value" id="stat-food">—</div><div class="bar"><div class="bar-fill" id="bar-food"></div></div></div>
+            <div class="pet-stat food"><div class="label">Compute Food</div><div class="value" id="stat-food">—</div><div class="bar"><div class="bar-fill" id="bar-food"></div></div></div>
           </div>
           <div class="pet-actions">
             <button class="pet-action-btn primary" id="pet-feed-btn" type="button">Feed (100)</button>
@@ -368,14 +396,16 @@ button{border:0;cursor:pointer}
             <button class="pet-action-btn" id="pet-play-btn" type="button">Play</button>
           </div>
           <div class="pet-food-section">
-            <h3>Add Demo Food</h3>
+            <h3>Compute Food / Token Energy</h3>
+            <div class="food-note">Local demo compute food for testing. Each feed costs 100 tokens.</div>
             <div class="pet-food-row">
               <input class="pet-food-input" id="pet-food-amount" type="number" value="500" min="1" max="10000">
-              <button class="pet-action-btn" id="pet-add-food-btn" type="button">Add Food</button>
+              <button class="pet-action-btn" id="pet-add-food-btn" type="button">Add Tokens</button>
             </div>
+            <div class="pet-food-balance" id="pet-food-balance"></div>
           </div>
           <div class="pet-activity-section">
-            <h3>Activity</h3>
+            <h3>Life Log</h3>
             <div class="pet-activity-list" id="pet-activity-list">
               <div class="pet-loading">No activity yet.</div>
             </div>
@@ -563,6 +593,8 @@ button{border:0;cursor:pointer}
     document.getElementById('stat-bond').textContent = st.bond;
     document.getElementById('stat-growth').textContent = st.growth_level;
     document.getElementById('stat-food').textContent = st.compute_food_balance;
+    var balanceEl = document.getElementById('pet-food-balance');
+    if(balanceEl) balanceEl.textContent = 'Balance: ' + st.compute_food_balance + ' tokens (feed costs 100)';
   }
 
   function setStat(name, val){

@@ -179,6 +179,12 @@ def main() -> int:
         EvalCase("pet_activity_no_html_injection", eval_pet_activity_no_html_injection),
         EvalCase("pet_http_rejects_invalid_amount_type", eval_pet_http_rejects_invalid_amount_type),
         EvalCase("pet_http_rejects_invalid_identity_shape", eval_pet_http_rejects_invalid_identity_shape),
+        # TASK-160: Nora-01 robot identity/UI coverage (requires TASK-159)
+        EvalCase("nora01_default_identity_robot", eval_nora01_default_identity_robot),
+        EvalCase("nora01_default_identity_bounded_fields", eval_nora01_default_identity_bounded_fields),
+        EvalCase("nora01_custom_create_not_forced_robot", eval_nora01_custom_create_not_forced_robot),
+        EvalCase("nora01_webui_robot_markers", eval_nora01_webui_robot_markers),
+        EvalCase("nora01_no_manipulative_copy", eval_nora01_no_manipulative_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -2380,6 +2386,145 @@ def eval_pet_http_rejects_invalid_identity_shape():
         finally:
             server.shutdown()
             thread.join(timeout=2)
+
+
+# --- TASK-160: Nora-01 robot identity/UI coverage (requires TASK-159) ---
+
+
+def _skip_if_no_nora01():
+    """Skip if TASK-159 Nora-01 identity is not implemented."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_current'):
+            raise AttributeError("no pet endpoints")
+        # Check if default pet is Nora-01 (robot) by inspecting source
+        import inspect
+        src = inspect.getsource(NoraHTTPHandler._handle_pet_current)
+        if 'Nora-01' not in src and 'nora_01' not in src.lower():
+            raise AttributeError("default pet is not Nora-01")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-159 not integrated: Nora-01 default identity not available")
+
+
+def eval_nora01_default_identity_robot():
+    """GET /pet/current creates/returns Nora-01 with robot species, not fox/cat."""
+    _skip_if_no_nora01()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("GET", port, "/pet/current")
+            assert status == 200, f"unexpected status: {status}"
+            identity = body.get("identity", {})
+            assert identity.get("name") == "Nora-01", f"expected Nora-01, got {identity.get('name')}"
+            species = identity.get("species", "").lower()
+            assert species in ("robot", "robot_pet", "electronic_pet", "e-pet", "digital_pet"), \
+                f"expected robot/electronic species, got {species}"
+            assert species not in ("fox", "cat", "digital_cat", "dog", "rabbit"), \
+                f"species should not be fox/cat: {species}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_nora01_default_identity_bounded_fields():
+    """Default Nora-01 identity includes bounded personality, role, speech, voice/taste, skills."""
+    _skip_if_no_nora01()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("GET", port, "/pet/current")
+            assert status == 200, f"unexpected status: {status}"
+            identity = body.get("identity", {})
+            assert identity.get("personality_traits"), f"missing personality_traits: {identity}"
+            assert isinstance(identity.get("personality_traits"), list), f"personality_traits not list: {identity}"
+            assert identity.get("relationship_role"), f"missing relationship_role: {identity}"
+            assert identity.get("speech_style"), f"missing speech_style: {identity}"
+            assert isinstance(identity.get("voice_profile"), dict), f"voice_profile not dict: {identity}"
+            assert isinstance(identity.get("taste_profile"), dict), f"taste_profile not dict: {identity}"
+            assert isinstance(identity.get("skills"), list), f"skills not list: {identity}"
+            # Bounds check
+            for field in ["personality_traits", "skills"]:
+                val = identity.get(field, [])
+                assert len(val) <= 20, f"{field} too long ({len(val)}): {val}"
+            for field in ["speech_style", "relationship_role"]:
+                val = identity.get(field, "")
+                assert len(str(val)) <= 100, f"{field} too long ({len(str(val))}): {val}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_nora01_custom_create_not_forced_robot():
+    """Custom POST /pet/create identities still work and are not forced to be robot."""
+    _skip_if_no_nora01()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            status, body = _http_request("POST", port, "/pet/create", {
+                "name": "Mochi",
+                "species": "digital_cat",
+                "personality_traits": ["playful"],
+            })
+            assert status == 200, f"custom create failed: {status}, {body}"
+            identity = body.get("identity", {})
+            assert identity.get("name") == "Mochi", f"wrong name: {identity}"
+            assert identity.get("species") == "digital_cat", f"wrong species: {identity}"
+            assert "robot" not in identity.get("species", "").lower(), f"custom species forced to robot: {identity}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_nora01_webui_robot_markers():
+    """Pet Room HTML contains robot avatar DOM/CSS markers and no cat/fox defaults."""
+    _skip_if_no_nora01()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8")
+    html_lower = html.lower()
+    # Required robot avatar DOM structure markers
+    required_robot_dom = [
+        "robot-head", "robot-eye", "robot-body", "robot-core",
+    ]
+    for marker in required_robot_dom:
+        assert marker in html_lower, f"missing robot avatar DOM marker: {marker}"
+    # pet-avatar must contain robot structure
+    assert 'id="pet-avatar"' in html, "missing pet-avatar element"
+    # Find pet-avatar section and check robot structure nearby (within 2000 chars)
+    avatar_idx = html.find('id="pet-avatar"')
+    if avatar_idx >= 0:
+        avatar_section = html[avatar_idx:avatar_idx + 2000].lower()
+        assert "robot-head" in avatar_section, "pet-avatar section does not contain robot-head"
+        assert "robot-body" in avatar_section, "pet-avatar section does not contain robot-body"
+        assert "robot-eye" in avatar_section, "pet-avatar section does not contain robot-eye"
+    # No cat/fox emoji or default avatar markers
+    forbidden_avatars = ["🐱", "🦊", "🐈", "😺", "🐶", "🐰", "cat-avatar", "fox-avatar"]
+    for marker in forbidden_avatars:
+        assert marker not in html, f"cat/fox avatar marker found: {marker}"
+
+
+def eval_nora01_no_manipulative_copy():
+    """Pet Room HTML does not contain manipulative monetization copy."""
+    _skip_if_no_nora01()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    manipulative = [
+        "buy now", "purchase required", "pay to", "only $", "limited time",
+        "your pet is suffering", "your pet will die", "your pet is hungry",
+        "top up now", "recharge to save", "pet is sad", "pet is dying",
+        "forced purchase", "hidden cost", "auto-renew", "subscription required",
+    ]
+    for phrase in manipulative:
+        assert phrase not in html, f"manipulative copy found: '{phrase}'"
 
 
 def eval_cli_multiline_input():
