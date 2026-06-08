@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-165: Identity Editor MVP for pet customization
+- 架构层: Pet Identity / Avatar/Room UI / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: TASK-163/164 committed in `c676cc0`.
+- 目标: 为电子宠物增加 Identity Editor MVP：用户可以编辑现有宠物的 name/species/personality_traits/relationship_role/speech_style/voice_profile/taste_profile/skills，并在 Pet Room 中看到和提交这些身份配置，让“每个人自行定义身份”进入可用闭环。
+- 非目标: 不做 3D/VRM、不做真正语音合成或 voice cloning、不做 avatar asset pipeline、不做账号/云同步、不做 billing/marketplace、不改 CLI/TUI。
+- 安全边界: mutation endpoint 必须保留 auth；所有可编辑文本/list/dict 继续拒绝 secret-like text；输出 bounded；未知字段不回显 raw secret；HTML 必须 escape；更新身份不得重置 pet state、food balance、activity 或 relationship memories。
+- 持久证据: updated `PetIdentity.updated_at`、HTTP JSON response、Pet Room visible Identity Editor form、unit tests。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Pet Identity / MVP Product Shape, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_pets.py`, `tests/test_http_server.py`.
+
+### TASK-166: Identity Editor deterministic coverage
+- 架构层: Eval/Review System / Pet Identity / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude B
+- 依赖: TASK-165 implementation. If TASK-165 is absent, add guarded evals around the expected contract and report the dependency.
+- 目标: 为 Identity Editor MVP 增加 deterministic coverage，锁住身份编辑 API、Pet Room 表单、安全拒绝、state/memory 不回归，以及和 token food / relationship memory 的兼容性。
+- 非目标: 不实现产品功能，除非是被测试暴露的极小 testability 修复；不做 3D/voice/billing/marketplace/CLI/TUI。
+- 安全边界: eval 必须证明 secret-like identity fields 不会保存或渲染；mutation auth 不回归；更新身份不清空 compute_food_balance、activity、relationship memories；Pet Room identity text escaped；现有 token_food 和 relmem eval 不 skip。
+- 持久证据: deterministic eval cases、HTTP/UI smoke assertions、精确 pass/fail report。
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
+- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`.
+
 ## 进行中
 
 ## 已完成

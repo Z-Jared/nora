@@ -1,10 +1,10 @@
-# TASK-163: Relationship memory MVP for pet shared moments
+# TASK-165: Identity Editor MVP for pet customization
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Nora is now a customizable electronic pet agent. TASK-161/162 completed the transparent token food estimate/status loop. The next Phase 1 priority is Relationship Memory: task results, preferences, and shared moments should become part of the pet relationship, not just transient UI text.
+Nora is now a customizable electronic pet agent. Relationship Memory has landed in `c676cc0`, so Phase 1 moves to letting each user define the pet's identity from the Pet Room.
 
 Read first:
 
@@ -12,9 +12,11 @@ Read first:
 - `docs/knowledge/PROJECT_WAKEUP.md`
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
+- `agent_tasks/BACKLOG.md`
 - `mini_agent/pets.py`
 - `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
+- `tests/test_pets.py`
 - `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
 
@@ -31,48 +33,63 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Build a deterministic Relationship Memory MVP for the pet loop.
+Build an Identity Editor MVP for existing pets.
 
 Required behavior:
 
-1. Pet memory model/store:
-   - Add a bounded relationship memory record type, for example `PetRelationshipMemory`.
-   - Suggested fields: `memory_id`, `pet_id`, `kind`, `summary`, `source`, `importance`, `metadata`, `created_at`.
-   - Supported `kind` should be a small deterministic set such as `shared_moment`, `preference`, `task_outcome`.
-   - Reject secret-like text in summary, source, kind, and metadata values.
-   - Bound summary/source lengths and list/read limits.
-   - Use existing pet persistence patterns in `PetStore`; keep JSONL/SQLite behavior consistent with nearby pet records.
+1. Pet store/API:
+   - Add a deterministic update method for `PetIdentity` fields:
+     - `name`
+     - `species`
+     - `personality_traits`
+     - `relationship_role`
+     - `speech_style`
+     - `voice_profile`
+     - `taste_profile`
+     - `skills`
+   - Preserve existing `pet_id` and `created_at`.
+   - Update `updated_at`.
+   - Do not reset `PetState`, compute food balance, activity events, or relationship memories.
+   - Reuse existing secret validation from `create_pet` for strings/lists/dicts.
+   - Reject unknown field types with bounded errors.
 
-2. HTTP/API:
-   - Add `POST /pet/relationship-memory` to record a memory.
-   - Add `GET /pet/relationship-memory?pet_id=...&limit=...` to list recent memories.
-   - Mutation endpoint must retain auth when `NORA_API_TOKEN` is set.
-   - Responses must be bounded and not leak raw secret-like input.
-   - Add concise docs entry to `/docs`.
+2. HTTP:
+   - Add a mutation endpoint such as `POST /pet/update-identity`.
+   - Mutation endpoint must honor existing HTTP auth behavior when `NORA_API_TOKEN` is set.
+   - Return the updated pet record or identity in bounded JSON.
+   - Add concise `/docs` entry.
 
 3. Pet Room UI:
-   - Add a small relationship memory section in Pet Room.
-   - Show recent memory summaries safely.
-   - Include a local-only demo/shared moment control or use existing action flow to create one.
-   - Escape all rendered memory text.
-   - Avoid fake intimacy, guilt, urgency, or manipulative copy.
+   - Add a compact Identity Editor section in the Pet Room.
+   - Show current identity fields.
+   - Allow editing a practical MVP subset at minimum:
+     - name
+     - species
+     - relationship_role
+     - speech_style
+     - personality_traits
+     - skills
+   - Voice/taste can be editable as simple JSON textareas or compact key fields, as long as input is bounded and invalid JSON is handled cleanly.
+   - Escape all rendered identity text.
+   - Avoid fake intimacy, purchase pressure, or marketplace language.
 
 ## Non-Goals
 
-- No vector RAG.
-- No external memory provider.
-- No LLM calls.
-- No cross-device sync.
-- No voice, 3D/VRM, marketplace, or billing work.
+- No 3D/VRM.
+- No voice synthesis or voice cloning.
+- No avatar asset generation.
+- No account/cloud sync.
+- No billing, marketplace, or plugin store.
 - No CLI/TUI redesign.
+- No LLM calls.
 
 ## Safety Boundaries
 
-- Model output must not directly write memory.
-- Secret-like text must be rejected before persistence.
-- HTML must escape memory content.
-- Mutation endpoints must honor existing HTTP auth behavior.
-- Do not touch unrelated CLI/TUI/runtime code.
+- Secret-like identity text must be rejected before persistence.
+- HTML must escape identity content.
+- Model output must not directly mutate identity.
+- Updating identity must not clear state, food balance, activity, or relationship memories.
+- Do not touch unrelated runtime/CLI code.
 
 ## Scope
 
@@ -104,11 +121,11 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If full evals fail because of pre-existing unrelated state, report the exact failure and still run the targeted API/UI tests.
+If full evals fail because of unrelated baseline state, report the exact failure and still run targeted tests.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the public contract TASK-164 should lock.
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and the public contract TASK-166 should lock.
 
 Then notify Codex PM:
 

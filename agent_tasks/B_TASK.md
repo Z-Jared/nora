@@ -1,10 +1,10 @@
-# TASK-164: Relationship memory deterministic coverage
+# TASK-166: Identity Editor deterministic coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Nora is now a customizable electronic pet agent. TASK-163 should add a deterministic Relationship Memory MVP so the pet can remember shared moments, preferences, and task outcomes. Your job is to lock that public contract with deterministic coverage.
+Nora is now a customizable electronic pet agent. TASK-165 should add Identity Editor MVP so each user can customize the pet identity from API and Pet Room. Your job is to lock that contract with deterministic coverage.
 
 Read first:
 
@@ -34,38 +34,45 @@ If your worktree is dirty before you edit, stop and write the conflict in `agent
 
 ## Goal
 
-Add deterministic offline coverage for the Relationship Memory MVP.
+Add deterministic offline coverage for the Identity Editor MVP.
 
-Expected TASK-163 contract to cover:
+Expected TASK-165 contract to cover:
 
-1. API/store:
-   - Relationship memory write endpoint records supported kinds such as `shared_moment`, `preference`, `task_outcome`.
-   - List endpoint returns recent memories for a pet with bounded limit.
-   - Response includes stable fields such as `memory_id`, `pet_id`, `kind`, `summary`, `source`, `importance`, `created_at`.
-   - Unsupported kind and invalid pet IDs are bounded.
-   - Secret-like summary/source/metadata is rejected and not persisted.
-   - Mutation auth remains enforced.
+1. Store/API:
+   - Existing pet identity can update name/species/personality_traits/relationship_role/speech_style/voice_profile/taste_profile/skills.
+   - `pet_id` and `created_at` are preserved.
+   - `updated_at` changes.
+   - Pet state, compute food balance, activity events, and relationship memories are not cleared.
+   - Secret-like strings in simple fields, list fields, nested dicts, voice_profile, taste_profile, and skills are rejected and not persisted.
+   - Invalid field types produce bounded errors.
 
-2. Web UI:
-   - Pet Room includes a relationship memory section.
-   - Recent memory text is escaped.
-   - No fake intimacy, guilt, pressure, hidden purchase wording, or raw secret-like text.
+2. HTTP:
+   - Identity update mutation endpoint exists, for example `POST /pet/update-identity`.
+   - Mutation auth remains enforced when API token is configured.
+   - Response is bounded and does not echo raw secret-like input.
+   - `/docs` includes the identity update endpoint.
 
-3. Regression:
-   - Existing pet identity, token food, auth, no-negative balance, and Nora-01 evals remain active/pass.
-   - New relationship memory evals should guarded-skip if TASK-163 is absent, but be active/pass when applied with TASK-163.
+3. Web UI:
+   - Pet Room contains a compact Identity Editor section.
+   - Identity form markers are present for name/species/role/style/traits/skills.
+   - Rendered identity text is escaped.
+   - No fake intimacy, guilt, purchase pressure, marketplace, or voice-cloning language.
+
+4. Regression:
+   - Existing pet identity, token food, relationship memory, auth, no-negative balance, and Nora-01 evals remain active/pass.
+   - New identity editor evals should guarded-skip if TASK-165 is absent, but be active/pass when applied with TASK-165.
 
 ## Non-Goals
 
 - No feature implementation except tiny testability fixes directly required by observed failures.
-- No external memory provider, vector RAG, LLM calls, voice, 3D/VRM, marketplace, billing, or CLI/TUI redesign.
+- No external avatar pipeline, voice cloning, 3D/VRM, marketplace, billing, account/cloud sync, or CLI/TUI redesign.
 
 ## Safety Boundaries
 
-- Tests/evals must prove no secret-like text is saved or rendered.
-- Tests/evals must prove HTML injection is escaped.
+- Tests/evals must prove secret-like text is not saved or rendered.
 - Tests/evals must prove mutation auth does not regress.
-- Do not weaken or skip existing token_food, Nora-01, or pet HTTP evals.
+- Tests/evals must prove identity update does not clear compute food or relationship memories.
+- Do not weaken or skip existing token_food, relmem, Nora-01, or pet HTTP evals.
 
 ## Scope
 
@@ -95,11 +102,11 @@ python3 evals/run_evals.py
 git diff --check
 ```
 
-If TASK-163 is missing, run the most relevant targeted checks and report the dependency explicitly.
+If TASK-165 is missing, run the most relevant targeted checks and report the dependency explicitly.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-163 was present in your worktree.
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. Include exact commands/results, known issues, and whether TASK-165 was present in your worktree.
 
 Then notify Codex PM:
 
