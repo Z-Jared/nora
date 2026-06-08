@@ -272,6 +272,13 @@ button{border:0;cursor:pointer}
 .speech-preview-row{display:flex;gap:8px;align-items:center;margin-top:10px}
 .speech-preview-input{flex:1;height:36px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;font-size:13px;outline:none}
 .speech-preview-input:focus{border-color:var(--accent)}
+.voice-consent-panel{border:1px solid var(--line);border-radius:8px;background:var(--card);padding:12px 14px;margin-bottom:12px;font-size:12px}
+.voice-consent-panel h4{font-size:13px;font-weight:800;margin-bottom:8px}
+.voice-consent-boundary{font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px}
+.voice-consent-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.voice-consent-row label{font-size:12px;cursor:pointer}
+.voice-consent-meta{font-size:10px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.voice-consent-meta .meta-tag{display:inline-block;padding:1px 6px;border:1px solid var(--line);border-radius:999px;background:var(--card)}
 @keyframes fade-notice{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .pet-activity-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
 .pet-activity-list{display:grid;gap:8px;max-height:300px;overflow:auto}
@@ -435,6 +442,20 @@ button{border:0;cursor:pointer}
             </div>
           </div>
           <div class="speech-bubble-area" id="speech-bubble-area">
+            <div class="voice-consent-panel" id="voice-consent-panel">
+              <h4>Voice Preview Consent</h4>
+              <div class="voice-consent-boundary" id="voice-consent-boundary">
+                This is a text-only preview. No real voice synthesis, audio playback, network call, or recording is performed. No food tokens are debited. This is a local read-only estimate.
+              </div>
+              <div class="voice-consent-meta" id="voice-consent-cost">
+                <span class="meta-tag">cost: estimated per text length</span>
+                <span class="meta-tag" id="voice-consent-provider">provider: not configured (text fallback)</span>
+              </div>
+              <div class="voice-consent-row">
+                <input type="checkbox" id="voice-consent-checkbox">
+                <label for="voice-consent-checkbox">I understand this is a text-only preview with no real audio</label>
+              </div>
+            </div>
             <div class="speech-bubble" id="speech-bubble">
               <div class="speech-bubble-text" id="speech-bubble-text"></div>
               <div class="speech-bubble-meta" id="speech-bubble-meta"></div>
@@ -850,13 +871,18 @@ button{border:0;cursor:pointer}
   // Speech bubble preview
   document.getElementById('speech-preview-btn').onclick = function(){
     if(!currentPet) return;
+    var consent = document.getElementById('voice-consent-checkbox');
+    var errorEl = document.getElementById('speech-bubble-error');
+    errorEl.textContent = '';
+    if(!consent.checked){
+      errorEl.textContent = 'Please confirm the consent boundary first.';
+      return;
+    }
     var input = document.getElementById('speech-preview-input');
     var text = input.value.trim();
-    var errorEl = document.getElementById('speech-bubble-error');
     var bubbleEl = document.getElementById('speech-bubble');
     var textEl = document.getElementById('speech-bubble-text');
     var metaEl = document.getElementById('speech-bubble-meta');
-    errorEl.textContent = '';
     if(!text){ errorEl.textContent = 'Enter text to preview.'; return; }
     if(text.length > 500){ errorEl.textContent = 'Text too long (max 500).'; return; }
     fetch('/pet/voice-preview', {
@@ -878,6 +904,9 @@ button{border:0;cursor:pointer}
       tags.push(result.has_audio ? 'audio: yes' : 'audio: no (text only)');
       if(result.no_network_call) tags.push('no network');
       if(result.no_recording) tags.push('no recording');
+      if(result.food_debit === false) tags.push('no food debit');
+      if(result.provider_status) tags.push('provider: ' + result.provider_status);
+      if(result.audio_requires_confirmation) tags.push('audio requires confirmation');
       metaEl.innerHTML = tags.map(function(t){
         return '<span class="meta-tag">' + escapeHtml(t) + '</span>';
       }).join('');

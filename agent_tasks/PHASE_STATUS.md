@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 20%
+- Percent: 25%
 - Status: in progress
-- Current focus: Explicit consent and cost confirmation boundary before any future real TTS/provider work.
+- Current focus: CSS-only expression state mapping from mood, energy, hunger, and consent-safe voice preview state.
 
 ## Completed This Phase
 
@@ -67,16 +67,22 @@ Last updated: 2026-06-09
   - Dynamic speech text uses DOM text APIs, while generated meta tags use escaping before HTML insertion.
   - Deterministic coverage locks all speech bubble DOM markers, preview request shape, text escaping, metadata visibility, and no voice-cloning/recording/background-listening/marketplace/payment copy drift.
   - Verification is green: 281 targeted tests OK, 686 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Voice preview consent and cost confirmation boundary:
+  - `POST /pet/voice-preview` now exposes stable consent/cost/provider metadata: `requires_user_confirmation`, `confirmation_kind`, `audio_requires_confirmation`, `provider_status`, and `food_debit`.
+  - Pet Room speech preview now requires an explicit confirmation checkbox before it fetches `/pet/voice-preview`.
+  - The UI displays text-only preview, estimated cost, no-audio, no-network/provider, no-recording, and no-food-debit/read-only boundaries.
+  - Dynamic speech text remains rendered with DOM text APIs and generated meta tags use escaping.
+  - Deterministic coverage locks consent DOM markers, unchecked no-fetch control flow, HTTP metadata, and no voice-cloning/recording/background-listening/marketplace/payment copy drift.
+  - Verification is green: 284 targeted tests OK, 691 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-174A: Voice preview consent and cost confirmation boundary.
-- TASK-174B: Voice consent boundary deterministic eval and safety coverage.
+- None. TASK-174A/B are integrated; next tasks should target CSS-only expression state mapping and coverage.
 
 ## Next
 
-1. Combine TASK-174A/B after worker completion and verify consent/cost confirmation boundary.
-2. After consent boundary lands, add CSS-only expression state mapping from mood/energy/hunger.
+1. Add CSS-only expression state mapping from mood/energy/hunger without real audio, 3D/VRM, PWA, billing, or marketplace work.
+2. Add deterministic eval and smoke coverage for expression markers, state-to-class mapping, and no voice/presence scope drift.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
@@ -123,11 +129,11 @@ Phase 2 start worker plan:
 
 - None for current Phase 2 A/B start.
 - Real billing/payment, 3D/VRM, voice deep work, marketplace, and cross-device native presence remain later-phase work.
-- Real TTS provider integration is blocked until explicit consent UI, provider boundary, and cost/food-debit evals are complete.
+- Real TTS provider integration remains blocked until a later provider task adds explicit provider configuration, cost/food-debit confirmation, and no-cloning/no-recording safeguards.
 
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 20% / Voice Profile, TTS text fallback, and Pet Room speech bubble preview complete
+- Phase 2 Voice & Presence: 25% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, and consent/cost boundary complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

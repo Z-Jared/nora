@@ -226,6 +226,12 @@ def main() -> int:
         EvalCase("voice_preview_ui_cost_and_no_audio_copy", eval_voice_preview_ui_cost_and_no_audio_copy),
         EvalCase("speech_bubble_escapes_preview_text", eval_speech_bubble_escapes_preview_text),
         EvalCase("speech_bubble_no_recording_or_marketplace_copy", eval_speech_bubble_no_recording_or_marketplace_copy),
+        # TASK-174B: Voice consent boundary eval coverage
+        EvalCase("voice_consent_markers_present", eval_voice_consent_markers_present),
+        EvalCase("voice_consent_unchecked_no_fetch", eval_voice_consent_unchecked_no_fetch),
+        EvalCase("voice_cost_confirmation_metadata", eval_voice_cost_confirmation_metadata),
+        EvalCase("voice_cost_confirmation_http_metadata", eval_voice_cost_confirmation_http_metadata),
+        EvalCase("voice_consent_no_recording_or_marketplace_copy", eval_voice_consent_no_recording_or_marketplace_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3663,6 +3669,138 @@ def eval_speech_bubble_no_recording_or_marketplace_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in speech bubble UI"
+
+
+# --- TASK-174B: Voice consent boundary eval coverage ---
+
+
+def _skip_if_no_voice_consent():
+    """Skip if TASK-174A voice consent boundary is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "voice-consent-panel" not in html or "voice-consent-checkbox" not in html:
+            raise AttributeError("no consent markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-174A not integrated: voice consent boundary not available")
+
+
+def eval_voice_consent_markers_present():
+    """Pet Room contains all required consent/cost boundary DOM and API markers."""
+    _skip_if_no_voice_consent()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "voice-consent-panel",
+        "voice-consent-checkbox",
+        "voice-consent-boundary",
+        "voice-consent-cost",
+        "voice-consent-provider",
+        "/pet/voice-preview",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required consent markers: {missing}"
+
+
+def eval_voice_consent_unchecked_no_fetch():
+    """Preview button click handler reads consent checkbox, checks .checked, returns before fetch if unchecked."""
+    _skip_if_no_voice_consent()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Locate speech-preview-btn click handler
+    handler_match = re.search(r"""speech-preview-btn['"]\)\s*\.onclick\s*=\s*function\s*\(\)\s*\{([\s\S]{0,3000})\}""", html)
+    assert handler_match, "speech-preview-btn click handler not found"
+    handler = handler_match.group(1)
+    # Must read voice-consent-checkbox
+    assert "voice-consent-checkbox" in handler, "handler does not reference voice-consent-checkbox"
+    # Must check .checked
+    assert ".checked" in handler, "handler does not check .checked"
+    # Find the consent guard: between reading checkbox and fetch, must have a return
+    consent_pos = handler.find("voice-consent-checkbox")
+    fetch_pos = handler.find("fetch(")
+    assert consent_pos >= 0 and fetch_pos > consent_pos, "consent check must precede fetch"
+    guard_section = handler[consent_pos:fetch_pos]
+    assert "return" in guard_section, "no return between consent check and fetch — unchecked may still fetch"
+    # Must have bounded error copy with consent/confirm/boundary semantics
+    assert ("consent" in guard_section or "confirm" in guard_section or "boundary" in guard_section or
+            "consent" in handler or "confirm" in handler), \
+        "handler missing consent/confirm/boundary error copy"
+
+
+def eval_voice_cost_confirmation_metadata():
+    """Consent panel and JS meta rendering path expose all required metadata fields."""
+    _skip_if_no_voice_consent()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Consent panel HTML must contain cost, text-only, no-network, no-recording, no-debit indicators
+    consent_panel = re.search(r'id=["\']voice-consent-panel["\'][\s\S]{0,2000}', html)
+    assert consent_panel, "voice-consent-panel HTML not found"
+    panel = consent_panel.group(0)
+    assert "cost" in panel, "consent panel missing cost indicator"
+    assert "text" in panel and ("only" in panel or "fallback" in panel), "consent panel missing text-only indicator"
+    assert "network" in panel or "provider" in panel, "consent panel missing no-network/provider indicator"
+    assert "recording" in panel, "consent panel missing no-recording indicator"
+    assert "debit" in panel or "food" in panel, "consent panel missing no-debit indicator"
+    # JS meta rendering path must use result fields
+    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", html)
+    assert meta_path, "speech-bubble-meta JS rendering path not found"
+    meta_section = meta_path.group(0)
+    assert "food_debit" in meta_section, "meta rendering missing food_debit check"
+    assert "provider_status" in meta_section, "meta rendering missing provider_status"
+    assert "audio_requires_confirmation" in meta_section, "meta rendering missing audio_requires_confirmation"
+
+
+def eval_voice_cost_confirmation_http_metadata():
+    """/pet/voice-preview response includes all consent/cost boundary metadata fields."""
+    _skip_if_no_voice_consent()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            status, body = _http_request("POST", port, "/pet/voice-preview", {
+                "pet_id": pet_id, "text": "Hello!",
+            })
+            assert status == 200, f"preview failed: {status}, {body}"
+            # Required metadata fields
+            assert body.get("requires_user_confirmation") is True, f"missing requires_user_confirmation: {body}"
+            assert body.get("confirmation_kind") == "text_fallback_voice_preview", f"wrong confirmation_kind: {body}"
+            assert body.get("audio_requires_confirmation") is True, f"missing audio_requires_confirmation: {body}"
+            assert body.get("provider_status") == "not_configured_text_fallback", f"wrong provider_status: {body}"
+            assert body.get("food_debit") is False, f"wrong food_debit: {body}"
+            assert body.get("has_audio") is False, f"wrong has_audio: {body}"
+            assert body.get("no_network_call") is True, f"wrong no_network_call: {body}"
+            assert body.get("no_recording") is True, f"wrong no_recording: {body}"
+            assert "cost_tokens" in body, f"missing cost_tokens: {body}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_voice_consent_no_recording_or_marketplace_copy():
+    """Consent boundary UI does not imply recording, microphone, marketplace, or purchase pressure."""
+    _skip_if_no_voice_consent()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "listening in background",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in consent UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in consent UI"
 
 
 def eval_cli_multiline_input():

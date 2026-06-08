@@ -148,4 +148,9 @@ class TextFallbackTTSAdapter:
             "no_audio_reason": "text fallback only — no TTS provider configured",
             "no_network_call": True,
             "no_recording": True,
+            "requires_user_confirmation": True,
+            "confirmation_kind": "text_fallback_voice_preview",
+            "audio_requires_confirmation": True,
+            "provider_status": "not_configured_text_fallback",
+            "food_debit": False,
         }

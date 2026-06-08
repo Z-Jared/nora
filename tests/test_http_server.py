@@ -2369,6 +2369,12 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertIn("voice_profile", body)
         self.assertIn("mood_context", body)
         self.assertIn("cost_tokens", body)
+        # Consent/cost/provider metadata
+        self.assertTrue(body["requires_user_confirmation"])
+        self.assertEqual(body["confirmation_kind"], "text_fallback_voice_preview")
+        self.assertTrue(body["audio_requires_confirmation"])
+        self.assertEqual(body["provider_status"], "not_configured_text_fallback")
+        self.assertFalse(body["food_debit"])
 
     def test_voice_preview_cost_deterministic(self):
         self.pet_store.create_pet(name="Mochi")

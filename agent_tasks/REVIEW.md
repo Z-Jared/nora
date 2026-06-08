@@ -1,68 +1,82 @@
-# TASK-173A/173B Review — Speech Bubble Text Fallback Surface
+# TASK-174A/174B Review — Voice Consent and Cost Confirmation Boundary
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-173A adds a visible speech bubble to Pet Room that calls `/pet/voice-preview` for text-only fallback preview. TASK-173B adds 4 deterministic evals with PM-strengthened assertions. All review criteria satisfied.
+TASK-174A adds consent checkbox and cost/provider metadata to the voice preview flow. TASK-174B adds 5 deterministic evals locking the consent boundary. All review criteria satisfied.
 
 ## Review Findings
 
-### 1. Text-Only, No Real TTS/Audio/Microphone/Network
+### 1. Voice Preview Metadata — Text-Only, Read-Only
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Calls only `/pet/voice-preview` | ✅ | JS fetch at line ~860: `fetch('/pet/voice-preview', {...})` |
-| No TTS provider code | ✅ | Only imports from `mini_agent.tts.TextFallbackTTSAdapter` (text fallback) |
-| No audio playback | ✅ | No AudioContext, media elements, or audio URL handling |
-| No microphone | ✅ | No getUserMedia, MediaRecorder, or mic access |
-| No food debit | ✅ | Preview endpoint is read-only (verified in TASK-172A review) |
-| No activity/memory mutation | ✅ | Endpoint only reads pet state, no write calls |
+| Text-only, no real TTS | ✅ | `TextFallbackTTSAdapter.preview()` returns `has_audio: False`, `source: "text_fallback"` |
+| No food debit | ✅ | `food_debit: False` in response metadata |
+| No provider/network | ✅ | `provider_status: "not_configured_text_fallback"`, `no_network_call: True` |
+| No recording | ✅ | `no_recording: True` |
+| Requires confirmation | ✅ | `requires_user_confirmation: True`, `confirmation_kind: "text_fallback_voice_preview"` |
+| Audio requires confirmation | ✅ | `audio_requires_confirmation: True` |
 
-### 2. Safe DOM Text APIs
+All 5 new metadata fields are safe booleans/strings. No raw data exposed.
 
-| Element | API Used | Status |
-|---------|----------|--------|
-| `speech-bubble-text` | `textContent` | ✅ Line ~870: `textEl.textContent = result.text \|\| ''` |
-| `speech-bubble-meta` | `innerHTML` + `escapeHtml` | ✅ Line ~878: `escapeHtml(t)` for each tag |
-| `speech-bubble-error` | `textContent` | ✅ Line ~868: `errorEl.textContent = result.error` |
+### 2. Consent Checkbox Prevents Fetch
 
-`eval_speech_bubble_escapes_preview_text` locks this with regex-based fail-closed assertions.
+**HTML structure** (index.html):
+- `voice-consent-panel` with boundary text, cost/provider meta, checkbox
+- Checkbox label: "I understand this is a text-only preview with no real audio"
 
-### 3. Bounded Errors, No Secret/Over-Limit Echo
+**JS guard** (speech-preview-btn onclick):
+```javascript
+var consent = document.getElementById('voice-consent-checkbox');
+if(!consent.checked){
+  errorEl.textContent = 'Please confirm the consent boundary first.';
+  return;  // blocks fetch
+}
+```
 
-| Error Case | Response | Echoes Raw? |
-|------------|----------|-------------|
-| Empty text | `"Enter text to preview."` | No ✅ |
-| Over 500 chars | `"Text too long (max 500)."` | No ✅ |
-| API error | `result.error` (server-side bounded) | No ✅ |
-| Catch/unknown | `"Preview failed."` | No ✅ |
+- ✅ `voice-consent-checkbox` checked before fetch
+- ✅ `.checked` property used (fail-closed)
+- ✅ Return before fetch if unchecked
+- ✅ Bounded error message with consent semantics
 
-Input is checked client-side (`text.length > 500`) and server-side (`VOICE_PREVIEW_TEXT_MAX_LEN`). Both reject without echoing.
+### 3. Dynamic Text Rendering Escaped
+
+| Element | API | Status |
+|---------|-----|--------|
+| `speech-bubble-text` | `textContent` | ✅ |
+| `speech-bubble-meta` | `innerHTML` + `escapeHtml` | ✅ |
+| `speech-bubble-error` | `textContent` | ✅ |
+| Consent boundary text | Static HTML | ✅ |
 
 ### 4. Eval Coverage Strength
 
 | Eval | What it locks |
 |------|---------------|
-| `speech_bubble_markers_present` | All 8 required DOM markers: area, bubble, text, meta, input, btn, error, `/pet/voice-preview` |
-| `voice_preview_ui_cost_and_no_audio_copy` | All 4 metadata categories: cost indicator, no-audio/text-only, no-network/provider, no-recording |
-| `speech_bubble_escapes_preview_text` | Fail-closed: textContent for text, escapeHtml for meta innerHTML, pet_id+text in request |
-| `speech_bubble_no_recording_or_marketplace_copy` | No voice clone/recording/background listening/marketplace/promotional copy |
+| `voice_consent_markers_present` | All 6 required markers: panel, checkbox, boundary, cost, provider, `/pet/voice-preview` |
+| `voice_consent_unchecked_no_fetch` | Handler reads checkbox, checks `.checked`, has return before fetch, consent/confirm semantics |
+| `voice_cost_confirmation_metadata` | Consent panel contains cost, text-only, no-network, no-recording, no-debit; JS uses food_debit, provider_status, audio_requires_confirmation |
+| `voice_cost_confirmation_http_metadata` | `/pet/voice-preview` response includes all 8 required fields: requires_user_confirmation, confirmation_kind, audio_requires_confirmation, provider_status, food_debit, has_audio, no_network_call, no_recording, cost_tokens |
+| `voice_consent_no_recording_or_marketplace_copy` | No voice clone/recording/background listening/marketplace/promotional copy |
 
-All evals use `_skip_if_no_speech_bubble()` guard — skip when TASK-173A absent, pass when present. PM strengthened all assertions from soft checks to fail-closed requirements.
+Evals are substantive — they check DOM structure, JS control flow, HTTP response fields, and copy safety. Not just file-existence.
 
 ### 5. Scope Compliance
 
-- ✅ No PWA, desktop, 3D, billing, marketplace, or voice provider code
-- ✅ Only adds speech bubble UI and 4 eval cases
-- ✅ Uses existing `/pet/voice-preview` endpoint (TASK-172A)
-- ✅ Forbidden scan: only negative safety assertions in evals
+- ✅ No real TTS provider integration
+- ✅ No audio playback, microphone, or recording
+- ✅ No billing, marketplace, or payment
+- ✅ No PWA, desktop, or 3D work
+- ✅ No Claude C/D worker setup
+
+### 6. B_DONE Report Note
+
+Claude B's B_DONE says "4 evals" but the diff adds 5 (including `voice_cost_confirmation_http_metadata`). Code and PM verification (691 passed) are authoritative. Not blocking.
 
 ## Verification
 
-```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 281 tests OK
-python3 evals/run_evals.py → 686 passed, 0 failed, 0 skipped
-git diff --check → clean
-rg forbidden phrases → only negative safety assertions
-```
+- 284 unit tests OK
+- 691 evals passed, 0 failed, 0 skipped
+- git diff --check: clean
+- Forbidden-copy scan: only negative safety assertions and tts.py docstrings

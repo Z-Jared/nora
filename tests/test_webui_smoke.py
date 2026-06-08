@@ -1460,7 +1460,7 @@ result.hasClass = document.getElementById('speech-bubble').classList.contains('v
         self.assertFalse(d['hasClass'])
 
     def test_speech_preview_calls_endpoint(self):
-        """Preview button must call /pet/voice-preview with pet_id and text."""
+        """Preview button must call /pet/voice-preview with pet_id and text after consent."""
         result = _run_node(setup_js="""
 var _lastFetch = null;
 _fetchHandler = function(url, opts) {
@@ -1468,11 +1468,14 @@ _fetchHandler = function(url, opts) {
   return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
     text:'Hello!', has_audio:false, source:'text_fallback', cost_tokens:0,
     voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
-    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true
+    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true,
+    requires_user_confirmation:true, confirmation_kind:'text_fallback_voice_preview',
+    audio_requires_confirmation:true, provider_status:'not_configured_text_fallback', food_debit:false
   })});
 };
 """, test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
+document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'Hello!';
 var btn = document.getElementById('speech-preview-btn');
 if(btn.onclick) btn.onclick();
@@ -1492,17 +1495,20 @@ result.bubbleText = document.getElementById('speech-bubble-text').textContent;
         self.assertEqual(d['bubbleText'], 'Hello!')
 
     def test_speech_preview_shows_meta_tags(self):
-        """Preview must display cost, no-audio, no-network, no-recording tags."""
+        """Preview must display cost, no-audio, no-network, no-recording, no-food-debit tags."""
         result = _run_node(setup_js="""
 _fetchHandler = function(url, opts) {
   return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
     text:'hi', has_audio:false, source:'text_fallback', cost_tokens:2,
     voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
-    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true
+    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true,
+    requires_user_confirmation:true, confirmation_kind:'text_fallback_voice_preview',
+    audio_requires_confirmation:true, provider_status:'not_configured_text_fallback', food_debit:false
   })});
 };
 """, test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
+document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'hi';
 var btn = document.getElementById('speech-preview-btn');
 if(btn.onclick) btn.onclick();
@@ -1515,6 +1521,9 @@ result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
         self.assertIn('audio: no', d['metaHtml'])
         self.assertIn('no network', d['metaHtml'])
         self.assertIn('no recording', d['metaHtml'])
+        self.assertIn('no food debit', d['metaHtml'])
+        self.assertIn('provider:', d['metaHtml'])
+        self.assertIn('audio requires confirmation', d['metaHtml'])
 
     def test_speech_preview_empty_shows_error(self):
         """Empty input must show error, not call endpoint."""
@@ -1524,6 +1533,7 @@ _fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolv
 """, test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
 _fetchCalled = false;
+document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = '';
 var btn = document.getElementById('speech-preview-btn');
 if(btn.onclick) btn.onclick();
@@ -1544,6 +1554,7 @@ _fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolv
 """, test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
 _fetchCalled = false;
+document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'x'.repeat(501);
 var btn = document.getElementById('speech-preview-btn');
 if(btn.onclick) btn.onclick();
@@ -1573,3 +1584,57 @@ result.fetchCalled = _fetchCalled;
 """)
         d = result
         self.assertFalse(d['fetchCalled'])
+
+    def test_voice_consent_panel_elements_exist(self):
+        """Consent panel must have checkbox, boundary, cost, provider markers."""
+        result = _run_node(test_body="""
+result = {};
+result.panel = !!document.getElementById('voice-consent-panel');
+result.checkbox = !!document.getElementById('voice-consent-checkbox');
+result.boundary = !!document.getElementById('voice-consent-boundary');
+result.cost = !!document.getElementById('voice-consent-cost');
+result.provider = !!document.getElementById('voice-consent-provider');
+""")
+        d = result
+        for key in ['panel', 'checkbox', 'boundary', 'cost', 'provider']:
+            self.assertTrue(d[key], f'Missing consent element: {key}')
+
+    def test_voice_consent_unchecked_blocks_preview(self):
+        """Preview must not call endpoint if consent checkbox is unchecked."""
+        result = _run_node(setup_js="""
+var _fetchCalls = [];
+_fetchHandler = function(url, opts) { _fetchCalls.push(url); return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({text:'hi',has_audio:false,source:'text_fallback',cost_tokens:0})}); };
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+await new Promise(function(r){setTimeout(r,200)});
+_fetchCalls = [];
+document.getElementById('voice-consent-checkbox').checked = false;
+document.getElementById('speech-preview-input').value = 'hello';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.voicePreviewCalled = _fetchCalls.indexOf('/pet/voice-preview') >= 0;
+result.error = document.getElementById('speech-bubble-error').textContent;
+""")
+        d = result
+        self.assertFalse(d['voicePreviewCalled'])
+        self.assertIn('consent', d['error'].lower())
+
+    def test_voice_consent_checked_allows_preview(self):
+        """Preview must call endpoint if consent checkbox is checked."""
+        result = _run_node(setup_js="""
+var _fetchCalled = false;
+_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({text:'hi',has_audio:false,source:'text_fallback',cost_tokens:0,voice_profile:{},mood_context:{},no_audio_reason:'text fallback only',no_network_call:true,no_recording:true,requires_user_confirmation:true,confirmation_kind:'text_fallback_voice_preview',audio_requires_confirmation:true,provider_status:'not_configured_text_fallback',food_debit:false})}); };
+""", test_body="""
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+document.getElementById('voice-consent-checkbox').checked = true;
+document.getElementById('speech-preview-input').value = 'hello';
+var btn = document.getElementById('speech-preview-btn');
+if(btn.onclick) btn.onclick();
+await new Promise(function(r){setTimeout(r,200)});
+result = {};
+result.fetchCalled = _fetchCalled;
+""")
+        d = result
+        self.assertTrue(d['fetchCalled'])
