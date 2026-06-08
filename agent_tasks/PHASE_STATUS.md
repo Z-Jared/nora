@@ -56,13 +56,14 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None assigned after TASK-171 integration.
+- TASK-172A: TTS adapter protocol with text fallback.
+- TASK-172B: TTS text fallback deterministic eval and safety coverage.
 
 ## Next
 
-1. Publish the next Phase 2 small tasks from `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`, likely TTS adapter boundary/text fallback plus deterministic consent/cost coverage.
-2. Continue A/B only unless Web/PWA presence or TTS adapter work becomes independent enough to avoid core-file conflicts.
-3. Reassess Claude C/D only when there are 3+ low-conflict workstreams with separate task/DONE files and clean synchronized worktrees.
+1. Wait for Claude A/B completion reports for TASK-172A/B.
+2. PM combines implementation plus eval coverage, runs targeted tests, `python3 evals/run_evals.py`, and `git diff --check`.
+3. Send approved candidate to reviewer before integration.
 
 ## Phase 1 Exit Criteria
 

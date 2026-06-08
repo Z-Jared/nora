@@ -1,10 +1,10 @@
-# TASK-171A: Voice Profile v1 contract implementation
+# TASK-172A: TTS adapter protocol with text fallback
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Phase 1 is complete and Phase 2 is ready to start. Phase 2 starts with A/B only; do not open or assume Claude C/D. Read first:
+Phase 2 is in progress. Voice Profile v1 is integrated. Phase 2 still uses A/B only; do not open or assume Claude C/D because current voice/presence work still shares core files. Read first:
 
 - `AGENTS.md`
 - `docs/knowledge/PROJECT_WAKEUP.md`
@@ -14,84 +14,76 @@ Phase 1 is complete and Phase 2 is ready to start. Phase 2 starts with A/B only;
 - `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
-- `mini_agent/pets.py`
 - `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
-- `tests/test_pets.py`
 - `tests/test_http_server.py`
+- `tests/test_webui_smoke.py`
 
 ## Goal
 
-Implement the Voice Profile v1 data contract for Nora pet identity.
+Implement the Phase 2 TTS adapter boundary as a deterministic text-fallback surface. Nora must expose a safe preview path for future speech without adding real TTS, audio playback, microphone access, provider calls, or hidden costs.
 
-The contract should allow and normalize bounded local profile fields:
+Suggested implementation shape:
 
-- `voice_id`
-- `speed`
-- `tone`
-- `pitch`
-- `expression_hints`
-- `speech_style_override`
-
-The behavior must apply to:
-
-- `PetStore.create_pet()`
-- `PetStore.update_identity()`
-- `POST /pet/create`
-- `POST /pet/update-identity`
-- Pet Room Identity Editor if it already exposes `voice_profile`
+- Add `mini_agent/tts.py` with bounded `TTSResult`, `TextFallbackTTSAdapter`, and deterministic cost/preview helpers.
+- Add a local HTTP preview endpoint such as `POST /pet/voice-preview` that returns escaped/bounded text fallback metadata for a pet and input text.
+- Include the pet's normalized `voice_profile` and state-derived mood context in the preview response when safe.
+- Return explicit fields showing no audio was generated, no provider/network call was made, and the fallback cost is deterministic/transparent.
+- Add docs entry for the endpoint if added.
 
 ## Scope
 
 Allowed files:
 
-- `mini_agent/pets.py`
+- `mini_agent/tts.py`
 - `mini_agent/http_server.py`
 - `mini_agent/static/index.html`
-- `tests/test_pets.py`
 - `tests/test_http_server.py`
 - `tests/test_webui_smoke.py`
 - `agent_tasks/A_DONE.md`
 
 ## Required Behavior
 
-- Store Voice Profile v1 as local preset/metadata only, not as audio, recording, or a real-person clone reference.
-- Preserve existing pet state, food balance, activity, and relationship memories when updating voice profile.
-- Reject non-dict `voice_profile`.
-- Reject secret-like values in nested fields.
-- Reject or strip unsafe fields such as audio samples, speaker embeddings, real-person clone hints, raw provider credentials, or overly long values.
-- Keep output bounded and deterministic.
-- Keep backward compatibility for existing profiles that only contain `voice_id`, `speed`, or `tone`.
+- Text fallback is always available locally when no TTS provider is configured.
+- No audio bytes, audio URLs, recording, microphone, or provider payloads are generated or stored.
+- Preview text must be bounded and reject secret-like content.
+- Cost fields must be deterministic and visible. If fallback costs zero local compute food, say so explicitly and separately report the existing future voice action estimate where useful.
+- Endpoint must be read-only: no food balance debit, no state mutation, no relationship memory mutation, no activity spam.
+- Response must not echo raw secret-like text or unsupported provider names.
+- HTTP errors should be bounded and stable.
 
 ## Non-Goals
 
-- Do not implement TTS, speech recognition, microphone access, audio playback, vendor adapters, PWA, desktop floating pet, 3D/VRM, billing, marketplace, account sync, or cloud sync.
+- Do not implement real TTS, speech recognition, microphone access, audio playback, vendor adapters, PWA, desktop floating pet, 3D/VRM, billing, marketplace, account sync, or cloud sync.
+- Do not debit compute food or create real audio.
+- Do not add new Claude C/D worker files.
 - Do not modify `evals/run_evals.py`; Claude B owns eval coverage.
-- Do not claim Phase 2 voice features are shipped.
+- Do not claim real voice features are shipped.
 
 ## Safety Boundaries
 
 - No voice cloning by default.
 - No recording by default.
 - No hidden background listening.
-- No purchase pressure, subscription pressure, or marketplace drift.
-- No API keys, provider secrets, raw audio, speaker embeddings, or real-person clone hints in stored identity or UI.
+- No hidden network calls or provider execution.
+- No purchase pressure, subscription pressure, hidden cost, or marketplace drift.
+- No API keys, provider secrets, raw audio, speaker embeddings, real-person clone hints, or secret-like input in outputs.
 
 ## Verification
 
 Run:
 
 ```bash
-python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke
+python3 -m unittest tests.test_http_server tests.test_webui_smoke
 git diff --check
-rg -n "voice clone|clone voice|record by default|background listening|checkout now|subscribe now|marketplace|real payment" mini_agent/pets.py mini_agent/http_server.py mini_agent/static/index.html tests/test_pets.py tests/test_http_server.py tests/test_webui_smoke.py
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes" mini_agent/tts.py mini_agent/http_server.py mini_agent/static/index.html tests/test_http_server.py tests/test_webui_smoke.py
 ```
 
 The `rg` command may find negative test/safety assertions only; explain any hits in `A_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-171A` and include:
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-172A` and include:
 
 - Summary of implementation changes
 - Public contract changes

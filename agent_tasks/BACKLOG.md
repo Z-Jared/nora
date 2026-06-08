@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-172A: TTS adapter protocol with text fallback
+- 架构层: Voice/Expression System / Token Food Economy / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-171A、TASK-171B 完成并集成。
+- 目标: 实现 Phase 2 TTS adapter boundary 的 text fallback 版本，让 Nora 能安全预览未来语音输出：无真实音频、无 provider call、无麦克风、无隐藏成本。
+- 非目标: 不实现真实 TTS、录音、语音识别、音频播放、vendor adapter、PWA、桌面浮窗、3D/VRM、billing、marketplace、云同步或新 Claude C/D worker。
+- 安全边界: no voice cloning、no recording by default、no hidden background listening、no network/provider execution、no secret echo、no food debit unless explicit future task adds consent gate。
+- 持久证据: `mini_agent/tts.py` adapter/result contract；HTTP preview response 暴露 text fallback、cost/no-audio/no-provider metadata；endpoint read-only 不改变 food/state/memory/activity。
+- 验证: `python3 -m unittest tests.test_http_server tests.test_webui_smoke`; `git diff --check`; targeted forbidden-copy scan。
+- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` TTS Adapter Boundary、Cost transparency checks；`mini_agent/http_server.py`; `mini_agent/static/index.html`.
+
+### TASK-172B: TTS text fallback deterministic eval and safety coverage
+- 架构层: Eval/Review System / Voice/Expression System / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-171A、TASK-171B 完成并集成；与 TASK-172A 并行，但不得改实现文件。
+- 目标: 为 TTS adapter boundary/text fallback 增加 deterministic eval 和安全覆盖，锁住 no-provider/no-audio、cost transparency、secret rejection、read-only mutation boundary 和 no recording/background/marketplace copy。
+- 非目标: 不实现 TTS runtime，不修改 `mini_agent/tts.py`、`mini_agent/http_server.py`、`mini_agent/static/index.html`、`mini_agent/pets.py`，不增加真实 TTS、录音、PWA、桌面浮窗、支付或 marketplace。
+- 安全边界: eval 必须阻断 promotional voice cloning、recording by default、always/background listening、hidden cost、purchase pressure、marketplace drift；不得通过弱断言只检查文件存在。
+- 持久证据: 新增 eval case 名称包含 `tts` 或 `voice_cost`; eval 在 TASK-172A 合并后 active/pass，不能长期 skip。
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_http_server tests.test_webui_smoke`; `git diff --check`; targeted forbidden-copy scan。
+- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Deterministic Eval And Test Plan；`evals/run_evals.py`; `tests/test_http_server.py`; `tests/test_webui_smoke.py`.
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
