@@ -232,6 +232,11 @@ def main() -> int:
         EvalCase("voice_cost_confirmation_metadata", eval_voice_cost_confirmation_metadata),
         EvalCase("voice_cost_confirmation_http_metadata", eval_voice_cost_confirmation_http_metadata),
         EvalCase("voice_consent_no_recording_or_marketplace_copy", eval_voice_consent_no_recording_or_marketplace_copy),
+        # TASK-175B: Expression state eval coverage
+        EvalCase("pet_expression_markers_present", eval_pet_expression_markers_present),
+        EvalCase("expression_state_mapping_rules", eval_expression_state_mapping_rules),
+        EvalCase("expression_state_read_only_no_fetch", eval_expression_state_read_only_no_fetch),
+        EvalCase("expression_state_no_voice_or_surveillance_copy", eval_expression_state_no_voice_or_surveillance_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3801,6 +3806,105 @@ def eval_voice_consent_no_recording_or_marketplace_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in consent UI"
+
+
+# --- TASK-175B: Expression state eval coverage ---
+
+
+def _skip_if_no_expression():
+    """Skip if TASK-175A expression state mapping is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "pet-expression" not in html and "expression-state" not in html and "expr-" not in html:
+            raise AttributeError("no expression markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-175A not integrated: expression state mapping not available")
+
+
+def eval_pet_expression_markers_present():
+    """Pet Room exposes all required expression DOM markers/classes."""
+    _skip_if_no_expression()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "pet-expression-state", "pet-expression-icon",
+        "pet-expression-label", "pet-expression-detail",
+        "data-expression",
+        "expression-happy", "expression-sleepy", "expression-hungry",
+        "expression-low-energy", "expression-calm", "expression-focused",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required expression markers: {missing}"
+
+
+def eval_expression_state_mapping_rules():
+    """JS mapping derives expression from mood, energy, and hunger with safe fallback."""
+    _skip_if_no_expression()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find expressionFromState function
+    expr_fn = re.search(r'function\s+expressionfromstate\s*\([^)]*\)\s*\{([\s\S]{0,2000})\}', html)
+    assert expr_fn, "expressionFromState function not found"
+    fn_body = expr_fn.group(1)
+    # Must reference mood, energy, hunger
+    assert "mood" in fn_body, "expression mapping missing mood reference"
+    assert "energy" in fn_body, "expression mapping missing energy reference"
+    assert "hunger" in fn_body, "expression mapping missing hunger reference"
+    # Must have fallback for missing/malformed state (ternary default or final return)
+    has_fallback = (": 50" in fn_body or ": 60" in fn_body or "default" in fn_body or
+                    "calm" in fn_body or "else" in fn_body)
+    assert has_fallback, "expression mapping missing fallback for missing/malformed state"
+
+
+def eval_expression_state_read_only_no_fetch():
+    """expressionFromState and applyExpression are CSS/DOM-only and read-only."""
+    _skip_if_no_expression()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    forbidden = [
+        "fetch(", "food_debit", "add-food", "/pet/", "voice-preview",
+        "relationship-memory", "activity",
+        "microphone", "camera", "navigator.media", "navigator.geolocation",
+        "getusermedia", "screencapture",
+    ]
+    # Check expressionFromState function body (ends at next function or closing brace at column 0)
+    expr_fn = re.search(r'function\s+expressionfromstate\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert expr_fn, "expressionFromState function not found"
+    expr_body = expr_fn.group(1)
+    for pattern in forbidden:
+        assert pattern not in expr_body, f"expressionFromState contains forbidden '{pattern}'"
+    # Check applyExpression function body
+    apply_fn = re.search(r'function\s+applyexpression\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert apply_fn, "applyExpression function not found"
+    apply_body = apply_fn.group(1)
+    for pattern in forbidden:
+        assert pattern not in apply_body, f"applyExpression contains forbidden '{pattern}'"
+
+
+def eval_expression_state_no_voice_or_surveillance_copy():
+    """UI copy does not imply voice cloning, recording, microphone, marketplace, or 3D/VRM drift."""
+    _skip_if_no_expression()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in expression UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in expression UI"
 
 
 def eval_cli_multiline_input():

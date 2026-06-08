@@ -215,6 +215,29 @@ button{border:0;cursor:pointer}
 .robot-arm.right{right:-12px}
 @keyframes blink{0%,90%,100%{opacity:1}95%{opacity:.3}}
 @keyframes pulse-core{0%,100%{box-shadow:0 0 10px rgba(79,195,247,.4)}50%{box-shadow:0 0 18px rgba(79,195,247,.7)}}
+/* Expression state CSS classes */
+.expression-happy .robot-eye{background:#81c784;box-shadow:0 0 10px rgba(129,199,132,.6)}
+.expression-happy .robot-core{background:radial-gradient(circle,#81c784,#4caf50);box-shadow:0 0 14px rgba(76,175,80,.5)}
+.expression-happy .robot-mouth{height:10px;border-radius:0 0 10px 10px;background:#546e7a}
+.expression-sleepy .robot-eye{height:8px;border-radius:8px 8px 0 0;top:24px;animation:none}
+.expression-sleepy .robot-core{animation-duration:4s;opacity:.6}
+.expression-sleepy .robot-mouth{height:4px;border-radius:4px}
+.expression-sleepy .robot-antenna::after{opacity:.4}
+.expression-hungry .robot-eye{background:#ffb74d;box-shadow:0 0 10px rgba(255,183,77,.6)}
+.expression-hungry .robot-core{background:radial-gradient(circle,#ffb74d,#ff9800);box-shadow:0 0 14px rgba(255,152,0,.4)}
+.expression-hungry .robot-mouth{height:6px;border-radius:0 0 6px 6px;background:#e65100}
+.expression-low-energy .robot-eye{opacity:.5;animation:none}
+.expression-low-energy .robot-core{animation-duration:5s;opacity:.4}
+.expression-low-energy .robot-arm{opacity:.4}
+.expression-calm .robot-eye{background:#90caf9;box-shadow:0 0 8px rgba(144,202,249,.5)}
+.expression-calm .robot-core{background:radial-gradient(circle,#90caf9,#42a5f5);animation-duration:3s}
+.expression-focused .robot-eye{width:18px;height:14px;background:#7c4dff;box-shadow:0 0 12px rgba(124,77,255,.6)}
+.expression-focused .robot-core{background:radial-gradient(circle,#b388ff,#7c4dff);box-shadow:0 0 14px rgba(124,77,255,.5)}
+.expression-focused .robot-antenna::after{background:#b388ff;box-shadow:0 0 10px rgba(179,136,255,.6)}
+.pet-expression-state{font-size:11px;color:var(--muted);margin-top:8px;display:flex;align-items:center;gap:6px}
+.pet-expression-state .expr-icon{font-size:14px}
+.pet-expression-state .expr-label{font-weight:700;color:var(--ink)}
+.pet-expression-state .expr-detail{font-size:10px;color:var(--muted)}
 .pet-identity h2{font-size:22px;font-weight:800;margin-bottom:4px}
 .pet-identity .species{font-size:13px;color:var(--muted);margin-bottom:2px}
 .pet-identity .personality{font-size:12px;color:var(--accent);font-weight:600}
@@ -439,6 +462,11 @@ button{border:0;cursor:pointer}
               <div class="personality" id="pet-personality">—</div>
               <div class="pet-mood-summary" id="pet-mood-summary"></div>
               <div class="pet-identity-details" id="pet-identity-details"></div>
+              <div class="pet-expression-state" id="pet-expression-state">
+                <span class="expr-icon" id="pet-expression-icon"></span>
+                <span class="expr-label" id="pet-expression-label"></span>
+                <span class="expr-detail" id="pet-expression-detail"></span>
+              </div>
             </div>
           </div>
           <div class="speech-bubble-area" id="speech-bubble-area">
@@ -735,6 +763,39 @@ button{border:0;cursor:pointer}
     if(balanceEl) balanceEl.textContent = 'Balance: ' + st.compute_food_balance + ' tokens';
     loadCostEstimates(pet.pet_id);
     loadTodayDiary(pet.pet_id);
+    applyExpression(st);
+  }
+
+  function expressionFromState(st){
+    var mood = (st && st.mood != null) ? st.mood : 50;
+    var energy = (st && st.energy != null) ? st.energy : 50;
+    var hunger = (st && st.hunger != null) ? st.hunger : 50;
+    // Priority: hungry > sleepy/low-energy > happy > focused > calm
+    if(hunger >= 70) return {key:'hungry', icon:'🔴', label:'Hungry', detail:'Hunger at '+hunger+'/100 — time to feed.'};
+    if(energy <= 20) return {key:'sleepy', icon:'💤', label:'Sleepy', detail:'Energy at '+energy+'/100 — needs rest.'};
+    if(energy <= 40) return {key:'low-energy', icon:'🔋', label:'Low Energy', detail:'Energy at '+energy+'/100.'};
+    if(mood >= 75 && energy >= 60) return {key:'happy', icon:'✨', label:'Happy', detail:'Mood at '+mood+'/100, energy at '+energy+'/100.'};
+    if(mood >= 55 && energy >= 50) return {key:'focused', icon:'🎯', label:'Focused', detail:'Mood at '+mood+'/100, energy at '+energy+'/100.'};
+    return {key:'calm', icon:'🌊', label:'Calm', detail:'Mood at '+mood+'/100, energy at '+energy+'/100.'};
+  }
+
+  function applyExpression(st){
+    var avatarEl = document.getElementById('pet-avatar');
+    var expr = expressionFromState(st);
+    if(!avatarEl || !expr) return;
+    // Remove old expression classes
+    var classes = ['expression-happy','expression-sleepy','expression-hungry','expression-low-energy','expression-calm','expression-focused'];
+    classes.forEach(function(c){ avatarEl.classList.remove(c); });
+    // Apply new expression class
+    avatarEl.classList.add('expression-' + expr.key);
+    avatarEl.setAttribute('data-expression', expr.key);
+    // Update DOM markers
+    var iconEl = document.getElementById('pet-expression-icon');
+    var labelEl = document.getElementById('pet-expression-label');
+    var detailEl = document.getElementById('pet-expression-detail');
+    if(iconEl) iconEl.textContent = expr.icon;
+    if(labelEl) labelEl.textContent = expr.label;
+    if(detailEl) detailEl.textContent = expr.detail;
   }
 
   function getMoodSummary(name, st){

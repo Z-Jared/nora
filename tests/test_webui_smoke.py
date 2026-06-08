@@ -79,7 +79,9 @@ const document = {
         scrollIntoView() {},
         focus() {},
         blur() {},
-        getAttribute() { return null; },
+        _attrs: {},
+        getAttribute(name) { return this._attrs[name] || null; },
+        setAttribute(name, val) { this._attrs[name] = String(val); },
       };
     }
     return _elements[id];
@@ -1638,3 +1640,150 @@ result.fetchCalled = _fetchCalled;
 """)
         d = result
         self.assertTrue(d['fetchCalled'])
+
+    def test_expression_state_dom_markers_exist(self):
+        """Expression state DOM markers must exist in pet room."""
+        result = _run_node(test_body="""
+result = {};
+result.stateEl = !!document.getElementById('pet-expression-state');
+result.iconEl = !!document.getElementById('pet-expression-icon');
+result.labelEl = !!document.getElementById('pet-expression-label');
+result.detailEl = !!document.getElementById('pet-expression-detail');
+result.avatarEl = !!document.getElementById('pet-avatar');
+""")
+        d = result
+        for key in ['stateEl', 'iconEl', 'labelEl', 'detailEl', 'avatarEl']:
+            self.assertTrue(d[key], f'Missing expression element: {key}')
+
+    def test_expression_from_state_hungry(self):
+        """High hunger should map to hungry expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:60, energy:60, hunger:80});
+result = {key: expr.key, icon: expr.icon, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'hungry')
+        self.assertEqual(d['label'], 'Hungry')
+
+    def test_expression_from_state_sleepy(self):
+        """Very low energy should map to sleepy expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:60, energy:10, hunger:30});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'sleepy')
+        self.assertEqual(d['label'], 'Sleepy')
+
+    def test_expression_from_state_low_energy(self):
+        """Low energy should map to low-energy expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:60, energy:30, hunger:30});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'low-energy')
+        self.assertEqual(d['label'], 'Low Energy')
+
+    def test_expression_from_state_happy(self):
+        """High mood and energy should map to happy expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:80, energy:70, hunger:30});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'happy')
+        self.assertEqual(d['label'], 'Happy')
+
+    def test_expression_from_state_focused(self):
+        """Moderate mood and energy should map to focused expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:60, energy:55, hunger:30});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'focused')
+        self.assertEqual(d['label'], 'Focused')
+
+    def test_expression_from_state_calm(self):
+        """Default/low mood should map to calm expression."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({mood:40, energy:50, hunger:30});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'calm')
+        self.assertEqual(d['label'], 'Calm')
+
+    def test_expression_from_state_missing_fields(self):
+        """Missing state fields should default safely."""
+        result = _run_node(test_body="""
+var expr = expressionFromState({});
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['calm', 'focused', 'happy', 'hungry', 'sleepy', 'low-energy'])
+
+    def test_expression_from_state_null_state(self):
+        """Null state should default safely."""
+        result = _run_node(test_body="""
+var expr = expressionFromState(null);
+result = {key: expr.key, label: expr.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['calm', 'focused', 'happy', 'hungry', 'sleepy', 'low-energy'])
+
+    def test_apply_expression_sets_data_attribute(self):
+        """applyExpression should set data-expression on avatar."""
+        result = _run_node(test_body="""
+applyExpression({mood:80, energy:70, hunger:30});
+result = {};
+result.dataExpr = document.getElementById('pet-avatar').getAttribute('data-expression');
+result.hasClass = document.getElementById('pet-avatar').classList.contains('expression-happy');
+""")
+        d = result
+        self.assertEqual(d['dataExpr'], 'happy')
+        self.assertTrue(d['hasClass'])
+
+    def test_apply_expression_updates_dom_markers(self):
+        """applyExpression should update icon, label, detail markers."""
+        result = _run_node(test_body="""
+applyExpression({mood:80, energy:70, hunger:30});
+result = {};
+result.icon = document.getElementById('pet-expression-icon').textContent;
+result.label = document.getElementById('pet-expression-label').textContent;
+result.detail = document.getElementById('pet-expression-detail').textContent;
+""")
+        d = result
+        self.assertEqual(d['icon'], '✨')
+        self.assertEqual(d['label'], 'Happy')
+        self.assertIn('80', d['detail'])  # mood value
+
+    def test_expression_class_cycling(self):
+        """Changing state should swap expression classes correctly."""
+        result = _run_node(test_body="""
+applyExpression({mood:80, energy:70, hunger:30});
+var first = document.getElementById('pet-avatar').getAttribute('data-expression');
+applyExpression({mood:40, energy:10, hunger:30});
+var second = document.getElementById('pet-avatar').getAttribute('data-expression');
+applyExpression({mood:60, energy:60, hunger:80});
+var third = document.getElementById('pet-avatar').getAttribute('data-expression');
+result = {first:first, second:second, third:third};
+""")
+        d = result
+        self.assertEqual(d['first'], 'happy')
+        self.assertEqual(d['second'], 'sleepy')
+        self.assertEqual(d['third'], 'hungry')
+
+    def test_expression_detail_uses_dom_text(self):
+        """Expression detail should use textContent, not innerHTML."""
+        result = _run_node(test_body="""
+applyExpression({mood:80, energy:70, hunger:30});
+result = {};
+result.detailText = document.getElementById('pet-expression-detail').textContent;
+result.labelText = document.getElementById('pet-expression-label').textContent;
+""")
+        d = result
+        # textContent should be populated (plain text, no HTML injection)
+        self.assertIn('Mood at', d['detailText'])
+        self.assertEqual(d['labelText'], 'Happy')

@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 25%
+- Percent: 30%
 - Status: in progress
-- Current focus: CSS-only expression state mapping from mood, energy, hunger, and consent-safe voice preview state.
+- Current focus: Lightweight Pet Room presence signals after CSS-only expression state mapping.
 
 ## Completed This Phase
 
@@ -74,16 +74,23 @@ Last updated: 2026-06-09
   - Dynamic speech text remains rendered with DOM text APIs and generated meta tags use escaping.
   - Deterministic coverage locks consent DOM markers, unchecked no-fetch control flow, HTTP metadata, and no voice-cloning/recording/background-listening/marketplace/payment copy drift.
   - Verification is green: 284 targeted tests OK, 691 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- CSS-only expression state mapping:
+  - Pet Room robot avatar now maps mood, energy, and hunger into deterministic expression states: hungry, sleepy, low-energy, happy, focused, and calm.
+  - Avatar root exposes stable `data-expression` and `expression-*` classes.
+  - Pet Room exposes `pet-expression-state`, `pet-expression-icon`, `pet-expression-label`, and `pet-expression-detail` markers.
+  - Expression updates are CSS/DOM-only and read-only: no provider/network calls, no voice preview call, no food debit, no state/activity/relationship-memory mutation, and no microphone/camera/screen/location access.
+  - Dynamic expression label/detail use DOM text APIs.
+  - Deterministic coverage locks exact markers/classes, mood/energy/hunger mapping fallback, function-body read-only checks, and no voice/surveillance/marketplace/3D scope drift.
+  - Verification is green: 297 targeted tests OK, 695 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-175A: Pet Room CSS-only expression state mapping.
-- TASK-175B: Expression state deterministic eval and safety coverage.
+- None. PM is preparing the next bounded Phase 2 presence task cycle.
 
 ## Next
 
-1. Add CSS-only expression state mapping from mood/energy/hunger without real audio, 3D/VRM, PWA, billing, or marketplace work.
-2. Add deterministic eval and smoke coverage for expression markers, state-to-class mapping, and no voice/presence scope drift.
+1. Add lightweight Pet Room idle/presence signals that remain CSS/DOM-only and deterministic.
+2. Add deterministic eval and smoke coverage for idle/presence markers, read-only behavior, and no voice/native/3D/billing/marketplace drift.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
@@ -135,6 +142,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 25% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, and consent/cost boundary complete
+- Phase 2 Voice & Presence: 30% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, and CSS-only expression mapping complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
