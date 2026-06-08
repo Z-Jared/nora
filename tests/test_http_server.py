@@ -2107,6 +2107,103 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("action must be string", body["error"])
 
+    def test_pet_food_status_feed_sufficient(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=feed")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["action"], "feed")
+        self.assertEqual(body["balance"], 500)
+        self.assertEqual(body["cost"], 100)
+        self.assertTrue(body["can_run"])
+        self.assertEqual(body["shortfall"], 0)
+        self.assertEqual(body["reason_label"], "ok")
+
+    def test_pet_food_status_feed_insufficient(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=feed")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["balance"], 0)
+        self.assertEqual(body["cost"], 100)
+        self.assertFalse(body["can_run"])
+        self.assertEqual(body["shortfall"], 100)
+        self.assertEqual(body["reason_label"], "insufficient_compute_food")
+        self.assertIn("100", body["message"])
+
+    def test_pet_food_status_chat(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=30)
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=chat")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["cost"], 25)
+        self.assertTrue(body["can_run"])
+
+    def test_pet_food_status_voice_insufficient(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=50)
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=voice")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["cost"], 80)
+        self.assertFalse(body["can_run"])
+        self.assertEqual(body["shortfall"], 30)
+
+    def test_pet_food_status_work(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=200)
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=work")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["cost"], 150)
+        self.assertTrue(body["can_run"])
+
+    def test_pet_food_status_default_action_is_feed(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=200)
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["action"], "feed")
+        self.assertEqual(body["cost"], 100)
+
+    def test_pet_food_status_invalid_action(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=invalid")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "unknown action")
+        self.assertIn("valid_actions", body)
+        self.assertEqual(sorted(body["valid_actions"]), ["chat", "feed", "voice", "work"])
+
+    def test_pet_food_status_secret_action_not_echoed(self):
+        self.pet_store.create_pet(name="Mochi")
+        secret = "sk-ant-secret-key-12345"
+        status, body = self._request("GET", f"/pet/food-status?pet_id=pet_1&action={secret}")
+        self.assertEqual(status, 400)
+        resp = str(body)
+        self.assertNotIn(secret, resp)
+        self.assertEqual(body["error"], "unknown action")
+
+    def test_pet_food_status_missing_pet_id(self):
+        status, body = self._request("GET", "/pet/food-status?action=feed")
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_pet_food_status_pet_not_found(self):
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_999&action=feed")
+        self.assertEqual(status, 404)
+
+    def test_pet_food_status_read_only_no_mutation(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=50)
+        # Check insufficient balance
+        status, body = self._request("GET", "/pet/food-status?pet_id=pet_1&action=feed")
+        self.assertFalse(body["can_run"])
+        # Balance must not have changed
+        pet = self.pet_store.get_pet("pet_1")
+        self.assertEqual(pet.state.compute_food_balance, 50)
+
+    def test_pet_food_status_in_docs(self):
+        status, body = self._request("GET", "/docs")
+        self.assertEqual(status, 200)
+        self.assertIn("/pet/food-status", body["paths"])
+
 
 class PetAuthHTTPServerTests(unittest.TestCase):
     """Tests for pet mutation auth when api_token is set."""

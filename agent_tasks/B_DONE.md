@@ -1,46 +1,53 @@
-# TASK-138: Minimal model routing deterministic eval coverage
+# B DONE — TASK-162
 
-**Status:** Complete
+**Status:** Complete — combined check PASSED
 
 ## Summary
 
-Added 21 deterministic offline eval cases for the minimal model routing inspection scaffold (`inspect_model_routing`) in `evals/run_evals.py`.
+Fixed all evals to match TASK-161's actual contract: `/pet/food-status` endpoint with `_handle_pet_food_status` handler. Added deterministic cost assertions. Combined A+B eval passes all 7 token_food evals.
 
-## Changes
+## Fixes Applied
 
-- `evals/run_evals.py`: Added 21 eval functions + `LLMSettings` import
-  - `eval_model_routing_default_openai` — Configured OpenAI-compatible settings select correct provider/model with policy/version and reason labels; no API key leak
-  - `eval_model_routing_anthropic` — Anthropic settings produce safe metadata; no key leak
-  - `eval_model_routing_gemini` — Gemini settings produce safe metadata; no key leak
-  - `eval_model_routing_unsupported_provider` — Unknown provider returns bounded result; no raw provider/model/key leak
-  - `eval_model_routing_missing_api_key` — Missing API key produces disabled route, no crash
-  - `eval_model_routing_task_type_hint` — Task type normalized, deterministic reason label
-  - `eval_model_routing_risk_level_hint` — High-risk hint adds reason label and route type
-  - `eval_model_routing_long_context_hint` — Context tokens >100k produces long_context route
-  - `eval_model_routing_tool_and_review_hints` — Tool/review hints produce correct route types
-  - `eval_model_routing_invalid_context_tokens_bounded` — Negative tokens bounded with warning
-  - `eval_model_routing_no_raw_prompt_leak` — No raw prompt/task content echoed
-  - `eval_model_routing_capabilities_present` — Capabilities dict includes expected fields
-  - `eval_model_routing_registry_tool_permission` — Registered with `local/read` permission
-  - `eval_model_routing_registry_no_mutation` — No mutation of tasks/workers/events
-  - `eval_model_routing_registry_with_settings` — Uses injected settings; no key leak
-  - `eval_model_routing_registry_no_settings` — Without settings returns safe error
-  - `eval_model_routing_registry_with_hints` — Passes hints correctly
-  - `eval_model_routing_provider_factory_compatibility` — Existing provider factory intact
-  - `eval_model_routing_unknown_task_type_defaults` — Unknown task type defaults to "general"
-  - `eval_model_routing_unknown_risk_defaults` — Unknown risk defaults to "low"
-  - `eval_model_routing_fallback_available` — Fallback provider available for supported providers
+1. **Guard**: `_handle_pet_food_status` instead of `_handle_pet_estimate`
+2. **Endpoint**: `/pet/food-status` instead of `/pet/estimate`
+3. **Response shape**: Asserts `balance`, `cost`, `can_run`, `shortfall`, `reason_label`, `message`
+4. **Deterministic costs**: `feed=100`, `chat=25`, `voice=80`, `work=150`
+5. **New eval**: `token_food_deterministic_costs` verifies all 4 known action costs
 
-## Verification
+## Evals (7)
+
+1. **`token_food_estimate_read_only`** — Repeated `/pet/food-status` calls do not mutate balance.
+2. **`token_food_estimate_response_shape`** — Response includes all required fields, cost=100 for feed, can_run=True with sufficient balance.
+3. **`token_food_deterministic_costs`** — Known actions have exact costs: feed=100, chat=25, voice=80, work=150.
+4. **`token_food_insufficient_no_mutation`** — Zero balance: can_run=False, shortfall>0, feed rejected, balance unchanged.
+5. **`token_food_unknown_action_bounded`** — Unknown action bounded (<2000 chars), secret-like input not leaked.
+6. **`token_food_webui_balance_visible`** — Pet Room HTML shows balance markers.
+7. **`token_food_no_manipulative_copy`** — No manipulative food/token purchase copy.
+
+## Verification Results
+
+### Own worktree (ccb/claude-b, no TASK-161)
 
 ```
-python3 evals/run_evals.py → 558 passed, 0 failed
-python3 -m unittest tests.test_model_router tests.test_config tests.test_mini_agent → 178 tests OK
-git diff --check → clean
+python3 evals/run_evals.py           → 629 passed, 22 failed, 7 skipped
+                                      (7 skipped = token_food evals)
+python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke → 276 tests OK
+git diff --check                     → clean
 ```
 
-## Notes
+### Combined check (applied onto Claude A's TASK-161)
 
-- No runtime changes required.
-- No commit or push performed.
-- Worktree was clean before editing.
+```
+python3 evals/run_evals.py           → 636 passed, 22 failed, 0 skipped
+
+All 7 token_food evals PASS:
+  PASS token_food_estimate_read_only
+  PASS token_food_estimate_response_shape
+  PASS token_food_deterministic_costs
+  PASS token_food_insufficient_no_mutation
+  PASS token_food_unknown_action_bounded
+  PASS token_food_webui_balance_visible
+  PASS token_food_no_manipulative_copy
+
+(22 failures = pre-existing prompt_toolkit errors, unrelated)
+```

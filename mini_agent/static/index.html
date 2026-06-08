@@ -242,6 +242,13 @@ button{border:0;cursor:pointer}
 .pet-food-row{display:flex;gap:8px;align-items:center}
 .pet-food-input{height:36px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:0 12px;font-size:13px;width:100px;outline:none}
 .pet-food-balance{font-size:12px;color:var(--muted);margin-top:8px}
+.pet-cost-table{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.pet-cost-item{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px 8px;text-align:center}
+.pet-cost-item .action-name{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:800;margin-bottom:4px}
+.pet-cost-item .cost-value{font-size:16px;font-weight:800}
+.pet-cost-item .cost-status{font-size:10px;margin-top:4px;font-weight:600}
+.pet-cost-item .cost-status.ok{color:#2e7d32}
+.pet-cost-item .cost-status.no{color:#c62828}
 .pet-activity-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
 .pet-activity-list{display:grid;gap:8px;max-height:300px;overflow:auto}
 .pet-event{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:10px 12px;font-size:12px;display:flex;justify-content:space-between;align-items:center}
@@ -397,7 +404,8 @@ button{border:0;cursor:pointer}
           </div>
           <div class="pet-food-section">
             <h3>Compute Food / Token Energy</h3>
-            <div class="food-note">Local demo compute food for testing. Each feed costs 100 tokens.</div>
+            <div class="food-note">Local demo compute food. Transparent cost estimates below.</div>
+            <div class="pet-cost-table" id="pet-cost-table"></div>
             <div class="pet-food-row">
               <input class="pet-food-input" id="pet-food-amount" type="number" value="500" min="1" max="10000">
               <button class="pet-action-btn" id="pet-add-food-btn" type="button">Add Tokens</button>
@@ -594,7 +602,30 @@ button{border:0;cursor:pointer}
     document.getElementById('stat-growth').textContent = st.growth_level;
     document.getElementById('stat-food').textContent = st.compute_food_balance;
     var balanceEl = document.getElementById('pet-food-balance');
-    if(balanceEl) balanceEl.textContent = 'Balance: ' + st.compute_food_balance + ' tokens (feed costs 100)';
+    if(balanceEl) balanceEl.textContent = 'Balance: ' + st.compute_food_balance + ' tokens';
+    loadCostEstimates(pet.pet_id);
+  }
+
+  function loadCostEstimates(petId){
+    var actions = ['feed','chat','voice','work'];
+    Promise.all(actions.map(function(action){
+      return fetch('/pet/food-status?pet_id='+encodeURIComponent(petId)+'&action='+action, {headers:authHeaders()})
+        .then(function(r){ return r.json(); })
+        .catch(function(){ return null; });
+    })).then(function(results){
+      var table = document.getElementById('pet-cost-table');
+      if(!table) return;
+      table.innerHTML = results.map(function(r){
+        if(!r) return '';
+        var statusCls = r.can_run ? 'ok' : 'no';
+        var statusText = r.can_run ? 'ok' : 'need ' + r.shortfall;
+        return '<div class="pet-cost-item">'
+          + '<div class="action-name">' + escapeHtml(r.action) + '</div>'
+          + '<div class="cost-value">' + r.cost + '</div>'
+          + '<div class="cost-status ' + statusCls + '">' + statusText + '</div>'
+          + '</div>';
+      }).join('');
+    });
   }
 
   function setStat(name, val){

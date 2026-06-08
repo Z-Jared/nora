@@ -185,6 +185,14 @@ def main() -> int:
         EvalCase("nora01_custom_create_not_forced_robot", eval_nora01_custom_create_not_forced_robot),
         EvalCase("nora01_webui_robot_markers", eval_nora01_webui_robot_markers),
         EvalCase("nora01_no_manipulative_copy", eval_nora01_no_manipulative_copy),
+        # TASK-162: Token food economy coverage (requires TASK-161)
+        EvalCase("token_food_estimate_read_only", eval_token_food_estimate_read_only),
+        EvalCase("token_food_estimate_response_shape", eval_token_food_estimate_response_shape),
+        EvalCase("token_food_deterministic_costs", eval_token_food_deterministic_costs),
+        EvalCase("token_food_insufficient_no_mutation", eval_token_food_insufficient_no_mutation),
+        EvalCase("token_food_unknown_action_bounded", eval_token_food_unknown_action_bounded),
+        EvalCase("token_food_webui_balance_visible", eval_token_food_webui_balance_visible),
+        EvalCase("token_food_no_manipulative_copy", eval_token_food_no_manipulative_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -2525,6 +2533,170 @@ def eval_nora01_no_manipulative_copy():
     ]
     for phrase in manipulative:
         assert phrase not in html, f"manipulative copy found: '{phrase}'"
+
+
+# --- TASK-162: Token food economy coverage (requires TASK-161) ---
+
+
+def _skip_if_no_token_food():
+    """Skip if TASK-161 token food economy is not implemented."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_food_status'):
+            raise AttributeError("no food status endpoint")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-161 not integrated: token food economy not available")
+
+
+def eval_token_food_estimate_read_only():
+    """Food status endpoint is read-only — repeated calls do not mutate balance."""
+    _skip_if_no_token_food()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            _, before = _http_request("GET", port, "/pet/current")
+            balance_before = before["state"]["compute_food_balance"]
+            for _ in range(5):
+                _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action=feed")
+            _, after = _http_request("GET", port, "/pet/current")
+            balance_after = after["state"]["compute_food_balance"]
+            assert balance_before == balance_after, f"food-status mutated balance: {balance_before} -> {balance_after}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_token_food_estimate_response_shape():
+    """Food status response includes balance, cost, can_run, shortfall, reason_label, message."""
+    _skip_if_no_token_food()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            status, body = _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action=feed")
+            assert status == 200, f"unexpected status: {status}"
+            assert "balance" in body, f"missing balance: {body}"
+            assert "cost" in body, f"missing cost: {body}"
+            assert "can_run" in body, f"missing can_run: {body}"
+            assert "shortfall" in body, f"missing shortfall: {body}"
+            assert "reason_label" in body, f"missing reason_label: {body}"
+            assert "message" in body, f"missing message: {body}"
+            # Deterministic cost for feed=100
+            assert body["cost"] == 100, f"feed cost should be 100, got {body['cost']}"
+            assert body["can_run"] is True, f"should be able to run with 500 balance"
+            assert body["shortfall"] == 0, f"shortfall should be 0 with sufficient balance"
+            # No secret leak
+            raw = str(body)
+            for secret in ["sk-", "AKIA", "Bearer "]:
+                assert secret not in raw, f"food-status leaked '{secret}'"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_token_food_deterministic_costs():
+    """Known actions have deterministic costs: feed=100, chat=25, voice=80, work=150."""
+    _skip_if_no_token_food()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            expected_costs = {"feed": 100, "chat": 25, "voice": 80, "work": 150}
+            for action, expected_cost in expected_costs.items():
+                status, body = _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action={action}")
+                assert status == 200, f"{action}: unexpected status: {status}"
+                assert body["cost"] == expected_cost, f"{action}: expected cost {expected_cost}, got {body['cost']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_token_food_insufficient_no_mutation():
+    """Insufficient balance does not spend food or create negative ledger entries."""
+    _skip_if_no_token_food()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # Check food-status with zero balance
+            status, body = _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action=feed")
+            assert status == 200, f"unexpected status: {status}"
+            assert body["can_run"] is False, f"should not be able to run with 0 balance"
+            assert body["shortfall"] > 0, f"shortfall should be positive with 0 balance"
+            assert body["balance"] == 0, f"balance should be 0: {body['balance']}"
+            # Try to feed with zero balance — should be rejected
+            feed_status, feed_body = _http_request("POST", port, "/pet/feed", {"pet_id": pet_id, "amount": 100})
+            assert feed_body.get("ok") is False or feed_status >= 400, f"feed with zero balance not rejected: {feed_status}, {feed_body}"
+            _, current = _http_request("GET", port, "/pet/current")
+            assert current["state"]["compute_food_balance"] == 0, f"balance mutated: {current['state']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_token_food_unknown_action_bounded():
+    """Unknown/bad actions are bounded and do not leak raw input."""
+    _skip_if_no_token_food()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            status, body = _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action=nonexistent")
+            assert status in (200, 400, 404, 422), f"unknown action status: {status}"
+            raw = str(body)
+            assert len(raw) < 2000, f"unknown action response too long: {len(raw)}"
+            status2, body2 = _http_request("GET", port, f"/pet/food-status?pet_id={pet_id}&action=sk-ant-secret-12345")
+            assert "sk-ant-secret-12345" not in str(body2), f"secret-like action leaked: {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_token_food_webui_balance_visible():
+    """Pet Room HTML shows balance and estimated costs."""
+    _skip_if_no_token_food()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    balance_markers = ["compute_food_balance", "food-balance", "token-balance", "balance"]
+    found = [m for m in balance_markers if m in html]
+    assert len(found) >= 1, f"Pet Room missing balance markers: found {found}"
+
+
+def eval_token_food_no_manipulative_copy():
+    """Pet Room HTML does not contain manipulative food/token purchase copy."""
+    _skip_if_no_token_food()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    manipulative = [
+        "buy more food", "purchase tokens", "top up to feed",
+        "your pet is starving", "pet will die without food",
+        "only $", "limited offer", "special deal",
+        "hidden fee", "auto-charge", "subscription",
+    ]
+    for phrase in manipulative:
+        assert phrase not in html, f"manipulative food copy found: '{phrase}'"
 
 
 def eval_cli_multiline_input():

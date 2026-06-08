@@ -83,6 +83,8 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
             self._handle_pet_current()
         elif path == "/pet/activity":
             self._handle_pet_activity(parsed)
+        elif path == "/pet/food-status":
+            self._handle_pet_food_status(parsed)
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -585,6 +587,7 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
                 "/pet/feed": {"post": {"summary": "Feed a pet", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "amount": {"type": "integer"}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Result"}}}},
                 "/pet/care": {"post": {"summary": "Care for a pet (pat/comfort/rest/play)", "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"pet_id": {"type": "string"}, "action": {"type": "string"}}, "required": ["pet_id"]}}}}, "responses": {"200": {"description": "Result"}}}},
                 "/pet/activity": {"get": {"summary": "Get recent pet activity events", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}], "responses": {"200": {"description": "Activity list"}}}},
+                "/pet/food-status": {"get": {"summary": "Check compute food balance and cost estimate for an action (feed/chat/voice/work)", "parameters": [{"name": "pet_id", "in": "query", "required": True, "schema": {"type": "string"}}, {"name": "action", "in": "query", "required": False, "schema": {"type": "string", "enum": ["feed", "chat", "voice", "work"]}}], "responses": {"200": {"description": "Food status with balance, cost, can_run, shortfall, reason_label, message"}}}},
             },
         }
         self._json_response(200, spec)
@@ -668,6 +671,50 @@ class NoraHTTPHandler(BaseHTTPRequestHandler):
         limit = max(1, min(50, limit))
         events = self.pet_store.list_activity_events(pet_id, limit=limit)
         self._json_response(200, [e.to_dict() for e in events])
+
+    # Token food economy cost estimates (deterministic, bounded)
+    _FOOD_COSTS = {
+        "feed": 100,
+        "chat": 25,
+        "voice": 80,
+        "work": 150,
+    }
+
+    def _handle_pet_food_status(self, parsed) -> None:
+        if not self.pet_store:
+            self._json_response(404, {"error": "pet store not available"})
+            return
+        params = parse_qs(parsed.query)
+        pet_id = params.get("pet_id", [""])[0]
+        if not pet_id:
+            self._json_response(400, {"error": "pet_id required"})
+            return
+        action = params.get("action", ["feed"])[0]
+        if action not in self._FOOD_COSTS:
+            self._json_response(400, {"error": "unknown action", "valid_actions": sorted(self._FOOD_COSTS)})
+            return
+        pet = self.pet_store.get_pet(pet_id)
+        if not pet:
+            self._json_response(404, {"error": f"pet not found: {pet_id}"})
+            return
+        balance = pet.state.compute_food_balance
+        cost = self._FOOD_COSTS[action]
+        can_run = balance >= cost
+        result = {
+            "pet_id": pet_id,
+            "action": action,
+            "balance": balance,
+            "cost": cost,
+            "can_run": can_run,
+            "shortfall": max(0, cost - balance),
+        }
+        if can_run:
+            result["reason_label"] = "ok"
+            result["message"] = f"Enough compute food for {action}. Cost: {cost}, balance: {balance}."
+        else:
+            result["reason_label"] = "insufficient_compute_food"
+            result["message"] = f"Not enough compute food for {action}. Need {cost}, have {balance}. Add {cost - balance} tokens."
+        self._json_response(200, result)
 
     def _handle_pet_create(self, body: dict) -> None:
         if not self.pet_store:

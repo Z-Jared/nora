@@ -1,56 +1,62 @@
-# TASK-159 + TASK-160 CCB Review
+# TASK-161 + TASK-162 CCB Review
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-159 redesigns default pet identity as Nora-01 robot with modular HTML/CSS avatar. TASK-160 adds 5 deterministic evals to lock robot identity, bounded fields, custom identity preservation, UI markers, and no-manipulative-copy.
+TASK-161 adds `/pet/food-status` read-only endpoint for token food economy estimates. TASK-162 adds 7 deterministic evals to lock the contract. All review criteria satisfied.
 
-## 1. Default Pet Identity
+## Review Findings
 
-| Aspect | Before | After | Verified |
-|--------|--------|-------|----------|
-| Name | `Nora` | `Nora-01` | `eval_nora01_default_identity_robot` |
-| Species | `digital_cat` | `robot_pet` | `eval_nora01_default_identity_robot` |
-| Personality | `["curious", "gentle"]` | `["curious", "gentle", "playful"]` | `eval_nora01_default_identity_bounded_fields` |
-| Voice profile | — | `{voice_id, speed, tone}` | `eval_nora01_default_identity_bounded_fields` |
-| Taste profile | — | `{likes, dislikes}` | `eval_nora01_default_identity_bounded_fields` |
-| Skills | — | `["memory", "patrol", "chat"]` | `eval_nora01_default_identity_bounded_fields` |
+### 1. `/pet/food-status` endpoint (TASK-161)
 
-Custom `POST /pet/create` not forced to robot — verified by `eval_nora01_custom_create_not_forced_robot`.
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Read-only | ✅ | GET endpoint, no mutations. `eval_token_food_estimate_read_only` + `test_pet_food_status_read_only_no_mutation` verify. |
+| Deterministic | ✅ | `_FOOD_COSTS` class attribute with fixed values. |
+| Bounded | ✅ | Response: pet_id, action, balance, cost, can_run, shortfall, reason_label, message only. |
+| Unknown action safe | ✅ | Returns `{"error": "unknown action", "valid_actions": [...]}` — no raw input echoed. `test_pet_food_status_secret_action_not_echoed` + `eval_token_food_unknown_action_bounded` verify. |
 
-## 2. Pet Room UI Changes
+### 2. Cost stability
 
-- **Robot avatar**: Modular HTML/CSS with `robot-head`, `robot-eye` (blink animation), `robot-antenna`, `robot-body`, `robot-core` (pulse animation), `robot-arms`. No cat/fox emoji. Verified by `eval_nora01_webui_robot_markers`.
-- **Labels**: "Compute Food" (was "Food"), "Life Log" (was "Activity"), "Add Tokens" (was "Add Food"), "Compute Food / Token Energy" section with "Local demo compute food for testing" note.
-- **Food balance display**: Shows "Balance: X tokens (feed costs 100)".
-- **No manipulative copy**: Verified by `eval_nora01_no_manipulative_copy` — no "buy now", "pet is dying", "forced purchase", etc.
-- **Existing UI preserved**: Chat/task/memory views unaffected (Pet Room is separate toggleable div).
+✅ Fixed costs locked by `eval_token_food_deterministic_costs`:
+- `feed=100`, `chat=25`, `voice=80`, `work=150`
 
-## 3. Eval Quality (TASK-160)
+### 3. Response contract
 
-| Eval | What it locks |
-|------|---------------|
-| `nora01_default_identity_robot` | Name=`Nora-01`, species is robot/electronic, not fox/cat |
-| `nora01_default_identity_bounded_fields` | personality_traits, relationship_role, speech_style, voice_profile, taste_profile, skills all present and bounded |
-| `nora01_custom_create_not_forced_robot` | Custom create returns exact name/species, not forced to robot |
-| `nora01_webui_robot_markers` | HTML contains `robot-head`, `robot-eye`, `robot-body`, `robot-core` in `pet-avatar` section; no 🐱🦊🐈😺🐶🐰 or cat-avatar/fox-avatar |
-| `nora01_no_manipulative_copy` | No manipulative monetization phrases |
+✅ All 6 required fields verified by `eval_token_food_estimate_response_shape`:
+- `balance`, `cost`, `can_run`, `shortfall`, `reason_label`, `message`
+- Insufficient balance: `reason_label="insufficient_compute_food"`, factual message (no emotional manipulation)
 
-All evals use `_skip_if_no_nora01()` for graceful skip when TASK-159 absent. Combined check: 5/5 PASS.
+### 4. Pet Room UI
 
-## 4. Security/Regression
+✅ Transparent:
+- `eval_token_food_webui_balance_visible` verifies balance markers in HTML
+- `eval_token_food_no_manipulative_copy` verifies no manipulative purchase copy
+- "Local demo compute food" context clearly stated
 
-- No secret/API-key leak regressions (existing `pet_http_no_secret_leak` still passes)
-- No negative balance regressions (existing `pet_http_feed_no_negative_balance` still passes)
-- Auth enforcement unchanged (existing `pet_http_auth_guards_mutation` still passes)
-- Activity limit clamping unchanged (existing `pet_http_activity_bounded` still passes)
-- 276 unit tests OK, 645 evals passed (6 failures = pre-existing TTY/CLI baseline, unrelated)
+### 5. Eval quality (TASK-162)
 
-## 5. Integration Recommendation
+✅ 7 evals, all deterministic/offline:
+- `token_food_estimate_read_only` — no mutation
+- `token_food_estimate_response_shape` — contract lock
+- `token_food_deterministic_costs` — all 4 costs locked
+- `token_food_insufficient_no_mutation` — zero balance safety
+- `token_food_unknown_action_bounded` — secret no-leak
+- `token_food_webui_balance_visible` — UI markers
+- `token_food_no_manipulative_copy` — no manipulative copy
 
-**APPROVE** with condition: 6 pre-existing TTY/CLI eval failures should be fixed in a separate task. They are unrelated to TASK-159/160 and exist in the clean HEAD baseline.
+✅ Guard `_skip_if_no_token_food()` properly skips when TASK-161 absent
+✅ Combined check: 7/7 PASS, 658 evals total, 288 unit tests OK
 
-## Findings
+### 6. No regressions
 
-No blocking issues. Implementation is clean, well-tested, and evals are deterministic.
+✅ No auth/no-negative/no-secret regressions
+✅ No out-of-scope changes
+
+## Verification Summary
+
+- Unit tests: 288 OK
+- Evals: 658 passed, 0 failed, 0 skipped
+- git diff --check: clean
+- Combined A+B patch applies cleanly to HEAD 933ec16
