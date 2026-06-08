@@ -23,7 +23,8 @@ Last updated: 2026-06-08
 ## In Progress
 
 - Phase 1 remains focused on turning the pet from a room demo into a usable relationship loop.
-- No active worker task is assigned until the next PM dispatch cycle.
+- TASK-163 is assigned to Claude A.
+- TASK-164 is assigned to Claude B.
 
 ## Next
 
