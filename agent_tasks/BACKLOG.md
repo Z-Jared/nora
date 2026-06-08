@@ -6,37 +6,23 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## Phase 1 Exit Gate
 
-这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169` 已完成；PM 已将 `TASK-170` 拆成 `TASK-170A`/`TASK-170B` 并行计划任务，不能直接进入 Phase 2。
+这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
 
 ## 进行中
 
-### TASK-170A: Phase 2 Voice & Presence product technical plan
-- 架构层: Voice/Expression System / Cross-Device Presence / Multimodal Cognition
-- 优先级: medium
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-167、TASK-168、TASK-169 完成。
-- 目标: 在进入 Phase 2 前产出产品/技术计划，定义 Voice Profile v1、TTS adapter boundary、Web/PWA presence、desktop floating pet path 和 Phase 2 产品实现小任务。
-- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM、支付或 marketplace。
-- 安全边界: voice cloning 默认排除；TTS/voice 需有 consent、cost estimate、secret/no-recording boundary；cross-device presence 不默认同步隐私数据。
-- 持久证据: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` 产品/技术 sections、Phase 2 task candidates。
-- 验证: `git diff --check`；targeted copy scan；文档审查。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Voice and Expression / Cross-Device Presence.
-
-### TASK-170B: Phase 2 safety, eval, and worker-scaling plan
-- 架构层: Safety/Policy / Eval/Review System / Voice/Expression System / Cross-Device Presence
-- 优先级: medium
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-167、TASK-168、TASK-169 完成。
-- 目标: 在进入 Phase 2 前产出 safety/eval/worker-scaling plan，明确 no-cloning-without-consent、no-recording-by-default、成本透明、presence 隐私边界、eval 覆盖和是否自动增开 Claude C/D。
-- 非目标: 不实现语音、TTS、native app、桌面宠物、3D/VRM、支付或 marketplace。
-- 安全边界: 不允许隐藏录音、后台监听、情绪勒索、购买诱导或未声明云同步；新增 worker 必须有清晰文件边界。
-- 持久证据: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` safety/eval/scaling sections、PM approval criteria、worker ownership plan。
-- 验证: `git diff --check`；targeted copy scan；文档审查。
-- 参考: `agent_tasks/PM_LOOP.md` Phase 2 Worker Scaling Protocol；`docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Safety / Voice / Presence.
-
 ## 已完成
+
+### TASK-170A: Phase 2 Voice & Presence product technical plan ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 343 tests OK；`python3 evals/run_evals.py` 672 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted copy scan 仅命中负面边界语句。
+- 内容: 在 `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` 规划 Voice Profile v1 data contract、TTS adapter boundary、Web/PWA presence path、desktop floating pet prerequisites 和 Phase 2 product task candidates；明确不实现 voice/TTS/native/PWA/3D/billing/marketplace。
+
+### TASK-170B: Phase 2 safety, eval, and worker-scaling plan ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 343 tests OK；`python3 evals/run_evals.py` 672 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted copy scan 仅命中负面边界语句。
+- 内容: 在 `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` 规划 no-cloning-without-consent、no-recording-by-default、no-hidden-background-listening、成本透明、presence 隐私边界、deterministic eval/test plan 和 Phase 2 worker scaling；建议 Phase 2 起步继续 A/B，不立即开 C/D。
 
 ### TASK-168: Phase 1.5 Pet Room life-feel polish ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

@@ -1,40 +1,56 @@
-# B DONE — TASK-164
+# B DONE - TASK-170B
 
-**Status:** Complete — combined check PASSED
+Status: Complete
 
 ## Summary
 
-Narrowed `relmem_webui_no_fake_intimacy` to inspect only the relationship memory DOM/JS section instead of the entire HTML. Combined A+B eval passes all 7 relmem evals.
+Created the Phase 2 safety, eval, and worker-scaling sections for `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`.
 
-## Fix Applied
+## Sections Written
 
-`eval_relmem_webui_no_fake_intimacy` now:
-- Checks forbidden global phrases (fake intimacy/guilt/pressure) across full file
-- Finds the relationship memory section via regex (`pet-memory`/`memory-section` DOM + `loadRelationshipMem`/`pet/relationship-memory` JS)
-- Checks for secret leak (`sk-`, `akia*`, `bearer`, `api_key`, `api_token`) only within that section
-- No longer fails on pre-existing global `api_key` in setup guidance
+### Safety Policy for Voice/TTS/Presence
 
-## Verification Results
+- Voice cloning: default off, explicit consent required for any future cloning path, no silent cloning, no real-person prompts.
+- Recording: no recording by default, no hidden background listening, transparent microphone state.
+- Cost: estimate before speak, no surprise charges, voice cost in food-status.
+- Emotional safety: no pressure, no dependency framing, no purchase manipulation.
+- Presence: no always-on surveillance, transparent data flow, local-first default.
 
-### Own worktree (ccb/claude-b, no TASK-163 HTTP)
+### Deterministic Eval Plan
 
+- Voice profile contract evals for no cloning, bounded fields, visible cost estimate, and deterministic cost.
+- No-secret/no-recording/no-cloning copy scans.
+- Web/PWA presence smoke tests for state sync, mic indicator, and no auto-start.
+- Cost transparency checks for voice/TTS food status and insufficient balance handling.
+
+### Worker Scaling Plan
+
+- Recommendation: keep Claude A/B only at Phase 2 start; do not open Claude C/D yet.
+- Reasoning: initial Voice/Profile/Presence work shares core files, so C/D would increase merge conflicts before boundaries stabilize.
+- File boundaries: Claude A owns implementation; Claude B owns evals/tests/safety docs.
+
+### Approval Criteria
+
+- Phase 1 exit gate complete.
+- Safety/eval/scaling plan reviewed and approved.
+- Phase 2 start conditions recorded: cloning off, recording off, passive listening off, cost transparency shipped before voice output is user-visible.
+
+## Verification
+
+```text
+git diff --check
+clean
+
+rg -n "voice clone|clone voice|record by default|background listening|checkout now|subscribe now|marketplace" docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md
+2 hits, both negative boundary statements:
+- "No hidden background listening"
+- "voice cloning" in an eval description checking absence of promotional cloning copy
 ```
-python3 evals/run_evals.py           → 636 passed, 22 failed, 7 skipped
-python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke → 288 tests OK
-git diff --check                     → clean
-```
 
-### Combined check (applied onto Claude A's TASK-163)
+## Coordination Notes
 
-```
-python3 evals/run_evals.py           → 643 passed, 22 failed, 0 skipped
-
-All 7 relmem evals PASS:
-  PASS relmem_write_supported_kinds
-  PASS relmem_list_bounded_response
-  PASS relmem_response_fields
-  PASS relmem_rejects_secret_input
-  PASS relmem_auth_enforced
-  PASS relmem_webui_section_exists
-  PASS relmem_webui_no_fake_intimacy
-```
+- Claude B owns safety/eval/scaling sections.
+- Claude A owns product/technical path sections.
+- PM reviews and approves before Phase 2 starts.
+- No push performed.
+- Known issues: none.

@@ -1,13 +1,13 @@
 # Nora Phase Status
 
-Last updated: 2026-06-08
+Last updated: 2026-06-09
 
 ## Current Phase
 
-- Phase: Phase 1 - Pet Life MVP
-- Percent: 97%
-- Status: in progress
-- Current focus: Phase 1 Exit Gate final Phase 2 Voice & Presence technical plan.
+- Phase: Phase 2 - Voice & Presence
+- Percent: 0%
+- Status: ready to start
+- Current focus: Voice Profile v1, TTS adapter boundary with text fallback, Web/PWA presence, and safety/eval foundations.
 
 ## Completed This Phase
 
@@ -42,18 +42,24 @@ Last updated: 2026-06-08
   - `docs/knowledge/PHASE_1_COMMERCIAL_NO_MANIPULATION_AUDIT.md` documents Token Food, future membership/expansion boundaries, local demo limits, and no-manipulation findings.
   - `commercial_no_manipulation_scan` covers README, Pet Room, and audit doc with context-aware negative-disclaimer handling.
   - Verification is green: 343 targeted tests OK, 672 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Phase 2 Voice & Presence technical plan:
+  - `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` documents Voice Profile v1, TTS adapter boundary, Web/PWA presence path, desktop floating pet prerequisites, safety policy, eval plan, task candidates, and worker scaling.
+  - Phase 2 starts with A/B only; Claude C/D are deferred until independent low-conflict workstreams exist.
+  - Verification is green: 343 targeted tests OK, 672 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- Phase 1 Exit Gate is active. Release audit, life-feel polish, and commercial/no-manipulation audit are complete; PM must still complete the Phase 2 technical plan before moving to Phase 2.
+- No Phase 2 implementation tasks are active yet. PM should publish the first Phase 2 A/B task pair after committing the Phase 1 Exit Gate integration.
 
 ## Next
 
-1. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
+1. Publish first Phase 2 task pair from `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`:
+   - Claude A: Voice Profile v1 validation / identity contract implementation.
+   - Claude B: Voice Profile deterministic eval and safety copy coverage.
 
 ## Phase 1 Exit Criteria
 
-Phase 1 cannot be marked complete until all of these are true:
+Phase 1 is complete. Completion evidence:
 
 1. Identity Editor MVP is implemented, reviewed, integrated, and covered by deterministic tests/evals.
 2. Token Food Economy, Relationship Memory, Pet Room, Pet State, and Pet Identity all have active regression coverage with 0 task-related eval skips.
@@ -73,33 +79,33 @@ After the Identity Editor tasks land, PM must complete these gate tasks before m
 1. Phase 1 MVP release audit: complete.
 2. Phase 1.5 Pet Room life-feel polish: complete.
 3. Commercial model and no-manipulation audit: complete.
-4. Phase 2 Voice & Presence technical plan: pending; plan voice profile, TTS boundary, Web/PWA presence, desktop floating pet path, safety, consent, cost controls, and worker scaling.
+4. Phase 2 Voice & Presence technical plan: complete.
 
-Phase 2 remains blocked until the Exit Gate Queue is complete and this file is updated to mark Phase 1 as complete.
+Phase 1 Exit Gate is complete. Phase 2 may start with the worker plan below.
 
 ## Phase 2 Worker Scaling Gate
 
-Before Phase 2 starts, PM must decide and record the Claude worker plan:
+Phase 2 start worker plan:
 
-1. Keep at least Claude A and Claude B active:
-   - Claude A for Voice/Profile/Presence product implementation.
-   - Claude B for deterministic evals, safety, cost transparency, and UI smoke coverage.
-2. Automatically open or configure additional Claude workers when Phase 2 has independent workstreams with low file conflict risk:
+1. Keep Claude A and Claude B active only at Phase 2 start:
+   - Claude A: Voice/Profile/Presence product implementation.
+   - Claude B: deterministic evals, safety, cost transparency, and UI smoke coverage.
+2. Do not open Claude C/D for the first Phase 2 tasks because initial Voice/Profile/Presence work shares `mini_agent/pets.py`, `mini_agent/server.py`, `mini_agent/static/index.html`, test files, and eval files.
+3. Automatically open or configure additional Claude workers only when Phase 2 has independent workstreams with low file conflict risk:
    - Claude C for Web/PWA floating pet presence or responsive UI shell.
    - Claude D for TTS adapter or desktop prototype only after the API boundary is stable.
-3. Do not open extra workers if the module boundaries are not ready; first create a small architecture-splitting task.
-4. Record active workers, task ownership, file boundaries, and blockers here before dispatching the first Phase 2 tasks.
+4. Record any future C/D opening here before dispatching tasks.
 5. Workers still must not commit or push; Codex PM owns review, integration, commits, and phase status updates.
 
 ## Blockers
 
-- None for current local MVP development.
+- None for Phase 2 planning.
 - Real billing/payment, 3D/VRM, voice deep work, marketplace, and cross-device native presence remain later-phase work.
-- Phase 2 is intentionally blocked by the Phase 1 Exit Gate Queue above.
+- Real TTS provider integration is blocked until adapter protocol, consent UI, and cost evals are complete.
 
 ## Four-Phase Overview
 
-- Phase 1 Pet Life MVP: 97% / Exit Gate final planning
-- Phase 2 Voice & Presence: 0% / not started
+- Phase 1 Pet Life MVP: 100% / complete
+- Phase 2 Voice & Presence: 0% / ready to start
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
