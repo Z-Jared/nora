@@ -5,9 +5,9 @@ Last updated: 2026-06-08
 ## Current Phase
 
 - Phase: Phase 1 - Pet Life MVP
-- Percent: 88%
+- Percent: 92%
 - Status: in progress
-- Current focus: Identity Editor and deeper Pet Room interaction.
+- Current focus: Phase 1 Exit Gate release audit and life-feel readiness.
 
 ## Completed This Phase
 
@@ -24,16 +24,22 @@ Last updated: 2026-06-08
   - Bounded `shared_moment` / `preference` / `task_outcome` records.
   - Pet Room relationship memory section with escaped rendering.
   - Guarded no-secret/no-fake-intimacy/no-auth-regression coverage.
+- Identity Editor MVP:
+  - `POST /pet/update-identity` local HTTP API.
+  - Pet Room Identity Editor for name/species/role/style/traits/skills/voice/taste.
+  - Preserves pet_id, created_at, pet state, compute food, activity, and relationship memories.
+  - Guarded no-secret/no-auth/no-marketplace/no-voice-cloning coverage.
 
 ## In Progress
 
-- Phase 1 remains focused on making the pet configurable and more interactive after the relationship loop landed.
+- Phase 1 Exit Gate is now active. Identity Editor has landed; PM must complete release audit, life-feel polish, commercial/no-manipulation audit, and Phase 2 technical plan before moving to Phase 2.
 
 ## Next
 
-1. Identity Editor MVP: editable pet name/species/personality/voice/taste/skills through API and Pet Room.
-2. Pet Room interaction depth: richer deterministic actions that feed mood/bond/activity/memory.
-3. Skill-as-pet-ability framing for low-risk read-only tools.
+1. TASK-167 Phase 1 MVP release audit.
+2. TASK-168 Phase 1.5 Pet Room life-feel polish.
+3. TASK-169 Commercial model and no-manipulation audit.
+4. TASK-170 Phase 2 Voice & Presence technical plan with worker scaling plan.
 
 ## Phase 1 Exit Criteria
 
@@ -83,7 +89,7 @@ Before Phase 2 starts, PM must decide and record the Claude worker plan:
 
 ## Four-Phase Overview
 
-- Phase 1 Pet Life MVP: 88% / in progress
+- Phase 1 Pet Life MVP: 92% / in progress
 - Phase 2 Voice & Presence: 0% / not started
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

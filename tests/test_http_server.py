@@ -2289,6 +2289,53 @@ class PetHTTPServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("/pet/relationship-memory", body["paths"])
 
+    def test_update_identity_name(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/update-identity", {"pet_id": "pet_1", "name": "Luna"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Luna")
+        self.assertEqual(body["identity"]["species"], "digital_pet")  # unchanged default
+
+    def test_update_identity_multiple_fields(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/update-identity", {
+            "pet_id": "pet_1", "name": "Luna", "species": "cat_v2",
+            "personality_traits": ["shy"], "skills": ["dance"],
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(body["identity"]["name"], "Luna")
+        self.assertEqual(body["identity"]["species"], "cat_v2")
+        self.assertEqual(body["identity"]["personality_traits"], ["shy"])
+        self.assertEqual(body["identity"]["skills"], ["dance"])
+
+    def test_update_identity_preserves_state(self):
+        self.pet_store.create_pet(name="Mochi")
+        self.pet_store.add_food("pet_1", amount=500)
+        self.pet_store.feed_pet("pet_1", amount=100)
+        status, body = self._request("POST", "/pet/update-identity", {"pet_id": "pet_1", "name": "Luna"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["state"]["compute_food_balance"], 400)
+
+    def test_update_identity_rejects_missing_pet_id(self):
+        status, body = self._request("POST", "/pet/update-identity", {"name": "Luna"})
+        self.assertEqual(status, 400)
+        self.assertIn("pet_id required", body["error"])
+
+    def test_update_identity_rejects_secret_name(self):
+        self.pet_store.create_pet(name="Mochi")
+        status, body = self._request("POST", "/pet/update-identity", {"pet_id": "pet_1", "name": "sk-secret-key-12345"})
+        self.assertEqual(status, 400)
+
+    def test_update_identity_rejects_nonexistent_pet(self):
+        status, body = self._request("POST", "/pet/update-identity", {"pet_id": "pet_999", "name": "Luna"})
+        self.assertEqual(status, 400)
+        self.assertIn("not found", body["error"])
+
+    def test_update_identity_in_docs(self):
+        status, body = self._request("GET", "/docs")
+        self.assertEqual(status, 200)
+        self.assertIn("/pet/update-identity", body["paths"])
+
 
 class PetAuthHTTPServerTests(unittest.TestCase):
     """Tests for pet mutation auth when api_token is set."""

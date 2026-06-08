@@ -500,6 +500,24 @@ class PetStore:
             updated_lines.append(json.dumps(record, ensure_ascii=False))
         pets_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
+    def _update_jsonl_pet_identity(self, pet_id: str, new_identity: PetIdentity) -> None:
+        """Update pet identity in the JSONL pets file after a mutation."""
+        if not self._jsonl_path:
+            return
+        pets_file = self._jsonl_path / "pets.jsonl"
+        if not pets_file.exists():
+            return
+        lines = pets_file.read_text(encoding="utf-8").splitlines()
+        updated_lines = []
+        for line in lines:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if record.get("identity", {}).get("pet_id") == pet_id:
+                record["identity"] = new_identity.to_dict()
+            updated_lines.append(json.dumps(record, ensure_ascii=False))
+        pets_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+
     # --- public API ---
 
     def create_pet(
@@ -581,6 +599,112 @@ class PetStore:
             self._save_jsonl_pet(identity, state)
 
         return PetRecord(identity=identity, state=state)
+
+    def update_identity(
+        self,
+        pet_id: str,
+        name: Optional[str] = None,
+        species: Optional[str] = None,
+        personality_traits: Optional[list[str]] = None,
+        relationship_role: Optional[str] = None,
+        speech_style: Optional[str] = None,
+        voice_profile: Optional[dict] = None,
+        taste_profile: Optional[dict] = None,
+        skills: Optional[list[str]] = None,
+    ) -> Optional[PetRecord]:
+        """Update identity fields for an existing pet. Returns None if pet not found or validation fails."""
+        pet = self.get_pet(pet_id)
+        if not pet:
+            return None
+
+        now = self._now()
+        old = pet.identity
+
+        # Validate only provided fields
+        text_fields = {}
+        if name is not None:
+            if not isinstance(name, str):
+                return None
+            text_fields["name"] = name
+        if species is not None:
+            if not isinstance(species, str):
+                return None
+            text_fields["species"] = species
+        if relationship_role is not None:
+            if not isinstance(relationship_role, str):
+                return None
+            text_fields["relationship_role"] = relationship_role
+        if speech_style is not None:
+            if not isinstance(speech_style, str):
+                return None
+            text_fields["speech_style"] = speech_style
+        if text_fields:
+            err = _validate_text_fields(**text_fields)
+            if err:
+                raise ValueError(err)
+
+        if personality_traits is not None:
+            if not isinstance(personality_traits, list):
+                return None
+            err = _validate_list_fields(personality_traits=personality_traits)
+            if err:
+                raise ValueError(err)
+
+        if skills is not None:
+            if not isinstance(skills, list):
+                return None
+            err = _validate_list_fields(skills=skills)
+            if err:
+                raise ValueError(err)
+
+        if voice_profile is not None:
+            if not isinstance(voice_profile, dict):
+                return None
+            err = _validate_dict_values(voice_profile=voice_profile)
+            if err:
+                raise ValueError(err)
+
+        if taste_profile is not None:
+            if not isinstance(taste_profile, dict):
+                return None
+            err = _validate_dict_values(taste_profile=taste_profile)
+            if err:
+                raise ValueError(err)
+
+        # Build updated identity preserving pet_id and created_at
+        updated = PetIdentity(
+            pet_id=old.pet_id,
+            name=name if name is not None else old.name,
+            species=species if species is not None else old.species,
+            personality_traits=personality_traits if personality_traits is not None else old.personality_traits,
+            relationship_role=relationship_role if relationship_role is not None else old.relationship_role,
+            speech_style=speech_style if speech_style is not None else old.speech_style,
+            voice_profile=voice_profile if voice_profile is not None else old.voice_profile,
+            taste_profile=taste_profile if taste_profile is not None else old.taste_profile,
+            skills=skills if skills is not None else old.skills,
+            created_at=old.created_at,
+            updated_at=now,
+        )
+
+        if self._db:
+            self._db.conn.execute(
+                "UPDATE pets SET name=?, species=?, personality_traits_json=?, "
+                "relationship_role=?, speech_style=?, voice_profile_json=?, "
+                "taste_profile_json=?, skills_json=?, updated_at=? WHERE pet_id=?",
+                (updated.name, updated.species,
+                 json.dumps(updated.personality_traits, ensure_ascii=False),
+                 updated.relationship_role, updated.speech_style,
+                 json.dumps(updated.voice_profile, ensure_ascii=False),
+                 json.dumps(updated.taste_profile, ensure_ascii=False),
+                 json.dumps(updated.skills, ensure_ascii=False),
+                 now, pet_id),
+            )
+            self._db.conn.commit()
+        else:
+            self._update_jsonl_pet_identity(pet_id, updated)
+
+        pet.identity = updated
+        return pet
 
     def get_pet(self, pet_id: str) -> Optional[PetRecord]:
         """Get a pet by ID, or None if not found."""

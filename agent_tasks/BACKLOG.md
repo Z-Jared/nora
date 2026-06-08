@@ -4,40 +4,11 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-165: Identity Editor MVP for pet customization
-- 架构层: Pet Identity / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-163/164 committed in `c676cc0`.
-- 目标: 为电子宠物增加 Identity Editor MVP：用户可以编辑现有宠物的 name/species/personality_traits/relationship_role/speech_style/voice_profile/taste_profile/skills，并在 Pet Room 中看到和提交这些身份配置，让“每个人自行定义身份”进入可用闭环。
-- 非目标: 不做 3D/VRM、不做真正语音合成或 voice cloning、不做 avatar asset pipeline、不做账号/云同步、不做 billing/marketplace、不改 CLI/TUI。
-- 安全边界: mutation endpoint 必须保留 auth；所有可编辑文本/list/dict 继续拒绝 secret-like text；输出 bounded；未知字段不回显 raw secret；HTML 必须 escape；更新身份不得重置 pet state、food balance、activity 或 relationship memories。
-- 持久证据: updated `PetIdentity.updated_at`、HTTP JSON response、Pet Room visible Identity Editor form、unit tests。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Pet Identity / MVP Product Shape, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `tests/test_pets.py`, `tests/test_http_server.py`.
-
-### TASK-166: Identity Editor deterministic coverage
-- 架构层: Eval/Review System / Pet Identity / Safety/Policy
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude B
-- 依赖: TASK-165 implementation. If TASK-165 is absent, add guarded evals around the expected contract and report the dependency.
-- 目标: 为 Identity Editor MVP 增加 deterministic coverage，锁住身份编辑 API、Pet Room 表单、安全拒绝、state/memory 不回归，以及和 token food / relationship memory 的兼容性。
-- 非目标: 不实现产品功能，除非是被测试暴露的极小 testability 修复；不做 3D/voice/billing/marketplace/CLI/TUI。
-- 安全边界: eval 必须证明 secret-like identity fields 不会保存或渲染；mutation auth 不回归；更新身份不清空 compute_food_balance、activity、relationship memories；Pet Room identity text escaped；现有 token_food 和 relmem eval 不 skip。
-- 持久证据: deterministic eval cases、HTTP/UI smoke assertions、精确 pass/fail report。
-- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`.
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`, `mini_agent/pets.py`, `mini_agent/http_server.py`, `mini_agent/static/index.html`, `evals/run_evals.py`.
-
-## Phase 1 Exit Gate
-
-这些任务是 Phase 1 完成后的硬门禁。`TASK-165`/`TASK-166` 集成后，PM 必须先把这些任务转入「待分配」并完成，不能直接进入 Phase 2。
-
 ### TASK-167: Phase 1 MVP release audit
 - 架构层: Eval/Review System / Pet Identity / Pet State Engine / Token Food Economy / Memory/Relationship System / Avatar/Room UI
 - 优先级: high
 - 预计: 1-2 hours
+- Worker: Claude A
 - 依赖: TASK-165 和 TASK-166 已集成。
 - 目标: 对 Phase 1 Pet Life MVP 做封版审查，验证首次使用闭环、测试/eval 状态、README/demo 路径和阶段完成证据。
 - 非目标: 不新增 Phase 2 voice/presence 功能；不做 3D/VRM、支付、marketplace、账号云同步。
@@ -45,6 +16,10 @@ PM 从这里读取待分配的任务。每个任务格式：
 - 持久证据: PM release audit report、更新后的 `agent_tasks/PHASE_STATUS.md`、必要 README/demo 文档、测试/eval 输出。
 - 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke`; `python3 evals/run_evals.py`; `git diff --check`; 手动或自动 first-use flow walkthrough。
 - 参考: `agent_tasks/PHASE_STATUS.md` Phase 1 Exit Criteria, `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`.
+
+## Phase 1 Exit Gate
+
+这些任务是 Phase 1 完成后的硬门禁。`TASK-167` 已转入「待分配」；PM 必须先完成 Exit Gate，不能直接进入 Phase 2。
 
 ### TASK-168: Phase 1.5 Pet Room life-feel polish
 - 架构层: Avatar/Room UI / Pet State Engine / Memory/Relationship System / Pet Identity
@@ -86,6 +61,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-165: Identity Editor MVP for pet customization ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 337 tests OK；`python3 evals/run_evals.py` 671 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 `PetStore.update_identity()`、JSONL identity mutation helper、`POST /pet/update-identity`、`/docs` entry 和 Pet Room Identity Editor；支持更新 name/species/personality_traits/relationship_role/speech_style/voice_profile/taste_profile/skills，保留 pet_id/created_at/state/food/activity/relationship memories，更新 updated_at，拒绝 secret-like identity text，UI invalid JSON 有清晰错误。
+
+### TASK-166: Identity Editor deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 671 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_pets tests.test_http_server tests.test_webui_smoke` 337 tests OK；`git diff --check` OK。
+- 内容: 新增 6 个 deterministic identity editor eval，覆盖 identity update preserves pet_id/created_at/updated_at、state/food balance 不清空、secret input 拒绝、mutation auth、Pet Room editor markers、无 marketplace/voice-cloning/purchase pressure 文案；合并后全部 active/pass。
 
 ### TASK-163: Relationship memory MVP for pet shared moments ✅
 - 完成者: Claude A；Codex PM 初审确认 relmem API/UI/store 组合通过，唯一 full eval 失败为既有 TTY baseline。

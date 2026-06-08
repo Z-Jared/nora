@@ -1,71 +1,80 @@
-# TASK-163 + TASK-164 CCB Review
+# TASK-165 + TASK-166 CCB Review
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-163 adds Relationship Memory MVP: store model, HTTP API, and Pet Room UI. TASK-164 adds 7 deterministic evals to lock the contract. All review criteria satisfied.
+TASK-165 adds Identity Editor MVP: `PetStore.update_identity()` with full field support, HTTP API endpoint, and Pet Room UI. TASK-166 adds 6 deterministic evals to lock the contract. All review criteria satisfied.
 
 ## Review Findings
 
-### 1. Pet Relationship Memory Store/Model (TASK-163)
+### 1. PetStore.update_identity() Correctness
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Bounded model | ✅ | `PetRelationshipMemory` dataclass with memory_id, pet_id, kind, summary, source, importance, metadata, created_at |
-| Supported kinds | ✅ | `shared_moment`, `preference`, `task_outcome` — validated in `add_relationship_memory()` |
-| Secret rejection | ✅ | `is_sensitive_text(summary)`, `is_sensitive_text(source)`, metadata values checked |
-| Summary bounded | ✅ | `_RELATIONSHIP_MEMORY_SUMMARY_MAX = 500`, `_RELATIONSHIP_MEMORY_SOURCE_MAX = 200` |
-| Importance clamped | ✅ | `max(1, min(10, importance))` |
-| List recent-first | ✅ | `ORDER BY created_at DESC` (SQLite), `reversed(matching[-limit:])` (JSONL) |
-| Limit clamped | ✅ | `max(1, min(50, limit))` in both HTTP handler and store |
-| SQLite/JSONL consistent | ✅ | Both backends implemented, `PetRelationshipMemoryJsonlTests` verifies |
+| Preserves pet_id | ✅ | `pet_id=old.pet_id` (pets.py:620) |
+| Preserves created_at | ✅ | `created_at=old.created_at` (pets.py:629) |
+| Preserves state (food balance) | ✅ | Only identity updated, state untouched |
+| Preserves activity | ✅ | No activity table mutations |
+| Preserves relationship memories | ✅ | No memory table mutations |
+| Updates updated_at | ✅ | `updated_at=now` (pets.py:630) |
+| Partial update preserves other fields | ✅ | Only provided kwargs override, others keep old values |
 
-### 2. HTTP API (TASK-163)
+### 2. Secret-Like Text Rejection
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| GET read-only | ✅ | List endpoint, no mutation |
-| POST mutation auth | ✅ | Uses existing `_check_auth()` pattern |
-| Invalid kind rejection | ✅ | Returns 400 with `valid_kinds` list |
-| Empty summary rejection | ✅ | Returns 400 |
-| Secret input rejection | ✅ | `add_relationship_memory()` returns None → 400 error |
-| Bounded errors | ✅ | No raw secret-like input echoed |
-| /docs includes entry | ✅ | `test_relationship_memory_in_docs` verifies |
+| Field Type | Validation | Evidence |
+|------------|------------|----------|
+| String fields (name, species, etc.) | `_validate_text_fields` → `is_sensitive_text()` | `ValueError` raised → 400 error |
+| List fields (personality_traits, skills) | `_validate_list_fields` | Each item checked |
+| Dict values (voice_profile, taste_profile) | `_validate_dict_values` | Each value checked |
+| HTTP handler catches ValueError | ✅ | Returns 400 with error message |
 
-### 3. Pet Room UI (TASK-163)
+### 3. POST /pet/update-identity
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Relationship Memories section | ✅ | `pet-memory-section` with list and Record Shared Moment button |
-| Memory text escaped | ✅ | Uses `escapeHtml(m.summary)`, `escapeHtml(m.kind)` |
-| No manipulative copy | ✅ | `eval_relmem_webui_no_fake_intimacy` verifies no "misses you", "lonely", "buy to unlock", etc. |
-| No secret leak | ✅ | Eval checks for `sk-`, `AKIA`, `Bearer `, `api_key` in memory section |
+| Mutation auth enforced | ✅ | POST handler uses `_check_auth()` |
+| Bounded JSON response | ✅ | Returns `pet.to_dict()` |
+| Docs entry | ✅ | Added to `/docs` OpenAPI spec |
+| Invalid type → bounded error | ✅ | TypeError caught → 400 "invalid field types" |
+| Missing pet_id → 400 | ✅ | Handler validates pet_id |
+| Nonexistent pet → 400 | ✅ | `update_identity()` returns None → 400 |
 
-### 4. Eval Quality (TASK-164)
+### 4. Pet Room Identity Editor UI
 
-| Eval | Coverage |
-|------|----------|
-| `relmem_write_supported_kinds` | All 3 kinds write and list successfully |
-| `relmem_list_bounded_response` | Default list bounded, huge limit clamped to ≤50 |
-| `relmem_response_fields` | memory_id, pet_id, kind, summary, source, created_at present |
-| `relmem_rejects_secret_input` | Secret summary and source rejected, not echoed |
-| `relmem_auth_enforced` | Without auth → 401, with auth → 200 |
-| `relmem_webui_section_exists` | HTML contains memory section markers |
-| `relmem_webui_no_fake_intimacy` | No fake intimacy/guilt/pressure/secret leak |
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Escape rendering | ✅ | DOM `.value` property used (auto-escaped), `escapeHtml()` for display |
+| Invalid JSON handling | ✅ | `JSON.parse()` try/catch for voice/taste profiles, shows "invalid JSON" error |
+| No fake intimacy | ✅ | `eval_idedit_webui_no_marketplace_copy` checks forbidden phrases |
+| No marketplace/voice cloning | ✅ | Same eval checks "marketplace", "buy avatar", "voice clone", "nft", etc. |
+| No purchase pressure | ✅ | Same eval checks "pay to customize", "premium identity", "token sale" |
 
-Guard `_skip_if_no_relmem()` properly skips when TASK-163 absent. Combined check: 7/7 PASS.
+### 5. TASK-166 Eval Quality (6 evals)
 
-### 5. No Regressions
+| Eval | What it locks |
+|------|---------------|
+| `idedit_update_preserves_identity` | pet_id and created_at unchanged, name updated |
+| `idedit_update_preserves_state` | Food balance preserved after identity update |
+| `idedit_rejects_secret_input` | Secret name and personality traits rejected (400) |
+| `idedit_auth_enforced` | 401 without auth, 200 with auth |
+| `idedit_webui_editor_markers` | HTML contains identity editor markers |
+| `idedit_webui_no_marketplace_copy` | No marketplace/voice clone/purchase copy |
 
-- 315 unit tests OK
-- 664 evals passed (1 failure = pre-existing TTY baseline, unrelated)
-- No auth/no-negative/no-secret regressions
-- No out-of-scope changes
+All evals are deterministic, offline, and use concrete assertions. No weak/vacuous checks.
+
+### 6. Out-of-Scope Changes
+
+None. All changes are within TASK-165/166 scope:
+- `mini_agent/pets.py` — `update_identity()` + JSONL helper
+- `mini_agent/http_server.py` — `/pet/update-identity` endpoint + docs
+- `mini_agent/static/index.html` — Identity Editor UI section
+- `tests/test_pets.py` — 14 unit tests for update_identity
+- `tests/test_http_server.py` — 7 HTTP tests for update-identity endpoint
+- `evals/run_evals.py` — 6 idedit evals
 
 ## Verification Summary
 
-- Unit tests: 315 OK
-- Evals: 664 passed, 1 failed (pre-existing TTY baseline), 0 skipped
+- 337 unit tests OK
+- 671 evals passed, 0 failed, 0 skipped
 - git diff --check: clean
-- Combined A+B patch applies cleanly

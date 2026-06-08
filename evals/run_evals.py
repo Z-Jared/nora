@@ -201,6 +201,13 @@ def main() -> int:
         EvalCase("relmem_auth_enforced", eval_relmem_auth_enforced),
         EvalCase("relmem_webui_section_exists", eval_relmem_webui_section_exists),
         EvalCase("relmem_webui_no_fake_intimacy", eval_relmem_webui_no_fake_intimacy),
+        # TASK-166: Identity Editor coverage (requires TASK-165)
+        EvalCase("idedit_update_preserves_identity", eval_idedit_update_preserves_identity),
+        EvalCase("idedit_update_preserves_state", eval_idedit_update_preserves_state),
+        EvalCase("idedit_rejects_secret_input", eval_idedit_rejects_secret_input),
+        EvalCase("idedit_auth_enforced", eval_idedit_auth_enforced),
+        EvalCase("idedit_webui_editor_markers", eval_idedit_webui_editor_markers),
+        EvalCase("idedit_webui_no_marketplace_copy", eval_idedit_webui_no_marketplace_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -2930,6 +2937,169 @@ def eval_relmem_webui_no_fake_intimacy():
         # No secret leak in memory section
         for secret in ["sk-", "akiaiosfodnn7", "bearer ", "api_key", "api_token"]:
             assert secret not in section, f"memory section leaked '{secret}'"
+
+
+# --- TASK-166: Identity Editor coverage (requires TASK-165) ---
+
+
+def _skip_if_no_idedit():
+    """Skip if TASK-165 Identity Editor is not implemented."""
+    try:
+        from mini_agent.http_server import NoraHTTPHandler
+        if not hasattr(NoraHTTPHandler, '_handle_pet_update_identity'):
+            raise AttributeError("no identity update endpoint")
+    except (ImportError, AttributeError):
+        raise unittest.SkipTest("TASK-165 not integrated: Identity Editor not available")
+
+
+def eval_idedit_update_preserves_identity():
+    """Identity update preserves pet_id and created_at, changes updated_at."""
+    _skip_if_no_idedit()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi", "species": "digital_cat"})
+            pet_id = created["pet_id"]
+            original_created = created["identity"]["created_at"]
+            # Update name
+            status, body = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": pet_id,
+                "name": "Mochi-v2",
+            })
+            assert status == 200, f"update failed: {status}, {body}"
+            assert body["pet_id"] == pet_id, f"pet_id changed: {body['pet_id']}"
+            assert body["identity"]["created_at"] == original_created, f"created_at changed: {body['identity']['created_at']}"
+            assert body["identity"]["name"] == "Mochi-v2", f"name not updated: {body['identity']['name']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_idedit_update_preserves_state():
+    """Identity update does not clear compute food balance, activity, or relationship memories."""
+    _skip_if_no_idedit()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            _http_request("POST", port, "/pet/add-food", {"pet_id": pet_id, "amount": 500})
+            # Update identity
+            _http_request("POST", port, "/pet/update-identity", {"pet_id": pet_id, "name": "Mochi-v2"})
+            # Verify state preserved
+            _, current = _http_request("GET", port, "/pet/current")
+            assert current["state"]["compute_food_balance"] == 500, f"food balance cleared: {current['state']}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_idedit_rejects_secret_input():
+    """Secret-like strings in identity fields are rejected and not persisted."""
+    _skip_if_no_idedit()
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        server, thread, port, db = _make_pet_http_server(tmpdir)
+        try:
+            time.sleep(0.1)
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"})
+            pet_id = created["pet_id"]
+            # Secret in name
+            status, body = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": pet_id,
+                "name": "sk-ant-secret-key-12345",
+            })
+            assert status >= 400 or body.get("ok") is False or "sk-ant-secret-key-12345" not in str(body), \
+                f"secret name not rejected: {status}, {body}"
+            # Secret in personality_traits
+            status2, body2 = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": pet_id,
+                "personality_traits": ["playful", "AKIAIOSFODNN7EXAMPLE"],
+            })
+            assert status2 >= 400 or body2.get("ok") is False or "AKIAIOSFODNN7EXAMPLE" not in str(body2), \
+                f"secret trait not rejected: {status2}, {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_idedit_auth_enforced():
+    """Mutation auth remains enforced for identity update."""
+    _skip_if_no_idedit()
+    import time
+    import threading
+    from mini_agent.controller import MiniAgent
+    from mini_agent.http_server import create_server
+    from mini_agent.tools import build_default_registry
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = NoraDB(Path(tmpdir) / "test.db")
+        registry = build_default_registry(
+            workspace_root=Path(tmpdir), db=db,
+            confirm_action=lambda prompt: True,
+        )
+        agent = MiniAgent(registry)
+        port = _find_free_port()
+        server = create_server(
+            agent, host="127.0.0.1", port=port,
+            api_token="test-secret",
+            pet_store=registry.pet_store,
+        )
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+        try:
+            time.sleep(0.1)
+            # Without auth → 401
+            status, body = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": "pet_1",
+                "name": "test",
+            })
+            assert status == 401, f"expected 401, got {status}: {body}"
+            # With auth → create pet, then update
+            _, created = _http_request("POST", port, "/pet/create", {"name": "Mochi"},
+                                        headers={"Authorization": "Bearer test-secret"})
+            pet_id = created["pet_id"]
+            status2, body2 = _http_request("POST", port, "/pet/update-identity", {
+                "pet_id": pet_id,
+                "name": "Mochi-v2",
+            }, headers={"Authorization": "Bearer test-secret"})
+            assert status2 == 200, f"expected 200, got {status2}: {body2}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
+def eval_idedit_webui_editor_markers():
+    """Pet Room HTML contains Identity Editor section markers."""
+    _skip_if_no_idedit()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    editor_markers = ["identity-editor", "edit-identity", "pet-name", "pet-species", "personality"]
+    found = [m for m in editor_markers if m in html]
+    assert len(found) >= 2, f"Pet Room missing identity editor markers: found {found}"
+
+
+def eval_idedit_webui_no_marketplace_copy():
+    """Pet Room HTML does not contain marketplace, voice-cloning, or purchase pressure copy."""
+    _skip_if_no_idedit()
+    index_html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    if not index_html.exists():
+        raise unittest.SkipTest("index.html not found")
+    html = index_html.read_text(encoding="utf-8").lower()
+    forbidden = [
+        "marketplace", "buy avatar", "purchase skin", "voice clone",
+        "premium identity", "unlock species", "pay to customize",
+        "nft", "token sale", "limited edition",
+    ]
+    for phrase in forbidden:
+        assert phrase not in html, f"forbidden copy found: '{phrase}'"
 
 
 def eval_cli_multiline_input():

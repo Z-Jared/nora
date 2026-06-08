@@ -595,5 +595,122 @@ class PetRelationshipMemoryJsonlTests(unittest.TestCase):
         self.assertEqual(mems[1].kind, "shared_moment")
 
 
+class PetUpdateIdentityTests(unittest.TestCase):
+    """Tests for PetStore.update_identity()."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db = NoraDB(Path(self.tmpdir) / "test.db")
+        self.store = PetStore(db=self.db)
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_update_name(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", name="Luna")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.name, "Luna")
+        # Verify persisted
+        restored = self.store.get_pet("pet_1")
+        self.assertEqual(restored.identity.name, "Luna")
+
+    def test_update_species(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", species="robot_v2")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.species, "robot_v2")
+
+    def test_update_personality_traits(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", personality_traits=["shy", "curious"])
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.personality_traits, ["shy", "curious"])
+
+    def test_update_skills(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", skills=["dance", "sing"])
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.skills, ["dance", "sing"])
+
+    def test_update_voice_profile(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", voice_profile={"speed": "fast"})
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.voice_profile["speed"], "fast")
+
+    def test_update_preserves_state(self):
+        self.store.create_pet(name="Mochi")
+        self.store.add_food("pet_1", amount=500)
+        self.store.feed_pet("pet_1", amount=100)
+        result = self.store.update_identity("pet_1", name="Luna")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.state.compute_food_balance, 400)
+        self.assertEqual(result.identity.name, "Luna")
+
+    def test_update_preserves_created_at(self):
+        self.store.create_pet(name="Mochi")
+        original = self.store.get_pet("pet_1")
+        created = original.identity.created_at
+        result = self.store.update_identity("pet_1", name="Luna")
+        self.assertEqual(result.identity.created_at, created)
+
+    def test_update_updates_updated_at(self):
+        self.store.create_pet(name="Mochi")
+        original = self.store.get_pet("pet_1")
+        result = self.store.update_identity("pet_1", name="Luna")
+        self.assertNotEqual(result.identity.updated_at, original.identity.updated_at)
+
+    def test_update_nonexistent_pet(self):
+        result = self.store.update_identity("pet_999", name="Luna")
+        self.assertIsNone(result)
+
+    def test_update_rejects_secret_name(self):
+        self.store.create_pet(name="Mochi")
+        with self.assertRaises(ValueError):
+            self.store.update_identity("pet_1", name="sk-secret-key-12345")
+
+    def test_update_rejects_secret_personality(self):
+        self.store.create_pet(name="Mochi")
+        with self.assertRaises(ValueError):
+            self.store.update_identity("pet_1", personality_traits=["sk-secret-key-12345"])
+
+    def test_update_rejects_non_string_name(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", name=123)
+        self.assertIsNone(result)
+
+    def test_update_rejects_non_list_personality(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", personality_traits="not-a-list")
+        self.assertIsNone(result)
+
+    def test_update_partial_preserves_other_fields(self):
+        self.store.create_pet(name="Mochi", species="cat", relationship_role="pet")
+        self.store.update_identity("pet_1", name="Luna")
+        pet = self.store.get_pet("pet_1")
+        self.assertEqual(pet.identity.name, "Luna")
+        self.assertEqual(pet.identity.species, "cat")
+        self.assertEqual(pet.identity.relationship_role, "pet")
+
+
+class PetUpdateIdentityJsonlTests(unittest.TestCase):
+    """Tests for PetStore.update_identity() JSONL fallback."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.jsonl_path = Path(self.tmpdir) / "pet_data"
+        self.store = PetStore(jsonl_path=self.jsonl_path)
+
+    def test_update_name_jsonl(self):
+        self.store.create_pet(name="Mochi")
+        result = self.store.update_identity("pet_1", name="Luna")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.identity.name, "Luna")
+        # Verify persisted
+        restored = self.store.get_pet("pet_1")
+        self.assertEqual(restored.identity.name, "Luna")
+
+
 if __name__ == "__main__":
     unittest.main()
