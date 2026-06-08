@@ -5725,4 +5725,165 @@ def build_default_registry(
         permission=ToolPermission(category="local", risk="read"),
     )
 
+    # --- Pet tools ---
+    from mini_agent.pets import PetStore
+    pet_store = PetStore(db=db)
+    registry.pet_store = pet_store
+
+    def _create_pet_json(
+        name: str,
+        species: str = "digital_pet",
+        personality_traits: Optional[list[str]] = None,
+        relationship_role: str = "companion",
+        speech_style: str = "",
+        voice_profile: Optional[dict] = None,
+        taste_profile: Optional[dict] = None,
+        skills: Optional[list[str]] = None,
+    ) -> str:
+        try:
+            record = pet_store.create_pet(
+                name=name,
+                species=species,
+                personality_traits=personality_traits,
+                relationship_role=relationship_role,
+                speech_style=speech_style,
+                voice_profile=voice_profile,
+                taste_profile=taste_profile,
+                skills=skills,
+            )
+            return _json.dumps(record.to_dict(), ensure_ascii=False)
+        except ValueError as e:
+            return _json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    def _get_pet_json(pet_id: str) -> str:
+        pet = pet_store.get_pet(pet_id)
+        if not pet:
+            return _json.dumps({"error": f"pet not found: {pet_id}"}, ensure_ascii=False)
+        return _json.dumps(pet.to_dict(), ensure_ascii=False)
+
+    def _list_pets_json(limit: int = 20) -> str:
+        pets = pet_store.list_pets(limit=limit)
+        return _json.dumps([p.to_dict() for p in pets], ensure_ascii=False)
+
+    def _add_pet_food_json(pet_id: str, amount: int, kind: str = "basic_food", reason: str = "") -> str:
+        result = pet_store.add_food(pet_id, amount=amount, kind=kind, reason=reason)
+        return _json.dumps(result.to_dict(), ensure_ascii=False)
+
+    def _feed_pet_json(pet_id: str, food_kind: str = "basic_food", amount: int = 100) -> str:
+        result = pet_store.feed_pet(pet_id, food_kind=food_kind, amount=amount)
+        return _json.dumps(result.to_dict(), ensure_ascii=False)
+
+    def _care_pet_json(pet_id: str, action: str = "pat") -> str:
+        result = pet_store.care_pet(pet_id, action=action)
+        return _json.dumps(result.to_dict(), ensure_ascii=False)
+
+    def _list_pet_activity_json(pet_id: str, limit: int = 20) -> str:
+        events = pet_store.list_activity_events(pet_id, limit=limit)
+        return _json.dumps([e.to_dict() for e in events], ensure_ascii=False)
+
+    registry.register(
+        "create_pet",
+        "Create a new pet with name, species, and optional personality traits.",
+        _create_pet_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Pet name"},
+                "species": {"type": "string", "description": "Pet species, e.g. digital_cat"},
+                "personality_traits": {"type": "array", "items": {"type": "string"}, "description": "Personality traits"},
+                "relationship_role": {"type": "string", "description": "Relationship role, e.g. companion"},
+                "speech_style": {"type": "string", "description": "Speech style"},
+                "voice_profile": {"type": "object", "description": "Voice profile settings"},
+                "taste_profile": {"type": "object", "description": "Taste profile settings"},
+                "skills": {"type": "array", "items": {"type": "string"}, "description": "Initial pet skills"},
+            },
+            "required": ["name"],
+        },
+        permission=ToolPermission(category="pet", risk="write"),
+    )
+    registry.register(
+        "get_pet",
+        "Get a pet's identity and state by pet_id.",
+        _get_pet_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pet_id": {"type": "string", "description": "Pet ID"},
+            },
+            "required": ["pet_id"],
+        },
+        permission=ToolPermission(category="pet", risk="read"),
+    )
+    registry.register(
+        "list_pets",
+        "List all pets, most recent first.",
+        _list_pets_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max pets to return, default 20"},
+            },
+        },
+        permission=ToolPermission(category="pet", risk="read"),
+    )
+    registry.register(
+        "add_pet_food",
+        "Add compute food tokens to a pet's balance.",
+        _add_pet_food_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pet_id": {"type": "string", "description": "Pet ID"},
+                "amount": {"type": "integer", "description": "Amount of food tokens to add"},
+                "kind": {"type": "string", "description": "Food kind, default basic_food"},
+                "reason": {"type": "string", "description": "Reason for adding food"},
+            },
+            "required": ["pet_id", "amount"],
+        },
+        permission=ToolPermission(category="pet", risk="write"),
+    )
+    registry.register(
+        "feed_pet",
+        "Feed a pet, spending compute food balance. Reduces hunger, increases energy/mood/bond.",
+        _feed_pet_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pet_id": {"type": "string", "description": "Pet ID"},
+                "food_kind": {"type": "string", "description": "Food kind, default basic_food"},
+                "amount": {"type": "integer", "description": "Amount of food to spend, default 100"},
+            },
+            "required": ["pet_id"],
+        },
+        permission=ToolPermission(category="pet", risk="write"),
+    )
+    registry.register(
+        "care_pet",
+        "Perform a care action on a pet (pat, comfort, rest, play). Does not spend food.",
+        _care_pet_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pet_id": {"type": "string", "description": "Pet ID"},
+                "action": {"type": "string", "description": "Care action: pat, comfort, rest, play"},
+            },
+            "required": ["pet_id"],
+        },
+        permission=ToolPermission(category="pet", risk="write"),
+    )
+    registry.register(
+        "list_pet_activity",
+        "List recent activity events for a pet.",
+        _list_pet_activity_json,
+        parameters={
+            "type": "object",
+            "properties": {
+                "pet_id": {"type": "string", "description": "Pet ID"},
+                "limit": {"type": "integer", "description": "Max events to return, default 20"},
+            },
+            "required": ["pet_id"],
+        },
+        permission=ToolPermission(category="pet", risk="read"),
+    )
+
     return registry

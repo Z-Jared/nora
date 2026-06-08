@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unittest
 from unittest.mock import patch
 
 
@@ -45,6 +46,11 @@ from mini_agent.mcp_server import (
 )
 from mini_agent.plugins import inspect_manifest_json, inspect_manifest
 from mini_agent.registry import ToolPermission, ToolRegistry
+try:
+    import mini_agent.pets
+    HAS_PETS = True
+except ImportError:
+    HAS_PETS = False
 from mini_agent.durable_tasks import DurableTaskStore, TaskStatus
 from mini_agent.durable_events import APPROVAL_DECIDED, APPROVAL_REQUESTED, CHECKPOINT_ADDED, DurableEventStore, FILE_EDIT_BLOCKED, FILE_EDIT_ERROR, FILE_EDIT_FINISHED, FILE_EDIT_STARTED, HANDOFF_ACCEPTED, HANDOFF_CREATED, MODEL_CALL_ERROR, MODEL_CALL_FINISHED, MODEL_CALL_STARTED, RECOVERY_PLANNED, REVIEW_GATE_BLOCKED, REVIEW_GATE_ERROR, REVIEW_GATE_FINISHED, REVIEW_GATE_STARTED, SCHEDULER_DECISION, SHELL_COMMAND_BLOCKED, SHELL_COMMAND_ERROR, SHELL_COMMAND_FINISHED, SHELL_COMMAND_STARTED, TASK_STATUS_CHANGED, TEST_RUN_BLOCKED, TEST_RUN_ERROR, TEST_RUN_FINISHED, TEST_RUN_STARTED, TOOL_CALL_BLOCKED, TOOL_CALL_ERROR, TOOL_CALL_FINISHED, TOOL_CALL_STARTED, WORKSPACE_PREPARED, WORKSPACE_RELEASED
 from mini_agent.durable_workers import WorkerStatus
@@ -141,6 +147,15 @@ def main() -> int:
         EvalCase("tty_run_events_streaming_answer", eval_tty_run_events_streaming_answer),
         EvalCase("selectable_confirm_allow_deny_choices", eval_selectable_confirm_allow_deny_choices),
         EvalCase("permission_deny_blocks_tool", eval_permission_deny_blocks_tool),
+        # TASK-156: Pet foundation deterministic eval coverage
+        EvalCase("pet_create_and_get", eval_pet_create_and_get),
+        EvalCase("pet_feed_requires_balance", eval_pet_feed_requires_balance),
+        EvalCase("pet_food_ledger_no_negative_balance", eval_pet_food_ledger_no_negative_balance),
+        EvalCase("pet_care_free_state_change", eval_pet_care_free_state_change),
+        EvalCase("pet_registry_permissions", eval_pet_registry_permissions),
+        EvalCase("pet_read_tools_no_mutation", eval_pet_read_tools_no_mutation),
+        EvalCase("pet_sensitive_name_rejected", eval_pet_sensitive_name_rejected),
+        EvalCase("pet_activity_bounded_no_secret_leak", eval_pet_activity_bounded_no_secret_leak),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -735,20 +750,24 @@ def main() -> int:
         print("SKIP llm_* evals (set EVAL_USE_LLM=1 to run real model checks)")
 
     failures = []
+    skipped = 0
     for case in cases:
         try:
             case.run()
         except AssertionError as error:
             failures.append((case.name, str(error)))
             print(f"FAIL {case.name}: {error}")
+        except unittest.SkipTest as skipped_error:
+            skipped += 1
+            print(f"SKIP {case.name}: {skipped_error}")
         except Exception as error:
             failures.append((case.name, repr(error)))
             print(f"ERROR {case.name}: {error!r}")
         else:
             print(f"PASS {case.name}")
 
-    passed = len(cases) - len(failures)
-    print(f"\n{passed} passed, {len(failures)} failed")
+    passed = len(cases) - len(failures) - skipped
+    print(f"\n{passed} passed, {len(failures)} failed, {skipped} skipped")
     return 1 if failures else 0
 
 
@@ -1522,6 +1541,170 @@ def eval_permission_deny_blocks_tool():
 
     assert result == "已取消操作。", f"unexpected denial result: {result}"
     assert called == [], f"tool was called despite denial: {called}"
+
+
+# --- TASK-156: Pet foundation deterministic eval coverage ---
+
+
+def _skip_if_no_pets():
+    if not HAS_PETS:
+        raise unittest.SkipTest("TASK-155 not integrated: mini_agent.pets not available")
+
+
+def _make_pet_registry(tmpdir):
+    db = NoraDB(Path(tmpdir) / "test.db")
+    registry = build_default_registry(
+        workspace_root=Path(tmpdir),
+        db=db,
+        confirm_action=lambda prompt: True,
+    )
+    return registry, db
+
+
+def eval_pet_create_and_get():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            created = registry.call("create_pet", name="Mochi", species="digital_cat")
+            assert '"pet_id"' in created, f"missing pet_id: {created[:300]}"
+            assert '"name": "Mochi"' in created, f"missing name: {created[:300]}"
+            assert '"species": "digital_cat"' in created, f"missing species: {created[:300]}"
+
+            got = registry.call("get_pet", pet_id="pet_1")
+            assert '"pet_id": "pet_1"' in got, f"get_pet missing pet_id: {got[:300]}"
+            assert '"name": "Mochi"' in got, f"get_pet missing name: {got[:300]}"
+            assert '"compute_food_balance": 0' in got, f"unexpected balance: {got[:300]}"
+        finally:
+            db.close()
+
+
+def eval_pet_feed_requires_balance():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            registry.call("create_pet", name="Mochi")
+            result = registry.call("feed_pet", pet_id="pet_1", food_kind="basic_food", amount=100)
+            assert "insufficient_compute_food" in result, f"missing insufficient label: {result[:300]}"
+            got = registry.call("get_pet", pet_id="pet_1")
+            assert '"compute_food_balance": 0' in got, f"balance mutated: {got[:300]}"
+        finally:
+            db.close()
+
+
+def eval_pet_food_ledger_no_negative_balance():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            registry.call("create_pet", name="Mochi")
+            registry.call("add_pet_food", pet_id="pet_1", amount=200, kind="basic_food", reason="test grant")
+            registry.call("feed_pet", pet_id="pet_1", food_kind="basic_food", amount=150)
+            result = registry.call("feed_pet", pet_id="pet_1", food_kind="basic_food", amount=100)
+            assert "insufficient_compute_food" in result, f"overfeed not rejected: {result[:300]}"
+            got = registry.call("get_pet", pet_id="pet_1")
+            assert '"compute_food_balance": 50' in got, f"unexpected balance: {got[:300]}"
+            activity = registry.call("list_pet_activity", pet_id="pet_1")
+            assert len(activity) < 5000, f"activity unbounded: {len(activity)} chars"
+        finally:
+            db.close()
+
+
+def eval_pet_care_free_state_change():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            registry.call("create_pet", name="Mochi")
+            before = registry.call("get_pet", pet_id="pet_1")
+            registry.call("care_pet", pet_id="pet_1", action="pat")
+            after = registry.call("get_pet", pet_id="pet_1")
+            assert '"compute_food_balance": 0' in after, f"care consumed food: {after[:300]}"
+            before_data = json.loads(before)
+            after_data = json.loads(after)
+            assert after_data["state"]["mood"] >= before_data["state"]["mood"], "mood should not decrease"
+            assert after_data["state"]["bond"] >= before_data["state"]["bond"], "bond should not decrease"
+        finally:
+            db.close()
+
+
+def eval_pet_registry_permissions():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            expected = {
+                "create_pet": ("pet", "write"),
+                "get_pet": ("pet", "read"),
+                "list_pets": ("pet", "read"),
+                "add_pet_food": ("pet", "write"),
+                "feed_pet": ("pet", "write"),
+                "care_pet": ("pet", "write"),
+                "list_pet_activity": ("pet", "read"),
+            }
+            for tool_name, (expected_category, expected_risk) in expected.items():
+                permission = registry.permission_for(tool_name)
+                assert permission is not None, f"{tool_name} not registered"
+                assert permission.category == expected_category, f"{tool_name} category: {permission.category}"
+                assert permission.risk == expected_risk, f"{tool_name} risk: {permission.risk}"
+        finally:
+            db.close()
+
+
+def eval_pet_read_tools_no_mutation():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            registry.call("create_pet", name="Mochi")
+            registry.call("add_pet_food", pet_id="pet_1", amount=100, kind="basic_food", reason="test")
+            before = registry.call("get_pet", pet_id="pet_1")
+            before_activity = registry.call("list_pet_activity", pet_id="pet_1")
+            registry.call("get_pet", pet_id="pet_1")
+            registry.call("list_pets")
+            registry.call("list_pet_activity", pet_id="pet_1")
+            after = registry.call("get_pet", pet_id="pet_1")
+            after_activity = registry.call("list_pet_activity", pet_id="pet_1")
+            assert before == after, f"read tool mutated state: {before[:200]} vs {after[:200]}"
+            assert before_activity == after_activity, "read tool mutated activity"
+        finally:
+            db.close()
+
+
+def eval_pet_sensitive_name_rejected():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            sensitive_names = [
+                "sk-ant-secret-key-12345",
+                "Bearer eyJhbGciOiJIUzI1NiJ9",
+                "AKIAIOSFODNN7EXAMPLE",
+            ]
+            for name in sensitive_names:
+                result = registry.call("create_pet", name=name)
+                assert name not in result, f"raw secret leaked: {result[:300]}"
+        finally:
+            db.close()
+
+
+def eval_pet_activity_bounded_no_secret_leak():
+    _skip_if_no_pets()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        registry, db = _make_pet_registry(tmpdir)
+        try:
+            registry.call("create_pet", name="Mochi")
+            registry.call("add_pet_food", pet_id="pet_1", amount=500, kind="basic_food", reason="test")
+            for _ in range(5):
+                registry.call("feed_pet", pet_id="pet_1", food_kind="basic_food", amount=50)
+            registry.call("care_pet", pet_id="pet_1", action="pat")
+            activity = registry.call("list_pet_activity", pet_id="pet_1")
+            assert len(activity) < 10000, f"activity unbounded: {len(activity)} chars"
+            for secret in ("sk-", "AKIA", "Bearer ", "eyJ"):
+                assert secret not in activity, f"activity leaked {secret}: {activity[:300]}"
+        finally:
+            db.close()
 
 
 def eval_cli_multiline_input():

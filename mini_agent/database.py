@@ -104,6 +104,50 @@ CREATE TABLE IF NOT EXISTS memory_records (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pets (
+    pet_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    species TEXT NOT NULL,
+    personality_traits_json TEXT NOT NULL DEFAULT '[]',
+    relationship_role TEXT NOT NULL DEFAULT 'companion',
+    speech_style TEXT NOT NULL DEFAULT '',
+    voice_profile_json TEXT NOT NULL DEFAULT '{}',
+    taste_profile_json TEXT NOT NULL DEFAULT '{}',
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pet_states (
+    pet_id TEXT PRIMARY KEY,
+    hunger INTEGER NOT NULL DEFAULT 30,
+    energy INTEGER NOT NULL DEFAULT 60,
+    mood INTEGER NOT NULL DEFAULT 60,
+    bond INTEGER NOT NULL DEFAULT 0,
+    growth_level INTEGER NOT NULL DEFAULT 1,
+    compute_food_balance INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pet_food_ledger (
+    entry_id TEXT PRIMARY KEY,
+    pet_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pet_activity_events (
+    event_id TEXT PRIMARY KEY,
+    pet_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
 """
 
 _INDEXES = """
@@ -127,6 +171,12 @@ CREATE INDEX IF NOT EXISTS idx_mr_scope ON memory_records(scope);
 CREATE INDEX IF NOT EXISTS idx_mr_created ON memory_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_mr_updated ON memory_records(updated_at);
 CREATE INDEX IF NOT EXISTS idx_mr_task ON memory_records(related_task_id);
+
+CREATE INDEX IF NOT EXISTS idx_pet_updated ON pets(updated_at);
+CREATE INDEX IF NOT EXISTS idx_pet_food_pet ON pet_food_ledger(pet_id);
+CREATE INDEX IF NOT EXISTS idx_pet_food_created ON pet_food_ledger(created_at);
+CREATE INDEX IF NOT EXISTS idx_pet_activity_pet ON pet_activity_events(pet_id);
+CREATE INDEX IF NOT EXISTS idx_pet_activity_created ON pet_activity_events(created_at);
 """
 
 
