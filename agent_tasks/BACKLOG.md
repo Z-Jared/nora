@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-180A: Pencil Pet Room design restoration contract and first-pass UI implementation
+- 架构层: Avatar/Room UI / Voice & Presence / Safety/Policy
+- 优先级: high
+- 预计: 1-2 hours
+- Worker: Claude A
+- 依赖: TASK-179A、TASK-179B 完成并集成。
+- 目标: 以 `designs/nora_pet_web_ui.pen` 的 `Room canvas` 为唯一设计源，建立可执行的设计还原合同，并对 `mini_agent/static/index.html` 做第一轮前端还原：暖色房间画布、陶瓷 Nora-01 主视觉、状态 chips、能力架和现有 Pet Room 数据全部保留。
+- 非目标: 不改 Pencil 原稿；不新增真实 voice/TTS/audio、desktop/native/PWA/service worker、notification、billing、marketplace、3D/VRM、插件运行时、真实 skill execution 或新 HTTP endpoint；不做大规模前端重写。
+- 安全边界: 前端仍为 DOM/text-only；动态文本必须 escape 或使用 DOM text APIs；不得读取麦克风/摄像头/屏幕/位置；不得引入外部网络图片依赖，设计图资产必须来自 repo 内已有 `designs/images/generated-1780975241297.png` 或受控复制到静态资源目录；不得出现购买压力、marketplace、premium skill、voice cloning、recording/background listening 文案。
+- 持久证据: 新增或更新 `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`，记录 Pencil source、Room canvas 尺寸、关键 tokens、主图资产、布局 marker、允许偏差；Pet Room HTML 暴露稳定 design markers，例如 `pet-room-design-shell`、`pet-room-canvas`、`pet-room-hero-image`、`pet-room-status-chip`。
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan；如可行，导出/对照 `.nora_design_exports/nora_pet_web_ui_screen.png` 或记录手动对照依据。
+- 参考: `designs/nora_pet_web_ui.pen` `Room canvas`; `.nora_design_exports/nora_pet_web_ui_screen.png`; `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Avatar Direction / MVP Product Shape; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`.
+
+### TASK-180B: Pencil design restoration deterministic smoke and safety coverage
+- 架构层: Eval/Review System / Avatar/Room UI / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-179A、TASK-179B 完成并集成；与 TASK-180A 并行，但不得改实现文件。
+- 目标: 为 Pencil Pet Room 还原添加 deterministic smoke/eval 覆盖，锁住设计合同、DOM markers、关键视觉 tokens、asset path、本地安全边界和 no-scope-drift 文案，防止“出了设计稿但前端不像”的回归。
+- 非目标: 不实现 UI/CSS/JS；不修改 `mini_agent/static/index.html`、Pencil 原稿、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright 依赖或真实浏览器自动化除非项目已有依赖明确可用。
+- 安全边界: 测试只读扫描 HTML/CSS/合同文档/受控资产路径；不得调用外部网络、生成图片、修改设计稿；必须阻断 marketplace/plugin store/premium skill、purchase pressure、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM drift。
+- 持久证据: 新增 eval 名称包含 `pencil_design` 或 `pet_room_design`; 覆盖 `NORA_PET_ROOM_FRONTEND_CONTRACT.md` 存在并引用 Pencil source、Room canvas 尺寸、关键 colors、hero asset；覆盖 Web UI markers/tokens/asset path；覆盖 no external image URL 和 no forbidden copy。
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
+- 参考: `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`; `designs/nora_pet_web_ui.pen`; `.nora_design_exports/nora_pet_web_ui_screen.png`; `evals/run_evals.py`; `tests/test_webui_smoke.py`.
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
