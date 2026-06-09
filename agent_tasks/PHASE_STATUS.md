@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 35%
 - Status: in progress
-- Current focus: Next bounded Phase 2 web-first presence step after CSS-only idle/presence signals.
+- Current focus: Deterministic Pet Room room-load greeting after CSS-only idle/presence signals.
 
 ## Completed This Phase
 
@@ -94,12 +94,13 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None. PM is preparing the next bounded Phase 2 web-first presence task cycle.
+- TASK-177A: Pet Room deterministic room-load greeting.
+- TASK-177B: Room-load greeting deterministic eval and safety coverage.
 
 ## Next
 
-1. Add the next lightweight web-first Pet Room presence affordance that remains CSS/DOM-only and deterministic.
-2. Add deterministic eval and smoke coverage for the new presence affordance, read-only behavior, and no voice/native/PWA/3D/billing/marketplace drift.
+1. Complete TASK-177A/TASK-177B through PM initial review and reviewer gate.
+2. Add the next lightweight web-first Pet Room presence affordance only after TASK-177 is integrated.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
