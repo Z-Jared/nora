@@ -278,6 +278,12 @@ def main() -> int:
         EvalCase("pet_room_api_auth_header_preserved", eval_pet_room_api_auth_header_preserved),
         EvalCase("pet_room_api_index_module_wired", eval_pet_room_api_index_module_wired),
         EvalCase("api_boundary_no_external_or_build_drift", eval_api_boundary_no_external_or_build_drift),
+        # TASK-183B: Pet Room Canvas module eval coverage
+        EvalCase("pet_room_canvas_module_file_present", eval_pet_room_canvas_module_file_present),
+        EvalCase("pet_room_canvas_module_index_wired", eval_pet_room_canvas_module_index_wired),
+        EvalCase("pet_room_canvas_markers_preserved", eval_pet_room_canvas_markers_preserved),
+        EvalCase("pet_room_canvas_read_only_no_api_or_fetch", eval_pet_room_canvas_read_only_no_api_or_fetch),
+        EvalCase("pet_room_canvas_no_external_or_scope_drift", eval_pet_room_canvas_no_external_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4819,6 +4825,104 @@ def eval_api_boundary_no_external_or_build_drift():
     # No external URLs in api.js
     assert "http://" not in api_js, "api.js contains external HTTP URL"
     assert "https://" not in api_js, "api.js contains external HTTPS URL"
+    # No build system
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    # No scope drift
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-183B: Pet Room Canvas module eval coverage ---
+
+
+def _skip_if_no_canvas_module():
+    """Skip if TASK-183A canvas module is not implemented."""
+    try:
+        canvas_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js"
+        if not canvas_js.exists():
+            raise AttributeError("pet-room-canvas.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-183A not integrated: pet-room-canvas.js not available")
+
+
+def eval_pet_room_canvas_module_file_present():
+    """pet-room-canvas.js exists and uses native JS exports."""
+    _skip_if_no_canvas_module()
+    canvas_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js").read_text(encoding="utf-8").lower()
+    # Must use native ES module exports
+    has_export = ("export " in canvas_js or "export{" in canvas_js or "export default" in canvas_js)
+    assert has_export, "pet-room-canvas.js missing native ES module export statements"
+    # No build tooling
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in canvas_js, f"pet-room-canvas.js contains build tooling: '{marker}'"
+
+
+def eval_pet_room_canvas_module_index_wired():
+    """index.html wires the canvas component through a local native module import."""
+    _skip_if_no_canvas_module()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "pet-room-canvas" in html, "index.html does not reference pet-room-canvas"
+    # Must use native module import
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_pet_room_canvas_markers_preserved():
+    """Required design markers and local hero asset remain present."""
+    _skip_if_no_canvas_module()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    canvas_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js").read_text(encoding="utf-8")
+    all_content = html + canvas_js
+    required_markers = [
+        "pet-room-design-shell", "pet-room-canvas", "pet-room-hero-image",
+        "pet-room-status-chip", "pet-room-name", "pet-room-role",
+        "chip-mood-value", "chip-presence-value", "chip-energy-value", "chip-bond-value",
+        "/static/nora-01-hero.jpg",
+    ]
+    missing = [m for m in required_markers if m not in all_content]
+    assert not missing, f"missing design markers: {missing}"
+
+
+def eval_pet_room_canvas_read_only_no_api_or_fetch():
+    """Canvas module is visual/read-only: no fetch, PetAPI, endpoint literals, or mutation calls."""
+    _skip_if_no_canvas_module()
+    canvas_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js").read_text(encoding="utf-8")
+    # Strip comments before checking
+    import re
+    no_comments = re.sub(r'//.*?$', '', canvas_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    forbidden = [
+        "fetch(", "petapi.", "/pet/", "voice-preview", "relationship-memory",
+        "add-food", "feed(", "care(", "update-identity",
+        "tool_call", "execute_tool", "run_tool", "install(",
+    ]
+    for pattern in forbidden:
+        assert pattern not in content, f"canvas module contains forbidden '{pattern}' in code"
+
+
+def eval_pet_room_canvas_no_external_or_scope_drift():
+    """No external URLs, build system, or scope drift in canvas module."""
+    _skip_if_no_canvas_module()
+    canvas_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = canvas_js + html
+    # No external URLs in canvas module
+    assert "http://" not in canvas_js, "canvas module contains external HTTP URL"
+    assert "https://" not in canvas_js, "canvas module contains external HTTPS URL"
     # No build system
     import re
     build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',

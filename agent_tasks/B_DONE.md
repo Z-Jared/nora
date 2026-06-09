@@ -1,42 +1,31 @@
-# B DONE — TASK-182B
+# B DONE — TASK-183B
 
-**Status:** Complete — API boundary drift fixed, combined check PASS
+**Status:** Complete — all pet_room_canvas evals PASS
 
 ## Summary
 
-Fixed 4 evals that broke when TASK-182A moved `/pet/voice-preview` endpoint from `index.html` to `api.js`. All evals now accept the new API boundary pattern.
+Added 5 deterministic evals for Pet Room Canvas module. All evals active/pass when combined with TASK-183A.
 
-## Fixes Applied
+## Evals Added
 
-### `speech_bubble_markers_present`
-- Removed `/pet/voice-preview` from required HTML markers
-- Now checks `api.js` exists and contains the endpoint, OR `index.html` has it
-
-### `speech_bubble_escapes_preview_text`
-- Preview request check now searches both `index.html` + `api.js`
-- Accepts `PetAPI.previewVoice(...)` or `preview_voice(...)` as valid API call pattern
-- Still requires `pet_id` and `text` in the request
-
-### `voice_consent_markers_present`
-- Removed `/pet/voice-preview` from required HTML markers
-- Now checks `api.js` for endpoint presence
-
-### `voice_consent_unchecked_no_fetch`
-- Consent guard check now looks for `fetch(`, `petapi`, `previewvoice`, or `preview_voice` as API call markers
-- Still requires consent check (checkbox + `.checked` + `return`) before API call
+1. **`pet_room_canvas_module_file_present`** — `pet-room-canvas.js` exists with native ES module exports, no build tooling.
+2. **`pet_room_canvas_module_index_wired`** — `index.html` references `pet-room-canvas` with `<script type="module">`.
+3. **`pet_room_canvas_markers_preserved`** — All required design markers present: `pet-room-design-shell`, `pet-room-canvas`, `pet-room-hero-image`, `pet-room-status-chip`, `pet-room-name`, `pet-room-role`, chip values, hero asset path.
+4. **`pet_room_canvas_read_only_no_api_or_fetch`** — Canvas module has no `fetch(`, `petapi.`, `/pet/`, voice-preview, relationship-memory, or mutation calls in code (comments excluded).
+5. **`pet_room_canvas_no_external_or_scope_drift`** — No external URLs, build system markers, or scope drift.
 
 ## Verification
 
-### Own worktree (no TASK-182A)
+### Own worktree (no TASK-183A)
 
 ```
-python3 evals/run_evals.py           → 724 passed, 0 failed, 5 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 381 tests OK
+python3 evals/run_evals.py           → 729 passed, 0 failed, 5 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 387 tests OK
 git diff --check                     → clean
 ```
 
-### Combined check (applied onto TASK-182A)
+### Combined check (applied onto Claude A's TASK-183A)
 
 ```
-python3 evals/run_evals.py           → 729 passed, 0 failed, 0 skipped
+python3 evals/run_evals.py           → 5/5 pet_room_canvas evals PASS
 ```

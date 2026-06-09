@@ -21,8 +21,8 @@ def _extract_script(html: str) -> str:
     if not match:
         raise ValueError("No inline <script type=\"module\"> found")
     script = match.group(1).strip()
-    # Strip the ES module import line (import * as PetAPI from ...)
-    script = re.sub(r'^\s*import\s.*?;\s*\n?', '', script, count=1)
+    # Strip all ES module import lines
+    script = re.sub(r'^\s*import\s.*?;\s*\n?', '', script, flags=re.MULTILINE)
     # Strip the window.PetAPI assignment line
     script = re.sub(r'^\s*window\.PetAPI\s*=\s*PetAPI;\s*\n?', '', script, count=1)
     # Strip IIFE wrapper so functions are globally accessible
@@ -2496,6 +2496,8 @@ _fetchHandler = function(url, opts) {
     })
   });
 };
+// Mock updateCanvas for renderPet
+function updateCanvas(identity, state, expr, pres) {}
 """, test_body="""
 // Override applyReaction to capture the action key
 applyReaction = function(action, state, result) {
@@ -2788,7 +2790,23 @@ result.roomRole = !!document.getElementById('pet-room-role');
 
     def test_render_pet_updates_design_markers(self):
         """renderPet must update room name, role, and chip values."""
-        result = _run_node(test_body="""
+        result = _run_node(setup_js="""
+function updateCanvas(identity, state, expr, pres) {
+  if (!identity || !state) return;
+  var roomNameEl = document.getElementById('pet-room-name');
+  if (roomNameEl) roomNameEl.textContent = identity.name || 'Nora-01';
+  var roomRoleEl = document.getElementById('pet-room-role');
+  if (roomRoleEl) roomRoleEl.textContent = identity.relationship_role || 'ceramic desktop pet agent';
+  var chipMood = document.getElementById('chip-mood-value');
+  if (chipMood) chipMood.textContent = expr ? expr.label : '—';
+  var chipPresence = document.getElementById('chip-presence-value');
+  if (chipPresence) chipPresence.textContent = pres ? pres.label : '—';
+  var chipEnergy = document.getElementById('chip-energy-value');
+  if (chipEnergy) chipEnergy.textContent = state.energy != null ? state.energy : '—';
+  var chipBond = document.getElementById('chip-bond-value');
+  if (chipBond) chipBond.textContent = state.bond != null ? state.bond : '—';
+}
+""", test_body="""
 renderPet({
   identity: {name:'Nora-01', species:'ceramic_cat', relationship_role:'desktop companion', personality_traits:['curious'], speech_style:'warm', skills:['memory'], taste_profile:{}},
   state: {hunger:25, energy:72, mood:65, bond:41, growth_level:3, compute_food_balance:500}
@@ -2904,3 +2922,76 @@ result.hasPost = typeof PetAPI.post === 'function';
         self.assertNotIn("fetch('/pet/current'", html)
         self.assertNotIn("fetch('/pet/feed'", html)
         self.assertNotIn("fetch('/pet/care'", html)
+
+
+class PetRoomCanvasModuleTests(unittest.TestCase):
+    """Tests for pet-room-canvas.js module."""
+
+    def test_canvas_module_exists(self):
+        """pet-room-canvas.js must exist as a native ES module."""
+        canvas_path = STATIC_DIR / "components" / "pet-room-canvas.js"
+        self.assertTrue(canvas_path.exists(), "pet-room-canvas.js not found")
+
+    def test_canvas_module_exports_updateCanvas(self):
+        """pet-room-canvas.js must export updateCanvas function."""
+        canvas_path = STATIC_DIR / "components" / "pet-room-canvas.js"
+        content = canvas_path.read_text(encoding="utf-8")
+        self.assertIn("export function updateCanvas", content)
+
+    def test_canvas_module_exports_updateChips(self):
+        """pet-room-canvas.js must export updateChips function."""
+        canvas_path = STATIC_DIR / "components" / "pet-room-canvas.js"
+        content = canvas_path.read_text(encoding="utf-8")
+        self.assertIn("export function updateChips", content)
+
+    def test_canvas_module_no_fetch_or_petapi(self):
+        """pet-room-canvas.js must not call fetch or reference PetAPI."""
+        canvas_path = STATIC_DIR / "components" / "pet-room-canvas.js"
+        content = canvas_path.read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", content)
+        self.assertNotIn("PetAPI", content)
+        self.assertNotIn("http://", content)
+        self.assertNotIn("https://", content)
+
+    def test_index_html_imports_canvas_module(self):
+        """index.html must import from pet-room-canvas.js."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn("from '/static/components/pet-room-canvas.js'", html)
+        self.assertIn("updateCanvas", html)
+
+    def test_render_pet_still_updates_design_markers(self):
+        """renderPet must still update room name, role, and chip values via canvas module."""
+        result = _run_node(setup_js="""
+function updateCanvas(identity, state, expr, pres) {
+  if (!identity || !state) return;
+  var roomNameEl = document.getElementById('pet-room-name');
+  if (roomNameEl) roomNameEl.textContent = identity.name || 'Nora-01';
+  var roomRoleEl = document.getElementById('pet-room-role');
+  if (roomRoleEl) roomRoleEl.textContent = identity.relationship_role || 'ceramic desktop pet agent';
+  var chipMood = document.getElementById('chip-mood-value');
+  if (chipMood) chipMood.textContent = expr ? expr.label : '—';
+  var chipPresence = document.getElementById('chip-presence-value');
+  if (chipPresence) chipPresence.textContent = pres ? pres.label : '—';
+  var chipEnergy = document.getElementById('chip-energy-value');
+  if (chipEnergy) chipEnergy.textContent = state.energy != null ? state.energy : '—';
+  var chipBond = document.getElementById('chip-bond-value');
+  if (chipBond) chipBond.textContent = state.bond != null ? state.bond : '—';
+}
+""", test_body="""
+renderPet({
+  identity: {name:'Nora-01', species:'ceramic_cat', relationship_role:'desktop companion', personality_traits:['curious'], speech_style:'warm', skills:['memory'], taste_profile:{}},
+  state: {hunger:25, energy:72, mood:65, bond:41, growth_level:3, compute_food_balance:500}
+});
+result = {};
+result.roomName = document.getElementById('pet-room-name').textContent;
+result.roomRole = document.getElementById('pet-room-role').textContent;
+result.moodValue = document.getElementById('chip-mood-value').textContent;
+result.energyValue = document.getElementById('chip-energy-value').textContent;
+result.bondValue = document.getElementById('chip-bond-value').textContent;
+""")
+        d = result
+        self.assertEqual(d['roomName'], 'Nora-01')
+        self.assertEqual(d['roomRole'], 'desktop companion')
+        self.assertNotEqual(d['moodValue'], '—')
+        self.assertNotEqual(d['energyValue'], '—')
+        self.assertNotEqual(d['bondValue'], '—')

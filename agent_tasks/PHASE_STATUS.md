@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 60%
+- Percent: 62%
 - Status: in progress
-- Current focus: Splitting Pet Room JavaScript into bounded native modules after the API boundary extraction.
+- Current focus: Continuing Pet Room JavaScript module extraction after the canvas boundary is stable.
 
 ## Completed This Phase
 
@@ -135,14 +135,21 @@ Last updated: 2026-06-09
   - Auth bearer header behavior, JSON parsing, `_authError` handling, request/response shapes, DOM markers, stylesheet links, and existing UI behavior are preserved.
   - Deterministic coverage locks native exports, endpoint catalog, auth header behavior, local module wiring, no hidden external URL, and no React/Vite/TypeScript/npm/build-system/product scope drift.
   - Verification is green: 387 targeted tests OK, 729 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native canvas module extraction:
+  - `mini_agent/static/components/pet-room-canvas.js` now owns the visual/read-only first-screen canvas update boundary.
+  - `mini_agent/static/index.html` imports `updateCanvas()` locally and keeps Pet Room API calls routed through `PetAPI`.
+  - The module updates only room name, relationship role, and Mood/Presence/Energy/Bond chip text with DOM text APIs.
+  - Design markers and local hero asset path remain stable: `pet-room-design-shell`, `pet-room-canvas`, `pet-room-hero-image`, `pet-room-status-chip`, `pet-room-name`, `pet-room-role`, chip markers, and `/static/nora-01-hero.jpg`.
+  - Deterministic coverage locks module exports, local module wiring, marker preservation, no fetch/PetAPI/endpoint behavior, no external URL, no build-system drift, and no product scope drift.
+  - Verification is green: 393 targeted tests OK, 734 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None currently assigned after TASK-182 integration.
+- None currently assigned after TASK-183 integration.
 
 ## Next
 
-1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 3: extract `mini_agent/static/components/pet-room-canvas.js`.
-2. Keep the canvas component visual/read-only only: wall, floor, Nora-01 hero image, ground shadow, name/role, and Mood/Presence/Energy/Bond chip placement.
+1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4: extract functional panels one at a time, starting with `status-chips.js`.
+2. Keep every extracted component bounded, local, native-module-only, and marker-preserving.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -195,6 +202,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 60% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, and native Pet Room API boundary extraction complete
+- Phase 2 Voice & Presence: 62% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, and native Pet Room canvas module extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

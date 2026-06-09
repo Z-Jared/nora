@@ -560,6 +560,7 @@ button{border:0;cursor:pointer}
 </div>
 <script type="module">
 import * as PetAPI from '/static/api.js';
+import { updateCanvas } from '/static/components/pet-room-canvas.js';
 window.PetAPI = PetAPI;
 (function(){
   var msgEl = document.getElementById('messages');
@@ -661,22 +662,10 @@ window.PetAPI = PetAPI;
     document.getElementById('pet-name').textContent = id.name;
     document.getElementById('pet-species').textContent = id.species;
     document.getElementById('pet-personality').textContent = (id.personality_traits||[]).join(', ');
-    // Design shell markers
-    var roomNameEl = document.getElementById('pet-room-name');
-    if(roomNameEl) roomNameEl.textContent = id.name || 'Nora-01';
-    var roomRoleEl = document.getElementById('pet-room-role');
-    if(roomRoleEl) roomRoleEl.textContent = id.relationship_role || 'ceramic desktop pet agent';
-    // Status chips
+    // Canvas: room name, role, and status chips via module
     var expr = expressionFromState(st);
     var pres = presenceFromState(st);
-    var chipMood = document.getElementById('chip-mood-value');
-    if(chipMood) chipMood.textContent = expr ? expr.label : '—';
-    var chipPresence = document.getElementById('chip-presence-value');
-    if(chipPresence) chipPresence.textContent = pres ? pres.label : '—';
-    var chipEnergy = document.getElementById('chip-energy-value');
-    if(chipEnergy) chipEnergy.textContent = st.energy != null ? st.energy : '—';
-    var chipBond = document.getElementById('chip-bond-value');
-    if(chipBond) chipBond.textContent = st.bond != null ? st.bond : '—';
+    updateCanvas(id, st, expr, pres);
     // Mood summary
     var moodEl = document.getElementById('pet-mood-summary');
     if(moodEl) moodEl.textContent = getMoodSummary(id.name, st);
