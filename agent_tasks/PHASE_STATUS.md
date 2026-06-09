@@ -125,6 +125,7 @@ Last updated: 2026-06-09
 1. Decide the next bounded Phase 2 Voice & Presence slice or pause for the requested UI redesign/Pencil-first direction.
 2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
+4. After TASK-180A/B lands, follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: finish Pencil restoration first, then extract native design tokens/CSS modules, `api.js`, and Pet Room components before considering Vite/React.
 
 ## Phase 1 Exit Criteria
 
