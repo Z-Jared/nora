@@ -1,67 +1,78 @@
-# TASK-179A/179B Review — Pet Room Deterministic Skill Ability Shelf
+# TASK-180A/TASK-180B Review — Pencil Pet Room Design Restoration
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-179A adds a read-only skill ability shelf derived from `identity.skills`. TASK-179B adds 6 evals covering markers, mapping rules, read-only, no marketplace/surveillance copy, stale content cleanup, and secret-like filtering. All review criteria satisfied.
+TASK-180A adds Pencil-derived design shell, canvas, hero image with CSS fallback, status chips, and name/role display. TASK-180B adds 5 deterministic evals and 6 smoke tests. Implementation materially improves visual fidelity while preserving all existing Pet Room features.
 
 ## Findings
 
-### 1. Read-Only, DOM/Text-Only, Derived from identity.skills
+### 1. Material Improvement (Not Just Markers)
 
-- `skillCardsFromIdentity(identity, state)` is a pure function: reads `identity.skills` array, filters/sanitizes, returns card objects. No fetch, no mutation.
-- `renderSkillShelf` builds HTML with `escapeHtml()` for icon and name, sets `innerHTML` and `data-skill-count`.
-- Called from `renderPet()` — no extra HTTP calls, no food debit, no activity/memory writes.
+The implementation adds:
+- **Design shell** (`pet-room-design-shell`): 880px frame with correct colors (#F5F3EE background, #D8D1C8 border, 12px radius)
+- **Canvas** (`pet-room-canvas`): Wall (#F1EEE7, 340px) + floor (#DDD5CA, 260px) composition
+- **Hero image** (`pet-room-hero-image`): Local `nora-01-hero.jpg` with CSS ceramic fallback on error
+- **Status chips**: Mood, Presence, Energy, Bond with Pencil-specified colors
+- **Name/Role**: Centered below hero, updated from identity data
+- **Action buttons**: Restyled with hints, warm brown primary color (#8F5A3C)
 
-### 2. Stale Card Cleanup Fix
+All Pencil contract colors are present in CSS. `renderPet()` extended to update design markers.
 
-`renderSkillShelf` handles empty/malformed skills correctly:
-- When `cards.length === 0`: clears `listEl.innerHTML = ''`, shows empty state, returns.
-- When cards exist: hides empty state, rebuilds HTML.
-- `eval_skill_shelf_no_stale_content_on_empty` uses brace-counting to verify `innerHTML` clear happens BEFORE return in the empty branch.
+### 2. Design Contract and Asset
 
-### 3. Secret-Like Skill Filtering
+| Criterion | Status | Evidence |
+|-----------|--------|----------|
+| Contract document | ✅ | `NORA_PET_ROOM_FRONTEND_CONTRACT.md` with colors, typography, markers, restore checklist |
+| Local asset | ✅ | `mini_agent/static/nora-01-hero.jpg` exists, referenced as `/static/nora-01-hero.jpg` |
+| No external URLs | ✅ | `eval_pet_room_design_local_asset_only` verifies no http/https in hero section |
+| PM asset correction | ✅ | Source .png contains JPEG bytes → integrated as .jpg (documented in contract) |
+| CSS fallback | ✅ | `onerror` handler hides img, shows ceramic-body placeholder |
 
-`isSecretLike(text)` checks against 9 patterns: `sk-`, `bearer`, `api_key`, `token`, `secret`, `password`, `credential`, `private_key`, `auth`.
+### 3. Existing Features Preserved
 
-`skillCardsFromIdentity` rejects:
-- Non-string items
-- Empty/whitespace-only strings
-- Names > 50 chars
-- Names with non-alphanumeric characters (except dash/underscore/space)
-- Secret-like names (via `isSecretLike`)
+`renderPet()` extended (not replaced) to update:
+- `pet-room-name` from `identity.name`
+- `pet-room-role` from `identity.relationship_role`
+- Status chip values from `expressionFromState()`, `presenceFromState()`, and state fields
 
-`eval_skill_shelf_rejects_secret_like_skills` verifies `SECRET_PATTERNS` or `isSecretLike` exists in code, covers required patterns, and is called in the mapping function.
+All existing Pet Room features remain: food/status, identity editor, speech bubble/consent, expression/presence, greeting/reaction, skill shelf, diary/memory/actions.
 
-### 4. Eval Coverage (6 evals)
+### 4. Eval Coverage (5 evals)
 
 | Eval | What it locks |
 |------|---------------|
-| `pet_skill_shelf_markers_present` | 6 required DOM markers |
-| `skill_shelf_mapping_rules` | Skills reference, fallback, sanitization, escapeHtml/textContent |
-| `skill_shelf_read_only_no_tool_execution` | No fetch/plugin/food/voice/memory/activity/microphone/camera/service-worker |
-| `skill_shelf_no_marketplace_native_pwa_or_surveillance_copy` | No marketplace/plugin-store/premium/voice/recording/3D/VRM copy |
-| `skill_shelf_no_stale_content_on_empty` | Empty branch clears innerHTML before return |
-| `skill_shelf_rejects_secret_like_skills` | Secret patterns exist and are called in mapping function |
+| `pencil_design_contract_present` | Contract doc references source Pencil file, canvas dimensions, all 4 colors, asset paths, 4 markers |
+| `pet_room_design_markers_present` | Web UI contains design-shell, canvas, hero-image, status-chip markers |
+| `pet_room_design_tokens_match_pencil` | All 4 Pencil colors present in index.html |
+| `pet_room_design_local_asset_only` | Local .jpg file exists, referenced in HTML, no external http/https in hero section |
+| `pet_room_design_no_scope_drift_copy` | No marketplace/voice/recording/3D/VRM/PWA/billing copy |
 
-### 5. Smoke Tests (15 tests)
+### 5. Smoke Tests (6 tests)
 
-DOM markers, valid skills, unknown skill default icon, empty/null/undefined/non-string/long-name/special-chars inputs, render with skills, empty state, stale card cleanup, secret-like filtering.
+- DOM markers (design shell, canvas, hero image, chips)
+- Status chips (all 8 elements: chip + value for mood/presence/energy/bond)
+- Name/role markers
+- Hero image uses local asset, no external URLs
+- Ceramic fallback exists with onerror handler
+- renderPet updates design markers (name, role, chip values)
 
-### 6. No Weakening of TASK-178
+### 6. Scope Compliance
 
-TASK-178 interaction reaction evals (4) remain unchanged in the diff. No coverage regression.
-
-### 7. B_DONE Report Mismatch
-
-B_DONE says "4 deterministic evals" but code has 6. Code diff is authoritative — not blocking.
+- ✅ No external image URLs
+- ✅ No voice/audio/recording
+- ✅ No marketplace/payment
+- ✅ No service worker/notification/native
+- ✅ No plugin execution
+- ✅ No 3D/VRM
+- ✅ Frontend architecture plan is separate planning doc, not implementation
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 372 tests OK
-python3 evals/run_evals.py → 714 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 378 tests OK
+python3 evals/run_evals.py → 719 passed, 0 failed, 0 skipped
 git diff --check → clean
 rg forbidden-copy → only negative safety assertions
 ```

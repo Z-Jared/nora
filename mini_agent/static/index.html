@@ -199,6 +199,41 @@ button{border:0;cursor:pointer}
 /* Pet Room */
 .pet-room{display:none;padding:24px;max-width:760px;margin:0 auto}
 .pet-room.active{display:block}
+.pet-room-design-shell{
+  max-width:880px;margin:0 auto;border:1px solid #D8D1C8;border-radius:12px;
+  background:#F5F3EE;box-shadow:0 2px 12px rgba(0,0,0,.06);overflow:hidden;
+}
+.pet-room-canvas{position:relative;min-height:600px}
+.pet-room-wall{background:#F1EEE7;height:340px;border-radius:12px 12px 0 0}
+.pet-room-floor{background:#DDD5CA;height:260px;border-radius:0 0 12px 12px}
+.pet-room-hero-area{position:relative;display:flex;flex-direction:column;align-items:center;padding:20px 0 0}
+.pet-room-ground-shadow{width:240px;height:30px;background:radial-gradient(ellipse,rgba(185,170,153,.24),transparent);margin-top:-8px;border-radius:50%}
+.pet-room-hero-image{width:260px;height:340px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;position:relative}
+.pet-room-hero-image .hero-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:12px}
+.pet-room-hero-image .ceramic-body{position:relative;width:140px;height:180px}
+.ceramic-body .c-head{width:100px;height:90px;background:linear-gradient(135deg,#d4cdc5,#b8b0a6);border-radius:20px 20px 16px 16px;position:relative;border:2px solid #a09890;box-shadow:0 4px 16px rgba(0,0,0,.1)}
+.ceramic-body .c-eye{width:18px;height:18px;background:#5a8a6a;border-radius:50%;position:absolute;top:28px;box-shadow:0 0 8px rgba(90,138,106,.5)}
+.ceramic-body .c-eye.left{left:18px}
+.ceramic-body .c-eye.right{right:18px}
+.ceramic-body .c-ear{width:20px;height:20px;background:linear-gradient(135deg,#d4cdc5,#b8b0a6);border-radius:4px 4px 0 0;position:absolute;top:-14px;border:2px solid #a09890;border-bottom:0}
+.ceramic-body .c-ear.left{left:16px;transform:rotate(-15deg)}
+.ceramic-body .c-ear.right{right:16px;transform:rotate(15deg)}
+.ceramic-body .c-mouth{width:24px;height:6px;background:#7a7068;border-radius:0 0 6px 6px;position:absolute;bottom:16px;left:50%;transform:translateX(-50%)}
+.ceramic-body .c-torso{width:110px;height:90px;background:linear-gradient(135deg,#d4cdc5,#b8b0a6);border-radius:12px;margin-top:4px;border:2px solid #a09890;position:relative}
+.ceramic-body .c-core{width:32px;height:32px;background:radial-gradient(circle,#6db88a,#3a8a5a);border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);box-shadow:0 0 12px rgba(109,184,138,.5)}
+.ceramic-body .c-arm{width:14px;height:50px;background:linear-gradient(135deg,#d4cdc5,#b8b0a6);border-radius:7px;position:absolute;top:12px;border:2px solid #a09890}
+.ceramic-body .c-arm.left{left:-18px;transform:rotate(10deg)}
+.ceramic-body .c-arm.right{right:-18px;transform:rotate(-10deg)}
+.pet-room-name{font-size:40px;font-weight:800;color:var(--ink);text-align:center;margin-bottom:4px}
+.pet-room-role{font-size:15px;font-weight:600;color:var(--muted);text-align:center;margin-bottom:16px}
+.pet-room-chips{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-bottom:16px;padding:0 16px}
+.pet-room-status-chip{display:flex;flex-direction:column;align-items:center;padding:8px 16px;border-radius:10px;min-width:100px}
+.pet-room-status-chip .chip-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+.pet-room-status-chip .chip-value{font-size:14px;font-weight:700}
+.pet-room-status-chip.mood{background:#F6DDC6}
+.pet-room-status-chip.presence{background:#DDE6DC}
+.pet-room-status-chip.energy{background:#ECE3D6}
+.pet-room-status-chip.bond{background:#E8DED4}
 .pet-avatar-area{display:flex;align-items:center;gap:28px;margin-bottom:28px}
 .pet-avatar{width:140px;height:160px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .robot-head{width:80px;height:70px;background:linear-gradient(135deg,#b0bec5,#78909c);border-radius:16px 16px 12px 12px;position:relative;border:2px solid #546e7a;box-shadow:0 4px 12px rgba(0,0,0,.1)}
@@ -285,12 +320,13 @@ button{border:0;cursor:pointer}
 .pet-stat.bond .bar-fill{background:#b55ae8}
 .pet-stat.growth .bar-fill{background:#5ae875}
 .pet-stat.food .bar-fill{background:#4fc3f7}
-.pet-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:24px}
-.pet-action-btn{height:36px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:0 16px;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer}
-.pet-action-btn:hover{border-color:var(--accent);background:var(--accent-soft)}
+.pet-actions{display:flex;gap:8px;margin-bottom:24px;padding:8px;background:#fff;border-radius:12px;border:1px solid #D8D1C8;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+.pet-action-btn{flex:1;height:44px;border:none;border-radius:8px;background:#EFE9E0;padding:0 12px;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.pet-action-btn:hover{background:#E5DDD3}
 .pet-action-btn:disabled{opacity:.5;cursor:not-allowed}
-.pet-action-btn.primary{background:var(--dark);border-color:var(--dark);color:#fff}
-.pet-action-btn.primary:hover{background:#2c3e38}
+.pet-action-btn.primary{background:#8F5A3C;border-color:#8F5A3C;color:#fff}
+.pet-action-btn.primary:hover{background:#7A4E33}
+.pet-action-btn .action-hint{font-size:10px;font-weight:600;opacity:.8}
 .pet-food-section{margin-bottom:24px;border:1px solid var(--line);border-radius:8px;padding:16px;background:var(--card)}
 .pet-food-section h3{font-size:14px;font-weight:800;margin-bottom:6px}
 .pet-food-section .food-note{font-size:12px;color:var(--muted);margin-bottom:10px}
@@ -372,7 +408,11 @@ button{border:0;cursor:pointer}
 @media (max-width:820px){
   .pet-avatar-area{flex-direction:column;text-align:center}
   .pet-stats{grid-template-columns:repeat(2,1fr)}
-  .pet-actions{justify-content:center}
+  .pet-actions{flex-wrap:wrap}
+  .pet-room-chips{flex-wrap:wrap;gap:6px}
+  .pet-room-status-chip{min-width:80px;padding:6px 10px}
+  .pet-room-hero-image{width:200px;height:260px}
+  .pet-room-name{font-size:28px}
 }
 .session-save-form.open{display:block}
 .session-save-form input{width:100%;border:1px solid var(--line);border-radius:5px;background:#fff;padding:6px 8px;font-size:12px;outline:none;margin-bottom:6px}
@@ -480,6 +520,52 @@ button{border:0;cursor:pointer}
       <div class="pet-room" id="pet-room">
         <div class="pet-loading" id="pet-loading">Loading pet...</div>
         <div id="pet-content" style="display:none">
+          <div class="pet-room-design-shell" id="pet-room-design-shell">
+            <div class="pet-room-canvas" id="pet-room-canvas">
+              <div class="pet-room-wall"></div>
+              <div class="pet-room-floor"></div>
+              <div class="pet-room-hero-area">
+                <div class="pet-room-hero-image" id="pet-room-hero-image">
+                  <img src="/static/nora-01-hero.jpg" alt="Nora-01 ceramic pet" class="hero-img" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+                  <div class="ceramic-body" style="display:none">
+                    <div class="c-ear left"></div>
+                    <div class="c-ear right"></div>
+                    <div class="c-head">
+                      <div class="c-eye left"></div>
+                      <div class="c-eye right"></div>
+                      <div class="c-mouth"></div>
+                    </div>
+                    <div class="c-torso">
+                      <div class="c-core"></div>
+                      <div class="c-arm left"></div>
+                      <div class="c-arm right"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="pet-room-ground-shadow"></div>
+                <div class="pet-room-name" id="pet-room-name">—</div>
+                <div class="pet-room-role" id="pet-room-role">—</div>
+                <div class="pet-room-chips" id="pet-room-chips">
+                  <div class="pet-room-status-chip mood" id="chip-mood">
+                    <span class="chip-label">Mood</span>
+                    <span class="chip-value" id="chip-mood-value">—</span>
+                  </div>
+                  <div class="pet-room-status-chip presence" id="chip-presence">
+                    <span class="chip-label">Presence</span>
+                    <span class="chip-value" id="chip-presence-value">—</span>
+                  </div>
+                  <div class="pet-room-status-chip energy" id="chip-energy">
+                    <span class="chip-label">Energy</span>
+                    <span class="chip-value" id="chip-energy-value">—</span>
+                  </div>
+                  <div class="pet-room-status-chip bond" id="chip-bond">
+                    <span class="chip-label">Bond</span>
+                    <span class="chip-value" id="chip-bond-value">—</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="pet-avatar-area">
             <div class="pet-avatar" id="pet-avatar">
               <div class="robot-antenna"></div>
@@ -556,11 +642,11 @@ button{border:0;cursor:pointer}
             <div class="pet-stat food"><div class="label">Compute Food</div><div class="value" id="stat-food">—</div><div class="bar"><div class="bar-fill" id="bar-food"></div></div></div>
           </div>
           <div class="pet-actions">
-            <button class="pet-action-btn primary" id="pet-feed-btn" type="button">Feed (100)</button>
-            <button class="pet-action-btn" id="pet-pat-btn" type="button">Pat</button>
-            <button class="pet-action-btn" id="pet-comfort-btn" type="button">Comfort</button>
-            <button class="pet-action-btn" id="pet-rest-btn" type="button">Rest</button>
-            <button class="pet-action-btn" id="pet-play-btn" type="button">Play</button>
+            <button class="pet-action-btn primary" id="pet-feed-btn" type="button">Feed<span class="action-hint">100 food</span></button>
+            <button class="pet-action-btn" id="pet-pat-btn" type="button">Pat<span class="action-hint">comfort</span></button>
+            <button class="pet-action-btn" id="pet-comfort-btn" type="button">Comfort<span class="action-hint">soothe</span></button>
+            <button class="pet-action-btn" id="pet-rest-btn" type="button">Rest<span class="action-hint">restore</span></button>
+            <button class="pet-action-btn" id="pet-play-btn" type="button">Play<span class="action-hint">light care</span></button>
           </div>
           <div class="pet-room-reaction" id="pet-room-reaction" style="display:none">
             <div class="pet-room-reaction-text" id="pet-room-reaction-text"></div>
@@ -791,6 +877,22 @@ button{border:0;cursor:pointer}
     document.getElementById('pet-name').textContent = id.name;
     document.getElementById('pet-species').textContent = id.species;
     document.getElementById('pet-personality').textContent = (id.personality_traits||[]).join(', ');
+    // Design shell markers
+    var roomNameEl = document.getElementById('pet-room-name');
+    if(roomNameEl) roomNameEl.textContent = id.name || 'Nora-01';
+    var roomRoleEl = document.getElementById('pet-room-role');
+    if(roomRoleEl) roomRoleEl.textContent = id.relationship_role || 'ceramic desktop pet agent';
+    // Status chips
+    var expr = expressionFromState(st);
+    var pres = presenceFromState(st);
+    var chipMood = document.getElementById('chip-mood-value');
+    if(chipMood) chipMood.textContent = expr ? expr.label : '—';
+    var chipPresence = document.getElementById('chip-presence-value');
+    if(chipPresence) chipPresence.textContent = pres ? pres.label : '—';
+    var chipEnergy = document.getElementById('chip-energy-value');
+    if(chipEnergy) chipEnergy.textContent = st.energy != null ? st.energy : '—';
+    var chipBond = document.getElementById('chip-bond-value');
+    if(chipBond) chipBond.textContent = st.bond != null ? st.bond : '—';
     // Mood summary
     var moodEl = document.getElementById('pet-mood-summary');
     if(moodEl) moodEl.textContent = getMoodSummary(id.name, st);

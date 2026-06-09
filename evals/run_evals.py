@@ -260,6 +260,12 @@ def main() -> int:
         EvalCase("skill_shelf_no_marketplace_native_pwa_or_surveillance_copy", eval_skill_shelf_no_marketplace_native_pwa_or_surveillance_copy),
         EvalCase("skill_shelf_no_stale_content_on_empty", eval_skill_shelf_no_stale_content_on_empty),
         EvalCase("skill_shelf_rejects_secret_like_skills", eval_skill_shelf_rejects_secret_like_skills),
+        # TASK-180B: Pencil design restoration eval coverage
+        EvalCase("pencil_design_contract_present", eval_pencil_design_contract_present),
+        EvalCase("pet_room_design_markers_present", eval_pet_room_design_markers_present),
+        EvalCase("pet_room_design_tokens_match_pencil", eval_pet_room_design_tokens_match_pencil),
+        EvalCase("pet_room_design_local_asset_only", eval_pet_room_design_local_asset_only),
+        EvalCase("pet_room_design_no_scope_drift_copy", eval_pet_room_design_no_scope_drift_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4495,6 +4501,105 @@ def eval_skill_shelf_rejects_secret_like_skills():
     has_secret_call = ("issecretlike" in fn_body or "issecret" in fn_body or
                        "secret" in fn_body or "sensitive" in fn_body)
     assert has_secret_call, "skill mapping function does not call secret-like filter"
+
+
+# --- TASK-180B: Pencil design restoration eval coverage ---
+
+
+def _skip_if_no_pencil_design():
+    """Skip if TASK-180A pencil design restoration is not implemented."""
+    try:
+        contract = PROJECT_ROOT / "docs" / "knowledge" / "NORA_PET_ROOM_FRONTEND_CONTRACT.md"
+        if not contract.exists():
+            raise AttributeError("contract doc not found")
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "pet-room-design-shell" not in html and "pet-room-canvas" not in html:
+            raise AttributeError("design markers not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-180A not integrated: pencil design restoration not available")
+
+
+def eval_pencil_design_contract_present():
+    """Contract doc exists and references design source, canvas, colors, hero asset, and markers."""
+    _skip_if_no_pencil_design()
+    contract = (PROJECT_ROOT / "docs" / "knowledge" / "NORA_PET_ROOM_FRONTEND_CONTRACT.md").read_text(encoding="utf-8").lower()
+    required = [
+        "nora_pet_web_ui.pen", "room canvas", "880", "850",
+        "#f5f3ee", "#d8d1c8", "#f1eee7", "#ddd5ca",
+        "designs/images/generated-1780975241297.png", "mini_agent/static/nora-01-hero.jpg",
+        "pet-room-design-shell", "pet-room-canvas", "pet-room-hero-image", "pet-room-status-chip",
+    ]
+    missing = [r for r in required if r not in contract]
+    assert not missing, f"contract doc missing references: {missing}"
+
+
+def eval_pet_room_design_markers_present():
+    """Web UI contains all required design markers from TASK-180A."""
+    _skip_if_no_pencil_design()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required = [
+        "pet-room-design-shell", "pet-room-canvas",
+        "pet-room-hero-image", "pet-room-status-chip",
+    ]
+    missing = [m for m in required if m not in html]
+    assert not missing, f"Web UI missing design markers: {missing}"
+
+
+def eval_pet_room_design_tokens_match_pencil():
+    """Web UI contains key design tokens/colors from Pencil source."""
+    _skip_if_no_pencil_design()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Key colors from Pencil design
+    required_tokens = ["#f5f3ee", "#d8d1c8", "#f1eee7", "#ddd5ca"]
+    missing = [t for t in required_tokens if t not in html]
+    assert not missing, f"Web UI missing Pencil design tokens: {missing}"
+
+
+def eval_pet_room_design_local_asset_only():
+    """Hero image is local/repo-controlled, no external http/https image source."""
+    _skip_if_no_pencil_design()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    asset = PROJECT_ROOT / "mini_agent" / "static" / "nora-01-hero.jpg"
+    assert asset.exists(), "local Nora-01 hero asset is missing"
+    assert "/static/nora-01-hero.jpg" in html, "Web UI does not reference local Nora-01 hero asset"
+    import re
+    # Find hero image element
+    hero_match = re.search(r'pet-room-hero-image[\s\S]{0,500}', html)
+    if hero_match:
+        hero_section = hero_match.group(0)
+        # Must not have external http/https image sources
+        assert "http://" not in hero_section, f"hero image uses external HTTP source: {hero_section[:200]}"
+        assert "https://" not in hero_section, f"hero image uses external HTTPS source: {hero_section[:200]}"
+
+
+def eval_pet_room_design_no_scope_drift_copy():
+    """No copy implies marketplace, plugin store, premium skills, voice cloning, or scope drift."""
+    _skip_if_no_pencil_design()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "plugin store", "premium skill", "buy skill", "purchase skill",
+        "install plugin", "marketplace",
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in design UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in design UI"
 
 
 def eval_cli_multiline_input():

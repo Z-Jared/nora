@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 50%
+- Percent: 55%
 - Status: in progress
-- Current focus: Next bounded Voice & Presence slice after skill ability shelf integration.
+- Current focus: Pencil-restored Pet Room UI and next frontend architecture extraction slice.
 
 ## Completed This Phase
 
@@ -116,16 +116,23 @@ Last updated: 2026-06-09
   - Skill shelf updates are DOM/text-only and read-only: no tool/plugin execution, no fetch, no provider/network call, no food debit, no durable task, no activity/relationship-memory write, and no voice/native/PWA/3D/marketplace drift.
   - Deterministic coverage locks markers, mapping rules, read-only/no-tool behavior, no marketplace/surveillance copy, stale-content cleanup, secret-like filtering, and TASK-178 coverage preservation.
   - Verification is green: 372 targeted tests OK, 714 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pencil Pet Room design restoration:
+  - `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md` now records `designs/nora_pet_web_ui.pen` `Room canvas` as the Pet Room front-end source of truth.
+  - Pet Room now includes a warm Pencil-derived design shell, wall/floor canvas, local ceramic Nora-01 hero asset, CSS fallback, name/role display, and Mood/Presence/Energy/Bond status chips.
+  - The source asset path remains `designs/images/generated-1780975241297.png`; the file bytes are JPEG, so the Web UI uses a controlled static copy at `mini_agent/static/nora-01-hero.jpg`.
+  - Existing Pet Room functions remain preserved: food/status, identity editor, speech bubble/consent, expression/presence, greeting/reaction, skill shelf, diary/memory/actions.
+  - Deterministic coverage locks the contract, markers, Pencil color tokens, local asset path/existence, no external hero image URL, and no marketplace/voice/native/PWA/3D scope drift.
+  - Verification is green: 378 targeted tests OK, 719 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None currently assigned after TASK-179 integration.
+- TASK-180 integration approved; final commit/push in progress.
 
 ## Next
 
-1. Decide the next bounded Phase 2 Voice & Presence slice or pause for the requested UI redesign/Pencil-first direction.
-2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
-3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
-4. After TASK-180A/B lands, follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: finish Pencil restoration first, then extract native design tokens/CSS modules, `api.js`, and Pet Room components before considering Vite/React.
+1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: extract native design tokens and Pet Room CSS modules next.
+2. Then extract `api.js` without endpoint changes.
+3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
 ## Phase 1 Exit Criteria
 
@@ -176,6 +183,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 50% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, and deterministic skill ability shelf complete
+- Phase 2 Voice & Presence: 55% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, and Pencil Pet Room restoration complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

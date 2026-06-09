@@ -2682,3 +2682,88 @@ result.cardCount = (result.html.match(/pet-skill-card/g) || []).length;
         self.assertFalse(d['hasApiKey'])
         self.assertTrue(d['hasValid'])
         self.assertEqual(d['cardCount'], 1)
+
+
+class PetRoomDesignTests(unittest.TestCase):
+    """Tests for Pet Room design shell and Pencil markers."""
+
+    def test_design_shell_markers_exist(self):
+        """Design shell, canvas, hero image, and status chip markers must exist."""
+        result = _run_node(test_body="""
+result = {};
+result.designShell = !!document.getElementById('pet-room-design-shell');
+result.canvas = !!document.getElementById('pet-room-canvas');
+result.heroImage = !!document.getElementById('pet-room-hero-image');
+result.chips = !!document.getElementById('pet-room-chips');
+""")
+        d = result
+        self.assertTrue(d['designShell'])
+        self.assertTrue(d['canvas'])
+        self.assertTrue(d['heroImage'])
+        self.assertTrue(d['chips'])
+
+    def test_status_chips_exist(self):
+        """All four status chips (mood, presence, energy, bond) must exist."""
+        result = _run_node(test_body="""
+result = {};
+result.moodChip = !!document.getElementById('chip-mood');
+result.presenceChip = !!document.getElementById('chip-presence');
+result.energyChip = !!document.getElementById('chip-energy');
+result.bondChip = !!document.getElementById('chip-bond');
+result.moodValue = !!document.getElementById('chip-mood-value');
+result.presenceValue = !!document.getElementById('chip-presence-value');
+result.energyValue = !!document.getElementById('chip-energy-value');
+result.bondValue = !!document.getElementById('chip-bond-value');
+""")
+        d = result
+        for key in ['moodChip', 'presenceChip', 'energyChip', 'bondChip',
+                     'moodValue', 'presenceValue', 'energyValue', 'bondValue']:
+            self.assertTrue(d[key], f'Missing chip element: {key}')
+
+    def test_pet_room_name_and_role_markers(self):
+        """Pet room name and role markers must exist."""
+        result = _run_node(test_body="""
+result = {};
+result.roomName = !!document.getElementById('pet-room-name');
+result.roomRole = !!document.getElementById('pet-room-role');
+""")
+        d = result
+        self.assertTrue(d['roomName'])
+        self.assertTrue(d['roomRole'])
+
+    def test_hero_image_element_exists(self):
+        """Hero image element must use the local static Nora-01 asset."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn('id="pet-room-hero-image"', html)
+        self.assertIn('class="hero-img"', html)
+        self.assertIn('src="/static/nora-01-hero.jpg"', html)
+        self.assertNotIn('src="http://', html)
+        self.assertNotIn('src="https://', html)
+
+    def test_ceramic_body_fallback_exists(self):
+        """CSS ceramic body fallback must exist for when image fails."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn('class="ceramic-body"', html)
+        self.assertIn('style="display:none"', html)
+        self.assertIn("this.nextElementSibling.style.display='block'", html)
+
+    def test_render_pet_updates_design_markers(self):
+        """renderPet must update room name, role, and chip values."""
+        result = _run_node(test_body="""
+renderPet({
+  identity: {name:'Nora-01', species:'ceramic_cat', relationship_role:'desktop companion', personality_traits:['curious'], speech_style:'warm', skills:['memory'], taste_profile:{}},
+  state: {hunger:25, energy:72, mood:65, bond:41, growth_level:3, compute_food_balance:500}
+});
+result = {};
+result.roomName = document.getElementById('pet-room-name').textContent;
+result.roomRole = document.getElementById('pet-room-role').textContent;
+result.moodValue = document.getElementById('chip-mood-value').textContent;
+result.energyValue = document.getElementById('chip-energy-value').textContent;
+result.bondValue = document.getElementById('chip-bond-value').textContent;
+""")
+        d = result
+        self.assertEqual(d['roomName'], 'Nora-01')
+        self.assertEqual(d['roomRole'], 'desktop companion')
+        self.assertNotEqual(d['moodValue'], '—')
+        self.assertNotEqual(d['energyValue'], '—')
+        self.assertNotEqual(d['bondValue'], '—')
