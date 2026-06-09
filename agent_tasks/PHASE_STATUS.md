@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 45%
+- Percent: 50%
 - Status: in progress
-- Current focus: Pet Room deterministic skill ability shelf as a bounded presence/skill bridge.
+- Current focus: Next bounded Voice & Presence slice after skill ability shelf integration.
 
 ## Completed This Phase
 
@@ -108,15 +108,21 @@ Last updated: 2026-06-09
   - Dynamic reaction text/meta use DOM text APIs.
   - Deterministic coverage locks markers, action/state/result/fallback mapping, add-food normalization, function-body read-only checks, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
   - Verification is green: 356 targeted tests OK, 708 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room deterministic skill ability shelf:
+  - Pet Room now shows a read-only ability shelf derived only from bounded `identity.skills`.
+  - Pet Room exposes stable `pet-skill-shelf`, `pet-skill-list`, `pet-skill-empty`, `pet-skill-card`, and `data-skill-count` markers.
+  - Skill labels are bounded and filtered for non-string, empty, overlong, special-character, and secret-like values including `sk-*`, bearer, api key, token, secret, password, credential, private key, and auth patterns.
+  - Empty or malformed skill renders clear stale `.pet-skill-card` content before returning.
+  - Skill shelf updates are DOM/text-only and read-only: no tool/plugin execution, no fetch, no provider/network call, no food debit, no durable task, no activity/relationship-memory write, and no voice/native/PWA/3D/marketplace drift.
+  - Deterministic coverage locks markers, mapping rules, read-only/no-tool behavior, no marketplace/surveillance copy, stale-content cleanup, secret-like filtering, and TASK-178 coverage preservation.
+  - Verification is green: 372 targeted tests OK, 714 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-
-- TASK-179A: Pet Room deterministic skill ability shelf.
-- TASK-179B: Skill ability shelf deterministic eval and safety coverage.
+- None currently assigned after TASK-179 integration.
 
 ## Next
 
-1. Complete TASK-179A/TASK-179B through PM initial review and reviewer gate.
+1. Decide the next bounded Phase 2 Voice & Presence slice or pause for the requested UI redesign/Pencil-first direction.
 2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -169,6 +175,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 45% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, and deterministic interaction reactions complete
+- Phase 2 Voice & Presence: 50% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, and deterministic skill ability shelf complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

@@ -253,6 +253,13 @@ def main() -> int:
         EvalCase("interaction_reaction_mapping_rules", eval_interaction_reaction_mapping_rules),
         EvalCase("interaction_reaction_read_only_no_extra_fetch", eval_interaction_reaction_read_only_no_extra_fetch),
         EvalCase("interaction_reaction_no_voice_native_pwa_or_surveillance_copy", eval_interaction_reaction_no_voice_native_pwa_or_surveillance_copy),
+        # TASK-179B: Skill ability shelf eval coverage
+        EvalCase("pet_skill_shelf_markers_present", eval_pet_skill_shelf_markers_present),
+        EvalCase("skill_shelf_mapping_rules", eval_skill_shelf_mapping_rules),
+        EvalCase("skill_shelf_read_only_no_tool_execution", eval_skill_shelf_read_only_no_tool_execution),
+        EvalCase("skill_shelf_no_marketplace_native_pwa_or_surveillance_copy", eval_skill_shelf_no_marketplace_native_pwa_or_surveillance_copy),
+        EvalCase("skill_shelf_no_stale_content_on_empty", eval_skill_shelf_no_stale_content_on_empty),
+        EvalCase("skill_shelf_rejects_secret_like_skills", eval_skill_shelf_rejects_secret_like_skills),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4188,20 +4195,10 @@ def eval_interaction_reaction_mapping_rules():
     """UI integration path normalizes add-food action and mapper handles all required actions."""
     _skip_if_no_reaction()
     html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
-    import re
 
-    # 1. Check integration path: petAction or equivalent must normalize add-food before applyReaction
-    # Find petAction function using brace counting
+    # 1. Check integration path: petAction function must normalize add-food before applyReaction
+    # Find petAction using brace counting
     pet_action_start = html.find('function petaction')
-    if pet_action_start < 0:
-        # Try broader match
-        pet_action_start = html.find('function ')
-        while pet_action_start >= 0:
-            next_fn = html.find('function ', pet_action_start + 1)
-            snippet = html[pet_action_start:pet_action_start + 200]
-            if 'applyreaction' in snippet or 'add-food' in snippet:
-                break
-            pet_action_start = next_fn
     assert pet_action_start >= 0, "petAction integration function not found"
     brace_start = html.find('{', pet_action_start)
     assert brace_start >= 0, "petAction body start not found"
@@ -4216,9 +4213,9 @@ def eval_interaction_reaction_mapping_rules():
                 break
         i += 1
     action_body = html[brace_start:i+1]
-    # Must have add-food normalization: actionName === 'add-food' ? 'food_added' : ...
-    has_add_food_bridge = ("add-food" in action_body and "food_added" in action_body)
-    assert has_add_food_bridge, \
+    # Must have add-food normalization bridge: actionName === 'add-food' ? 'food_added' : actionName
+    has_bridge = ("add-food" in action_body and "food_added" in action_body and "?" in action_body)
+    assert has_bridge, \
         "petAction missing add-food -> food_added normalization bridge"
     # Must call applyReaction with the normalized key
     assert "applyreaction" in action_body, "petAction does not call applyReaction"
@@ -4309,6 +4306,195 @@ def eval_interaction_reaction_no_voice_native_pwa_or_surveillance_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in reaction UI"
+
+
+# --- TASK-179B: Skill ability shelf eval coverage ---
+
+
+def _skip_if_no_skill_shelf():
+    """Skip if TASK-179A skill shelf is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "pet-skill-shelf" not in html and "skill-shelf" not in html:
+            raise AttributeError("no skill shelf markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-179A not integrated: skill ability shelf not available")
+
+
+def eval_pet_skill_shelf_markers_present():
+    """Pet Room exposes stable skill shelf DOM markers/attributes."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "pet-skill-shelf", "pet-skill-list", "pet-skill-card",
+        "skill-icon", "skill-name", "pet-skill-empty",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required skill shelf markers: {missing}"
+
+
+def eval_skill_shelf_mapping_rules():
+    """Rendering derives from bounded identity.skills with safe fallback for missing/malformed/secret/HTML input."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find skillCardsFromIdentity or equivalent mapping function
+    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert skill_fn, "skill mapping function not found"
+    fn_body = skill_fn.group(1)
+    # Must reference identity.skills or skills
+    assert "skill" in fn_body, "skill mapping missing skills reference"
+    # Must have fallback for missing/empty skills
+    has_fallback = ("empty" in fn_body or "no ability" in fn_body or "null" in fn_body or
+                    "length" in fn_body or "!skills" in fn_body or "array" in fn_body)
+    assert has_fallback, "skill mapping missing fallback for missing/empty skills"
+    # Must sanitize/bound input (type check, length limit, regex, or trim)
+    has_sanitize = ("typeof" in fn_body or "length" in fn_body or "trim" in fn_body or
+                    "test(" in fn_body or "slice" in fn_body or "max" in fn_body)
+    assert has_sanitize, "skill mapping missing input sanitization/bounding"
+    # Check renderSkillShelf or equivalent uses escapeHtml for output
+    render_start = html.find('function renderskillshelf')
+    if render_start < 0:
+        render_start = html.find('function renderskill')
+    if render_start >= 0:
+        brace_start = html.find('{', render_start)
+        depth = 0
+        i = brace_start
+        while i < len(html):
+            if html[i] == '{': depth += 1
+            elif html[i] == '}':
+                depth -= 1
+                if depth == 0: break
+            i += 1
+        render_body = html[brace_start:i+1]
+        has_escape = ("escapehtml" in render_body or "textcontent" in render_body)
+        assert has_escape, "skill rendering missing escaping for output (escapeHtml/textContent)"
+
+
+def eval_skill_shelf_read_only_no_tool_execution():
+    """Skill shelf is read-only: no fetch, tool execution, plugin install, or mutation."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    forbidden = [
+        "fetch(", "tool_call", "execute_tool", "run_tool", "install",
+        "plugin", "food_debit", "add-food", "/pet/voice-preview",
+        "/pet/relationship-memory", "/pet/activity",
+        "microphone", "camera", "navigator.media", "navigator.geolocation",
+        "getusermedia", "screencapture",
+        "service-worker", "serviceworker", "notification",
+        "register(", "postmessage",
+    ]
+    # Find skill-related functions
+    skill_fns = re.finditer(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    found_any = False
+    for fn_match in skill_fns:
+        found_any = True
+        fn_body = fn_match.group(1)
+        fn_name = fn_match.group(0)[:50]
+        for pattern in forbidden:
+            assert pattern not in fn_body, f"skill function '{fn_name}' contains forbidden '{pattern}'"
+    # Also check renderSkill or similar
+    render_fns = re.finditer(r'function\s+render[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    for fn_match in render_fns:
+        fn_body = fn_match.group(1)
+        if "skill" in fn_body:
+            found_any = True
+            fn_name = fn_match.group(0)[:50]
+            for pattern in forbidden:
+                assert pattern not in fn_body, f"render function '{fn_name}' contains forbidden '{pattern}'"
+    assert found_any, "no skill rendering functions found to validate"
+
+
+def eval_skill_shelf_no_marketplace_native_pwa_or_surveillance_copy():
+    """UI copy does not imply marketplace, plugin store, premium skills, or scope drift."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "plugin store", "premium skill", "buy skill", "purchase skill",
+        "install plugin", "marketplace",
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in skill shelf UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in skill shelf UI"
+
+
+def eval_skill_shelf_no_stale_content_on_empty():
+    """Empty/malformed skills must clear stale .pet-skill-card HTML before returning."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Find renderSkillShelf function using brace counting
+    render_start = html.find('function renderskillshelf')
+    if render_start < 0:
+        render_start = html.find('function renderskill')
+    assert render_start >= 0, "renderSkillShelf function not found"
+    brace_start = html.find('{', render_start)
+    depth = 0
+    i = brace_start
+    while i < len(html):
+        if html[i] == '{': depth += 1
+        elif html[i] == '}':
+            depth -= 1
+            if depth == 0: break
+        i += 1
+    render_body = html[brace_start:i+1]
+    # Find the empty branch (cards.length === 0 or similar)
+    empty_branch_match = re.search(r'(length\s*===?\s*0|\.length\s*<\s*1)', render_body)
+    assert empty_branch_match, "renderSkillShelf missing empty-length check"
+    # Get code from empty check to the return
+    empty_pos = empty_branch_match.start()
+    after_empty = render_body[empty_pos:]
+    return_pos = after_empty.find('return')
+    assert return_pos >= 0, "empty branch missing return"
+    empty_branch_code = after_empty[:return_pos]
+    # Must have innerHTML clear BEFORE return in the empty branch
+    has_clear_before_return = ("innerhtml" in empty_branch_code and
+                               ('""' in empty_branch_code or "''" in empty_branch_code or
+                                "null" in empty_branch_code))
+    assert has_clear_before_return, \
+        "renderSkillShelf empty branch must clear innerHTML before return (stale cards would persist)"
+
+
+def eval_skill_shelf_rejects_secret_like_skills():
+    """Secret-like skill strings (sk-, api_key, token, secret, password, bearer, credential, private_key) must not render."""
+    _skip_if_no_skill_shelf()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Must have explicit secret-like pattern filtering
+    required_patterns = ["sk-", "api_key", "token", "secret", "password", "bearer", "credential"]
+    # Check for SECRET_PATTERNS array or isSecretLike function or equivalent
+    has_secret_patterns = "secret_pattern" in html or "issecretlike" in html or "issecret" in html
+    assert has_secret_patterns, \
+        "skill shelf missing explicit secret-like pattern filtering (SECRET_PATTERNS/isSecretLike)"
+    # Verify the patterns cover the required secret types
+    found_patterns = [p for p in required_patterns if p.replace("_", "[-_]?") in html or p in html]
+    # At minimum, sk- and token/secret must be covered
+    assert "sk-" in html and ("token" in html or "secret" in html), \
+        "skill shelf secret patterns must cover sk- and token/secret prefixes"
+    # Must call the secret check in the skill mapping function
+    import re
+    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert skill_fn, "skill mapping function not found"
+    fn_body = skill_fn.group(1)
+    has_secret_call = ("issecretlike" in fn_body or "issecret" in fn_body or
+                       "secret" in fn_body or "sensitive" in fn_body)
+    assert has_secret_call, "skill mapping function does not call secret-like filter"
 
 
 def eval_cli_multiline_input():

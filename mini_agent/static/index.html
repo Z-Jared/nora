@@ -263,6 +263,13 @@ button{border:0;cursor:pointer}
 .pet-expression-state .expr-icon{font-size:14px}
 .pet-expression-state .expr-label{font-weight:700;color:var(--ink)}
 .pet-expression-state .expr-detail{font-size:10px;color:var(--muted)}
+.pet-skill-shelf{margin-top:12px}
+.pet-skill-shelf h4{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em}
+.pet-skill-list{display:flex;flex-wrap:wrap;gap:6px}
+.pet-skill-card{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--card);font-size:12px;color:var(--ink)}
+.pet-skill-card .skill-icon{font-size:14px}
+.pet-skill-card .skill-name{font-weight:600}
+.pet-skill-empty{font-size:12px;color:var(--muted);font-style:italic}
 .pet-identity h2{font-size:22px;font-weight:800;margin-bottom:4px}
 .pet-identity .species{font-size:13px;color:var(--muted);margin-bottom:2px}
 .pet-identity .personality{font-size:12px;color:var(--accent);font-weight:600}
@@ -493,6 +500,12 @@ button{border:0;cursor:pointer}
               <div class="personality" id="pet-personality">—</div>
               <div class="pet-mood-summary" id="pet-mood-summary"></div>
               <div class="pet-identity-details" id="pet-identity-details"></div>
+              <div class="pet-skill-shelf" id="pet-skill-shelf" data-skill-count="0">
+                <h4>Abilities</h4>
+                <div class="pet-skill-list" id="pet-skill-list">
+                  <div class="pet-skill-empty" id="pet-skill-empty">No abilities yet.</div>
+                </div>
+              </div>
               <div class="pet-expression-state" id="pet-expression-state">
                 <span class="expr-icon" id="pet-expression-icon"></span>
                 <span class="expr-label" id="pet-expression-label"></span>
@@ -810,6 +823,7 @@ button{border:0;cursor:pointer}
     applyExpression(st);
     applyPresence(st);
     applyRoomGreeting(st);
+    renderSkillShelf(id, st);
   }
 
   function expressionFromState(st){
@@ -933,6 +947,67 @@ button{border:0;cursor:pointer}
     root.setAttribute('data-greeting', greeting.key);
     textEl.textContent = greeting.text;
     if(metaEl) metaEl.textContent = greeting.meta;
+  }
+
+  var SKILL_ICONS = {
+    'memory': '🧠', 'patrol': '🛡️', 'chat': '💬', 'code': '💻',
+    'research': '🔍', 'browse': '🌐', 'plan': '📋', 'write': '✏️',
+    'read': '📖', 'watch': '👁️', 'build': '🔧', 'test': '🧪',
+    'deploy': '🚀', 'monitor': '📊', 'analyze': '📈', 'summarize': '📝',
+    'translate': '🌍', 'draw': '🎨', 'play': '🎮', 'sing': '🎵',
+    'cook': '🍳', 'garden': '🌱', 'exercise': '💪', 'meditate': '🧘',
+  };
+
+  var SECRET_PATTERNS = [/sk[-_]/i, /bearer/i, /api[_-]?key/i, /token/i, /secret/i, /password/i, /passwd/i, /credential/i, /private[_-]?key/i, /auth/i];
+
+  function isSecretLike(text){
+    if(!text) return false;
+    var lower = text.toLowerCase();
+    for(var i = 0; i < SECRET_PATTERNS.length; i++){
+      if(SECRET_PATTERNS[i].test(lower)) return true;
+    }
+    return false;
+  }
+
+  function skillCardsFromIdentity(identity, state){
+    var skills = identity && identity.skills;
+    if(!skills || !Array.isArray(skills) || skills.length === 0) return [];
+    var result = [];
+    for(var i = 0; i < skills.length; i++){
+      var raw = skills[i];
+      if(typeof raw !== 'string') continue;
+      var name = raw.trim();
+      if(!name || name.length > 50) continue;
+      // Sanitize: only allow alphanumeric, dash, underscore, space
+      if(!/^[a-zA-Z0-9_\- ]+$/.test(name)) continue;
+      // Reject secret-like skill labels
+      if(isSecretLike(name)) continue;
+      var icon = SKILL_ICONS[name.toLowerCase()] || '⚡';
+      result.push({name: name, icon: icon});
+    }
+    return result;
+  }
+
+  function renderSkillShelf(identity, state){
+    var shelf = document.getElementById('pet-skill-shelf');
+    var listEl = document.getElementById('pet-skill-list');
+    var emptyEl = document.getElementById('pet-skill-empty');
+    if(!shelf || !listEl) return;
+    var cards = skillCardsFromIdentity(identity, state);
+    shelf.setAttribute('data-skill-count', String(cards.length));
+    if(cards.length === 0){
+      listEl.innerHTML = '';
+      if(emptyEl) emptyEl.style.display = '';
+      return;
+    }
+    if(emptyEl) emptyEl.style.display = 'none';
+    // Build card elements
+    var html = '';
+    for(var i = 0; i < cards.length; i++){
+      var c = cards[i];
+      html += '<div class="pet-skill-card"><span class="skill-icon">' + escapeHtml(c.icon) + '</span><span class="skill-name">' + escapeHtml(c.name) + '</span></div>';
+    }
+    listEl.innerHTML = html;
   }
 
   function getMoodSummary(name, st){

@@ -2474,3 +2474,211 @@ result = {capturedKey: _capturedReactionKey};
 """)
         d = result
         self.assertEqual(d['capturedKey'], 'food_added')
+
+
+class PetRoomSkillShelfTests(unittest.TestCase):
+    """Tests for the skill ability shelf in the Pet Room."""
+
+    def test_skill_shelf_dom_markers_exist(self):
+        """Skill shelf DOM markers must exist."""
+        result = _run_node(test_body="""
+result = {};
+result.shelf = !!document.getElementById('pet-skill-shelf');
+result.list = !!document.getElementById('pet-skill-list');
+result.empty = !!document.getElementById('pet-skill-empty');
+""")
+        d = result
+        self.assertTrue(d['shelf'])
+        self.assertTrue(d['list'])
+        self.assertTrue(d['empty'])
+
+    def test_skill_cards_from_valid_skills(self):
+        """Valid skills should produce correct cards."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:['memory','patrol','chat']}, {});
+result = {count: cards.length, names: cards.map(function(c){return c.name}), icons: cards.map(function(c){return c.icon})};
+""")
+        d = result
+        self.assertEqual(d['count'], 3)
+        self.assertEqual(d['names'], ['memory', 'patrol', 'chat'])
+        self.assertEqual(d['icons'], ['🧠', '🛡️', '💬'])
+
+    def test_skill_cards_unknown_skill_gets_default_icon(self):
+        """Unknown skills should get default icon."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:['customAbility']}, {});
+result = {icon: cards[0] ? cards[0].icon : null};
+""")
+        d = result
+        self.assertEqual(d['icon'], '⚡')
+
+    def test_skill_cards_empty_skills(self):
+        """Empty skills array should return empty."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:[]}, {});
+result = {count: cards.length};
+""")
+        d = result
+        self.assertEqual(d['count'], 0)
+
+    def test_skill_cards_null_skills(self):
+        """Null skills should return empty."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:null}, {});
+result = {count: cards.length};
+""")
+        d = result
+        self.assertEqual(d['count'], 0)
+
+    def test_skill_cards_undefined_identity(self):
+        """Undefined identity should return empty."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity(null, {});
+result = {count: cards.length};
+""")
+        d = result
+        self.assertEqual(d['count'], 0)
+
+    def test_skill_cards_non_string_skills_filtered(self):
+        """Non-string skills should be filtered out."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:['valid', 123, null, '', 'also_valid']}, {});
+result = {count: cards.length, names: cards.map(function(c){return c.name})};
+""")
+        d = result
+        self.assertEqual(d['count'], 2)
+        self.assertEqual(d['names'], ['valid', 'also_valid'])
+
+    def test_skill_cards_long_name_filtered(self):
+        """Skills with names > 50 chars should be filtered."""
+        result = _run_node(test_body="""
+var longName = 'a'.repeat(51);
+var cards = skillCardsFromIdentity({skills:['ok', longName]}, {});
+result = {count: cards.length};
+""")
+        d = result
+        self.assertEqual(d['count'], 1)
+
+    def test_skill_cards_special_chars_filtered(self):
+        """Skills with special characters should be filtered."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:['valid', '<script>alert(1)</script>', 'also-valid', 'has space']}, {});
+result = {count: cards.length, names: cards.map(function(c){return c.name})};
+""")
+        d = result
+        self.assertEqual(d['count'], 3)
+        self.assertIn('valid', d['names'])
+        self.assertIn('also-valid', d['names'])
+        self.assertIn('has space', d['names'])
+
+    def test_render_skill_shelf_with_skills(self):
+        """renderSkillShelf should populate the list with cards."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:['memory','chat']}, {});
+result = {};
+result.count = document.getElementById('pet-skill-shelf').getAttribute('data-skill-count');
+result.html = document.getElementById('pet-skill-list').innerHTML;
+result.emptyHidden = document.getElementById('pet-skill-empty').style.display === 'none';
+""")
+        d = result
+        self.assertEqual(d['count'], '2')
+        self.assertIn('memory', d['html'])
+        self.assertIn('chat', d['html'])
+        self.assertTrue(d['emptyHidden'])
+
+    def test_render_skill_shelf_empty_shows_empty_state(self):
+        """renderSkillShelf with no skills should show empty state."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:[]}, {});
+result = {};
+result.count = document.getElementById('pet-skill-shelf').getAttribute('data-skill-count');
+result.emptyVisible = document.getElementById('pet-skill-empty').style.display !== 'none';
+""")
+        d = result
+        self.assertEqual(d['count'], '0')
+        self.assertTrue(d['emptyVisible'])
+
+    def test_render_skill_shelf_uses_escape_html(self):
+        """Skill names should be escaped via escapeHtml in the rendered HTML."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:['memory','chat']}, {});
+result = {};
+result.html = document.getElementById('pet-skill-list').innerHTML;
+result.hasMemory = result.html.indexOf('memory') >= 0;
+result.hasChat = result.html.indexOf('chat') >= 0;
+result.hasSkillCard = result.html.indexOf('pet-skill-card') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasMemory'])
+        self.assertTrue(d['hasChat'])
+        self.assertTrue(d['hasSkillCard'])
+
+    def test_render_skill_shelf_clears_stale_cards_on_empty(self):
+        """After rendering non-empty then empty, no .pet-skill-card nodes should remain."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:['memory','chat']}, {});
+renderSkillShelf({skills:[]}, {});
+result = {};
+result.cardCount = (document.getElementById('pet-skill-list').innerHTML.match(/pet-skill-card/g) || []).length;
+result.dataCount = document.getElementById('pet-skill-shelf').getAttribute('data-skill-count');
+result.emptyVisible = document.getElementById('pet-skill-empty').style.display !== 'none';
+result.listHtml = document.getElementById('pet-skill-list').innerHTML;
+""")
+        d = result
+        self.assertEqual(d['cardCount'], 0)
+        self.assertEqual(d['dataCount'], '0')
+        self.assertTrue(d['emptyVisible'])
+        self.assertEqual(d['listHtml'], '')
+
+    def test_render_skill_shelf_clears_stale_cards_on_malformed(self):
+        """After rendering non-empty then malformed, no .pet-skill-card nodes should remain."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:['memory','chat']}, {});
+renderSkillShelf({skills:'not-an-array'}, {});
+result = {};
+result.cardCount = (document.getElementById('pet-skill-list').innerHTML.match(/pet-skill-card/g) || []).length;
+result.dataCount = document.getElementById('pet-skill-shelf').getAttribute('data-skill-count');
+result.emptyVisible = document.getElementById('pet-skill-empty').style.display !== 'none';
+""")
+        d = result
+        self.assertEqual(d['cardCount'], 0)
+        self.assertEqual(d['dataCount'], '0')
+        self.assertTrue(d['emptyVisible'])
+
+    def test_skill_cards_rejects_secret_like_strings(self):
+        """Secret-like skill labels must be filtered out."""
+        result = _run_node(test_body="""
+var cards = skillCardsFromIdentity({skills:[
+  'sk-secret-key-12345',
+  'bearer token',
+  'api_key_value',
+  'my_token_here',
+  'the_secret_thing',
+  'password123',
+  'credential_file',
+  'private_key_path',
+  'auth_token',
+  'valid_skill'
+]}, {});
+result = {count: cards.length, names: cards.map(function(c){return c.name})};
+""")
+        d = result
+        self.assertEqual(d['count'], 1)
+        self.assertEqual(d['names'], ['valid_skill'])
+
+    def test_skill_cards_secret_not_in_rendered_html(self):
+        """Secret-like strings must not appear in rendered shelf HTML."""
+        result = _run_node(test_body="""
+renderSkillShelf({skills:['sk-secret-key-12345', 'api_key_prod', 'valid_tool']}, {});
+result = {};
+result.html = document.getElementById('pet-skill-list').innerHTML;
+result.hasSkSecret = result.html.indexOf('sk-secret-key-12345') >= 0;
+result.hasApiKey = result.html.indexOf('api_key_prod') >= 0;
+result.hasValid = result.html.indexOf('valid_tool') >= 0;
+result.cardCount = (result.html.match(/pet-skill-card/g) || []).length;
+""")
+        d = result
+        self.assertFalse(d['hasSkSecret'])
+        self.assertFalse(d['hasApiKey'])
+        self.assertTrue(d['hasValid'])
+        self.assertEqual(d['cardCount'], 1)

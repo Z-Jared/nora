@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-179A: Pet Room deterministic skill ability shelf
-- 架构层: Skill Runtime / Avatar/Room UI / Voice/Expression System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-178A、TASK-178B 完成并集成。
-- 目标: 在 Pet Room 中添加只读 deterministic skill ability shelf，把 `identity.skills` 显示为 Nora-01 的可见能力/装备，让用户从宠物房间直接理解“它会什么”，但不执行工具、不新增技能运行时。
-- 非目标: 不新增 HTTP endpoint；不执行真实 skill/tool/plugin；不修改 skill manifest、plugin runtime、capability router、durable tasks、billing、marketplace、PWA/service worker、desktop native、真实 TTS/audio、relationship memory 或 pet state 持久化语义。
-- 安全边界: DOM/text-only/read-only；skill labels 必须来自 bounded identity skills 并经过 HTML escaping 或 DOM text APIs；不得读取文件、调用 provider/network、执行工具、创建 durable task、扣 food、写 activity/relationship memory；不得新增 marketplace、premium pack、plugin store、购买压力、voice cloning、recording、background listening、surveillance、PWA、notification、3D/VRM 文案。
-- 持久证据: Pet Room 暴露稳定 markers，例如 `pet-skill-shelf`、`pet-skill-list`、`pet-skill-empty`、`pet-skill-card` 和 `data-skill-count`；helper 从 bounded skills/state 派生 display text/meta，unknown/empty/malformed skills fallback bounded。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Skill Runtime；`docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Web/PWA Presence Path；`mini_agent/static/index.html`; `tests/test_webui_smoke.py`.
-
-### TASK-179B: Skill ability shelf deterministic eval and safety coverage
-- 架构层: Eval/Review System / Skill Runtime / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-178A、TASK-178B 完成并集成；与 TASK-179A 并行，但不得改实现文件。
-- 目标: 为 deterministic skill ability shelf 增加 eval/smoke 覆盖，锁住 skill shelf DOM markers、bounded skill rendering、empty/malformed fallback、read-only/no-tool-execution behavior，以及 no marketplace/plugin/native/PWA/voice/3D scope drift。
-- 非目标: 不实现 UI/CSS/JS helper；不修改 `mini_agent/static/index.html`、`mini_agent/pets.py`、`mini_agent/http_server.py`、skill/plugin/runtime 文件或 provider/TTS 文件；不新增真实 skill execution、plugin installation、marketplace、billing、PWA、desktop native、3D/VRM、voice cloning、recording 或 notification 行为。
-- 安全边界: eval 必须阻断 tool execution、plugin install/store/marketplace drift、purchase pressure、hidden cost、voice cloning、recording by default、always/background listening、microphone/camera/screen/location access、PWA/service-worker/notification/native drift、3D/VRM drift；不得只检查文件存在，必须锁住 markers、read-only/no-fetch/no-mutation/no-tool behavior 或 copy contract。
-- 持久证据: 新增 eval case 名称包含 `skill_shelf` 或 `pet_skill`; TASK-179A 合并后 eval 必须 active/pass，不能长期 skip。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md` Skill Runtime；`evals/run_evals.py`; `tests/test_webui_smoke.py`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-179A: Pet Room deterministic skill ability shelf ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 372 tests OK；`python3 evals/run_evals.py` 714 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 安全断言。
+- 内容: Pet Room 新增 read-only deterministic skill ability shelf，从 bounded `identity.skills` 派生可见能力卡片；新增 `pet-skill-shelf`、`pet-skill-list`、`pet-skill-empty`、`pet-skill-card` 和 `data-skill-count` markers；`skillCardsFromIdentity()` 过滤非字符串、空值、超长、特殊字符和 secret-like skill labels；`renderSkillShelf()` 修复空/ malformed 渲染后 stale card 残留问题；动态 skill label/icon 通过 escaping 后渲染，不执行工具、不新增 endpoint、不写 food/activity/relationship memory。
+
+### TASK-179B: Skill ability shelf deterministic eval and safety coverage ✅
+- 完成者: Claude B；Codex PM 初审确认实际 diff 注册 6 个 eval，B_DONE 文本“4 evals”不作为阻塞。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 714 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 372 tests OK；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 安全断言。
+- 内容: 新增 `pet_skill_shelf_markers_present`、`skill_shelf_mapping_rules`、`skill_shelf_read_only_no_tool_execution`、`skill_shelf_no_marketplace_native_pwa_or_surveillance_copy`、`skill_shelf_no_stale_content_on_empty`、`skill_shelf_rejects_secret_like_skills`；覆盖 skill shelf DOM markers、bounded skill rendering、empty/malformed fallback、stale cleanup、secret-like filtering、read-only/no-tool/no-fetch/no-mutation，以及 no marketplace/plugin/native/PWA/voice/3D scope drift；保留 TASK-178 interaction reaction eval 覆盖。
 
 ### TASK-178A: Pet Room deterministic interaction reaction surface ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

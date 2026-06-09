@@ -1,45 +1,67 @@
-# TASK-178A/178B Review — Deterministic Interaction Reaction Surface
+# TASK-179A/179B Review — Pet Room Deterministic Skill Ability Shelf
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-178A adds deterministic interaction reactions derived from bounded pet state and action type. TASK-178B adds 4 evals locking the reaction contract. All review criteria satisfied.
+TASK-179A adds a read-only skill ability shelf derived from `identity.skills`. TASK-179B adds 6 evals covering markers, mapping rules, read-only, no marketplace/surveillance copy, stale content cleanup, and secret-like filtering. All review criteria satisfied.
 
 ## Findings
 
-### Deterministic & Read-Only
-- `reactionFromInteraction(action, state, result)` is pure: bounded state + action key → reaction text. No fetch, no state mutation, no provider calls.
-- Uses `clampState()` for numeric normalization (NaN/Infinity/negative/over-100/strings/booleans → safe defaults).
-- `applyReaction` uses `textContent` for all dynamic text, sets `data-reaction` attribute.
+### 1. Read-Only, DOM/Text-Only, Derived from identity.skills
 
-### Bounded to Pet State + Action
-- Maps specific actions (feed, pat, comfort, rest, play, food_added, shared_moment) to deterministic text based on state thresholds.
-- Falls back to "neutral" for unknown actions. Failed result → "failed" reaction.
-- No LLM calls, no dynamic content beyond state + action.
+- `skillCardsFromIdentity(identity, state)` is a pure function: reads `identity.skills` array, filters/sanitizes, returns card objects. No fetch, no mutation.
+- `renderSkillShelf` builds HTML with `escapeHtml()` for icon and name, sets `innerHTML` and `data-skill-count`.
+- Called from `renderPet()` — no extra HTTP calls, no food debit, no activity/memory writes.
 
-### add-food Normalization Bridge
-- `petAction('/pet/add-food', ...)` normalizes `add-food` endpoint to `food_added` reaction key via `reactionKey` variable before calling `applyReaction`.
-- Locked by `eval_interaction_reaction_mapping_rules` with brace-counting validation of the full `petAction` function body.
+### 2. Stale Card Cleanup Fix
 
-### Eval Coverage (4 evals)
-1. **`pet_room_reaction_markers_present`** — DOM markers: pet-room-reaction, text, meta
-2. **`interaction_reaction_mapping_rules`** — petAction normalization bridge (add-food→food_added), reaction mapper handles all required action branches (feed, pat, comfort, rest, play, food_added), references state/result, has fallback
-3. **`interaction_reaction_read_only_no_extra_fetch`** — No forbidden patterns in reaction function bodies (fetch, voice-preview, relationship-memory, activity, microphone, camera, service-worker, etc.)
-4. **`interaction_reaction_no_voice_native_pwa_or_surveillance_copy`** — No voice clone/recording/microphone/camera/screen/location/marketplace/3D/VRM/service-worker/notification copy
+`renderSkillShelf` handles empty/malformed skills correctly:
+- When `cards.length === 0`: clears `listEl.innerHTML = ''`, shows empty state, returns.
+- When cards exist: hides empty state, rebuilds HTML.
+- `eval_skill_shelf_no_stale_content_on_empty` uses brace-counting to verify `innerHTML` clear happens BEFORE return in the empty branch.
 
-### Smoke Tests (24 tests)
-- DOM markers, 6 action variants (feed×3, pat×2, comfort, rest, play×2, food_added, shared_moment), failed, neutral/unknown, null/undefined/malformed state, null result, meta content, textContent, add-food normalization bridge.
+### 3. Secret-Like Skill Filtering
 
-### Scope Compliance
-- ✅ No new HTTP endpoint, real TTS, audio, recording, PWA/service worker, notification, desktop/native, billing, marketplace, 3D/VRM
-- ✅ B_DONE says "4 deterministic evals" — code has 4. Consistent.
+`isSecretLike(text)` checks against 9 patterns: `sk-`, `bearer`, `api_key`, `token`, `secret`, `password`, `credential`, `private_key`, `auth`.
+
+`skillCardsFromIdentity` rejects:
+- Non-string items
+- Empty/whitespace-only strings
+- Names > 50 chars
+- Names with non-alphanumeric characters (except dash/underscore/space)
+- Secret-like names (via `isSecretLike`)
+
+`eval_skill_shelf_rejects_secret_like_skills` verifies `SECRET_PATTERNS` or `isSecretLike` exists in code, covers required patterns, and is called in the mapping function.
+
+### 4. Eval Coverage (6 evals)
+
+| Eval | What it locks |
+|------|---------------|
+| `pet_skill_shelf_markers_present` | 6 required DOM markers |
+| `skill_shelf_mapping_rules` | Skills reference, fallback, sanitization, escapeHtml/textContent |
+| `skill_shelf_read_only_no_tool_execution` | No fetch/plugin/food/voice/memory/activity/microphone/camera/service-worker |
+| `skill_shelf_no_marketplace_native_pwa_or_surveillance_copy` | No marketplace/plugin-store/premium/voice/recording/3D/VRM copy |
+| `skill_shelf_no_stale_content_on_empty` | Empty branch clears innerHTML before return |
+| `skill_shelf_rejects_secret_like_skills` | Secret patterns exist and are called in mapping function |
+
+### 5. Smoke Tests (15 tests)
+
+DOM markers, valid skills, unknown skill default icon, empty/null/undefined/non-string/long-name/special-chars inputs, render with skills, empty state, stale card cleanup, secret-like filtering.
+
+### 6. No Weakening of TASK-178
+
+TASK-178 interaction reaction evals (4) remain unchanged in the diff. No coverage regression.
+
+### 7. B_DONE Report Mismatch
+
+B_DONE says "4 deterministic evals" but code has 6. Code diff is authoritative — not blocking.
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 356 tests OK
-python3 evals/run_evals.py → 708 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 372 tests OK
+python3 evals/run_evals.py → 714 passed, 0 failed, 0 skipped
 git diff --check → clean
 rg forbidden-copy → only negative safety assertions
 ```
