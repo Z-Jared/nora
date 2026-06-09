@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-182A: Extract Pet Room API boundary into native api.js
-- 架构层: Avatar/Room UI / Frontend Architecture / API Boundary
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-181A、TASK-181B 完成并集成。
-- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 2，创建 `mini_agent/static/api.js`，把 Pet Room 当前 fetch 调用集中为 native ES module API wrapper，保持所有 HTTP endpoint、request/response shape、auth header 行为和 UI 行为不变。
-- 非目标: 不新增/删除/重命名 HTTP endpoint；不改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/tts.py`；不抽 Pet Room component；不引入 React/Vite/TypeScript/npm/build step；不新增外部网络 URL、真实 voice/audio、PWA/native、billing/marketplace、plugin execution 或 3D/VRM。
-- 安全边界: 只允许本地 same-origin API paths；继续使用现有 auth token source 和 JSON handling；动态文本仍由现有 DOM text APIs/escaping 负责；不得引入隐藏 fetch、外部 URL、credential logging、secret echo、microphone/camera/screen/location access。
-- 持久证据: 新增 `mini_agent/static/api.js`；`index.html` 使用 `<script type="module">` 或等价 native module wiring；Pet Room calls for `/pet/current`、`/pet/create`、`/pet/add-food`、`/pet/feed`、`/pet/care`、`/pet/activity`、`/pet/food-status`、`/pet/update-identity`、`/pet/relationship-memory`、`/pet/voice-preview` 通过 API wrapper；现有 DOM markers 和 CSS links 保持稳定。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for external URLs/build-system/scope drift in `mini_agent/static/index.html mini_agent/static/api.js tests/test_webui_smoke.py`。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 2; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`; `mini_agent/http_server.py`.
-
-### TASK-182B: API boundary deterministic coverage
-- 架构层: Eval/Review System / Frontend Architecture / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-181A、TASK-181B 完成并集成；与 TASK-182A 并行，但不得改实现文件。
-- 目标: 为 TASK-182A 的 `api.js` extraction 添加 deterministic eval/smoke 覆盖，确保 API wrapper 存在、endpoint paths 不漂移、auth header 行为保留、index module wiring 本地无 build、Pet Room markers/stylesheet links 继续存在。
-- 非目标: 不实现 API wrapper；不修改 `mini_agent/static/index.html`、`mini_agent/static/api.js`、CSS、Pencil 原稿、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm。
-- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成图片、修改设计稿；必须阻断 external URL/build-system drift，以及 marketplace/plugin store/premium skill、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM drift。
-- 持久证据: 新增 eval 名称包含 `api_boundary` 或 `pet_room_api`; 覆盖 `api.js` exports/wrappers、same-origin endpoint literals、auth header helper/usage、index local module wiring、no endpoint shape drift、TASK-181 CSS/token eval 继续 active/pass。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 2; `evals/run_evals.py`; `tests/test_webui_smoke.py`; `mini_agent/static/index.html`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-182A: Extract Pet Room API boundary into native api.js ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 387 tests OK；`python3 evals/run_evals.py` 729 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy/build-system scan 仅命中既有负面断言、既有 LLM/API 示例 URL 和 eval/test 中的安全扫描词。
+- 内容: 新增 native ES module `mini_agent/static/api.js`，集中 Pet Room same-origin API wrapper 和 `PET_ENDPOINTS` catalog；`index.html` 使用 `<script type="module">` 从 `/static/api.js` 导入 `PetAPI`，并将 `/pet/current`、`/pet/create`、`/pet/add-food`、`/pet/feed`、`/pet/care`、`/pet/activity`、`/pet/food-status`、`/pet/update-identity`、`/pet/relationship-memory`、`/pet/voice-preview` 调用迁移到 wrapper；保留 auth bearer header、JSON/error handling、DOM markers、CSS links 和现有 UI 行为；不新增 endpoint、外部 URL、build step、React/Vite/TypeScript/npm、真实 voice/audio、PWA/native、billing/marketplace、plugin execution 或 3D/VRM。
+
+### TASK-182B: API boundary deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 729 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 387 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 `api_boundary` / `pet_room_api` eval，覆盖 `api.js` 文件存在、native export/no-build/no-window-global、10 个 Pet Room endpoint path 保留、Authorization bearer header 保留、index 本地 module import wiring、无 external URL/build-system/product scope drift；同步修复 speech bubble 与 voice consent 旧 eval，使 `/pet/voice-preview` endpoint 从 HTML 迁移到 `api.js` 后仍检查 `PetAPI.previewVoice`、`pet_id`、`text` 和 consent-before-call contract；补强 smoke tests 锁住 module import、API exports、endpoint catalog 和 Pet Room fetch calls 使用 `PetAPI` wrapper。
 
 ### TASK-181A: Extract Pet Room design tokens and CSS modules ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

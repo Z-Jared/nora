@@ -15,9 +15,16 @@ INDEX_HTML = STATIC_DIR / "index.html"
 
 
 def _extract_script(html: str) -> str:
-    start = html.index("<script>") + len("<script>")
-    end = html.index("</script>")
-    script = html[start:end].strip()
+    # Find the <script type="module"> tag (the main IIFE with import)
+    import re
+    match = re.search(r'<script type="module">(.+?)</script>', html, re.DOTALL)
+    if not match:
+        raise ValueError("No inline <script type=\"module\"> found")
+    script = match.group(1).strip()
+    # Strip the ES module import line (import * as PetAPI from ...)
+    script = re.sub(r'^\s*import\s.*?;\s*\n?', '', script, count=1)
+    # Strip the window.PetAPI assignment line
+    script = re.sub(r'^\s*window\.PetAPI\s*=\s*PetAPI;\s*\n?', '', script, count=1)
     # Strip IIFE wrapper so functions are globally accessible
     if script.startswith("(function(){"):
         script = script[len("(function(){"):]
@@ -126,6 +133,38 @@ function fetch(url, opts) {
 
 const window = { scrollTo() {}, addEventListener() {} };
 const AbortController = class { constructor() { this.signal = {}; } abort() {} };
+
+// Mock PetAPI that delegates to fetch (so _fetchHandler mock still works)
+function _petPost(path, body) {
+  return fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    .then(function(r) { return r.json(); });
+}
+const PetAPI = {
+  getPetCurrent: function() { return fetch('/pet/current').then(function(r){ return r.json(); }); },
+  getPetActivity: function(petId, limit) {
+    var url = '/pet/activity?pet_id=' + encodeURIComponent(petId);
+    if (limit != null) url += '&limit=' + limit;
+    return fetch(url).then(function(r){ return r.json(); });
+  },
+  getPetFoodStatus: function(petId, action) {
+    return fetch('/pet/food-status?pet_id=' + encodeURIComponent(petId) + '&action=' + encodeURIComponent(action))
+      .then(function(r){ return r.json(); });
+  },
+  getRelationshipMemory: function(petId, limit) {
+    var url = '/pet/relationship-memory?pet_id=' + encodeURIComponent(petId);
+    if (limit != null) url += '&limit=' + limit;
+    return fetch(url).then(function(r){ return r.json(); });
+  },
+  createPet: function(body) { return _petPost('/pet/create', body); },
+  addPetFood: function(body) { return _petPost('/pet/add-food', body); },
+  feedPet: function(body) { return _petPost('/pet/feed', body); },
+  carePet: function(body) { return _petPost('/pet/care', body); },
+  updatePetIdentity: function(body) { return _petPost('/pet/update-identity', body); },
+  previewVoice: function(body) { return _petPost('/pet/voice-preview', body); },
+  createRelationshipMemory: function(body) { return _petPost('/pet/relationship-memory', body); },
+  PET_ENDPOINTS: ['/pet/current','/pet/activity','/pet/food-status','/pet/relationship-memory','/pet/create','/pet/add-food','/pet/feed','/pet/care','/pet/update-identity','/pet/voice-preview'],
+  post: _petPost,
+};
 
 """ + setup_js + r"""
 
@@ -2791,3 +2830,77 @@ result.bondValue = document.getElementById('chip-bond-value').textContent;
         self.assertIn('#DDE6DC', css)
         self.assertIn('#ECE3D6', css)
         self.assertIn('#E8DED4', css)
+
+
+class PetAPIModuleTests(unittest.TestCase):
+    """Tests for the PetAPI module loaded from api.js."""
+
+    def test_pet_api_object_exists(self):
+        """PetAPI must be exposed on window after loading api.js."""
+        result = _run_node(test_body="""
+result = {};
+result.exists = typeof PetAPI === 'object';
+result.hasGet = typeof PetAPI.getPetCurrent === 'function';
+result.hasPost = typeof PetAPI.feedPet === 'function';
+""")
+        d = result
+        self.assertTrue(d['exists'])
+        self.assertTrue(d['hasGet'])
+        self.assertTrue(d['hasPost'])
+
+    def test_pet_api_has_all_endpoints(self):
+        """PET_ENDPOINTS must list all 10 Pet Room endpoints."""
+        result = _run_node(test_body="""
+result = {};
+result.endpoints = PetAPI.PET_ENDPOINTS;
+result.count = PetAPI.PET_ENDPOINTS.length;
+""")
+        d = result
+        self.assertEqual(d['count'], 10)
+        self.assertIn('/pet/current', d['endpoints'])
+        self.assertIn('/pet/feed', d['endpoints'])
+        self.assertIn('/pet/care', d['endpoints'])
+        self.assertIn('/pet/voice-preview', d['endpoints'])
+        self.assertIn('/pet/relationship-memory', d['endpoints'])
+
+    def test_pet_api_exposes_post_helper(self):
+        """PetAPI.post must be available for ad-hoc POST calls."""
+        result = _run_node(test_body="""
+result = {};
+result.hasPost = typeof PetAPI.post === 'function';
+""")
+        d = result
+        self.assertTrue(d['hasPost'])
+
+    def test_index_html_uses_module_import(self):
+        """index.html must use <script type='module'> with ES import."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn('type="module"', html)
+        self.assertIn("import * as PetAPI from '/static/api.js'", html)
+
+    def test_api_js_has_exports(self):
+        """api.js must use ES module export statements."""
+        api_path = STATIC_DIR / "api.js"
+        api = api_path.read_text(encoding="utf-8")
+        self.assertIn('export function getPetCurrent', api)
+        self.assertIn('export function feedPet', api)
+        self.assertIn('export var PET_ENDPOINTS', api)
+
+    def test_pet_room_fetch_calls_use_pet_api(self):
+        """Pet Room fetch calls in index.html should use PetAPI, not raw fetch for pet endpoints."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        # Check that the main pet fetch patterns now use PetAPI
+        self.assertIn('PetAPI.getPetCurrent()', html)
+        self.assertIn('PetAPI.getPetActivity(', html)
+        self.assertIn('PetAPI.feedPet', html)
+        self.assertIn('PetAPI.carePet', html)
+        self.assertIn('PetAPI.previewVoice(', html)
+        self.assertIn('PetAPI.updatePetIdentity(', html)
+        self.assertIn('PetAPI.createRelationshipMemory(', html)
+        self.assertIn('PetAPI.getRelationshipMemory(', html)
+        self.assertIn('PetAPI.getPetFoodStatus(', html)
+        # Verify no raw fetch to pet endpoints in the main script
+        # (some raw fetch may exist in non-pet contexts like /chat, /session)
+        self.assertNotIn("fetch('/pet/current'", html)
+        self.assertNotIn("fetch('/pet/feed'", html)
+        self.assertNotIn("fetch('/pet/care'", html)

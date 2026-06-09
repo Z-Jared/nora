@@ -1,59 +1,62 @@
-# TASK-181A/TASK-181B Review — Extract Pet Room Design Tokens and CSS Modules
+# TASK-182A/182B Review — Extract Pet Room API boundary into native api.js
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-181A extracts Pet Room design tokens and CSS into native static CSS files without changing behavior, DOM markers, API calls, or requiring a build step. TASK-181B adds 5 deterministic evals. PM has verified the combined candidate passes all checks.
+TASK-182A extracts Pet Room fetch calls into `api.js` as a native ES module. TASK-182B adds 5 evals and fixes existing speech/voice consent evals for endpoint migration. All review criteria satisfied.
 
 ## Findings
 
-### 1. CSS Extraction Preserves Design Restoration
+### 1. api.js Same-Origin/Auth/JSON/Error Compatibility
 
-The implementation correctly extracts CSS from `index.html` into external files:
+- **Same-origin only**: `api.js` uses `fetch()` with relative paths (`/pet/current`, `/pet/feed`, etc.). No external URLs.
+- **Auth preserved**: `_authHeaders()` reads `#token` input, sets `Authorization: Bearer` header. `_checkAuth()` rejects 401 with `_authError` promise rejection.
+- **JSON/error behavior**: All endpoints use `.then(_checkAuth).then(_json)` pattern. POST helper uses `JSON.stringify(body)`.
+- **No build step**: Pure ES module, no imports from React/Vite/TypeScript/npm/Webpack/Rollup.
 
-- **tokens.css**: Defines CSS custom properties for all Pencil-derived values (canvas colors, wall/floor fills, chip colors, ceramic body, action dock, stat bars, speech bubble, typography)
-- **pet-room.css**: Contains all Pet Room CSS rules using token variables, preserving all selectors and DOM markers
-- **index.html**: Links both CSS files via `<link>` tags, removes inline Pet Room CSS, preserves non-Pet Room UI CSS
+### 2. index.html Module Import Compatibility
 
-### 2. Design Markers Preserved
+- **Module syntax**: `<script type="module">` with `import * as PetAPI from '/static/api.js'` and `window.PetAPI = PetAPI` for IIFE access.
+- **IIFE preserved**: The existing IIFE `(function(){...})()` wrapper is preserved inside the module script.
+- **Test harness updated**: `_extract_script()` handles module syntax, strips import/assignment lines. Mock `PetAPI` object delegates to `fetch()` so `_fetchHandler` mock still works.
+- **All PetAPI calls verified**: `test_pet_room_fetch_calls_use_pet_api` checks all 10 endpoints use PetAPI wrappers, no raw fetch to `/pet/*`.
 
-All TASK-180A design markers are preserved in `index.html`:
-- `pet-room-design-shell`, `pet-room-canvas`, `pet-room-hero-image`, `pet-room-status-chip`
-- `pet-room-name`, `pet-room-role`, chip value IDs
-- `renderPet()` marker updates preserved
+### 3. Pet Room Behavior Preserved
 
-### 3. No Build Step Required
+| Behavior | Status | Evidence |
+|----------|--------|----------|
+| Auth 401 handling | ✅ | `_authError` catch pattern in all `.catch()` handlers |
+| Voice consent no-fetch-before-confirmation | ✅ | `eval_voice_consent_unchecked_no_fetch` updated to check `PetAPI.previewVoice` or `fetch` |
+| Activity/memory/identity/food/status refresh | ✅ | All `loadPetActivity`, `loadRelationshipMemories`, `loadCostEstimates`, `loadTodayDiary` use PetAPI |
+| Speech bubble preview | ✅ | `eval_speech_bubble_escapes_preview_text` updated to check `previewVoice` or `/pet/voice-preview` |
 
-- CSS files served as static assets via `/static/styles/` paths
-- No React/Vite/TypeScript/npm/Webpack/Rollup dependencies
-- Local-first architecture preserved
+### 4. Eval Coverage (5 new evals)
 
-### 4. TASK-181B Evals (in claude-b worktree)
+| Eval | What it locks |
+|------|---------------|
+| `api_boundary_file_present` | api.js exists, uses ES module exports, no build tooling, no window global IIFE |
+| `pet_room_api_endpoints_preserved` | All 10 required endpoints present in api.js |
+| `pet_room_api_auth_header_preserved` | Authorization/bearer header present, no console.log of tokens |
+| `pet_room_api_index_module_wired` | index.html uses `<script type="module">` with `import` from local api.js |
+| `api_boundary_no_external_or_build_drift` | No external URLs, no build system markers (React/Vite/TypeScript/npm/Webpack/Rollup) |
 
-5 evals added:
-1. `design_tokens_files_present` — tokens.css exists with Pencil colors and CSS variables
-2. `design_tokens_match_pencil_contract` — radius and warm action color tokens present
-3. `pet_room_css_module_wired` — index.html links both CSS files with local paths
-4. `pet_room_css_preserves_markers` — pet-room.css owns required selectors
-5. `pet_room_css_no_build_or_scope_drift` — No build system or scope drift markers
+**Existing eval fixes**: `eval_speech_bubble_markers_present`, `eval_speech_bubble_escapes_preview_text`, `eval_voice_consent_markers_present`, `eval_voice_consent_unchecked_no_fetch` updated to check api.js for endpoint references.
 
-Also fixed `pet_room_design_tokens_match_pencil` to check HTML + CSS files after extraction.
-
-### 5. PM Verification
-
-PM has verified the combined candidate:
-- `python3 -m unittest tests.test_webui_smoke tests.test_http_server` → 381 tests OK
-- `python3 evals/run_evals.py` → 724 passed, 0 failed, 0 skipped
-- `git diff --check` → clean
-- No external asset URLs or build dependencies detected
-
-### 6. No Scope Drift
+### 5. No Scope Drift
 
 - ✅ No React/Vite/TypeScript/npm/Webpack/Rollup
 - ✅ No external URLs
-- ✅ No voice/audio/recording
-- ✅ No PWA/native
+- ✅ No PWA/native/3D/VRM
 - ✅ No marketplace/payment
-- ✅ No plugin execution
-- ✅ No 3D/VRM
+- ✅ No voice/audio/recording beyond existing preview
+- ✅ Same-origin fetch only
+
+## Verification
+
+```
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 387 tests OK
+python3 evals/run_evals.py → 729 passed, 0 failed, 0 skipped
+git diff --check → clean
+rg forbidden scan → only pre-existing negative assertions
+```

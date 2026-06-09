@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 55%
+- Percent: 60%
 - Status: in progress
-- Current focus: Extracting the Pet Room API boundary into native `api.js` without endpoint changes.
+- Current focus: Splitting Pet Room JavaScript into bounded native modules after the API boundary extraction.
 
 ## Completed This Phase
 
@@ -129,15 +129,20 @@ Last updated: 2026-06-09
   - `mini_agent/static/index.html` links local `/static/styles/tokens.css` and `/static/styles/pet-room.css`, with non-Pet Room CSS left inline for now.
   - Deterministic coverage locks CSS file presence, Pencil tokens after extraction, local stylesheet wiring, selector ownership, and no React/Vite/TypeScript/npm/Webpack/Rollup or product scope drift.
   - Verification is green: 381 targeted tests OK, 724 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native API boundary extraction:
+  - `mini_agent/static/api.js` now owns same-origin Pet Room API wrappers and `PET_ENDPOINTS` for current local endpoints.
+  - `mini_agent/static/index.html` loads the wrapper with `<script type="module">` and routes Pet Room calls through `PetAPI`.
+  - Auth bearer header behavior, JSON parsing, `_authError` handling, request/response shapes, DOM markers, stylesheet links, and existing UI behavior are preserved.
+  - Deterministic coverage locks native exports, endpoint catalog, auth header behavior, local module wiring, no hidden external URL, and no React/Vite/TypeScript/npm/build-system/product scope drift.
+  - Verification is green: 387 targeted tests OK, 729 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-182A: Extract Pet Room API boundary into native `api.js`.
-- TASK-182B: Add deterministic API boundary coverage.
+- None currently assigned after TASK-182 integration.
 
 ## Next
 
-1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: extract `api.js` without endpoint changes.
-2. Then split Pet Room JS into bounded native modules only after API extraction is stable.
+1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 3: extract `mini_agent/static/components/pet-room-canvas.js`.
+2. Keep the canvas component visual/read-only only: wall, floor, Nora-01 hero image, ground shadow, name/role, and Mood/Presence/Energy/Bond chip placement.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -190,6 +195,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 55% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, and Pet Room CSS/token extraction complete
+- Phase 2 Voice & Presence: 60% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, and native Pet Room API boundary extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

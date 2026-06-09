@@ -558,7 +558,9 @@ button{border:0;cursor:pointer}
     </aside>
   </div>
 </div>
-<script>
+<script type="module">
+import * as PetAPI from '/static/api.js';
+window.PetAPI = PetAPI;
 (function(){
   var msgEl = document.getElementById('messages');
   var msgWrap = document.getElementById('messages-wrap');
@@ -640,17 +642,15 @@ button{border:0;cursor:pointer}
   }
 
   function loadPet(){
-    fetch('/pet/current', {headers:authHeaders()}).then(function(r){
-      if(handleAuthError(r)) throw new Error('auth');
-      return r.json();
-    }).then(function(pet){
+    PetAPI.getPetCurrent().then(function(pet){
       currentPet = pet;
       petLoadingEl.style.display = 'none';
       petContentEl.style.display = '';
       renderPet(pet);
       loadPetActivity(pet.pet_id);
       loadRelationshipMemories(pet.pet_id);
-    }).catch(function(){
+    }).catch(function(err){
+      if(err && err._authError){ handleAuthError({status:401}); return; }
       petLoadingEl.textContent = 'Failed to load pet.';
     });
   }
@@ -989,8 +989,8 @@ button{border:0;cursor:pointer}
 
   function loadTodayDiary(petId){
     Promise.all([
-      fetch('/pet/activity?pet_id='+encodeURIComponent(petId)+'&limit=5', {headers:authHeaders()}).then(function(r){return r.json()}).catch(function(){return []}),
-      fetch('/pet/relationship-memory?pet_id='+encodeURIComponent(petId)+'&limit=3', {headers:authHeaders()}).then(function(r){return r.json()}).catch(function(){return []})
+      PetAPI.getPetActivity(petId, 5).catch(function(){return []}),
+      PetAPI.getRelationshipMemory(petId, 3).catch(function(){return []})
     ]).then(function(results){
       var events = results[0] || [];
       var memories = results[1] || [];
@@ -1015,9 +1015,7 @@ button{border:0;cursor:pointer}
   function loadCostEstimates(petId){
     var actions = ['feed','chat','voice','work'];
     Promise.all(actions.map(function(action){
-      return fetch('/pet/food-status?pet_id='+encodeURIComponent(petId)+'&action='+action, {headers:authHeaders()})
-        .then(function(r){ return r.json(); })
-        .catch(function(){ return null; });
+      return PetAPI.getPetFoodStatus(petId, action).catch(function(){ return null; });
     })).then(function(results){
       var table = document.getElementById('pet-cost-table');
       if(!table) return;
@@ -1045,16 +1043,15 @@ button{border:0;cursor:pointer}
   }
 
   function loadPetActivity(petId){
-    fetch('/pet/activity?pet_id='+encodeURIComponent(petId), {headers:authHeaders()}).then(function(r){
-      if(handleAuthError(r)) throw new Error('auth');
-      return r.json();
-    }).then(function(events){
+    PetAPI.getPetActivity(petId).then(function(events){
       var list = document.getElementById('pet-activity-list');
       if(!events.length){list.innerHTML='<div class="pet-loading">No activity yet.</div>';return;}
       list.innerHTML = events.map(function(e){
         var t = e.created_at ? escapeHtml(e.created_at.substring(11,16)) : '';
         return '<div class="pet-event"><span class="type">'+escapeHtml(e.event_type)+'</span><span class="summary">'+escapeHtml(e.summary)+'</span><span class="time">'+t+'</span></div>';
       }).join('');
+    }).catch(function(err){
+      if(err && err._authError) handleAuthError({status:401});
     });
   }
 
@@ -1062,16 +1059,21 @@ button{border:0;cursor:pointer}
     if(btn) btn.disabled = true;
     var actionName = endpoint.split('/').pop();
     var reactionKey = actionName === 'add-food' ? 'food_added' : actionName;
-    fetch(endpoint, {method:'POST', headers:authHeaders(), body:JSON.stringify(body)})
-      .then(function(r){
-        if(handleAuthError(r)) throw new Error('auth');
-        return r.json();
-      })
+    var apiFn = {
+      '/pet/feed': PetAPI.feedPet,
+      '/pet/care': PetAPI.carePet,
+      '/pet/add-food': PetAPI.addPetFood,
+    }[endpoint];
+    var promise = apiFn ? apiFn(body) : PetAPI.post(endpoint, body);
+    promise
       .then(function(result){
         if(result.state) renderPet({identity:currentPet.identity, state:result.state});
         if(currentPet) loadPetActivity(currentPet.pet_id);
         if(result.ok !== false) showRoomNotice(actionName + ' done.');
         applyReaction(reactionKey, currentPet ? currentPet.state : null, result);
+      })
+      .catch(function(err){
+        if(err && err._authError) handleAuthError({status:401});
       })
       .finally(function(){if(btn) btn.disabled = false;});
   }
@@ -1118,13 +1120,7 @@ button{border:0;cursor:pointer}
     var metaEl = document.getElementById('speech-bubble-meta');
     if(!text){ errorEl.textContent = 'Enter text to preview.'; return; }
     if(text.length > 500){ errorEl.textContent = 'Text too long (max 500).'; return; }
-    fetch('/pet/voice-preview', {
-      method:'POST', headers:authHeaders(),
-      body:JSON.stringify({pet_id:currentPet.pet_id, text:text})
-    }).then(function(r){
-      if(handleAuthError(r)) throw new Error('auth');
-      return r.json();
-    }).then(function(result){
+    PetAPI.previewVoice({pet_id:currentPet.pet_id, text:text}).then(function(result){
       if(result.error){
         errorEl.textContent = result.error;
         bubbleEl.classList.remove('visible');
@@ -1144,7 +1140,8 @@ button{border:0;cursor:pointer}
         return '<span class="meta-tag">' + escapeHtml(t) + '</span>';
       }).join('');
       bubbleEl.classList.add('visible');
-    }).catch(function(){
+    }).catch(function(err){
+      if(err && err._authError){ handleAuthError({status:401}); return; }
       errorEl.textContent = 'Preview failed.';
       bubbleEl.classList.remove('visible');
     });
@@ -1153,27 +1150,21 @@ button{border:0;cursor:pointer}
     if(!currentPet) return;
     var summary = prompt('Describe the shared moment:');
     if(!summary || !summary.trim()) return;
-    fetch('/pet/relationship-memory', {
-      method:'POST', headers:authHeaders(),
-      body:JSON.stringify({pet_id:currentPet.pet_id, kind:'shared_moment', summary:summary.trim(), source:'pet_room_demo'})
-    }).then(function(r){
-      if(handleAuthError(r)) throw new Error('auth');
-      return r.json();
-    }).then(function(result){
+    PetAPI.createRelationshipMemory({pet_id:currentPet.pet_id, kind:'shared_moment', summary:summary.trim(), source:'pet_room_demo'})
+    .then(function(result){
       if(!result.error){
         loadRelationshipMemories(currentPet.pet_id);
         loadTodayDiary(currentPet.pet_id);
         showRoomNotice('memory recorded.');
         applyReaction('shared_moment', currentPet ? currentPet.state : null, result);
       }
-    }).catch(function(){});
+    }).catch(function(err){
+      if(err && err._authError) handleAuthError({status:401});
+    });
   };
 
   function loadRelationshipMemories(petId){
-    fetch('/pet/relationship-memory?pet_id='+encodeURIComponent(petId), {headers:authHeaders()}).then(function(r){
-      if(handleAuthError(r)) throw new Error('auth');
-      return r.json();
-    }).then(function(memories){
+    PetAPI.getRelationshipMemory(petId).then(function(memories){
       var list = document.getElementById('pet-memory-list');
       if(!list) return;
       if(!memories.length){list.innerHTML='<div class="pet-loading">No memories yet.</div>';return;}
@@ -1185,7 +1176,9 @@ button{border:0;cursor:pointer}
           + '<div class="mem-meta"><span>importance: '+m.importance+'</span><span>'+t+'</span></div>'
           + '</div>';
       }).join('');
-    }).catch(function(){});
+    }).catch(function(err){
+      if(err && err._authError) handleAuthError({status:401});
+    });
   }
 
   // --- Identity Editor ---
@@ -1237,15 +1230,17 @@ button{border:0;cursor:pointer}
     if(tasteText){
       try{ body.taste_profile = JSON.parse(tasteText); }catch(e){ statusEl.textContent = 'Taste profile: invalid JSON'; statusEl.className = 'editor-status error'; return; }
     }
-    fetch('/pet/update-identity', {method:'POST', headers:authHeaders(), body:JSON.stringify(body)})
-      .then(function(r){ if(handleAuthError(r)) throw new Error('auth'); return r.json(); })
+    PetAPI.updatePetIdentity(body)
       .then(function(result){
         if(result.error){ statusEl.textContent = result.error; statusEl.className = 'editor-status error'; return; }
         currentPet = result;
         renderPet(result);
         statusEl.textContent = 'Identity saved.'; statusEl.className = 'editor-status ok';
       })
-      .catch(function(){ statusEl.textContent = 'Save failed.'; statusEl.className = 'editor-status error'; });
+      .catch(function(err){
+        if(err && err._authError){ handleAuthError({status:401}); statusEl.textContent = 'Auth required.'; statusEl.className = 'editor-status error'; return; }
+        statusEl.textContent = 'Save failed.'; statusEl.className = 'editor-status error';
+      });
   };
 
   navChatEl.onclick = function(){switchView('chat')};

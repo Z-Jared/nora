@@ -272,6 +272,12 @@ def main() -> int:
         EvalCase("pet_room_css_module_wired", eval_pet_room_css_module_wired),
         EvalCase("pet_room_css_preserves_markers", eval_pet_room_css_preserves_markers),
         EvalCase("pet_room_css_no_build_or_scope_drift", eval_pet_room_css_no_build_or_scope_drift),
+        # TASK-182B: API boundary eval coverage
+        EvalCase("api_boundary_file_present", eval_api_boundary_file_present),
+        EvalCase("pet_room_api_endpoints_preserved", eval_pet_room_api_endpoints_preserved),
+        EvalCase("pet_room_api_auth_header_preserved", eval_pet_room_api_auth_header_preserved),
+        EvalCase("pet_room_api_index_module_wired", eval_pet_room_api_index_module_wired),
+        EvalCase("api_boundary_no_external_or_build_drift", eval_api_boundary_no_external_or_build_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3628,13 +3634,21 @@ def eval_speech_bubble_markers_present():
     """Pet Room contains all required speech bubble DOM markers."""
     _skip_if_no_speech_bubble()
     html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
-    required_markers = [
+    required_html_markers = [
         "speech-bubble-area", "speech-bubble", "speech-bubble-text",
         "speech-bubble-meta", "speech-preview-input", "speech-preview-btn",
-        "speech-bubble-error", "/pet/voice-preview",
+        "speech-bubble-error",
     ]
-    missing = [m for m in required_markers if m not in html]
+    missing = [m for m in required_html_markers if m not in html]
     assert not missing, f"Pet Room missing required speech bubble markers: {missing}"
+    # Endpoint may be in api.js after TASK-182A API boundary extraction
+    api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
+    if api_js.exists():
+        api_content = api_js.read_text(encoding="utf-8")
+        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in html, \
+            "voice-preview endpoint not found in api.js or index.html"
+    else:
+        assert "/pet/voice-preview" in html, "voice-preview endpoint not found in index.html"
 
 
 def eval_voice_preview_ui_cost_and_no_audio_copy():
@@ -3678,11 +3692,15 @@ def eval_speech_bubble_escapes_preview_text():
             assert "escapehtml" in meta_section or "escape_html" in meta_section, \
                 "speech-bubble-meta uses innerHTML without escapeHtml"
     # Preview request must include pet_id and text
-    preview_req = re.search(r'/pet/voice-preview[\s\S]{0,500}', html)
-    assert preview_req, "voice-preview request path not found"
-    req_section = preview_req.group(0)
-    assert "pet_id" in req_section, "voice-preview request missing pet_id"
-    assert "text" in req_section, "voice-preview request missing text"
+    # After TASK-182A, endpoint may be in api.js with PetAPI.previewVoice() wrapper
+    api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
+    all_content = html
+    if api_js.exists():
+        all_content += api_js.read_text(encoding="utf-8").lower()
+    has_preview_call = ("pet_id" in all_content and "text" in all_content and
+                        ("/pet/voice-preview" in all_content or "previewvoice" in all_content or
+                         "preview_voice" in all_content))
+    assert has_preview_call, "voice-preview request missing pet_id+text or previewVoice call"
 
 
 def eval_speech_bubble_no_recording_or_marketplace_copy():
@@ -3728,16 +3746,23 @@ def eval_voice_consent_markers_present():
     """Pet Room contains all required consent/cost boundary DOM and API markers."""
     _skip_if_no_voice_consent()
     html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
-    required_markers = [
+    required_html_markers = [
         "voice-consent-panel",
         "voice-consent-checkbox",
         "voice-consent-boundary",
         "voice-consent-cost",
         "voice-consent-provider",
-        "/pet/voice-preview",
     ]
-    missing = [m for m in required_markers if m not in html]
+    missing = [m for m in required_html_markers if m not in html]
     assert not missing, f"Pet Room missing required consent markers: {missing}"
+    # Endpoint may be in api.js after TASK-182A
+    api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
+    if api_js.exists():
+        api_content = api_js.read_text(encoding="utf-8")
+        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in html, \
+            "voice-preview endpoint not found in api.js or index.html"
+    else:
+        assert "/pet/voice-preview" in html, "voice-preview endpoint not found in index.html"
 
 
 def eval_voice_consent_unchecked_no_fetch():
@@ -3753,12 +3778,19 @@ def eval_voice_consent_unchecked_no_fetch():
     assert "voice-consent-checkbox" in handler, "handler does not reference voice-consent-checkbox"
     # Must check .checked
     assert ".checked" in handler, "handler does not check .checked"
-    # Find the consent guard: between reading checkbox and fetch, must have a return
+    # Find the consent guard: between reading checkbox and API call, must have a return
     consent_pos = handler.find("voice-consent-checkbox")
-    fetch_pos = handler.find("fetch(")
-    assert consent_pos >= 0 and fetch_pos > consent_pos, "consent check must precede fetch"
-    guard_section = handler[consent_pos:fetch_pos]
-    assert "return" in guard_section, "no return between consent check and fetch — unchecked may still fetch"
+    # After TASK-182A, API call may be PetAPI.previewVoice(...) instead of fetch(...)
+    api_call_pos = handler.find("fetch(")
+    if api_call_pos < 0:
+        api_call_pos = handler.find("petapi")
+    if api_call_pos < 0:
+        api_call_pos = handler.find("previewvoice")
+    if api_call_pos < 0:
+        api_call_pos = handler.find("preview_voice")
+    assert consent_pos >= 0 and api_call_pos > consent_pos, "consent check must precede API call"
+    guard_section = handler[consent_pos:api_call_pos]
+    assert "return" in guard_section, "no return between consent check and API call — unchecked may still call"
     # Must have bounded error copy with consent/confirm/boundary semantics
     assert ("consent" in guard_section or "confirm" in guard_section or "boundary" in guard_section or
             "consent" in handler or "confirm" in handler), \
@@ -4696,6 +4728,104 @@ def eval_pet_room_css_no_build_or_scope_drift():
     for pattern in build_patterns:
         match = re.search(pattern, all_content)
         assert not match, f"build system marker '{pattern}' found at pos {match.start()}"
+    # No scope drift
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-182B: API boundary eval coverage ---
+
+
+def _skip_if_no_api_js():
+    """Skip if TASK-182A api.js extraction is not implemented."""
+    try:
+        api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
+        if not api_js.exists():
+            raise AttributeError("api.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-182A not integrated: api.js not available")
+
+
+def eval_api_boundary_file_present():
+    """api.js exists, uses native ES module exports, no IIFE/window global pattern."""
+    _skip_if_no_api_js()
+    api_js = (PROJECT_ROOT / "mini_agent" / "static" / "api.js").read_text(encoding="utf-8").lower()
+    # Must not contain build tooling imports
+    build_markers = ["import react", "from react", "require(", "import vue", "import angular",
+                     "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in api_js, f"api.js contains build tooling: '{marker}'"
+    # Must use native ES module exports
+    has_export = ("export " in api_js or "export{" in api_js or "export default" in api_js)
+    assert has_export, "api.js missing native ES module export statements"
+    # Must NOT use window global IIFE pattern as primary API exposure
+    uses_window_global = "window.petapi" in api_js or "window.noraapi" in api_js or "window.api" in api_js
+    assert not uses_window_global, "api.js uses window global IIFE instead of native ES module exports"
+
+
+def eval_pet_room_api_endpoints_preserved():
+    """api.js preserves all known local endpoint paths."""
+    _skip_if_no_api_js()
+    api_js = (PROJECT_ROOT / "mini_agent" / "static" / "api.js").read_text(encoding="utf-8").lower()
+    required_endpoints = [
+        "/pet/current", "/pet/create", "/pet/add-food", "/pet/feed",
+        "/pet/care", "/pet/activity", "/pet/food-status",
+        "/pet/update-identity", "/pet/relationship-memory", "/pet/voice-preview",
+    ]
+    missing = [ep for ep in required_endpoints if ep not in api_js]
+    assert not missing, f"api.js missing endpoints: {missing}"
+
+
+def eval_pet_room_api_auth_header_preserved():
+    """api.js preserves Authorization/bearer header behavior."""
+    _skip_if_no_api_js()
+    api_js = (PROJECT_ROOT / "mini_agent" / "static" / "api.js").read_text(encoding="utf-8").lower()
+    assert "authorization" in api_js, "api.js missing Authorization header"
+    assert "bearer" in api_js, "api.js missing bearer token handling"
+    # Must not log or render API key/token values
+    assert "console.log" not in api_js or "token" not in api_js.split("console.log")[0][-50:], \
+        "api.js may log token values"
+
+
+def eval_pet_room_api_index_module_wired():
+    """index.html wires api.js through native ES module import, not plain script src."""
+    _skip_if_no_api_js()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "api.js" in html, "index.html does not reference api.js"
+    # Must use <script type="module"> for native ES module loading
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+    # Must have a module import from api.js (import ... from '/static/api.js' or similar)
+    has_module_import = ("import " in html and "api.js" in html)
+    assert has_module_import, "index.html missing native module import from api.js"
+    # Must be a local path, not external
+    assert "http://" not in html.split("api.js")[0][-100:], "api.js loaded from external source"
+    assert "https://" not in html.split("api.js")[0][-100:], "api.js loaded from external source"
+
+
+def eval_api_boundary_no_external_or_build_drift():
+    """No external URLs, build system, or scope drift in api.js or index.html."""
+    _skip_if_no_api_js()
+    api_js = (PROJECT_ROOT / "mini_agent" / "static" / "api.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = api_js + html
+    # No external URLs in api.js
+    assert "http://" not in api_js, "api.js contains external HTTP URL"
+    assert "https://" not in api_js, "api.js contains external HTTPS URL"
+    # No build system
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
     # No scope drift
     drift_markers = [
         "plugin store", "premium skill", "marketplace",

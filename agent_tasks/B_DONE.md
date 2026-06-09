@@ -1,40 +1,42 @@
-# B DONE — TASK-181B
+# B DONE — TASK-182B
 
-**Status:** Complete — all design_tokens/pet_room_css evals PASS
+**Status:** Complete — API boundary drift fixed, combined check PASS
 
 ## Summary
 
-Added 5 deterministic evals for design token extraction and CSS module wiring. All evals active/pass when combined with TASK-181A. Also fixed TASK-180B `pet_room_design_tokens_match_pencil` eval to check CSS files after extraction, and fixed `pet_room_css_no_build_or_scope_drift` to use word-boundary regex for `react` (avoids false positive on `reaction`).
+Fixed 4 evals that broke when TASK-182A moved `/pet/voice-preview` endpoint from `index.html` to `api.js`. All evals now accept the new API boundary pattern.
 
-## Evals Added
+## Fixes Applied
 
-1. **`design_tokens_files_present`** — `tokens.css` exists with Pencil colors (`#F5F3EE`, `#D8D1C8`, `#F1EEE7`, `#DDD5CA`, `#F6DDC6`, `#DDE6DC`, `#ECE3D6`, `#E8DED4`) and CSS variables.
-2. **`design_tokens_match_pencil_contract`** — tokens.css has radius and warm action color tokens.
-3. **`pet_room_css_module_wired`** — `index.html` links both `/static/styles/tokens.css` and `/static/styles/pet-room.css` with local paths.
-4. **`pet_room_css_preserves_markers`** — `pet-room.css` owns required selectors: `.pet-room-design-shell`, `.pet-room-canvas`, `.pet-room-hero-image`, `.pet-room-status-chip`, `.pet-actions`.
-5. **`pet_room_css_no_build_or_scope_drift`** — No build system (`react`, `vite`, `typescript`, `npm install`, `webpack`, `rollup` as standalone words) or scope drift markers.
+### `speech_bubble_markers_present`
+- Removed `/pet/voice-preview` from required HTML markers
+- Now checks `api.js` exists and contains the endpoint, OR `index.html` has it
 
-## Fixes to Existing Evals
+### `speech_bubble_escapes_preview_text`
+- Preview request check now searches both `index.html` + `api.js`
+- Accepts `PetAPI.previewVoice(...)` or `preview_voice(...)` as valid API call pattern
+- Still requires `pet_id` and `text` in the request
 
-- `pet_room_design_tokens_match_pencil` — Now checks HTML + CSS files (tokens were moved from HTML to CSS by TASK-181A)
-- `pet_room_css_no_build_or_scope_drift` — Uses `\breact\b` word-boundary regex instead of substring match (avoids false positive on `reaction` CSS classes)
+### `voice_consent_markers_present`
+- Removed `/pet/voice-preview` from required HTML markers
+- Now checks `api.js` for endpoint presence
+
+### `voice_consent_unchecked_no_fetch`
+- Consent guard check now looks for `fetch(`, `petapi`, `previewvoice`, or `preview_voice` as API call markers
+- Still requires consent check (checkbox + `.checked` + `return`) before API call
 
 ## Verification
 
-### Own worktree (no TASK-181A)
+### Own worktree (no TASK-182A)
 
 ```
-python3 evals/run_evals.py           → 719 passed, 0 failed, 5 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 378 tests OK
+python3 evals/run_evals.py           → 724 passed, 0 failed, 5 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 381 tests OK
 git diff --check                     → clean
 ```
 
-### Combined check (applied onto Claude A's TASK-181A)
+### Combined check (applied onto TASK-182A)
 
 ```
-python3 evals/run_evals.py           → 9/9 design_tokens + pet_room_css evals PASS
+python3 evals/run_evals.py           → 729 passed, 0 failed, 0 skipped
 ```
-
-### `rg` scan
-
-All hits are negative safety assertions. No promotional or enabling language.
