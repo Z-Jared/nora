@@ -1,10 +1,10 @@
-# TASK-182B: API boundary deterministic coverage
+# TASK-183B: Pet Room Canvas module deterministic coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is 55% complete. TASK-181 extracted Pet Room design tokens and CSS modules. TASK-182A will extract existing Pet Room fetch calls into `mini_agent/static/api.js` without endpoint changes.
+Phase 2 is 60% complete. TASK-182 extracted Pet Room API calls into `mini_agent/static/api.js`. TASK-183A will extract the first-screen visual Pet Room canvas boundary into `mini_agent/static/components/pet-room-canvas.js`.
 
 Read first:
 
@@ -21,45 +21,49 @@ Read first:
 - `evals/run_evals.py`
 - `tests/test_webui_smoke.py`
 - `mini_agent/static/index.html`
+- `mini_agent/static/api.js`
 
 ## Goal
 
-Add deterministic coverage for TASK-182A so the new `api.js` boundary remains local, same-origin, no-build, endpoint-compatible, and Pet Room behavior-preserving.
+Add deterministic coverage for TASK-183A so the new Pet Room Canvas module remains local, native-module-only, visual/read-only, design-marker-preserving, and free of API/network/build/product scope drift.
 
 ## Required Coverage
 
-Add evals whose names include `api_boundary` or `pet_room_api`, for example:
+Add evals whose names include `pet_room_canvas` or `canvas_module`, for example:
 
-- `api_boundary_file_present`
-- `pet_room_api_endpoints_preserved`
-- `pet_room_api_auth_header_preserved`
-- `pet_room_api_index_module_wired`
-- `api_boundary_no_external_or_build_drift`
+- `pet_room_canvas_module_file_present`
+- `pet_room_canvas_module_index_wired`
+- `pet_room_canvas_markers_preserved`
+- `pet_room_canvas_read_only_no_api_or_fetch`
+- `pet_room_canvas_no_external_or_scope_drift`
 
 Coverage should verify:
 
-1. `mini_agent/static/api.js` exists after TASK-182A and uses native JS only.
-2. API wrapper preserves the current local endpoint paths:
-   - `/pet/current`
-   - `/pet/create`
-   - `/pet/add-food`
-   - `/pet/feed`
-   - `/pet/care`
-   - `/pet/activity`
-   - `/pet/food-status`
-   - `/pet/update-identity`
-   - `/pet/relationship-memory`
-   - `/pet/voice-preview`
-3. Auth header behavior is preserved:
-   - Existing `Authorization` / bearer behavior remains present.
-   - API key/token values are not logged or rendered.
-4. `index.html` wires `api.js` through a local native module path and does not introduce build tooling.
-5. TASK-180/TASK-181 design markers, stylesheet links, local hero asset, and CSS/token evals remain active/pass.
-6. No endpoint shape drift: no new `/pet/...` endpoint literals are introduced beyond the known set unless already pre-existing in docs/tests.
-7. No build-system drift: no React/Vite/TypeScript/npm/package.json/Webpack/Rollup/bundler/import-map dependency is added.
-8. No product scope drift: no marketplace/plugin store/premium skills, voice cloning, recording/background listening, microphone/camera/screen/location access, PWA/service-worker/notification/native drift, or 3D/VRM implementation drift.
+1. `mini_agent/static/components/pet-room-canvas.js` exists after TASK-183A and uses native JS exports.
+2. `index.html` wires the component through a local native module import.
+3. Required design markers and local hero asset remain present:
+   - `pet-room-design-shell`
+   - `pet-room-canvas`
+   - `pet-room-hero-image`
+   - `pet-room-status-chip`
+   - `pet-room-name`
+   - `pet-room-role`
+   - `chip-mood-value`
+   - `chip-presence-value`
+   - `chip-energy-value`
+   - `chip-bond-value`
+   - `/static/nora-01-hero.jpg`
+4. The canvas module is visual/read-only:
+   - no `fetch(`
+   - no `PetAPI`
+   - no `/pet/` endpoint literals
+   - no mutation endpoint calls
+   - no voice preview, food mutation, relationship memory write, identity save, skill/tool/plugin execution.
+5. TASK-180/TASK-181/TASK-182 evals remain active/pass.
+6. No build-system drift: no React/Vite/TypeScript/npm/package.json/Webpack/Rollup/bundler/import-map dependency is added.
+7. No product scope drift: no marketplace/plugin store/premium skills, voice cloning, recording/background listening, microphone/camera/screen/location access, PWA/service-worker/notification/native drift, or 3D/VRM/Live2D implementation drift.
 
-Guard evals so they explain missing TASK-182A behavior during isolated worker runs, but after PM combines with TASK-182A they must be active/pass and not permanently skipped.
+Guard evals so they explain missing TASK-183A behavior during isolated worker runs, but after PM combines with TASK-183A they must be active/pass and not permanently skipped.
 
 ## Allowed Files
 
@@ -70,6 +74,7 @@ Guard evals so they explain missing TASK-182A behavior during isolated worker ru
 ## Do Not Modify
 
 - `mini_agent/static/index.html`
+- `mini_agent/static/components/pet-room-canvas.js`
 - `mini_agent/static/api.js`
 - `mini_agent/static/styles/tokens.css`
 - `mini_agent/static/styles/pet-room.css`
@@ -84,7 +89,7 @@ Guard evals so they explain missing TASK-182A behavior during isolated worker ru
 
 ## Non-Goals
 
-Do not implement UI/JS API wrapper behavior, create frontend modules yourself beyond tests/evals, add Playwright dependencies, add a frontend build system, or add real voice/native/PWA/billing/marketplace/skill execution/3D behavior.
+Do not implement UI/JS component behavior, create frontend modules yourself beyond tests/evals, add Playwright dependencies, add a frontend build system, or add real voice/native/PWA/billing/marketplace/skill execution/3D/Live2D behavior.
 
 ## Verification
 
@@ -99,4 +104,4 @@ rg -n "https?://|react|vite|typescript|npm install|package.json|webpack|rollup|v
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the standard format. Explicitly mention `TASK-182B`.
+Write `agent_tasks/B_DONE.md` using the standard format. Explicitly mention `TASK-183B`.
