@@ -1,60 +1,71 @@
-# TASK-184A/184B Review — Pet Room Status Chips native module extraction and deterministic coverage
+# TASK-185A/185B Review — Pet Room Food Panel native module extraction and deterministic coverage
 
 **Status: APPROVED**
 
-## Review Summary
+## Summary
 
-The status-chips.js module is correctly narrow: owns only chip-mood-value/chip-presence-value/chip-energy-value/chip-bond-value text updates via textContent. pet-room-canvas.js properly delegates chip updates while retaining name/role boundary. Evals and smoke tests lock the contract. No scope drift.
+TASK-185A extracts Pet Room food panel into `food-panel.js` as a native ES module. TASK-185B adds 5 evals covering the food panel boundary. The implementation correctly delegates API calls through injected parameters rather than direct fetch/PetAPI references.
 
 ## Findings
 
-### 1. status-chips.js Boundary — PASS
+### 1. food-panel.js Boundary — PASS
 
-Module exports single `updateStatusChips(state, expr, pres)` function:
-- Updates only 4 chip value elements via `textContent` (no innerHTML)
-- Null-safe: returns early if `state` is null
-- Uses `!= null` check for energy/bond values
-- No fetch, PetAPI, /pet/ endpoints, voice/memory/identity/skill/plugin/runtime calls
-- Comments explicitly list non-goals (lines 5-9)
+Module exports three functions:
+- `updateFoodPanel(state)` — updates stat-food, bar-food, pet-food-balance via textContent
+- `loadCostEstimates(petId, api)` — fetches costs via `api.getPetFoodStatus` (delegated API boundary)
+- `wireFoodButtons(getCurrentPet, petActionFn)` — wires buttons via `petActionFn` (delegated action boundary)
 
-### 2. pet-room-canvas.js Delegation — PASS
+The module:
+- Uses `escapeHtml` for cost table HTML generation
+- No direct `fetch()`, no `PetAPI` reference, no external URLs
+- API calls go through injected `api` parameter (`api.getPetFoodStatus`)
+- Button actions go through injected `petActionFn` parameter
+- Comments explicitly list non-goals (lines 4-11)
 
-- Imports `updateStatusChips` from status-chips.js (line 17)
-- `updateCanvas()` delegates chip updates to `updateStatusChips()` (line 38), retains room name/role
-- `updateChips()` delegates entirely to `updateStatusChips()` (line 49)
-- Canvas boundary preserved: still owns `pet-room-name` and `pet-room-role` text updates
+### 2. index.html / PetAPI Delegated Boundary — PASS
 
-### 3. Tests/Evals — PASS
+- Import: `import { updateFoodPanel, loadCostEstimates, wireFoodButtons }` from food-panel.js
+- `renderPet()` calls `updateFoodPanel(st)` and `loadCostEstimates(pet.pet_id, PetAPI)` — PetAPI passed as parameter
+- `wireFoodButtons(function(){ return currentPet; }, petAction)` — petAction function passed as parameter
+- Inline `loadCostEstimates` function removed from index.html
+- Inline feed/add-food button handlers removed, delegated to module
 
-**5 evals** with substantive assertions:
-- `status_chips_module_file_present` — file exists, has ES exports, no build tooling
-- `status_chips_module_wired` — wired via native module import in canvas.js or index.html
-- `status_chips_markers_preserved` — 5 required markers present across HTML/canvas/chips modules
-- `status_chips_read_only_no_api_or_fetch` — strips comments, scans for forbidden patterns (fetch, petapi, /pet/, voice-preview, relationship-memory, add-food, feed, care, update-identity, tool_call, execute_tool, run_tool, install)
-- `status_chips_no_external_or_scope_drift` — no external URLs, build system regex with word boundaries, scope drift markers
+### 3. Tests — PASS
 
-**Smoke tests** (7 tests): module exists, exports, no fetch/PetAPI/URL, uses textContent, references chip IDs, canvas delegates, renderPet updates.
+**11 smoke tests** (`FoodPanelModuleTests`):
+- Module exists as native ES module
+- Exports `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons`
+- No direct fetch, no PetAPI, no external URLs
+- No payment/marketplace/pressure copy
+- Uses textContent or escapeHtml
+- References all required markers (stat-food, bar-food, pet-food-balance, pet-cost-table)
+- Preserves action set (feed, chat, voice, work)
+- index.html imports food-panel.js
+- renderPet calls updateFoodPanel and loadCostEstimates with PetAPI
+- updateFoodPanel sets stat-food and pet-food-balance textContent
+- loadCostEstimates calls api.getPetFoodStatus for all four actions
 
-**False positive risk**: Low. Comment-stripping before forbidden-pattern scan. Build-system regex uses `\b` word boundaries.
+**Harness update**: Default no-op mocks added for `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons` to prevent undefined function errors in test harness.
 
-### 4. Scope Drift — PASS
+### 4. Evals — PASS
+
+**5 evals** (`food_panel_*`):
+- `food_panel_module_file_present` — file exists, has ES exports, no build tooling
+- `food_panel_module_wired` — index.html references food-panel with module import
+- `food_panel_markers_preserved` — 8 required markers present across HTML/food-panel
+- `food_panel_petapi_boundary_no_direct_fetch` — strips comments, checks for api.getPetFoodStatus boundary, rejects direct fetch, requires delegated action function, verifies cost action set
+- `food_panel_no_payment_or_scope_drift` — no external URLs, build system markers, payment/manipulative copy, or scope drift
+
+**PM fix**: B correctly fixed eval to accept delegated `petActionFn` pattern instead of requiring `PetAPI` literal in food-panel.js.
+
+### 5. Scope Drift — PASS
 
 No evidence of:
 - React/Vite/TypeScript/npm/build step
-- External URLs in status-chips.js or pet-room-canvas.js
-- Real voice/audio, PWA/native, billing/marketplace, plugin execution, 3D/VRM/Live2D
-
-### 5. Integration Scope — PASS
-
-Candidate files match scope:
-- `mini_agent/static/components/status-chips.js` (new)
-- `mini_agent/static/components/pet-room-canvas.js` (modified)
-- `tests/test_webui_smoke.py` (modified)
-- `evals/run_evals.py` (modified)
-- `agent_tasks/A_DONE.md`, `agent_tasks/B_DONE.md` (modified)
-
-Additional files in diff (A_TASK.md, B_TASK.md, BACKLOG.md, PHASE_STATUS.md, PM_INBOX.md, REVIEW.md) are administrative task management files — expected and acceptable.
+- External URLs in food-panel.js
+- Payment/billing/marketplace/manipulative copy
+- Real voice/audio, PWA/native, 3D/VRM, plugin execution
 
 ## Residual Risks
 
-None. The module is purely visual/text-only with no side effects or data exposure.
+None. The module boundary is clean: all API calls go through injected parameters, no direct fetch/PetAPI references, safe DOM text APIs used throughout.

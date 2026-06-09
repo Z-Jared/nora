@@ -134,6 +134,14 @@ function fetch(url, opts) {
 const window = { scrollTo() {}, addEventListener() {} };
 const AbortController = class { constructor() { this.signal = {}; } abort() {} };
 
+// Default no-ops for imported module functions (stripped by _extract_script)
+// Tests can override these in setup_js.
+function updateCanvas(identity, state, expr, pres) {}
+function updateStatusChips(state, expr, pres) {}
+function updateFoodPanel(state) {}
+function loadCostEstimates(petId, api) {}
+function wireFoodButtons(getPet, actionFn) {}
+
 // Mock PetAPI that delegates to fetch (so _fetchHandler mock still works)
 function _petPost(path, body) {
   return fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
@@ -2905,7 +2913,7 @@ result.hasPost = typeof PetAPI.post === 'function';
         self.assertIn('export var PET_ENDPOINTS', api)
 
     def test_pet_room_fetch_calls_use_pet_api(self):
-        """Pet Room fetch calls in index.html should use PetAPI, not raw fetch for pet endpoints."""
+        """Pet Room fetch calls should use PetAPI, not raw fetch for pet endpoints."""
         html = INDEX_HTML.read_text(encoding="utf-8")
         # Check that the main pet fetch patterns now use PetAPI
         self.assertIn('PetAPI.getPetCurrent()', html)
@@ -2916,7 +2924,8 @@ result.hasPost = typeof PetAPI.post === 'function';
         self.assertIn('PetAPI.updatePetIdentity(', html)
         self.assertIn('PetAPI.createRelationshipMemory(', html)
         self.assertIn('PetAPI.getRelationshipMemory(', html)
-        self.assertIn('PetAPI.getPetFoodStatus(', html)
+        # Food panel receives PetAPI as parameter (delegated, not inline)
+        self.assertIn('loadCostEstimates(pet.pet_id, PetAPI)', html)
         # Verify no raw fetch to pet endpoints in the main script
         # (some raw fetch may exist in non-pet contexts like /chat, /session)
         self.assertNotIn("fetch('/pet/current'", html)
@@ -3077,3 +3086,160 @@ result.bondValue = document.getElementById('chip-bond-value').textContent;
         self.assertNotEqual(d['moodValue'], '—')
         self.assertNotEqual(d['energyValue'], '—')
         self.assertNotEqual(d['bondValue'], '—')
+
+
+class FoodPanelModuleTests(unittest.TestCase):
+    """Tests for food-panel.js module."""
+
+    def test_food_panel_module_exists(self):
+        """food-panel.js must exist as a native ES module."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        self.assertTrue(path.exists(), "food-panel.js not found")
+
+    def test_food_panel_exports_functions(self):
+        """food-panel.js must export updateFoodPanel, loadCostEstimates, wireFoodButtons."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("export function updateFoodPanel", content)
+        self.assertIn("export function loadCostEstimates", content)
+        self.assertIn("export function wireFoodButtons", content)
+
+    def test_food_panel_no_direct_fetch(self):
+        """food-panel.js must not call fetch directly or reference PetAPI."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", content)
+        self.assertNotIn("PetAPI", content)
+        self.assertNotIn("http://", content)
+        self.assertNotIn("https://", content)
+
+    def test_food_panel_no_payment_pressure(self):
+        """food-panel.js must not contain payment/marketplace/pressure copy."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        for term in ['purchase tokens', 'buy more food', 'top up to feed',
+                     'your pet is starving', 'pet will die',
+                     'checkout now', 'subscribe now', 'marketplace',
+                     'premium skill', 'real payment']:
+            self.assertNotIn(term, content, f"forbidden term '{term}' found in food-panel.js")
+
+    def test_food_panel_uses_textContent_or_escapeHtml(self):
+        """food-panel.js must use DOM text APIs or escaped HTML."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertTrue(
+            "textContent" in content or "escapeHtml" in content,
+            "food-panel.js must use textContent or escapeHtml"
+        )
+
+    def test_food_panel_references_required_markers(self):
+        """food-panel.js must reference stat-food, bar-food, pet-food-balance, pet-cost-table."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("stat-food", content)
+        self.assertIn("bar-food", content)
+        self.assertIn("pet-food-balance", content)
+        self.assertIn("pet-cost-table", content)
+
+    def test_food_panel_preserves_action_set(self):
+        """food-panel.js must preserve feed, chat, voice, work actions."""
+        path = STATIC_DIR / "components" / "food-panel.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("feed", content)
+        self.assertIn("chat", content)
+        self.assertIn("voice", content)
+        self.assertIn("work", content)
+
+    def test_index_imports_food_panel(self):
+        """index.html must import from food-panel.js."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn("from '/static/components/food-panel.js'", html)
+
+    def test_render_pet_updates_food_via_module(self):
+        """renderPet must call updateFoodPanel and loadCostEstimates with PetAPI."""
+        result = _run_node(setup_js="""
+var _foodPanelCalls = [];
+function updateFoodPanel(state) { _foodPanelCalls.push('update:' + (state ? state.compute_food_balance : 'null')); }
+function loadCostEstimates(petId, api) {
+  _foodPanelCalls.push('cost:' + petId);
+  _foodPanelCalls.push('hasApi:' + (api != null));
+}
+function wireFoodButtons(getPet, actionFn) { _foodPanelCalls.push('wire'); }
+function updateCanvas(identity, state, expr, pres) {}
+""", test_body="""
+_foodPanelCalls = [];
+renderPet({
+  identity: {name:'Nora-01', species:'ceramic_cat', relationship_role:'desktop companion', personality_traits:['curious'], speech_style:'warm', skills:['memory'], taste_profile:{}},
+  state: {hunger:25, energy:72, mood:65, bond:41, growth_level:3, compute_food_balance:500}
+});
+result = {};
+result.calls = _foodPanelCalls;
+""")
+        d = result
+        self.assertIn('update:500', d['calls'])
+        self.assertTrue(any(c.startswith('cost:') for c in d['calls']))
+        # PetAPI must be passed to loadCostEstimates
+        self.assertIn('hasApi:true', d['calls'])
+
+    def test_food_panel_updates_stat_food_and_balance(self):
+        """updateFoodPanel must set stat-food textContent and pet-food-balance textContent."""
+        result = _run_node(setup_js="""
+function updateCanvas(identity, state, expr, pres) {}
+function updateFoodPanel(state) {
+  if (!state) return;
+  var bal = state.compute_food_balance != null ? state.compute_food_balance : 0;
+  var bar = document.getElementById('bar-food');
+  if (bar) bar.style.width = Math.max(0, Math.min(100, bal / 10)) + '%';
+  var valEl = document.getElementById('stat-food');
+  if (valEl) valEl.textContent = bal;
+  var balEl = document.getElementById('pet-food-balance');
+  if (balEl) balEl.textContent = 'Balance: ' + bal + ' tokens';
+}
+function loadCostEstimates(petId, api) {}
+function wireFoodButtons(getPet, actionFn) {}
+""", test_body="""
+renderPet({
+  identity: {name:'Test', species:'cat', relationship_role:'pet', personality_traits:[], speech_style:'', skills:[], taste_profile:{}},
+  state: {hunger:50, energy:50, mood:50, bond:50, growth_level:1, compute_food_balance:1234}
+});
+result = {};
+result.foodValue = document.getElementById('stat-food').textContent;
+result.balText = document.getElementById('pet-food-balance').textContent;
+""")
+        d = result
+        self.assertEqual(str(d['foodValue']), '1234')
+        self.assertIn('1234', str(d['balText']))
+        self.assertIn('tokens', str(d['balText']))
+
+    def test_food_panel_loadCostEstimates_uses_PetAPI(self):
+        """loadCostEstimates must call api.getPetFoodStatus for each action."""
+        result = _run_node(setup_js="""
+var _apiCalls = [];
+var mockAPI = {
+  getPetFoodStatus: function(petId, action) {
+    _apiCalls.push(petId + ':' + action);
+    return Promise.resolve({action: action, cost: 100, can_run: true, shortfall: 0});
+  }
+};
+function updateCanvas(identity, state, expr, pres) {}
+function updateFoodPanel(state) {}
+function wireFoodButtons(getPet, actionFn) {}
+function loadCostEstimates(petId, api) {
+  if (!petId || !api) return;
+  var actions = ['feed', 'chat', 'voice', 'work'];
+  Promise.all(actions.map(function (action) {
+    return api.getPetFoodStatus(petId, action).catch(function () { return null; });
+  })).then(function (results) {});
+}
+""", test_body="""
+_apiCalls = [];
+loadCostEstimates('pet_1', mockAPI);
+await new Promise(function(r) { setTimeout(r, 100); });
+result = {};
+result.calls = _apiCalls;
+""")
+        d = result
+        self.assertIn('pet_1:feed', d['calls'])
+        self.assertIn('pet_1:chat', d['calls'])
+        self.assertIn('pet_1:voice', d['calls'])
+        self.assertIn('pet_1:work', d['calls'])

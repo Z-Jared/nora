@@ -561,6 +561,7 @@ button{border:0;cursor:pointer}
 <script type="module">
 import * as PetAPI from '/static/api.js';
 import { updateCanvas } from '/static/components/pet-room-canvas.js';
+import { updateFoodPanel, loadCostEstimates, wireFoodButtons } from '/static/components/food-panel.js';
 window.PetAPI = PetAPI;
 (function(){
   var msgEl = document.getElementById('messages');
@@ -684,16 +685,13 @@ window.PetAPI = PetAPI;
     setStat('mood', st.mood);
     setStat('bond', st.bond);
     setStat('growth', st.growth_level * 10);
-    setStat('food', Math.min(100, st.compute_food_balance / 10));
     document.getElementById('stat-hunger').textContent = st.hunger;
     document.getElementById('stat-energy').textContent = st.energy;
     document.getElementById('stat-mood').textContent = st.mood;
     document.getElementById('stat-bond').textContent = st.bond;
     document.getElementById('stat-growth').textContent = st.growth_level;
-    document.getElementById('stat-food').textContent = st.compute_food_balance;
-    var balanceEl = document.getElementById('pet-food-balance');
-    if(balanceEl) balanceEl.textContent = 'Balance: ' + st.compute_food_balance + ' tokens';
-    loadCostEstimates(pet.pet_id);
+    updateFoodPanel(st);
+    loadCostEstimates(pet.pet_id, PetAPI);
     loadTodayDiary(pet.pet_id);
     applyExpression(st);
     applyPresence(st);
@@ -1001,26 +999,6 @@ window.PetAPI = PetAPI;
     });
   }
 
-  function loadCostEstimates(petId){
-    var actions = ['feed','chat','voice','work'];
-    Promise.all(actions.map(function(action){
-      return PetAPI.getPetFoodStatus(petId, action).catch(function(){ return null; });
-    })).then(function(results){
-      var table = document.getElementById('pet-cost-table');
-      if(!table) return;
-      table.innerHTML = results.map(function(r){
-        if(!r) return '';
-        var statusCls = r.can_run ? 'ok' : 'no';
-        var statusText = r.can_run ? 'ok' : 'need ' + r.shortfall;
-        return '<div class="pet-cost-item">'
-          + '<div class="action-name">' + escapeHtml(r.action) + '</div>'
-          + '<div class="cost-value">' + r.cost + '</div>'
-          + '<div class="cost-status ' + statusCls + '">' + statusText + '</div>'
-          + '</div>';
-      }).join('');
-    });
-  }
-
   function setStat(name, val){
     var bar = document.getElementById('bar-'+name);
     if(bar) bar.style.width = Math.max(0, Math.min(100, val)) + '%';
@@ -1067,10 +1045,9 @@ window.PetAPI = PetAPI;
       .finally(function(){if(btn) btn.disabled = false;});
   }
 
-  document.getElementById('pet-feed-btn').onclick = function(){
-    if(!currentPet) return;
-    petAction('/pet/feed', {pet_id:currentPet.pet_id, amount:100}, this);
-  };
+  // Wire food buttons via food-panel module
+  wireFoodButtons(function(){ return currentPet; }, petAction);
+
   document.getElementById('pet-pat-btn').onclick = function(){
     if(!currentPet) return;
     petAction('/pet/care', {pet_id:currentPet.pet_id, action:'pat'}, this);
@@ -1086,11 +1063,6 @@ window.PetAPI = PetAPI;
   document.getElementById('pet-play-btn').onclick = function(){
     if(!currentPet) return;
     petAction('/pet/care', {pet_id:currentPet.pet_id, action:'play'}, this);
-  };
-  document.getElementById('pet-add-food-btn').onclick = function(){
-    if(!currentPet) return;
-    var amt = parseInt(document.getElementById('pet-food-amount').value)||500;
-    petAction('/pet/add-food', {pet_id:currentPet.pet_id, amount:amt, reason:'local demo'}, this);
   };
   // Speech bubble preview
   document.getElementById('speech-preview-btn').onclick = function(){

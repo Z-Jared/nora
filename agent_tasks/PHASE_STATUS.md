@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 64%
+- Percent: 66%
 - Status: in progress
-- Current focus: Extracting Pet Room functional panels one native module at a time after status chips are stable.
+- Current focus: Continuing Pet Room functional panel extraction one native module at a time after the food panel is stable.
 
 ## Completed This Phase
 
@@ -148,14 +148,20 @@ Last updated: 2026-06-09
   - The status chips module uses DOM `textContent`, has no fetch/PetAPI/endpoint behavior, and does not touch voice, food, memory, identity, skill/plugin, runtime, or provider boundaries.
   - Deterministic coverage locks module exports, local wiring, required chip markers, read-only/no-fetch/no-PetAPI/no-endpoint behavior, no external URL, no build-system drift, and no product scope drift.
   - Verification is green: 400 targeted tests OK, 739 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native food panel module extraction:
+  - `mini_agent/static/components/food-panel.js` now owns food stat/balance updates, cost estimate rendering, and feed/add-food button wiring.
+  - `mini_agent/static/index.html` imports `updateFoodPanel()`, `loadCostEstimates()`, and `wireFoodButtons()` locally while keeping Pet Room API calls routed through delegated `PetAPI` / `petAction` boundaries.
+  - The food panel module has no direct `fetch`, no direct `PetAPI` reference, no external URL, and no endpoint shape changes; cost estimates still cover feed/chat/voice/work.
+  - Deterministic coverage locks module exports, local wiring, food markers, delegated API/action boundaries, no build-system drift, no payment/marketplace/manipulative copy, and no product scope drift.
+  - Verification is green: 411 targeted tests OK, 744 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-185A / TASK-185B: Extract the Pet Room food panel into a bounded native module and add deterministic Token Food coverage.
+- None. TASK-185A / TASK-185B are complete and integrated; waiting for the next PM dispatch cycle.
 
 ## Next
 
-1. Complete TASK-185A/B food panel extraction and coverage.
-2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `skill-shelf.js` only after TASK-185 is reviewed and integrated.
+1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `skill-shelf.js` in the next dispatch cycle.
+2. Keep the next slice bounded to frontend architecture extraction and deterministic coverage.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -208,6 +214,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 64% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, and native status chips module extraction complete
+- Phase 2 Voice & Presence: 66% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, and native food panel module extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

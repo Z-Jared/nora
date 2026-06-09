@@ -290,6 +290,12 @@ def main() -> int:
         EvalCase("status_chips_markers_preserved", eval_status_chips_markers_preserved),
         EvalCase("status_chips_read_only_no_api_or_fetch", eval_status_chips_read_only_no_api_or_fetch),
         EvalCase("status_chips_no_external_or_scope_drift", eval_status_chips_no_external_or_scope_drift),
+        # TASK-185B: Food Panel module eval coverage
+        EvalCase("food_panel_module_file_present", eval_food_panel_module_file_present),
+        EvalCase("food_panel_module_wired", eval_food_panel_module_wired),
+        EvalCase("food_panel_markers_preserved", eval_food_panel_markers_preserved),
+        EvalCase("food_panel_petapi_boundary_no_direct_fetch", eval_food_panel_petapi_boundary_no_direct_fetch),
+        EvalCase("food_panel_no_payment_or_scope_drift", eval_food_panel_no_payment_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -5039,6 +5045,118 @@ def eval_status_chips_no_external_or_scope_drift():
     for pattern in build_patterns:
         match = re.search(pattern, all_content)
         assert not match, f"build system marker '{pattern}' found"
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-185B: Food Panel module eval coverage ---
+
+
+def _skip_if_no_food_panel():
+    """Skip if TASK-185A food-panel module is not implemented."""
+    try:
+        food_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "food-panel.js"
+        if not food_js.exists():
+            raise AttributeError("food-panel.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-185A not integrated: food-panel.js not available")
+
+
+def eval_food_panel_module_file_present():
+    """food-panel.js exists and uses native JS exports."""
+    _skip_if_no_food_panel()
+    food_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "food-panel.js").read_text(encoding="utf-8").lower()
+    has_export = ("export " in food_js or "export{" in food_js or "export default" in food_js)
+    assert has_export, "food-panel.js missing native ES module export statements"
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in food_js, f"food-panel.js contains build tooling: '{marker}'"
+
+
+def eval_food_panel_module_wired():
+    """food-panel.js is wired through local native module import in index.html."""
+    _skip_if_no_food_panel()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "food-panel" in html, "index.html does not reference food-panel"
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_food_panel_markers_preserved():
+    """Required food markers remain present in HTML or food-panel module."""
+    _skip_if_no_food_panel()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    food_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "food-panel.js").read_text(encoding="utf-8")
+    all_content = html + food_js
+    required = [
+        "pet-food-section", "pet-cost-table", "pet-food-amount",
+        "pet-add-food-btn", "pet-food-balance", "pet-feed-btn",
+        "stat-food", "bar-food",
+    ]
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing food markers: {missing}"
+
+
+def eval_food_panel_petapi_boundary_no_direct_fetch():
+    """Food module uses delegated API boundary, no direct fetch to /pet/ endpoints."""
+    _skip_if_no_food_panel()
+    food_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "food-panel.js").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    import re
+    no_comments = re.sub(r'//.*?$', '', food_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    html_lower = html.lower()
+    # index.html must wire PetAPI to the food panel (delegated boundary)
+    has_petapi_wiring = "petapi" in html_lower and ("loadcostestimates" in html_lower or "food-panel" in html_lower)
+    assert has_petapi_wiring, "index.html missing PetAPI wiring for food panel (expected loadCostEstimates(pet.pet_id, PetAPI))"
+    # food-panel.js must use api.getPetFoodStatus or getPetFoodStatus parameter boundary
+    has_api_boundary = "getpetfoodstatus" in content or "get_pet_food_status" in content
+    assert has_api_boundary, "food-panel.js missing api.getPetFoodStatus parameter boundary"
+    # Must NOT direct-fetch /pet/ endpoints (depetActionFn/petActionFn calls are OK — delegated boundary)
+    assert "fetch(" not in content, "food-panel.js uses direct fetch instead of API boundary"
+    # Check for direct endpoint literals only if NOT using delegated action function
+    has_delegated_action = "petactionfn" in content or "petaction" in content or "actionfn" in content
+    if not has_delegated_action:
+        assert "/pet/food-status" not in content, "food-panel.js contains direct /pet/food-status without delegation"
+        assert "/pet/feed" not in content, "food-panel.js contains direct /pet/feed without delegation"
+        assert "/pet/add-food" not in content, "food-panel.js contains direct /pet/add-food without delegation"
+    # Must reference cost action set
+    for action in ["feed", "chat", "voice", "work"]:
+        assert action in content, f"food-panel.js missing cost action '{action}'"
+
+
+def eval_food_panel_no_payment_or_scope_drift():
+    """No payment/marketplace/manipulative copy, build system, or scope drift."""
+    _skip_if_no_food_panel()
+    food_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "food-panel.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = food_js + html
+    # No external URLs in food module
+    assert "http://" not in food_js, "food-panel.js contains external HTTP URL"
+    assert "https://" not in food_js, "food-panel.js contains external HTTPS URL"
+    # No build system
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    # No payment/manipulative copy
+    payment_markers = [
+        "checkout", "billing", "real payment", "purchase tokens", "buy more food",
+        "top up to feed", "your pet is starving", "pet will die",
+    ]
+    for marker in payment_markers:
+        assert marker not in all_content, f"payment/manipulative marker '{marker}' found"
+    # No scope drift
     drift_markers = [
         "plugin store", "premium skill", "marketplace",
         "voice clone", "record by default", "always listening",

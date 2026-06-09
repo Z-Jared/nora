@@ -1,47 +1,50 @@
-# TASK-184A: Extract Pet Room Status Chips native module
+# TASK-185A Completion Report
 
 ## Summary
 
-Created `mini_agent/static/components/status-chips.js` and moved Mood/Presence/Energy/Bond chip text updates out of `pet-room-canvas.js` into a smaller native ES module.
+Extracted Pet Room food panel into `mini_agent/static/components/food-panel.js` as a native ES module. Moved food stat/balance updates, cost estimate rendering, and button wiring out of `index.html` while preserving all UI behavior, DOM markers, and PetAPI boundaries.
 
 ## Changes
 
-### New file: `mini_agent/static/components/status-chips.js`
-- Exports `updateStatusChips(state, expr, pres)` function
-- Owns only: `chip-mood-value`, `chip-presence-value`, `chip-energy-value`, `chip-bond-value`
-- Uses `textContent` only (no HTML insertion)
-- Read-only: no fetch, no PetAPI, no external URLs
+### `mini_agent/static/components/food-panel.js` (new)
+- `updateFoodPanel(state)` — updates `stat-food`, `bar-food`, `pet-food-balance` from pet state
+- `loadCostEstimates(petId, api)` — fetches feed/chat/voice/work costs via API param, renders `pet-cost-table`
+- `wireFoodButtons(getCurrentPet, petActionFn)` — wires `pet-feed-btn` and `pet-add-food-btn` click handlers
+- Uses `escapeHtml` for cost table HTML generation
+- No direct `fetch()`, no `PetAPI` reference, no external URLs
 
-### Updated: `mini_agent/static/components/pet-room-canvas.js`
-- Imports `updateStatusChips` from `status-chips.js`
-- `updateCanvas()` delegates chip updates to `updateStatusChips()`
-- `updateChips()` delegates to `updateStatusChips()`
-- Still owns `pet-room-name` and `pet-room-role` text updates
+### `mini_agent/static/index.html`
+- Added `import { updateFoodPanel, loadCostEstimates, wireFoodButtons }` from food-panel.js
+- `renderPet()` calls `updateFoodPanel(st)` and `loadCostEstimates(pet.pet_id, PetAPI)`
+- Removed inline `loadCostEstimates` function
+- Replaced inline feed/add-food button handlers with `wireFoodButtons()`
 
-### Updated: `tests/test_webui_smoke.py`
-- Added `StatusChipsModuleTests` class with 7 tests:
-  - Module exists as native ES module
-  - Exports `updateStatusChips`
-  - No fetch/PetAPI/URL references
-  - Uses `textContent` not `innerHTML`
-  - References all four chip value IDs
-  - Canvas module delegates to status-chips
-  - `renderPet` still updates chip values via delegation
+### `tests/test_webui_smoke.py`
+- Added default no-op mocks for `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons` in harness
+- `PetAPIModuleTests.test_pet_room_fetch_calls_use_pet_api` — updated to check `loadCostEstimates(pet.pet_id, PetAPI)` delegation
+- New `FoodPanelModuleTests` class (11 tests):
+  - Module existence, exports, no-fetch/no-PetAPI/no-URL, no payment pressure, textContent/escapeHtml usage
+  - Required markers (stat-food, bar-food, pet-food-balance, pet-cost-table)
+  - Preserved action set (feed, chat, voice, work)
+  - index.html imports food-panel.js
+  - renderPet calls updateFoodPanel and loadCostEstimates with PetAPI
+  - updateFoodPanel sets stat-food and pet-food-balance textContent
+  - loadCostEstimates calls api.getPetFoodStatus for all four actions
 
 ## Verification
 
 ```
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 400 tests in 147.143s — OK
+Ran 411 tests in 146.367s — OK
 
 git diff --check
 (clean)
 
-rg scan
-No hits in status-chips.js or pet-room-canvas.js
-Only allowed PetAPI usage in index.html and existing fetch calls
+rg scan — food-panel.js: no forbidden markers
+index.html: only expected fetch() for non-pet endpoints (chat/session/task/memory/status)
+test_webui_smoke.py: only mock PetAPI fetch and negative assertions
 ```
 
-## Non-Goals Preserved
-- No new endpoints, React/Vite/TS, food/voice/memory extraction
-- No real TTS, PWA, 3D/VRM, billing, marketplace
+## Notes
+
+- No push performed.
