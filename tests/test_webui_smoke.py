@@ -2995,3 +2995,85 @@ result.bondValue = document.getElementById('chip-bond-value').textContent;
         self.assertNotEqual(d['moodValue'], '—')
         self.assertNotEqual(d['energyValue'], '—')
         self.assertNotEqual(d['bondValue'], '—')
+
+
+class StatusChipsModuleTests(unittest.TestCase):
+    """Tests for status-chips.js module."""
+
+    def test_status_chips_module_exists(self):
+        """status-chips.js must exist as a native ES module."""
+        chips_path = STATIC_DIR / "components" / "status-chips.js"
+        self.assertTrue(chips_path.exists(), "status-chips.js not found")
+
+    def test_status_chips_exports_updateStatusChips(self):
+        """status-chips.js must export updateStatusChips function."""
+        chips_path = STATIC_DIR / "components" / "status-chips.js"
+        content = chips_path.read_text(encoding="utf-8")
+        self.assertIn("export function updateStatusChips", content)
+
+    def test_status_chips_no_fetch_or_petapi(self):
+        """status-chips.js must not call fetch or reference PetAPI."""
+        chips_path = STATIC_DIR / "components" / "status-chips.js"
+        content = chips_path.read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", content)
+        self.assertNotIn("PetAPI", content)
+        self.assertNotIn("http://", content)
+        self.assertNotIn("https://", content)
+
+    def test_status_chips_uses_textContent(self):
+        """status-chips.js must use textContent, not innerHTML."""
+        chips_path = STATIC_DIR / "components" / "status-chips.js"
+        content = chips_path.read_text(encoding="utf-8")
+        self.assertIn("textContent", content)
+        self.assertNotIn("innerHTML", content)
+
+    def test_status_chips_updates_all_four_markers(self):
+        """status-chips.js must reference all four chip value IDs."""
+        chips_path = STATIC_DIR / "components" / "status-chips.js"
+        content = chips_path.read_text(encoding="utf-8")
+        self.assertIn("chip-mood-value", content)
+        self.assertIn("chip-presence-value", content)
+        self.assertIn("chip-energy-value", content)
+        self.assertIn("chip-bond-value", content)
+
+    def test_canvas_delegates_to_status_chips(self):
+        """pet-room-canvas.js must import from status-chips.js."""
+        canvas_path = STATIC_DIR / "components" / "pet-room-canvas.js"
+        content = canvas_path.read_text(encoding="utf-8")
+        self.assertIn("from '/static/components/status-chips.js'", content)
+        self.assertIn("updateStatusChips", content)
+
+    def test_render_pet_updates_chip_values(self):
+        """renderPet must still update Mood/Presence/Energy/Bond chip text."""
+        result = _run_node(setup_js="""
+function updateStatusChips(state, expr, pres) {
+  if (!state) return;
+  var chipMood = document.getElementById('chip-mood-value');
+  if (chipMood) chipMood.textContent = expr ? expr.label : '—';
+  var chipPresence = document.getElementById('chip-presence-value');
+  if (chipPresence) chipPresence.textContent = pres ? pres.label : '—';
+  var chipEnergy = document.getElementById('chip-energy-value');
+  if (chipEnergy) chipEnergy.textContent = state.energy != null ? state.energy : '—';
+  var chipBond = document.getElementById('chip-bond-value');
+  if (chipBond) chipBond.textContent = state.bond != null ? state.bond : '—';
+}
+function updateCanvas(identity, state, expr, pres) {
+  if (!identity || !state) return;
+  var roomNameEl = document.getElementById('pet-room-name');
+  if (roomNameEl) roomNameEl.textContent = identity.name || 'Nora-01';
+  updateStatusChips(state, expr, pres);
+}
+""", test_body="""
+renderPet({
+  identity: {name:'Nora-01', species:'ceramic_cat', relationship_role:'desktop companion', personality_traits:['curious'], speech_style:'warm', skills:['memory'], taste_profile:{}},
+  state: {hunger:25, energy:72, mood:65, bond:41, growth_level:3, compute_food_balance:500}
+});
+result = {};
+result.moodValue = document.getElementById('chip-mood-value').textContent;
+result.energyValue = document.getElementById('chip-energy-value').textContent;
+result.bondValue = document.getElementById('chip-bond-value').textContent;
+""")
+        d = result
+        self.assertNotEqual(d['moodValue'], '—')
+        self.assertNotEqual(d['energyValue'], '—')
+        self.assertNotEqual(d['bondValue'], '—')

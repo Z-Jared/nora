@@ -284,6 +284,12 @@ def main() -> int:
         EvalCase("pet_room_canvas_markers_preserved", eval_pet_room_canvas_markers_preserved),
         EvalCase("pet_room_canvas_read_only_no_api_or_fetch", eval_pet_room_canvas_read_only_no_api_or_fetch),
         EvalCase("pet_room_canvas_no_external_or_scope_drift", eval_pet_room_canvas_no_external_or_scope_drift),
+        # TASK-184B: Status Chips module eval coverage
+        EvalCase("status_chips_module_file_present", eval_status_chips_module_file_present),
+        EvalCase("status_chips_module_wired", eval_status_chips_module_wired),
+        EvalCase("status_chips_markers_preserved", eval_status_chips_markers_preserved),
+        EvalCase("status_chips_read_only_no_api_or_fetch", eval_status_chips_read_only_no_api_or_fetch),
+        EvalCase("status_chips_no_external_or_scope_drift", eval_status_chips_no_external_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4931,6 +4937,108 @@ def eval_pet_room_canvas_no_external_or_scope_drift():
         match = re.search(pattern, all_content)
         assert not match, f"build system marker '{pattern}' found"
     # No scope drift
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-184B: Status Chips module eval coverage ---
+
+
+def _skip_if_no_status_chips():
+    """Skip if TASK-184A status-chips module is not implemented."""
+    try:
+        chips_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "status-chips.js"
+        if not chips_js.exists():
+            raise AttributeError("status-chips.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-184A not integrated: status-chips.js not available")
+
+
+def eval_status_chips_module_file_present():
+    """status-chips.js exists and uses native JS exports."""
+    _skip_if_no_status_chips()
+    chips_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "status-chips.js").read_text(encoding="utf-8").lower()
+    has_export = ("export " in chips_js or "export{" in chips_js or "export default" in chips_js)
+    assert has_export, "status-chips.js missing native ES module export statements"
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in chips_js, f"status-chips.js contains build tooling: '{marker}'"
+
+
+def eval_status_chips_module_wired():
+    """status-chips.js is wired through local native module import in pet-room-canvas.js or index.html."""
+    _skip_if_no_status_chips()
+    canvas_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js"
+    html = PROJECT_ROOT / "mini_agent" / "static" / "index.html"
+    wired = False
+    if canvas_js.exists():
+        content = canvas_js.read_text(encoding="utf-8").lower()
+        if "status-chips" in content or "statuschips" in content:
+            wired = True
+    if html.exists():
+        content = html.read_text(encoding="utf-8").lower()
+        if "status-chips" in content:
+            wired = True
+    assert wired, "status-chips.js not wired in pet-room-canvas.js or index.html"
+
+
+def eval_status_chips_markers_preserved():
+    """Required chip markers remain present in HTML or canvas/chips modules."""
+    _skip_if_no_status_chips()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    canvas_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "pet-room-canvas.js"
+    chips_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "status-chips.js"
+    all_content = html
+    if canvas_js.exists():
+        all_content += canvas_js.read_text(encoding="utf-8")
+    if chips_js.exists():
+        all_content += chips_js.read_text(encoding="utf-8")
+    required = [
+        "pet-room-status-chip", "chip-mood-value", "chip-presence-value",
+        "chip-energy-value", "chip-bond-value",
+    ]
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing chip markers: {missing}"
+
+
+def eval_status_chips_read_only_no_api_or_fetch():
+    """Status chips module is visual/read-only: no fetch, PetAPI, endpoint literals, or mutation calls."""
+    _skip_if_no_status_chips()
+    chips_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "status-chips.js").read_text(encoding="utf-8")
+    import re
+    no_comments = re.sub(r'//.*?$', '', chips_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    forbidden = [
+        "fetch(", "petapi.", "/pet/", "voice-preview", "relationship-memory",
+        "add-food", "feed(", "care(", "update-identity",
+        "tool_call", "execute_tool", "run_tool", "install(",
+    ]
+    for pattern in forbidden:
+        assert pattern not in content, f"status-chips module contains forbidden '{pattern}' in code"
+
+
+def eval_status_chips_no_external_or_scope_drift():
+    """No external URLs, build system, or scope drift in status-chips module."""
+    _skip_if_no_status_chips()
+    chips_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "status-chips.js").read_text(encoding="utf-8").lower()
+    assert "http://" not in chips_js, "status-chips module contains external HTTP URL"
+    assert "https://" not in chips_js, "status-chips module contains external HTTPS URL"
+    import re
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = chips_js + html
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
     drift_markers = [
         "plugin store", "premium skill", "marketplace",
         "voice clone", "record by default", "always listening",

@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 62%
+- Percent: 64%
 - Status: in progress
-- Current focus: Extracting Pet Room functional panels one native module at a time after the canvas boundary is stable.
+- Current focus: Extracting Pet Room functional panels one native module at a time after status chips are stable.
 
 ## Completed This Phase
 
@@ -142,14 +142,20 @@ Last updated: 2026-06-09
   - Design markers and local hero asset path remain stable: `pet-room-design-shell`, `pet-room-canvas`, `pet-room-hero-image`, `pet-room-status-chip`, `pet-room-name`, `pet-room-role`, chip markers, and `/static/nora-01-hero.jpg`.
   - Deterministic coverage locks module exports, local module wiring, marker preservation, no fetch/PetAPI/endpoint behavior, no external URL, no build-system drift, and no product scope drift.
   - Verification is green: 393 targeted tests OK, 734 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native status chips module extraction:
+  - `mini_agent/static/components/status-chips.js` now owns only Mood/Presence/Energy/Bond chip value text updates.
+  - `pet-room-canvas.js` delegates chip updates to `updateStatusChips()` while retaining room name and relationship role updates.
+  - The status chips module uses DOM `textContent`, has no fetch/PetAPI/endpoint behavior, and does not touch voice, food, memory, identity, skill/plugin, runtime, or provider boundaries.
+  - Deterministic coverage locks module exports, local wiring, required chip markers, read-only/no-fetch/no-PetAPI/no-endpoint behavior, no external URL, no build-system drift, and no product scope drift.
+  - Verification is green: 400 targeted tests OK, 739 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-184A / TASK-184B: Extract the Pet Room status chips into a bounded native module and add deterministic coverage.
+- None.
 
 ## Next
 
-1. Complete TASK-184A/B status chip extraction and coverage.
-2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with the next panel only after TASK-184 is reviewed and integrated.
+1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with the next panel only after TASK-184 is committed.
+2. Prefer the next bounded extraction slice: `food-panel.js` plus deterministic read-only/mutation-boundary coverage.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -202,6 +208,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 62% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, and native Pet Room canvas module extraction complete
+- Phase 2 Voice & Presence: 64% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, and native status chips module extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

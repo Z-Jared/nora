@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-184A: Extract Pet Room Status Chips native module
-- 架构层: Avatar/Room UI / Frontend Architecture / Component Boundary
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-183A、TASK-183B 完成并集成。
-- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4，创建 `mini_agent/static/components/status-chips.js`，把 Mood/Presence/Energy/Bond chip 文本更新从 `pet-room-canvas.js` 继续拆成独立 native ES module，并保持 Pet Room UI、DOM markers、CSS selectors、local asset path 和 API behavior 不变。
-- 非目标: 不拆 food panel、skill shelf、voice preview、memory diary、identity editor；不新增/删除/重命名 HTTP endpoint；不改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/tts.py`；不引入 React/Vite/TypeScript/npm/build step；不新增外部 URL、真实 voice/audio、PWA/native、billing/marketplace、plugin execution、3D/VRM/Live2D runtime。
-- 安全边界: status chips module 必须 visual/read-only；不得直接调用 `fetch`、`PetAPI` 或任何 `/pet/` endpoint；动态 chip 文本必须使用 DOM text APIs；不得引入 hidden network、credential logging、secret echo、microphone/camera/screen/location access。
-- 持久证据: 新增 `mini_agent/static/components/status-chips.js`；`pet-room-canvas.js` 或 `index.html` 使用本地 native module import；`chip-mood-value`、`chip-presence-value`、`chip-energy-value`、`chip-bond-value` markers 保持稳定；`pet-room-name`、`pet-room-role` 仍由 canvas boundary 更新；Pet Room API boundary 继续通过 `PetAPI`。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for external URLs/build-system/scope drift in `mini_agent/static/index.html mini_agent/static/components/pet-room-canvas.js mini_agent/static/components/status-chips.js tests/test_webui_smoke.py`。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `mini_agent/static/components/pet-room-canvas.js`; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`.
-
-### TASK-184B: Status Chips module deterministic coverage
-- 架构层: Eval/Review System / Frontend Architecture / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-183A、TASK-183B 完成并集成；与 TASK-184A 并行，但不得改实现文件。
-- 目标: 为 TASK-184A 的 status chips module extraction 添加 deterministic eval/smoke 覆盖，确保 component 文件存在、本地 module wiring、chip markers 保留、status chips module read-only/no-fetch/no-PetAPI/no-scope-drift，且 TASK-183 canvas eval 继续 active/pass。
-- 非目标: 不实现 status chips module；不修改 `mini_agent/static/index.html`、`mini_agent/static/components/pet-room-canvas.js`、`mini_agent/static/components/status-chips.js`、CSS、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm。
-- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成图片、修改设计稿；必须阻断 external URL/build-system drift，以及 marketplace/plugin store/premium skill、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM/Live2D drift。
-- 持久证据: 新增 eval 名称包含 `status_chips` 或 `pet_room_status`; 覆盖 component file exports、local module import wiring、chip markers、read-only no-fetch/no-PetAPI/no-endpoint behavior、TASK-183 canvas eval 继续 active/pass。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `evals/run_evals.py`; `tests/test_webui_smoke.py`; `mini_agent/static/components/pet-room-canvas.js`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-184A: Extract Pet Room Status Chips native module ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 400 tests OK；`python3 evals/run_evals.py` 739 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy/build-system scan 仅命中既有 `index.html` PetAPI/非 pet fetch、测试 mock、eval 负面断言和既有 LLM/example URL。
+- 内容: 新增 native ES module `mini_agent/static/components/status-chips.js`，把 Mood/Presence/Energy/Bond chip 文本更新从 `pet-room-canvas.js` 拆成独立 visual/read-only module；`updateStatusChips(state, expr, pres)` 只拥有 `chip-mood-value`、`chip-presence-value`、`chip-energy-value`、`chip-bond-value` 四个 marker，使用 `textContent`，不调用 `fetch`、`PetAPI`、`/pet/` endpoint、voice、food、memory、identity、skill/plugin/runtime；`pet-room-canvas.js` 保留 room name/role 边界并委托 chip 更新；不新增 endpoint、外部 URL、build step、React/Vite/TypeScript/npm、真实 voice/audio、PWA/native、billing/marketplace、plugin execution 或 3D/VRM。
+
+### TASK-184B: Status Chips module deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 739 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 400 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 `status_chips` eval，覆盖 `status-chips.js` 文件存在和 native export、本地 module wiring、`pet-room-status-chip` 与四个 chip value markers 保留、status module read-only/no-fetch/no-PetAPI/no-`/pet/` endpoint/no mutation behavior、无 external URL/build-system/product scope drift；补强 smoke tests 锁住 module exports、no fetch/PetAPI/URL、`textContent`、chip IDs、canvas delegation，以及 `renderPet()` 经 delegation 更新 chip values。
 
 ### TASK-183A: Extract Pet Room Canvas native module ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

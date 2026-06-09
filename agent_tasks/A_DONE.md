@@ -1,46 +1,47 @@
-# TASK-183A Completion Report
+# TASK-184A: Extract Pet Room Status Chips native module
 
 ## Summary
 
-Created `mini_agent/static/components/pet-room-canvas.js` as a native ES module and wired it into `index.html` via `import { updateCanvas }`. The module owns only the visual canvas boundary: room name, role, and status chip text updates. All existing DOM markers, CSS selectors, asset paths, and API behavior preserved.
+Created `mini_agent/static/components/status-chips.js` and moved Mood/Presence/Energy/Bond chip text updates out of `pet-room-canvas.js` into a smaller native ES module.
 
 ## Changes
 
-### New: `mini_agent/static/components/pet-room-canvas.js`
-- Native ES module with `export function updateCanvas(identity, state, expr, pres)` and `export function updateChips(state, expr, pres)`
-- Owns only: room name/role text, Mood/Presence/Energy/Bond chip text
-- Does NOT call fetch, PetAPI, or any API — verified by test
+### New file: `mini_agent/static/components/status-chips.js`
+- Exports `updateStatusChips(state, expr, pres)` function
+- Owns only: `chip-mood-value`, `chip-presence-value`, `chip-energy-value`, `chip-bond-value`
+- Uses `textContent` only (no HTML insertion)
+- Read-only: no fetch, no PetAPI, no external URLs
 
-### Modified: `mini_agent/static/index.html`
-- Added `import { updateCanvas } from '/static/components/pet-room-canvas.js'`
-- `renderPet()` now calls `updateCanvas(id, st, expr, pres)` instead of inline DOM updates for name/role/chips
-- All other renderPet behavior (mood summary, identity details, stats, etc.) unchanged
+### Updated: `mini_agent/static/components/pet-room-canvas.js`
+- Imports `updateStatusChips` from `status-chips.js`
+- `updateCanvas()` delegates chip updates to `updateStatusChips()`
+- `updateChips()` delegates to `updateStatusChips()`
+- Still owns `pet-room-name` and `pet-room-role` text updates
 
-### Modified: `tests/test_webui_smoke.py`
-- `_extract_script()` regex updated to strip all import lines (not just first)
-- `PetRoomCanvasModuleTests` class added (6 tests):
-  - `test_canvas_module_exists` — file exists
-  - `test_canvas_module_exports_updateCanvas` — has export
-  - `test_canvas_module_exports_updateChips` — has export
-  - `test_canvas_module_no_fetch_or_petapi` — no fetch/PetAPI/http references
-  - `test_index_html_imports_canvas_module` — import wired in index.html
-  - `test_render_pet_still_updates_design_markers` — name/role/chips updated via canvas
-- `test_render_pet_updates_design_markers` in PetRoomDesignTests updated with mock
-- `test_add_food_endpoint_normalizes_to_food_added` updated with mock
+### Updated: `tests/test_webui_smoke.py`
+- Added `StatusChipsModuleTests` class with 7 tests:
+  - Module exists as native ES module
+  - Exports `updateStatusChips`
+  - No fetch/PetAPI/URL references
+  - Uses `textContent` not `innerHTML`
+  - References all four chip value IDs
+  - Canvas module delegates to status-chips
+  - `renderPet` still updates chip values via delegation
 
 ## Verification
 
 ```
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 393 tests in 130.621s — OK
+Ran 400 tests in 147.143s — OK
 
-git diff — check
-(no whitespace errors)
+git diff --check
+(clean)
 
-rg scan — pet-room-canvas.js has no fetch/PetAPI/URL hits
-index.html hits are allowed PetAPI usage and non-pet fetch calls
+rg scan
+No hits in status-chips.js or pet-room-canvas.js
+Only allowed PetAPI usage in index.html and existing fetch calls
 ```
 
 ## Non-Goals Preserved
-- No new endpoints, no React/Vite/TS, no food/voice/memory extraction
-- No real TTS, no PWA, no 3D/VRM, no billing
+- No new endpoints, React/Vite/TS, food/voice/memory extraction
+- No real TTS, PWA, 3D/VRM, billing, marketplace
