@@ -1,13 +1,13 @@
 # Nora Phase Status
 
-Last updated: 2026-06-09
+Last updated: 2026-06-10
 
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 66%
+- Percent: 68%
 - Status: in progress
-- Current focus: Extracting the Pet Room skill shelf into a bounded native module with deterministic read-only coverage.
+- Current focus: Continuing Pet Room frontend architecture extraction with the next bounded native module after skill shelf completion.
 
 ## Completed This Phase
 
@@ -154,14 +154,20 @@ Last updated: 2026-06-09
   - The food panel module has no direct `fetch`, no direct `PetAPI` reference, no external URL, and no endpoint shape changes; cost estimates still cover feed/chat/voice/work.
   - Deterministic coverage locks module exports, local wiring, food markers, delegated API/action boundaries, no build-system drift, no payment/marketplace/manipulative copy, and no product scope drift.
   - Verification is green: 411 targeted tests OK, 744 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native skill shelf module extraction:
+  - `mini_agent/static/components/skill-shelf.js` now owns deterministic skill card derivation and shelf rendering.
+  - `mini_agent/static/index.html` imports `skillCardsFromIdentity()` and `renderSkillShelf()` locally while keeping skill shelf read-only and disconnected from PetAPI, petAction, `/pet/` endpoints, tool execution, plugin execution, runtime calls, and capability routing.
+  - The module preserves icon mapping, unknown default icon behavior, secret-like filtering, special-character/overlong/non-string filtering, empty/malformed stale card cleanup, and stable `pet-skill-*` / `skill-*` / `data-skill-count` markers.
+  - Deterministic coverage locks the new module, legacy skill shelf contracts after extraction, no external URL/build-system drift, no marketplace/payment/premium skill drift, and no voice/PWA/native/3D scope drift.
+  - Verification is green: 411 targeted tests OK, 750 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-186A / TASK-186B: Extract the Pet Room skill shelf into a bounded native module and add deterministic read-only/no-tool coverage.
+- None. TASK-186A / TASK-186B are reviewed and integrated; next task publication should target the next bounded Pet Room frontend module.
 
 ## Next
 
-1. Complete TASK-186A/B skill shelf extraction and coverage.
-2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `voice-preview.js` only after TASK-186 is reviewed and integrated.
+1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `voice-preview.js`.
+2. Keep voice-preview extraction bounded to local UI orchestration only: no real audio provider, no recording, no food debit mutation, no new endpoint, no PWA/native, and no 3D/VRM.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -214,6 +220,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 66% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, and native food panel module extraction complete
+- Phase 2 Voice & Presence: 68% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, native food panel module extraction, and native skill shelf module extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

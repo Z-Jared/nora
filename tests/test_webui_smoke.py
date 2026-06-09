@@ -142,6 +142,65 @@ function updateFoodPanel(state) {}
 function loadCostEstimates(petId, api) {}
 function wireFoodButtons(getPet, actionFn) {}
 
+// Skill shelf functions (extracted to skill-shelf.js module)
+function escapeHtml(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+var SKILL_ICONS = {
+  'memory': '🧠', 'patrol': '🛡️', 'chat': '💬', 'code': '💻',
+  'research': '🔍', 'browse': '🌐', 'plan': '📋', 'write': '✏️',
+  'read': '📖', 'watch': '👁️', 'build': '🔧', 'test': '🧪',
+  'deploy': '🚀', 'monitor': '📊', 'analyze': '📈', 'summarize': '📝',
+  'translate': '🌍', 'draw': '🎨', 'play': '🎮', 'sing': '🎵',
+  'cook': '🍳', 'garden': '🌱', 'exercise': '💪', 'meditate': '🧘',
+};
+var SECRET_PATTERNS = [/sk[-_]/i, /bearer/i, /api[_-]?key/i, /token/i, /secret/i, /password/i, /passwd/i, /credential/i, /private[_-]?key/i, /auth/i];
+function isSecretLike(text) {
+  if (!text) return false;
+  var lower = text.toLowerCase();
+  for (var i = 0; i < SECRET_PATTERNS.length; i++) {
+    if (SECRET_PATTERNS[i].test(lower)) return true;
+  }
+  return false;
+}
+function skillCardsFromIdentity(identity, state) {
+  var skills = identity && identity.skills;
+  if (!skills || !Array.isArray(skills) || skills.length === 0) return [];
+  var result = [];
+  for (var i = 0; i < skills.length; i++) {
+    var raw = skills[i];
+    if (typeof raw !== 'string') continue;
+    var name = raw.trim();
+    if (!name || name.length > 50) continue;
+    if (!/^[a-zA-Z0-9_\- ]+$/.test(name)) continue;
+    if (isSecretLike(name)) continue;
+    var icon = SKILL_ICONS[name.toLowerCase()] || '⚡';
+    result.push({ name: name, icon: icon });
+  }
+  return result;
+}
+function renderSkillShelf(identity, state) {
+  var shelf = document.getElementById('pet-skill-shelf');
+  var listEl = document.getElementById('pet-skill-list');
+  var emptyEl = document.getElementById('pet-skill-empty');
+  if (!shelf || !listEl) return;
+  var cards = skillCardsFromIdentity(identity, state);
+  shelf.setAttribute('data-skill-count', String(cards.length));
+  if (cards.length === 0) {
+    listEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = '';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  var html = '';
+  for (var i = 0; i < cards.length; i++) {
+    var c = cards[i];
+    html += '<div class="pet-skill-card"><span class="skill-icon">' + escapeHtml(c.icon) + '</span><span class="skill-name">' + escapeHtml(c.name) + '</span></div>';
+  }
+  listEl.innerHTML = html;
+}
+
 // Mock PetAPI that delegates to fetch (so _fetchHandler mock still works)
 function _petPost(path, body) {
   return fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })

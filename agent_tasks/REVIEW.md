@@ -1,71 +1,69 @@
-# TASK-185A/185B Review — Pet Room Food Panel native module extraction and deterministic coverage
+# TASK-186A/186B Review — Pet Room Skill Shelf native module extraction
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-185A extracts Pet Room food panel into `food-panel.js` as a native ES module. TASK-185B adds 5 evals covering the food panel boundary. The implementation correctly delegates API calls through injected parameters rather than direct fetch/PetAPI references.
+TASK-186A extracts Pet Room skill shelf into `skill-shelf.js` as a native ES module. TASK-186B adds 6 evals and fixes 4 stale TASK-179 evals. Implementation correctly preserves all UI behavior, DOM markers, filtering rules, and read-only safety boundaries.
 
 ## Findings
 
-### 1. food-panel.js Boundary — PASS
+### 1. skill-shelf.js Boundary — PASS
 
-Module exports three functions:
-- `updateFoodPanel(state)` — updates stat-food, bar-food, pet-food-balance via textContent
-- `loadCostEstimates(petId, api)` — fetches costs via `api.getPetFoodStatus` (delegated API boundary)
-- `wireFoodButtons(getCurrentPet, petActionFn)` — wires buttons via `petActionFn` (delegated action boundary)
+Module exports two functions:
+- `skillCardsFromIdentity(identity, state)` — derives skill cards from pet identity
+- `renderSkillShelf(identity, state)` — renders skill cards into DOM
 
 The module:
-- Uses `escapeHtml` for cost table HTML generation
-- No direct `fetch()`, no `PetAPI` reference, no external URLs
-- API calls go through injected `api` parameter (`api.getPetFoodStatus`)
-- Button actions go through injected `petActionFn` parameter
-- Comments explicitly list non-goals (lines 4-11)
+- Uses `escapeHtml` for all dynamic content (icon, name)
+- No direct `fetch()`, no `PetAPI`, no `petAction`, no `/pet/` endpoints, no tool/plugin execution
+- Comments explicitly list non-goals (line 9)
+- Read-only eval strips comments before scanning forbidden patterns
 
-### 2. index.html / PetAPI Delegated Boundary — PASS
+### 2. DOM Markers / Filtering / Safety — PASS
 
-- Import: `import { updateFoodPanel, loadCostEstimates, wireFoodButtons }` from food-panel.js
-- `renderPet()` calls `updateFoodPanel(st)` and `loadCostEstimates(pet.pet_id, PetAPI)` — PetAPI passed as parameter
-- `wireFoodButtons(function(){ return currentPet; }, petAction)` — petAction function passed as parameter
-- Inline `loadCostEstimates` function removed from index.html
-- Inline feed/add-food button handlers removed, delegated to module
+- **Icon mapping**: 24 skills → emoji, default ⚡ for unknown skills
+- **Secret-like filtering**: `SECRET_PATTERNS` (sk-, bearer, api_key, token, secret, password, credential, private_key, auth) + `isSecretLike()` function
+- **Stale cleanup**: `renderSkillShelf` clears `innerHTML` before returning on empty cards
+- **Input sanitization**: non-string, empty, overlong (>50 chars), special-character labels filtered
+- **DOM markers preserved**: `pet-skill-shelf`, `pet-skill-list`, `pet-skill-empty`, `pet-skill-card`, `skill-icon`, `skill-name`, `data-skill-count`
 
-### 3. Tests — PASS
+### 3. index.html Extraction — PASS
 
-**11 smoke tests** (`FoodPanelModuleTests`):
-- Module exists as native ES module
-- Exports `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons`
-- No direct fetch, no PetAPI, no external URLs
-- No payment/marketplace/pressure copy
-- Uses textContent or escapeHtml
-- References all required markers (stat-food, bar-food, pet-food-balance, pet-cost-table)
-- Preserves action set (feed, chat, voice, work)
-- index.html imports food-panel.js
-- renderPet calls updateFoodPanel and loadCostEstimates with PetAPI
-- updateFoodPanel sets stat-food and pet-food-balance textContent
-- loadCostEstimates calls api.getPetFoodStatus for all four actions
+- Import: `import { skillCardsFromIdentity, renderSkillShelf } from '/static/components/skill-shelf.js'`
+- Removed inline: `SKILL_ICONS`, `SECRET_PATTERNS`, `isSecretLike`, `skillCardsFromIdentity`, `renderSkillShelf`
+- `renderPet()` call to `renderSkillShelf(id, st)` unchanged
+- Test harness updated with skill shelf functions for test isolation
 
-**Harness update**: Default no-op mocks added for `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons` to prevent undefined function errors in test harness.
+### 4. Eval Coverage — PASS
 
-### 4. Evals — PASS
+**6 new evals** (`skill_shelf_module_*`):
+- `skill_shelf_module_file_present` — file exists, has ES exports, no build tooling
+- `skill_shelf_module_wired` — index.html references skill-shelf with module import
+- `skill_shelf_module_markers_preserved` — 7 required markers present across HTML/JS
+- `skill_shelf_module_read_only_no_tool_execution` — strips comments, scans for forbidden patterns (fetch, petapi, petaction, /pet/, tool_call, execute_tool, run_tool, install, runtimetool, capabilityrouter)
+- `skill_shelf_module_secret_filtering_and_stale_cleanup` — secret filtering, stale card cleanup, empty/malformed fallback
+- `skill_shelf_module_no_marketplace_or_scope_drift` — no external URLs, build system markers, marketplace/payment/voice/PWA/3D drift
 
-**5 evals** (`food_panel_*`):
-- `food_panel_module_file_present` — file exists, has ES exports, no build tooling
-- `food_panel_module_wired` — index.html references food-panel with module import
-- `food_panel_markers_preserved` — 8 required markers present across HTML/food-panel
-- `food_panel_petapi_boundary_no_direct_fetch` — strips comments, checks for api.getPetFoodStatus boundary, rejects direct fetch, requires delegated action function, verifies cost action set
-- `food_panel_no_payment_or_scope_drift` — no external URLs, build system markers, payment/manipulative copy, or scope drift
-
-**PM fix**: B correctly fixed eval to accept delegated `petActionFn` pattern instead of requiring `PetAPI` literal in food-panel.js.
+**4 fixed TASK-179 evals** — use `_read_skill_shelf_surface()` helper to read combined `index.html` + `skill-shelf.js`:
+- `pet_skill_shelf_markers_present`
+- `skill_shelf_mapping_rules`
+- `skill_shelf_no_stale_content_on_empty`
+- `skill_shelf_rejects_secret_like_skills`
 
 ### 5. Scope Drift — PASS
 
 No evidence of:
 - React/Vite/TypeScript/npm/build step
-- External URLs in food-panel.js
-- Payment/billing/marketplace/manipulative copy
-- Real voice/audio, PWA/native, 3D/VRM, plugin execution
+- External URLs in skill-shelf.js
+- Marketplace/payment/premium skill
+- Voice/native/PWA/3D/VRM
 
-## Residual Risks
+## Verification
 
-None. The module boundary is clean: all API calls go through injected parameters, no direct fetch/PetAPI references, safe DOM text APIs used throughout.
+```
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 411 tests OK
+python3 evals/run_evals.py → 750 passed, 0 failed, 0 skipped
+git diff --check → clean
+rg scan → skill-shelf.js only hits negative safety comment
+```

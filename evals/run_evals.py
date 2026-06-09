@@ -296,6 +296,13 @@ def main() -> int:
         EvalCase("food_panel_markers_preserved", eval_food_panel_markers_preserved),
         EvalCase("food_panel_petapi_boundary_no_direct_fetch", eval_food_panel_petapi_boundary_no_direct_fetch),
         EvalCase("food_panel_no_payment_or_scope_drift", eval_food_panel_no_payment_or_scope_drift),
+        # TASK-186B: Skill Shelf module eval coverage
+        EvalCase("skill_shelf_module_file_present", eval_skill_shelf_module_file_present),
+        EvalCase("skill_shelf_module_wired", eval_skill_shelf_module_wired),
+        EvalCase("skill_shelf_module_markers_preserved", eval_skill_shelf_module_markers_preserved),
+        EvalCase("skill_shelf_module_read_only_no_tool_execution", eval_skill_shelf_module_read_only_no_tool_execution),
+        EvalCase("skill_shelf_module_secret_filtering_and_stale_cleanup", eval_skill_shelf_module_secret_filtering_and_stale_cleanup),
+        EvalCase("skill_shelf_module_no_marketplace_or_scope_drift", eval_skill_shelf_module_no_marketplace_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4383,25 +4390,34 @@ def _skip_if_no_skill_shelf():
         raise unittest.SkipTest("TASK-179A not integrated: skill ability shelf not available")
 
 
+def _read_skill_shelf_surface():
+    """Read combined skill shelf surface: index.html + skill-shelf.js if it exists."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    shelf_js_path = PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js"
+    if shelf_js_path.exists():
+        html += "\n" + shelf_js_path.read_text(encoding="utf-8")
+    return html
+
+
 def eval_pet_skill_shelf_markers_present():
     """Pet Room exposes stable skill shelf DOM markers/attributes."""
     _skip_if_no_skill_shelf()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    all_content = _read_skill_shelf_surface()
     required_markers = [
         "pet-skill-shelf", "pet-skill-list", "pet-skill-card",
         "skill-icon", "skill-name", "pet-skill-empty",
     ]
-    missing = [m for m in required_markers if m not in html]
+    missing = [m for m in required_markers if m not in all_content]
     assert not missing, f"Pet Room missing required skill shelf markers: {missing}"
 
 
 def eval_skill_shelf_mapping_rules():
     """Rendering derives from bounded identity.skills with safe fallback for missing/malformed/secret/HTML input."""
     _skip_if_no_skill_shelf()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = _read_skill_shelf_surface().lower()
     import re
     # Find skillCardsFromIdentity or equivalent mapping function
-    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', all_content)
     assert skill_fn, "skill mapping function not found"
     fn_body = skill_fn.group(1)
     # Must reference identity.skills or skills
@@ -4415,20 +4431,20 @@ def eval_skill_shelf_mapping_rules():
                     "test(" in fn_body or "slice" in fn_body or "max" in fn_body)
     assert has_sanitize, "skill mapping missing input sanitization/bounding"
     # Check renderSkillShelf or equivalent uses escapeHtml for output
-    render_start = html.find('function renderskillshelf')
+    render_start = all_content.find('function renderskillshelf')
     if render_start < 0:
-        render_start = html.find('function renderskill')
+        render_start = all_content.find('function renderskill')
     if render_start >= 0:
-        brace_start = html.find('{', render_start)
+        brace_start = all_content.find('{', render_start)
         depth = 0
         i = brace_start
-        while i < len(html):
-            if html[i] == '{': depth += 1
-            elif html[i] == '}':
+        while i < len(all_content):
+            if all_content[i] == '{': depth += 1
+            elif all_content[i] == '}':
                 depth -= 1
                 if depth == 0: break
             i += 1
-        render_body = html[brace_start:i+1]
+        render_body = all_content[brace_start:i+1]
         has_escape = ("escapehtml" in render_body or "textcontent" in render_body)
         assert has_escape, "skill rendering missing escaping for output (escapeHtml/textContent)"
 
@@ -4501,22 +4517,23 @@ def eval_skill_shelf_no_marketplace_native_pwa_or_surveillance_copy():
 def eval_skill_shelf_no_stale_content_on_empty():
     """Empty/malformed skills must clear stale .pet-skill-card HTML before returning."""
     _skip_if_no_skill_shelf()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = _read_skill_shelf_surface().lower()
+    import re
     # Find renderSkillShelf function using brace counting
-    render_start = html.find('function renderskillshelf')
+    render_start = all_content.find('function renderskillshelf')
     if render_start < 0:
-        render_start = html.find('function renderskill')
+        render_start = all_content.find('function renderskill')
     assert render_start >= 0, "renderSkillShelf function not found"
-    brace_start = html.find('{', render_start)
+    brace_start = all_content.find('{', render_start)
     depth = 0
     i = brace_start
-    while i < len(html):
-        if html[i] == '{': depth += 1
-        elif html[i] == '}':
+    while i < len(all_content):
+        if all_content[i] == '{': depth += 1
+        elif all_content[i] == '}':
             depth -= 1
             if depth == 0: break
         i += 1
-    render_body = html[brace_start:i+1]
+    render_body = all_content[brace_start:i+1]
     # Find the empty branch (cards.length === 0 or similar)
     empty_branch_match = re.search(r'(length\s*===?\s*0|\.length\s*<\s*1)', render_body)
     assert empty_branch_match, "renderSkillShelf missing empty-length check"
@@ -4537,21 +4554,21 @@ def eval_skill_shelf_no_stale_content_on_empty():
 def eval_skill_shelf_rejects_secret_like_skills():
     """Secret-like skill strings (sk-, api_key, token, secret, password, bearer, credential, private_key) must not render."""
     _skip_if_no_skill_shelf()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = _read_skill_shelf_surface().lower()
     # Must have explicit secret-like pattern filtering
     required_patterns = ["sk-", "api_key", "token", "secret", "password", "bearer", "credential"]
     # Check for SECRET_PATTERNS array or isSecretLike function or equivalent
-    has_secret_patterns = "secret_pattern" in html or "issecretlike" in html or "issecret" in html
+    has_secret_patterns = "secret_pattern" in all_content or "issecretlike" in all_content or "issecret" in all_content
     assert has_secret_patterns, \
         "skill shelf missing explicit secret-like pattern filtering (SECRET_PATTERNS/isSecretLike)"
     # Verify the patterns cover the required secret types
-    found_patterns = [p for p in required_patterns if p.replace("_", "[-_]?") in html or p in html]
+    found_patterns = [p for p in required_patterns if p.replace("_", "[-_]?") in all_content or p in all_content]
     # At minimum, sk- and token/secret must be covered
-    assert "sk-" in html and ("token" in html or "secret" in html), \
+    assert "sk-" in all_content and ("token" in all_content or "secret" in all_content), \
         "skill shelf secret patterns must cover sk- and token/secret prefixes"
     # Must call the secret check in the skill mapping function
     import re
-    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    skill_fn = re.search(r'function\s+[a-z]*skill[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', all_content)
     assert skill_fn, "skill mapping function not found"
     fn_body = skill_fn.group(1)
     has_secret_call = ("issecretlike" in fn_body or "issecret" in fn_body or
@@ -5159,6 +5176,113 @@ def eval_food_panel_no_payment_or_scope_drift():
     # No scope drift
     drift_markers = [
         "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-186B: Skill Shelf module eval coverage ---
+
+
+def _skip_if_no_skill_shelf_module():
+    """Skip if TASK-186A skill-shelf module is not implemented."""
+    try:
+        shelf_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js"
+        if not shelf_js.exists():
+            raise AttributeError("skill-shelf.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-186A not integrated: skill-shelf.js not available")
+
+
+def eval_skill_shelf_module_file_present():
+    """skill-shelf.js exists and uses native JS exports."""
+    _skip_if_no_skill_shelf_module()
+    shelf_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js").read_text(encoding="utf-8").lower()
+    has_export = ("export " in shelf_js or "export{" in shelf_js or "export default" in shelf_js)
+    assert has_export, "skill-shelf.js missing native ES module export statements"
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in shelf_js, f"skill-shelf.js contains build tooling: '{marker}'"
+
+
+def eval_skill_shelf_module_wired():
+    """skill-shelf.js is wired through local native module import in index.html."""
+    _skip_if_no_skill_shelf_module()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "skill-shelf" in html, "index.html does not reference skill-shelf"
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_skill_shelf_module_markers_preserved():
+    """Required skill markers/classes remain present."""
+    _skip_if_no_skill_shelf_module()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    shelf_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js").read_text(encoding="utf-8")
+    all_content = html + shelf_js
+    required = [
+        "pet-skill-shelf", "pet-skill-list", "pet-skill-empty",
+        "pet-skill-card", "skill-icon", "skill-name", "data-skill-count",
+    ]
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing skill markers: {missing}"
+
+
+def eval_skill_shelf_module_read_only_no_tool_execution():
+    """Skill module is read-only: no fetch, PetAPI, petAction, /pet/, tool execution, plugin install."""
+    _skip_if_no_skill_shelf_module()
+    shelf_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js").read_text(encoding="utf-8")
+    import re
+    no_comments = re.sub(r'//.*?$', '', shelf_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    forbidden = [
+        "fetch(", "petapi.", "petaction", "/pet/",
+        "tool_call", "execute_tool", "run_tool", "install(",
+        "runtimetool", "capabilityrouter",
+    ]
+    for pattern in forbidden:
+        assert pattern not in content, f"skill-shelf module contains forbidden '{pattern}' in code"
+
+
+def eval_skill_shelf_module_secret_filtering_and_stale_cleanup():
+    """Skill module preserves secret filtering and stale card cleanup."""
+    _skip_if_no_skill_shelf_module()
+    shelf_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js").read_text(encoding="utf-8").lower()
+    # Must have secret-like filtering
+    has_secret_filter = ("issecretlike" in shelf_js or "secret" in shelf_js or
+                         "sk-" in shelf_js or "sensitive" in shelf_js)
+    assert has_secret_filter, "skill-shelf.js missing secret-like filtering"
+    # Must have stale card cleanup (innerHTML clear or equivalent)
+    has_stale_cleanup = ("innerhtml" in shelf_js or "removechild" in shelf_js or
+                         "replacechildren" in shelf_js)
+    assert has_stale_cleanup, "skill-shelf.js missing stale card cleanup"
+    # Must handle empty/malformed skills
+    has_fallback = ("empty" in shelf_js or "length" in shelf_js or "null" in shelf_js or
+                    "array" in shelf_js or "typeof" in shelf_js)
+    assert has_fallback, "skill-shelf.js missing fallback for empty/malformed skills"
+
+
+def eval_skill_shelf_module_no_marketplace_or_scope_drift():
+    """No marketplace, plugin store, real tool execution, or scope drift."""
+    _skip_if_no_skill_shelf_module()
+    shelf_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "skill-shelf.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = shelf_js + html
+    assert "http://" not in shelf_js, "skill-shelf.js contains external HTTP URL"
+    assert "https://" not in shelf_js, "skill-shelf.js contains external HTTPS URL"
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace", "checkout", "billing",
         "voice clone", "record by default", "always listening",
         "microphone access", "camera access", "screen capture", "location access",
         "3d model", "vrm", "live2d",

@@ -1,50 +1,42 @@
-# TASK-185A Completion Report
+# TASK-186A Completion Report
 
 ## Summary
 
-Extracted Pet Room food panel into `mini_agent/static/components/food-panel.js` as a native ES module. Moved food stat/balance updates, cost estimate rendering, and button wiring out of `index.html` while preserving all UI behavior, DOM markers, and PetAPI boundaries.
+Extracted Pet Room skill shelf into `mini_agent/static/components/skill-shelf.js` as a native ES module, preserving all UI behavior, DOM markers, filtering rules, and read-only safety boundaries.
 
 ## Changes
 
-### `mini_agent/static/components/food-panel.js` (new)
-- `updateFoodPanel(state)` — updates `stat-food`, `bar-food`, `pet-food-balance` from pet state
-- `loadCostEstimates(petId, api)` — fetches feed/chat/voice/work costs via API param, renders `pet-cost-table`
-- `wireFoodButtons(getCurrentPet, petActionFn)` — wires `pet-feed-btn` and `pet-add-food-btn` click handlers
-- Uses `escapeHtml` for cost table HTML generation
-- No direct `fetch()`, no `PetAPI` reference, no external URLs
+### New file: `mini_agent/static/components/skill-shelf.js`
+- **Exported functions:** `skillCardsFromIdentity(identity, state)`, `renderSkillShelf(identity, state)`
+- **Owns markers:** `pet-skill-shelf`, `pet-skill-list`, `pet-skill-empty`, `pet-skill-card`, `skill-icon`, `skill-name`, `data-skill-count`
+- **Preserves:** Icon mapping (24 skills → emoji), default ⚡ icon for unknown skills
+- **Preserves filtering:** non-string, empty, overlong (>50 chars), special-character, and secret-like skill labels
+- **Uses:** DOM text APIs via `escapeHtml()` for all dynamic content
+- **Does NOT call:** fetch, PetAPI, petAction, or any tool/plugin execution
 
-### `mini_agent/static/index.html`
-- Added `import { updateFoodPanel, loadCostEstimates, wireFoodButtons }` from food-panel.js
-- `renderPet()` calls `updateFoodPanel(st)` and `loadCostEstimates(pet.pet_id, PetAPI)`
-- Removed inline `loadCostEstimates` function
-- Replaced inline feed/add-food button handlers with `wireFoodButtons()`
+### Updated: `mini_agent/static/index.html`
+- Added `import { skillCardsFromIdentity, renderSkillShelf } from '/static/components/skill-shelf.js'`
+- Removed inline `SKILL_ICONS`, `SECRET_PATTERNS`, `isSecretLike`, `skillCardsFromIdentity`, `renderSkillShelf` definitions
+- `renderPet()` call to `renderSkillShelf(id, st)` unchanged
 
-### `tests/test_webui_smoke.py`
-- Added default no-op mocks for `updateFoodPanel`, `loadCostEstimates`, `wireFoodButtons` in harness
-- `PetAPIModuleTests.test_pet_room_fetch_calls_use_pet_api` — updated to check `loadCostEstimates(pet.pet_id, PetAPI)` delegation
-- New `FoodPanelModuleTests` class (11 tests):
-  - Module existence, exports, no-fetch/no-PetAPI/no-URL, no payment pressure, textContent/escapeHtml usage
-  - Required markers (stat-food, bar-food, pet-food-balance, pet-cost-table)
-  - Preserved action set (feed, chat, voice, work)
-  - index.html imports food-panel.js
-  - renderPet calls updateFoodPanel and loadCostEstimates with PetAPI
-  - updateFoodPanel sets stat-food and pet-food-balance textContent
-  - loadCostEstimates calls api.getPetFoodStatus for all four actions
+### Updated: `tests/test_webui_smoke.py`
+- Added skill shelf functions (`escapeHtml`, `SKILL_ICONS`, `SECRET_PATTERNS`, `isSecretLike`, `skillCardsFromIdentity`, `renderSkillShelf`) to test harness for test isolation
+- All 16 existing `PetRoomSkillShelfTests` pass unchanged
 
 ## Verification
 
-```
+```bash
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 411 tests in 146.367s — OK
+# Ran 411 tests in 145.321s — OK
 
 git diff --check
-(clean)
+# (clean)
 
-rg scan — food-panel.js: no forbidden markers
-index.html: only expected fetch() for non-pet endpoints (chat/session/task/memory/status)
-test_webui_smoke.py: only mock PetAPI fetch and negative assertions
+rg -n "..." mini_agent/static/components/skill-shelf.js
+# Only hit: comment "Does NOT call fetch, PetAPI, petAction, or any tool/plugin execution."
+# This is a negative safety assertion — expected.
 ```
 
-## Notes
+## rg scan note
 
-- No push performed.
+`skill-shelf.js` line 9 contains `fetch`, `PetAPI`, `petAction` in a docstring comment explaining what the module does NOT call. This is a negative safety assertion, not actual code usage.

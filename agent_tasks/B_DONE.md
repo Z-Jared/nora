@@ -1,35 +1,32 @@
-# B DONE — TASK-185B
+# B DONE — TASK-186B
 
-**Status:** Complete — PetAPI delegated boundary fix applied
+**Status:** Complete — stale TASK-179 eval failures fixed
 
 ## Summary
 
-Fixed `eval_food_panel_petapi_boundary_no_direct_fetch` to accept the delegated action function pattern (`petActionFn('/pet/feed', ...)`) used by TASK-185A instead of requiring `PetAPI` literal in food-panel.js.
+Fixed 4 stale TASK-179 skill shelf evals that failed after TASK-186A moved implementation into `skill-shelf.js`. Added `_read_skill_shelf_surface()` helper that reads combined `index.html` + `skill-shelf.js` when the module exists. All 12 skill shelf evals (6 old + 6 new) PASS combined.
 
-## Fix Applied
+## Fixes Applied
 
-- Removed requirement for `PetAPI` literal in `food-panel.js` text
-- Added check that `index.html` contains `PetAPI` wiring for food panel
-- Added check for `api.getPetFoodStatus` / `getPetFoodStatus` parameter boundary
-- Endpoint path checks (`/pet/feed`, `/pet/add-food`, `/pet/food-status`) now only fail if no delegated action function (`petActionFn`/`petAction`) is present
-- Direct `fetch(` still rejected
+Added `_read_skill_shelf_surface()` helper and updated 4 evals:
+
+1. **`pet_skill_shelf_markers_present`** — Now reads combined surface, finds markers in skill-shelf.js
+2. **`skill_shelf_mapping_rules`** — Now reads combined surface, finds `skillCardsFromIdentity` in skill-shelf.js
+3. **`skill_shelf_no_stale_content_on_empty`** — Now reads combined surface, finds `renderSkillShelf` in skill-shelf.js
+4. **`skill_shelf_rejects_secret_like_skills`** — Now reads combined surface, finds `SECRET_PATTERNS`/`isSecretLike` in skill-shelf.js
 
 ## Verification
 
-### Own worktree (no TASK-185A)
+### Own worktree (no TASK-186A)
 
 ```
-python3 evals/run_evals.py           → 739 passed, 0 failed, 5 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 400 tests OK
+python3 evals/run_evals.py           → 744 passed, 0 failed, 6 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 411 tests OK
 git diff --check                     → clean
 ```
 
-### Combined check (applied onto Claude A's TASK-185A)
+### Combined check (applied onto Claude A's TASK-186A)
 
 ```
-python3 evals/run_evals.py           → 5/5 food_panel evals PASS
+python3 evals/run_evals.py           → 12/12 skill_shelf evals PASS (6 old + 6 new)
 ```
-
-## Notes
-
-- No push performed.
