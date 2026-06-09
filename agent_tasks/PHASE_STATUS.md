@@ -150,12 +150,12 @@ Last updated: 2026-06-09
   - Verification is green: 400 targeted tests OK, 739 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None.
+- TASK-185A / TASK-185B: Extract the Pet Room food panel into a bounded native module and add deterministic Token Food coverage.
 
 ## Next
 
-1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with the next panel only after TASK-184 is committed.
-2. Prefer the next bounded extraction slice: `food-panel.js` plus deterministic read-only/mutation-boundary coverage.
+1. Complete TASK-185A/B food panel extraction and coverage.
+2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `skill-shelf.js` only after TASK-185 is reviewed and integrated.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 

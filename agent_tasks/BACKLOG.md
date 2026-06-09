@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-185A: Extract Pet Room Food Panel native module
+- 架构层: Avatar/Room UI / Frontend Architecture / Token Food Economy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-184A、TASK-184B 完成并集成。
+- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4，创建 `mini_agent/static/components/food-panel.js`，把 Pet Room 的 Compute Food/Token Energy panel 渲染和 cost estimate DOM 更新从 `mini_agent/static/index.html` 拆成 bounded native ES module，同时保持现有 UI、DOM markers、PetAPI endpoint boundary、Token Food 文案和本地 demo 行为不变。
+- 非目标: 不拆 skill shelf、voice preview、memory diary、identity editor；不新增/删除/重命名 HTTP endpoint；不改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/tts.py`、`mini_agent/static/api.js`；不引入 React/Vite/TypeScript/npm/build step；不新增真实支付、checkout、billing、marketplace、premium skill、外部 URL、真实 voice/audio、PWA/native、plugin execution、3D/VRM/Live2D runtime。
+- 安全边界: food panel module 必须只通过现有 `PetAPI` wrapper 调用 `/pet/food-status`、`/pet/feed`、`/pet/add-food` 的 wrapper，不得直接 `fetch('/pet/...')`；动态 pet/user/API 文本必须使用 DOM text APIs 或 `escapeHtml`；不得新增隐藏网络、credential logging、secret echo、诱导付费、情绪勒索、microphone/camera/screen/location access。
+- 持久证据: 新增 `mini_agent/static/components/food-panel.js`；`index.html` 使用本地 native module import；`pet-food-section`、`pet-cost-table`、`pet-food-amount`、`pet-add-food-btn`、`pet-food-balance`、`pet-feed-btn`、`stat-food`、`bar-food` markers 保持稳定；cost estimate 仍显示 feed/chat/voice/work；feeding/add food 仍走 `PetAPI.feedPet` / `PetAPI.addPetFood` / existing `petAction` boundary。
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for external URLs/build-system/payment/marketplace/scope drift in `mini_agent/static/index.html mini_agent/static/components/food-panel.js tests/test_webui_smoke.py`。
+- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `mini_agent/static/index.html`; `mini_agent/static/api.js`; `tests/test_webui_smoke.py`.
+
+### TASK-185B: Food Panel module deterministic coverage
+- 架构层: Eval/Review System / Frontend Architecture / Token Food Economy / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-184A、TASK-184B 完成并集成；与 TASK-185A 并行，但不得改实现文件。
+- 目标: 为 TASK-185A 的 food-panel module extraction 添加 deterministic eval/smoke 覆盖，确保 component 文件存在、本地 module wiring、food markers 保留、food panel 只通过 `PetAPI` boundary、无 direct fetch/no endpoint shape drift、无 build-system drift、无 payment/marketplace/manipulative-copy scope drift，且 TASK-184 status chips eval 继续 active/pass。
+- 非目标: 不实现 food panel module；不修改 `mini_agent/static/index.html`、`mini_agent/static/components/food-panel.js`、`mini_agent/static/components/pet-room-canvas.js`、`mini_agent/static/components/status-chips.js`、CSS、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm。
+- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成图片、修改设计稿；必须阻断 direct `/pet/` fetch drift、external URL/build-system drift、checkout/billing/real payment、marketplace/plugin store/premium skill、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM/Live2D drift。
+- 持久证据: 新增 eval 名称包含 `food_panel` 或 `pet_room_food`; 覆盖 component file exports、local module import wiring、food markers、PetAPI-only boundary、cost estimate action set、no manipulative Token Food copy、TASK-184 status chip eval 继续 active/pass。
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system/payment scan。
+- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `evals/run_evals.py`; `tests/test_webui_smoke.py`; `mini_agent/static/index.html`; `mini_agent/static/api.js`.
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
