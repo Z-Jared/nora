@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 45%
 - Status: in progress
-- Current focus: Next bounded Voice & Presence presence step after deterministic interaction reactions.
+- Current focus: Pet Room deterministic skill ability shelf as a bounded presence/skill bridge.
 
 ## Completed This Phase
 
@@ -111,11 +111,12 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None assigned after TASK-178 integration.
+- TASK-179A: Pet Room deterministic skill ability shelf.
+- TASK-179B: Skill ability shelf deterministic eval and safety coverage.
 
 ## Next
 
-1. Select the next bounded Phase 2 presence task from the Voice & Presence plan.
+1. Complete TASK-179A/TASK-179B through PM initial review and reviewer gate.
 2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 

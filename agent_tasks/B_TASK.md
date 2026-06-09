@@ -1,10 +1,10 @@
-# TASK-178B: Interaction reaction deterministic eval and safety coverage
+# TASK-179B: Skill ability shelf deterministic eval and safety coverage
 
 You are Claude B. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-b` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is in progress. TASK-178A will add a deterministic text-only reaction surface after existing Pet Room interactions. Your job is deterministic eval/smoke/safety coverage only. Phase 2 still uses A/B only; do not open or assume Claude C/D.
+Phase 2 is in progress. TASK-179A will add a deterministic read-only skill ability shelf to the Pet Room. Your job is deterministic eval/smoke/safety coverage only. Phase 2 still uses A/B only; do not open or assume Claude C/D.
 
 Read first:
 
@@ -21,15 +21,15 @@ Read first:
 
 ## Goal
 
-Add deterministic coverage for the interaction reaction surface that TASK-178A implements. Coverage should lock the public contract without implementing the UI mapping yourself.
+Add deterministic coverage for the Pet Room skill ability shelf that TASK-179A implements. Coverage should lock the public contract without implementing the UI yourself.
 
 Expected coverage areas:
 
-- Pet Room exposes stable reaction DOM markers/attributes.
-- JS mapping derives reaction from bounded action type plus bounded pet state/result.
-- Missing/malformed action, state, or result inputs fall back to bounded safe reaction text.
-- Reaction update is read-only beyond the already-existing user-triggered interaction request: no extra fetch, food debit, state mutation, activity write, relationship-memory write, voice-preview call, consent mutation, microphone/camera/screen/location access, provider call, service worker, desktop/native code, or notification setup.
-- UI copy does not imply voice cloning, recording by default, microphone use, always listening, hidden background activity, real payment, marketplace, purchase pressure, notification opt-in, PWA install, or 3D/VRM scope drift.
+- Pet Room exposes stable skill shelf DOM markers/attributes.
+- Rendering derives from bounded `identity.skills` only.
+- Missing, empty, malformed, secret-like, HTML, or excessive skill inputs fall back safely or escape/bound output.
+- Skill shelf update is read-only: no fetch, provider/model call, tool execution, plugin install, durable task creation, food debit, state mutation, activity write, relationship-memory write, voice-preview call, microphone/camera/screen/location access, service worker, desktop/native code, or notification setup.
+- UI copy does not imply marketplace/plugin store, premium skill packs, purchase pressure, hidden cost, voice cloning, recording by default, always listening, notification opt-in, PWA install, or 3D/VRM scope drift.
 
 ## Scope
 
@@ -42,42 +42,43 @@ Allowed files:
 Do not edit implementation files:
 
 - `mini_agent/static/index.html`
-- `mini_agent/tts.py`
-- `mini_agent/http_server.py`
 - `mini_agent/pets.py`
+- `mini_agent/http_server.py`
+- `mini_agent/tts.py`
+- skill/plugin/runtime/capability-router files
 
 ## Required Coverage
 
-Add evals whose names include `reaction` or `pet_room_reaction`, for example:
+Add evals whose names include `skill_shelf` or `pet_skill`, for example:
 
-- `pet_room_reaction_markers_present`
-- `interaction_reaction_mapping_rules`
-- `interaction_reaction_read_only_no_extra_fetch`
-- `interaction_reaction_no_voice_native_pwa_or_surveillance_copy`
+- `pet_skill_shelf_markers_present`
+- `skill_shelf_mapping_rules`
+- `skill_shelf_read_only_no_tool_execution`
+- `skill_shelf_no_marketplace_native_pwa_or_surveillance_copy`
 
-Guard evals so they can explain missing TASK-178A behavior during isolated worker runs, but after PM combines with TASK-178A they must be active/pass and not permanently skipped.
+Guard evals so they can explain missing TASK-179A behavior during isolated worker runs, but after PM combines with TASK-179A they must be active/pass and not permanently skipped.
 
 ## Non-Goals
 
-- Do not implement the reaction UI, CSS, or JS helper.
-- Do not add real TTS, speech recognition, microphone/camera/screen/location access, audio playback, vendor adapters, PWA/service worker, notifications, desktop floating pet, billing, marketplace, cloud sync, relationship-memory writes, activity writes, or 3D/VRM.
-- Do not weaken existing pet, voice profile, TTS fallback, speech bubble, voice consent, expression state, presence state, room greeting, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
+- Do not implement the skill shelf UI, CSS, or JS helper.
+- Do not add real skill execution, plugin installation, marketplace, billing, payment, PWA/service worker, notifications, desktop floating pet, real TTS/audio, speech recognition, microphone/camera/screen/location access, relationship-memory writes, activity writes, or 3D/VRM.
+- Do not weaken existing pet, voice profile, TTS fallback, speech bubble, voice consent, expression state, presence state, room greeting, interaction reaction, identity editor, commercial/no-manipulation, or Web UI smoke coverage.
 - Do not add new Claude C/D worker files.
 
 ## Safety Boundaries
 
-- Eval scans may allow negative boundary statements, but must block promotional or enabling language for:
+- Eval scans may allow negative boundary statements, but must block enabling/promotional language for:
+  - plugin store / marketplace / premium skills
+  - tool execution from the shelf
+  - hidden cost / surprise food debit
+  - subscription or purchase pressure
   - voice cloning
   - recording by default
   - microphone/camera/screen/location access
   - always/background listening
-  - hidden cost
-  - surprise food debit
-  - subscription or purchase pressure
-  - marketplace drift
-  - 3D/VRM implementation drift
   - PWA/service-worker/notification/native drift
-- Tests must not assert only that files exist; they must lock mapping behavior, read-only/no-extra-mutation behavior, or copy contracts.
+  - 3D/VRM implementation drift
+- Tests must not assert only that files exist; they must lock markers, mapping behavior, read-only/no-tool/no-mutation behavior, escaping/bounding, or copy contracts.
 - Do not include real secrets or credentials in fixtures.
 
 ## Verification
@@ -88,14 +89,14 @@ Run:
 python3 evals/run_evals.py
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
 git diff --check
-rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission" evals/run_evals.py tests/test_webui_smoke.py
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|plugin store|premium skill|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission|install plugin" evals/run_evals.py tests/test_webui_smoke.py
 ```
 
 The `rg` command may find negative test/safety assertions only; explain any hits in `B_DONE.md`.
 
 ## Completion Report
 
-Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-178B` and include:
+Write `agent_tasks/B_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-179B` and include:
 
 - Summary of eval/test coverage
 - Eval names added
