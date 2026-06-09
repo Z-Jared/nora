@@ -234,6 +234,31 @@ button{border:0;cursor:pointer}
 .expression-focused .robot-eye{width:18px;height:14px;background:#7c4dff;box-shadow:0 0 12px rgba(124,77,255,.6)}
 .expression-focused .robot-core{background:radial-gradient(circle,#b388ff,#7c4dff);box-shadow:0 0 14px rgba(124,77,255,.5)}
 .expression-focused .robot-antenna::after{background:#b388ff;box-shadow:0 0 10px rgba(179,136,255,.6)}
+/* Idle presence CSS classes */
+.presence-resting .robot-eye{animation-duration:6s}
+.presence-resting .robot-core{animation-duration:4s;opacity:.5}
+.presence-resting .robot-antenna::after{opacity:.3;animation:antenna-dim 4s infinite}
+.presence-resting .robot-arm{opacity:.5}
+@keyframes antenna-dim{0%,100%{opacity:.3}50%{opacity:.6}}
+.presence-alert .robot-eye{animation-duration:1.5s;box-shadow:0 0 12px rgba(79,195,247,.8)}
+.presence-alert .robot-core{animation-duration:1s;box-shadow:0 0 16px rgba(79,195,247,.6)}
+.presence-alert .robot-antenna::after{box-shadow:0 0 10px rgba(79,195,247,.8);animation:antenna-pulse 1.5s infinite}
+@keyframes antenna-pulse{0%,100%{box-shadow:0 0 6px rgba(79,195,247,.5)}50%{box-shadow:0 0 12px rgba(79,195,247,.9)}}
+.presence-drifting .robot-eye{animation-duration:4s;opacity:.7}
+.presence-drifting .robot-core{animation-duration:3.5s;opacity:.6}
+.presence-drifting .robot-antenna::after{animation:antenna-drift 5s infinite}
+@keyframes antenna-drift{0%,100%{transform:translateX(-50%) rotate(0deg)}25%{transform:translateX(-50%) rotate(3deg)}75%{transform:translateX(-50%) rotate(-3deg)}}
+.presence-charging .robot-core{animation-duration:1.5s;box-shadow:0 0 20px rgba(79,195,247,.7)}
+.presence-charging .robot-eye{background:#4dd0e1;box-shadow:0 0 10px rgba(77,208,225,.6)}
+.presence-charging .robot-antenna::after{background:#4dd0e1;box-shadow:0 0 8px rgba(77,208,225,.6)}
+.presence-waiting .robot-eye{animation-duration:2s;opacity:.8}
+.presence-waiting .robot-core{animation-duration:2.5s}
+.presence-waiting .robot-antenna::after{animation:antenna-wait 2s infinite}
+@keyframes antenna-wait{0%,100%{opacity:.5}50%{opacity:1}}
+.pet-presence-state{font-size:11px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:6px}
+.pet-presence-state .pres-icon{font-size:14px}
+.pet-presence-state .pres-label{font-weight:700;color:var(--ink)}
+.pet-presence-state .pres-detail{font-size:10px;color:var(--muted)}
 .pet-expression-state{font-size:11px;color:var(--muted);margin-top:8px;display:flex;align-items:center;gap:6px}
 .pet-expression-state .expr-icon{font-size:14px}
 .pet-expression-state .expr-label{font-weight:700;color:var(--ink)}
@@ -466,6 +491,11 @@ button{border:0;cursor:pointer}
                 <span class="expr-icon" id="pet-expression-icon"></span>
                 <span class="expr-label" id="pet-expression-label"></span>
                 <span class="expr-detail" id="pet-expression-detail"></span>
+              </div>
+              <div class="pet-presence-state" id="pet-presence-state">
+                <span class="pres-icon" id="pet-presence-icon"></span>
+                <span class="pres-label" id="pet-presence-label"></span>
+                <span class="pres-detail" id="pet-presence-detail"></span>
               </div>
             </div>
           </div>
@@ -764,6 +794,7 @@ button{border:0;cursor:pointer}
     loadCostEstimates(pet.pet_id);
     loadTodayDiary(pet.pet_id);
     applyExpression(st);
+    applyPresence(st);
   }
 
   function expressionFromState(st){
@@ -796,6 +827,48 @@ button{border:0;cursor:pointer}
     if(iconEl) iconEl.textContent = expr.icon;
     if(labelEl) labelEl.textContent = expr.label;
     if(detailEl) detailEl.textContent = expr.detail;
+  }
+
+  function clampState(val, defaultVal){
+    if(val == null) return defaultVal;
+    if(typeof val === 'boolean') return defaultVal;
+    var n = Number(val);
+    if(!isFinite(n)) return defaultVal;
+    if(n < 0) return 0;
+    if(n > 100) return 100;
+    return Math.round(n);
+  }
+
+  function presenceFromState(st){
+    var energy = clampState(st && st.energy, 50);
+    var hunger = clampState(st && st.hunger, 50);
+    var mood = clampState(st && st.mood, 50);
+    var bond = clampState(st && st.bond, 0);
+    // Priority: charging > resting > alert > drifting > waiting
+    if(energy >= 80 && hunger <= 30) return {key:'charging', icon:'⚡', label:'Charging', detail:'Energy at '+energy+'/100, hunger at '+hunger+'/100 — fully charged.'};
+    if(energy <= 25) return {key:'resting', icon:'🌙', label:'Resting', detail:'Energy at '+energy+'/100 — conserving power.'};
+    if(mood >= 70 && energy >= 50) return {key:'alert', icon:'👁️', label:'Alert', detail:'Mood at '+mood+'/100, energy at '+energy+'/100 — attentive and ready.'};
+    if(mood < 40 && energy < 50) return {key:'drifting', icon:'🌀', label:'Drifting', detail:'Mood at '+mood+'/100, energy at '+energy+'/100 — low engagement.'};
+    return {key:'waiting', icon:'⏳', label:'Waiting', detail:'Energy at '+energy+'/100, mood at '+mood+'/100 — standby mode.'};
+  }
+
+  function applyPresence(st){
+    var avatarEl = document.getElementById('pet-avatar');
+    var pres = presenceFromState(st);
+    if(!avatarEl || !pres) return;
+    // Remove old presence classes
+    var classes = ['presence-resting','presence-alert','presence-drifting','presence-charging','presence-waiting'];
+    classes.forEach(function(c){ avatarEl.classList.remove(c); });
+    // Apply new presence class
+    avatarEl.classList.add('presence-' + pres.key);
+    avatarEl.setAttribute('data-presence', pres.key);
+    // Update DOM markers
+    var iconEl = document.getElementById('pet-presence-icon');
+    var labelEl = document.getElementById('pet-presence-label');
+    var detailEl = document.getElementById('pet-presence-detail');
+    if(iconEl) iconEl.textContent = pres.icon;
+    if(labelEl) labelEl.textContent = pres.label;
+    if(detailEl) detailEl.textContent = pres.detail;
   }
 
   function getMoodSummary(name, st){

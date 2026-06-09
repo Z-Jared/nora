@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 30%
+- Percent: 35%
 - Status: in progress
-- Current focus: Lightweight Pet Room presence signals after CSS-only expression state mapping.
+- Current focus: Next bounded Phase 2 web-first presence step after CSS-only idle/presence signals.
 
 ## Completed This Phase
 
@@ -82,15 +82,24 @@ Last updated: 2026-06-09
   - Dynamic expression label/detail use DOM text APIs.
   - Deterministic coverage locks exact markers/classes, mood/energy/hunger mapping fallback, function-body read-only checks, and no voice/surveillance/marketplace/3D scope drift.
   - Verification is green: 297 targeted tests OK, 695 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- CSS-only idle/presence signals:
+  - Pet Room robot avatar now maps bounded mood, energy, hunger, and bond into deterministic presence states: charging, resting, alert, drifting, and waiting.
+  - Avatar root exposes stable `data-presence` and `presence-*` classes.
+  - Pet Room exposes `pet-presence-state`, `pet-presence-icon`, `pet-presence-label`, and `pet-presence-detail` markers.
+  - Presence updates are CSS/DOM-only and read-only: no provider/network calls, no voice preview call, no food debit, no state/activity/relationship-memory mutation, and no microphone/camera/screen/location access.
+  - `clampState()` normalizes null, undefined, strings, booleans, NaN, Infinity, negative values, and values over 100 before presence mapping or detail text.
+  - Dynamic presence label/detail use DOM text APIs.
+  - Deterministic coverage locks markers/classes, bounded mapping fallback, malformed-state clamp behavior, function-body read-only checks, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
+  - Verification is green: 317 targeted tests OK, 700 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- None. PM is preparing the next bounded Phase 2 presence task cycle.
+- None. PM is preparing the next bounded Phase 2 web-first presence task cycle.
 
 ## Next
 
-1. Add lightweight Pet Room idle/presence signals that remain CSS/DOM-only and deterministic.
-2. Add deterministic eval and smoke coverage for idle/presence markers, read-only behavior, and no voice/native/3D/billing/marketplace drift.
+1. Add the next lightweight web-first Pet Room presence affordance that remains CSS/DOM-only and deterministic.
+2. Add deterministic eval and smoke coverage for the new presence affordance, read-only behavior, and no voice/native/PWA/3D/billing/marketplace drift.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 
 ## Phase 1 Exit Criteria
@@ -142,6 +151,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 30% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, and CSS-only expression mapping complete
+- Phase 2 Voice & Presence: 35% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, and CSS-only idle/presence signals complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

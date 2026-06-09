@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-176A: Pet Room CSS-only idle presence signals
-- 架构层: Voice/Expression System / Avatar/Room UI / Pet State Engine / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-175A、TASK-175B 完成并集成。
-- 目标: 在 Pet Room 中添加 CSS-only deterministic idle/presence signals，让 Nora-01 的 blink/core pulse/motion speed 和 visible presence label 从 existing state 派生，增强 room-load presence，同时不引入真实音频、PWA、native、3D 或 provider/network 行为。
-- 非目标: 不实现真实 TTS、音频播放、录音、麦克风、provider adapter、PWA/service worker、桌面浮窗、3D/VRM、billing、marketplace、云同步、LLM-generated greeting、通知或新 Claude C/D worker。
-- 安全边界: CSS/DOM-only；不得读取麦克风、摄像头、屏幕或位置；不得调用 provider/network；不得修改 pet state、food、activity、relationship memory 或 voice preview state；动态文本必须使用 DOM text APIs；不得新增诱导付费、voice cloning、always/background listening、surveillance、marketplace 或 3D/VRM 文案。
-- 持久证据: Pet Room 暴露稳定 idle/presence markers，例如 `data-presence`, `presence-*` CSS classes, `pet-presence-state`, `pet-presence-label`, `pet-presence-detail`；mapping helper 从 bounded state 生成 class/label/detail 且无 fetch/mutation side effect。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Web/PWA Presence Path；`mini_agent/static/index.html`; `tests/test_webui_smoke.py`.
-
-### TASK-176B: Idle presence deterministic eval and safety coverage
-- 架构层: Eval/Review System / Voice/Expression System / Avatar/Room UI / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-175A、TASK-175B 完成并集成；与 TASK-176A 并行，但不得改实现文件。
-- 目标: 为 CSS-only idle/presence signals 增加 deterministic eval/smoke 覆盖，锁住 state-to-presence class/label contract、marker 存在、read-only behavior、无 voice/native/3D/billing/marketplace scope drift。
-- 非目标: 不实现 UI/CSS/JS presence mapping；不修改 `mini_agent/static/index.html`、`mini_agent/tts.py`、`mini_agent/pets.py` 或 HTTP handler；不增加真实 TTS、录音、PWA、桌面浮窗、支付、marketplace 或 3D/VRM。
-- 安全边界: eval 必须阻断 voice cloning、recording by default、always/background listening、microphone/camera/screen/location access、hidden cost、purchase pressure、marketplace drift、3D/VRM implementation drift；不得只检查文件存在，必须锁住 mapping behavior、read-only behavior 或 copy contract。
-- 持久证据: 新增 eval case 名称包含 `presence_state` 或 `pet_presence`; TASK-176A 合并后 eval 必须 active/pass，不能长期 skip。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy scan。
-- 参考: `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md` Web/PWA smoke tests；`evals/run_evals.py`; `tests/test_webui_smoke.py`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-176A: Pet Room CSS-only idle presence signals ✅
+- 完成者: Claude A；PM 初审发现 malformed state fallback gap 后要求补强，Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 317 tests OK；`python3 evals/run_evals.py` 700 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 安全断言。
+- 内容: Pet Room robot avatar 新增 CSS-only deterministic idle/presence mapping，从 bounded mood/energy/hunger/bond 映射为 `charging`、`resting`、`alert`、`drifting`、`waiting`；avatar root 暴露 `data-presence` 与 `presence-*` classes；新增 `pet-presence-state`、`pet-presence-icon`、`pet-presence-label`、`pet-presence-detail` markers；`clampState()` 归一化 null/undefined/string/boolean/NaN/Infinity/negative/>100 state values，动态 label/detail 使用 `textContent`，不调用 provider/network、不读麦克风/摄像头/屏幕/位置、不修改 pet state/food/activity/relationship memory/voice preview state。
+
+### TASK-176B: Idle presence deterministic eval and safety coverage ✅
+- 完成者: Claude B；PM 初审要求补强 malformed-state coverage 后新增 `presence_state_malformed_state_fallback`，Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 700 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 317 tests OK；`git diff --check` OK；targeted forbidden-copy scan 仅命中负面 eval 安全断言。
+- 内容: 新增/补强 `pet_presence_markers_present`、`presence_state_mapping_rules`、`presence_state_malformed_state_fallback`、`presence_state_read_only_no_fetch`、`presence_state_no_voice_native_or_surveillance_copy`；覆盖 presence markers/classes、bounded state mapping fallback、clamp/coercion/finite/range behavior、function-body read-only/no-fetch/no-mutation/no-service-worker/no-notification patterns，以及 no voice cloning/recording/native/PWA/surveillance/marketplace/3D/VRM scope drift。
 
 ### TASK-175A: Pet Room CSS-only expression state mapping ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

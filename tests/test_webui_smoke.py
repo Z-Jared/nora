@@ -1787,3 +1787,242 @@ result.labelText = document.getElementById('pet-expression-label').textContent;
         # textContent should be populated (plain text, no HTML injection)
         self.assertIn('Mood at', d['detailText'])
         self.assertEqual(d['labelText'], 'Happy')
+
+    # --- Idle presence signal tests (TASK-176A) ---
+
+    def test_presence_state_dom_markers_exist(self):
+        """Presence state DOM markers must exist in pet room."""
+        result = _run_node(test_body="""
+result = {};
+result.stateEl = !!document.getElementById('pet-presence-state');
+result.iconEl = !!document.getElementById('pet-presence-icon');
+result.labelEl = !!document.getElementById('pet-presence-label');
+result.detailEl = !!document.getElementById('pet-presence-detail');
+result.avatarEl = !!document.getElementById('pet-avatar');
+""")
+        d = result
+        for key in ['stateEl', 'iconEl', 'labelEl', 'detailEl', 'avatarEl']:
+            self.assertTrue(d[key], f'Missing presence element: {key}')
+
+    def test_presence_from_state_charging(self):
+        """High energy and low hunger should map to charging presence."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:60, energy:85, hunger:20});
+result = {key: pres.key, icon: pres.icon, label: pres.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'charging')
+        self.assertEqual(d['label'], 'Charging')
+
+    def test_presence_from_state_resting(self):
+        """Very low energy should map to resting presence."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:60, energy:15, hunger:30});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'resting')
+        self.assertEqual(d['label'], 'Resting')
+
+    def test_presence_from_state_alert(self):
+        """High mood and decent energy should map to alert presence."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:75, energy:60, hunger:30});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'alert')
+        self.assertEqual(d['label'], 'Alert')
+
+    def test_presence_from_state_drifting(self):
+        """Low mood and low energy should map to drifting presence."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:30, energy:40, hunger:30});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'drifting')
+        self.assertEqual(d['label'], 'Drifting')
+
+    def test_presence_from_state_waiting(self):
+        """Default/neutral state should map to waiting presence."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:50, energy:50, hunger:30});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertEqual(d['key'], 'waiting')
+        self.assertEqual(d['label'], 'Waiting')
+
+    def test_presence_from_state_missing_fields(self):
+        """Missing state fields should default safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+
+    def test_presence_from_state_null_state(self):
+        """Null state should default safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState(null);
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+
+    def test_apply_presence_sets_data_attribute(self):
+        """applyPresence should set data-presence on avatar."""
+        result = _run_node(test_body="""
+applyPresence({mood:60, energy:85, hunger:20});
+result = {};
+result.dataPres = document.getElementById('pet-avatar').getAttribute('data-presence');
+result.hasClass = document.getElementById('pet-avatar').classList.contains('presence-charging');
+""")
+        d = result
+        self.assertEqual(d['dataPres'], 'charging')
+        self.assertTrue(d['hasClass'])
+
+    def test_apply_presence_updates_dom_markers(self):
+        """applyPresence should update icon, label, detail markers."""
+        result = _run_node(test_body="""
+applyPresence({mood:60, energy:85, hunger:20});
+result = {};
+result.icon = document.getElementById('pet-presence-icon').textContent;
+result.label = document.getElementById('pet-presence-label').textContent;
+result.detail = document.getElementById('pet-presence-detail').textContent;
+""")
+        d = result
+        self.assertEqual(d['icon'], '⚡')
+        self.assertEqual(d['label'], 'Charging')
+        self.assertIn('85', d['detail'])
+
+    def test_presence_class_cycling(self):
+        """Changing state should swap presence classes correctly."""
+        result = _run_node(test_body="""
+applyPresence({mood:60, energy:85, hunger:20});
+var first = document.getElementById('pet-avatar').getAttribute('data-presence');
+applyPresence({mood:60, energy:10, hunger:30});
+var second = document.getElementById('pet-avatar').getAttribute('data-presence');
+applyPresence({mood:75, energy:60, hunger:30});
+var third = document.getElementById('pet-avatar').getAttribute('data-presence');
+result = {first:first, second:second, third:third};
+""")
+        d = result
+        self.assertEqual(d['first'], 'charging')
+        self.assertEqual(d['second'], 'resting')
+        self.assertEqual(d['third'], 'alert')
+
+    def test_presence_detail_uses_dom_text(self):
+        """Presence detail should use textContent, not innerHTML."""
+        result = _run_node(test_body="""
+applyPresence({mood:60, energy:85, hunger:20});
+result = {};
+result.detailText = document.getElementById('pet-presence-detail').textContent;
+result.labelText = document.getElementById('pet-presence-label').textContent;
+""")
+        d = result
+        self.assertIn('Energy at', d['detailText'])
+        self.assertEqual(d['labelText'], 'Charging')
+
+    def test_presence_from_state_string_values(self):
+        """String state values should coerce to defaults safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:'abc', energy:'xyz', hunger:'bad'});
+result = {key: pres.key, label: pres.label, detail: pres.detail};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+        self.assertNotIn('abc', d['detail'])
+        self.assertNotIn('xyz', d['detail'])
+        self.assertNotIn('bad', d['detail'])
+
+    def test_presence_from_state_nan_values(self):
+        """NaN state values should coerce to defaults safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:NaN, energy:NaN, hunger:NaN});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+
+    def test_presence_from_state_infinity_values(self):
+        """Infinity state values should clamp to 100."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:Infinity, energy:Infinity, hunger:Infinity});
+result = {key: pres.key, label: pres.label, detail: pres.detail};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+        self.assertNotIn('Infinity', d['detail'])
+
+    def test_presence_from_state_negative_values(self):
+        """Negative values should clamp to 0."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:-50, energy:-100, hunger:-10});
+result = {key: pres.key, label: pres.label, detail: pres.detail};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+        self.assertNotIn('-', d['detail'].split('—')[0])  # no negative in numeric part
+
+    def test_presence_from_state_over_100_values(self):
+        """Values >100 should clamp to 100."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:999, energy:500, hunger:200});
+result = {key: pres.key, label: pres.label, detail: pres.detail};
+""")
+        d = result
+        # hunger clamped to 100 (>30), energy clamped to 100 (>=80), mood clamped to 100 (>=70)
+        # charging requires energy>=80 AND hunger<=30 → fails (hunger=100)
+        # alert requires mood>=70 AND energy>=50 → passes
+        self.assertEqual(d['key'], 'alert')
+        self.assertNotIn('999', d['detail'])
+        self.assertNotIn('500', d['detail'])
+        self.assertNotIn('200', d['detail'])
+
+    def test_presence_from_state_boolean_values(self):
+        """Boolean values should coerce to 0/1 safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:true, energy:false, hunger:true});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+
+    def test_presence_from_state_undefined_values(self):
+        """Undefined values should use defaults safely."""
+        result = _run_node(test_body="""
+var pres = presenceFromState({mood:undefined, energy:undefined, hunger:undefined});
+result = {key: pres.key, label: pres.label};
+""")
+        d = result
+        self.assertIn(d['key'], ['resting', 'alert', 'drifting', 'charging', 'waiting'])
+
+    def test_clamp_state_normalizes_values(self):
+        """clampState should normalize various malformed inputs."""
+        result = _run_node(test_body="""
+result = {};
+result.normal = clampState(50, 99);
+result.nullVal = clampState(null, 99);
+result.undefVal = clampState(undefined, 99);
+result.nanVal = clampState(NaN, 99);
+result.infVal = clampState(Infinity, 99);
+result.negInfVal = clampState(-Infinity, 99);
+result.negVal = clampState(-50, 99);
+result.overVal = clampState(150, 99);
+result.strVal = clampState('abc', 99);
+result.boolVal = clampState(true, 99);
+""")
+        d = result
+        self.assertEqual(d['normal'], 50)
+        self.assertEqual(d['nullVal'], 99)
+        self.assertEqual(d['undefVal'], 99)
+        self.assertEqual(d['nanVal'], 99)
+        self.assertEqual(d['infVal'], 99)
+        self.assertEqual(d['negInfVal'], 99)
+        self.assertEqual(d['negVal'], 0)
+        self.assertEqual(d['overVal'], 100)
+        self.assertEqual(d['strVal'], 99)
+        self.assertEqual(d['boolVal'], 99)

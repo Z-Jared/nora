@@ -1,68 +1,58 @@
-# TASK-175A/175B CCB Review
+# TASK-176A/176B CCB Review
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-175A adds CSS-only expression state mapping from pet state to robot avatar. TASK-175B adds 4 deterministic evals locking the expression state contract. All review criteria satisfied.
+TASK-176A adds CSS-only idle presence signals with bounded numeric state normalization. TASK-176B adds 5 deterministic evals locking the presence state contract. All review criteria satisfied.
 
 ## Review Findings
 
-### 1. CSS-Only Deterministic Expression Mapping
+### 1. CSS/DOM-Only Scope
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Pure function | ✅ | `expressionFromState(st)` derives key/icon/label/detail from `{mood, energy, hunger}` — no side effects |
-| Deterministic thresholds | ✅ | Fixed thresholds: hunger≥70→hungry, energy≤20→sleepy, energy≤40→low-energy, mood≥75+energy≥60→happy, mood≥55+energy≥50→focused, else→calm |
-| Safe fallback | ✅ | Missing/null state defaults to 50 for mood/energy/hunger; final fallback is "calm" |
-| CSS-only | ✅ | 6 expression classes with CSS rules only — no JS-driven animation or state mutation |
+| CSS-only classes | ✅ | 5 presence classes (resting/alert/drifting/charging/waiting) with CSS animation rules only |
+| DOM markers | ✅ | `pet-presence-state`, `pet-presence-icon`, `pet-presence-label`, `pet-presence-detail`, `data-presence` |
+| textContent rendering | ✅ | `applyPresence()` uses `textContent` for icon/label/detail |
+| No fetch/network | ✅ | `eval_presence_state_read_only_no_fetch` scans function bodies for forbidden patterns |
+| No state mutation | ✅ | No food/activity/memory/voice-preview/provider references in presence functions |
 
-### 2. Stable DOM Markers and `data-expression`
+### 2. Malformed State Fallback
 
-| Marker | Type | Evidence |
-|--------|------|----------|
-| `#pet-expression-state` | Container | Line 462 in index.html |
-| `#pet-expression-icon` | Emoji icon (✨💤🔴🔋🎯🌊) | Line 463 |
-| `#pet-expression-label` | Text label (Happy/Sleepy/etc.) | Line 464 |
-| `#pet-expression-detail` | Numeric detail (e.g., "Mood at 80/100") | Line 465 |
-| `data-expression` | Attribute on `#pet-avatar` | Set by `applyExpression()` |
+| Input Type | Handling | Evidence |
+|------------|----------|----------|
+| null/undefined | Returns default (50 for mood/energy/hunger, 0 for bond) | `clampState` line 830 |
+| NaN | Returns default | `isFinite(n)` check |
+| Infinity | Clamps to 100 | `n > 100` check |
+| Negative | Clamps to 0 | `n < 0` check |
+| >100 | Clamps to 100 | `n > 100` check |
+| String | Returns default | `typeof val === 'boolean'` + `Number()` coercion |
+| Boolean | Returns default | `typeof val === 'boolean'` check |
 
-### 3. No Side Effects
+`clampState` function handles all edge cases. `eval_presence_state_malformed_state_fallback` locks this with regex-based function body analysis.
 
-| Check | Status | Evidence |
-|-------|--------|----------|
-| No fetch/network | ✅ | `eval_expression_state_read_only_no_fetch` scans function bodies for forbidden patterns |
-| No food debit | ✅ | No `food_debit` or `add-food` references |
-| No activity/memory mutation | ✅ | No `relationship-memory` or `activity` references |
-| No voice-preview | ✅ | No `voice-preview` references |
-| No provider/network | ✅ | No `microphone`, `camera`, `navigator.media`, `navigator.geolocation` references |
-| No state mutation | ✅ | `applyExpression` only does classList, setAttribute, textContent |
-
-### 4. Dynamic Text Escaping
-
-All DOM updates use `textContent`, not `innerHTML`:
-- `iconEl.textContent = expr.icon`
-- `labelEl.textContent = expr.label`
-- `detailEl.textContent = expr.detail`
-
-`test_expression_detail_uses_dom_text` verifies textContent usage.
-
-### 5. Eval Coverage (4 evals)
+### 3. Eval Coverage (5 evals)
 
 | Eval | What it locks |
 |------|---------------|
-| `pet_expression_markers_present` | All 10 required markers: 4 DOM IDs + data-expression + 6 CSS classes |
-| `expression_state_mapping_rules` | `expressionFromState` references mood/energy/hunger, has fallback for missing state |
-| `expression_state_read_only_no_fetch` | Function bodies contain no fetch/food_debit/pet-endpoints/microphone/camera/screen/location |
-| `expression_state_no_voice_or_surveillance_copy` | No voice clone/recording/microphone/camera/screen/location/marketplace/3D/VRM copy |
+| `pet_presence_markers_present` | All 9 required markers: 4 DOM IDs + 5 CSS classes |
+| `presence_state_mapping_rules` | `presenceFromState` references ≥2 state fields, has fallback |
+| `presence_state_malformed_state_fallback` | `clampState` handles null/undefined, numeric coercion, finite check, range clamping |
+| `presence_state_read_only_no_fetch` | Function bodies contain no fetch/food/pet-endpoints/microphone/camera/screen/location/service-worker/notification |
+| `presence_state_no_voice_native_or_surveillance_copy` | No voice clone/recording/microphone/camera/screen/location/marketplace/3D/VRM/service-worker/notification copy |
 
-### 6. No Phase 2 Scope Drift
+### 4. No Phase 2 Scope Drift
 
-✅ CSS-only, deterministic, read-only. No real audio, PWA/native, 3D/VRM, billing, marketplace, or new worker setup.
+✅ CSS-only, deterministic, read-only. No real audio/TTS provider, PWA/service worker, native/desktop, notifications, billing, marketplace, 3D/VRM, or surveillance.
+
+### 5. B_DONE Report Note
+
+B_DONE says "4 deterministic evals" but the diff adds 5 (including `presence_state_malformed_state_fallback`). Code diff is authoritative. Minor wording mismatch — not blocking.
 
 ## Verification
 
-- 297 unit tests OK
-- 695 evals passed, 0 failed, 0 skipped
+- 317 unit tests OK
+- 700 evals passed, 0 failed, 0 skipped
 - git diff --check: clean
 - Forbidden-copy scan: only negative safety assertions in evals

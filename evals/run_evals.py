@@ -237,6 +237,12 @@ def main() -> int:
         EvalCase("expression_state_mapping_rules", eval_expression_state_mapping_rules),
         EvalCase("expression_state_read_only_no_fetch", eval_expression_state_read_only_no_fetch),
         EvalCase("expression_state_no_voice_or_surveillance_copy", eval_expression_state_no_voice_or_surveillance_copy),
+        # TASK-176B: Idle presence eval coverage
+        EvalCase("pet_presence_markers_present", eval_pet_presence_markers_present),
+        EvalCase("presence_state_mapping_rules", eval_presence_state_mapping_rules),
+        EvalCase("presence_state_malformed_state_fallback", eval_presence_state_malformed_state_fallback),
+        EvalCase("presence_state_read_only_no_fetch", eval_presence_state_read_only_no_fetch),
+        EvalCase("presence_state_no_voice_native_or_surveillance_copy", eval_presence_state_no_voice_native_or_surveillance_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3905,6 +3911,138 @@ def eval_expression_state_no_voice_or_surveillance_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in expression UI"
+
+
+# --- TASK-176B: Idle presence eval coverage ---
+
+
+def _skip_if_no_presence():
+    """Skip if TASK-176A idle presence is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "pet-presence" not in html and "presence-state" not in html and "presence-" not in html:
+            raise AttributeError("no presence markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-176A not integrated: idle presence not available")
+
+
+def eval_pet_presence_markers_present():
+    """Pet Room exposes all required presence DOM markers/classes."""
+    _skip_if_no_presence()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "pet-presence-state", "pres-icon", "pres-label", "pres-detail",
+        "presence-resting", "presence-alert", "presence-drifting",
+        "presence-charging", "presence-waiting",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required presence markers: {missing}"
+
+
+def eval_presence_state_mapping_rules():
+    """JS mapping derives presence from mood/energy/hunger/bond with safe fallback."""
+    _skip_if_no_presence()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find presenceFromState or similar function
+    presence_fn = re.search(r'function\s+presence[a-z]*state\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    if not presence_fn:
+        presence_fn = re.search(r'function\s+[a-z]*presence[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert presence_fn, "presence mapping function not found"
+    fn_body = presence_fn.group(1)
+    # Must reference at least mood, energy, hunger, or bond
+    state_fields = ["mood", "energy", "hunger", "bond"]
+    found = [f for f in state_fields if f in fn_body]
+    assert len(found) >= 2, f"presence mapping references too few state fields: {found}"
+    # Must have fallback for missing/malformed state (ternary default, clampState, or final return)
+    has_fallback = (": 50" in fn_body or ": 60" in fn_body or "default" in fn_body or
+                    "else" in fn_body or "waiting" in fn_body or "idle" in fn_body or
+                    "clampstate" in fn_body or "clamp" in fn_body)
+    assert has_fallback, "presence mapping missing fallback for missing/malformed state"
+
+
+def eval_presence_state_malformed_state_fallback():
+    """presenceFromState uses clamping/coercion helper for malformed state values."""
+    _skip_if_no_presence()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Check for clampState or equivalent helper function
+    clamp_fn = re.search(r'function\s+clamp[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert clamp_fn, "clampState/clamp helper function not found"
+    clamp_body = clamp_fn.group(1)
+    # Must handle null/undefined
+    has_null_check = "null" in clamp_body or "undefined" in clamp_body
+    assert has_null_check, "clamp helper missing null/undefined check"
+    # Must coerce to number
+    has_coercion = "number(" in clamp_body or "parseint" in clamp_body or "parsefloat" in clamp_body
+    assert has_coercion, "clamp helper missing numeric coercion (Number/parseInt/parseFloat)"
+    # Must check for non-finite (NaN, Infinity)
+    has_finite_check = "isfinite" in clamp_body or "isnan" in clamp_body
+    assert has_finite_check, "clamp helper missing finite check (isFinite/isNaN)"
+    # Must clamp to valid range
+    has_clamp = ("< 0" in clamp_body or "> 100" in clamp_body or
+                 "<= 0" in clamp_body or ">= 100" in clamp_body or
+                 "math.max" in clamp_body or "math.min" in clamp_body or
+                 "0)" in clamp_body or "100)" in clamp_body)
+    assert has_clamp, "clamp helper missing numeric clamping (values may exceed bounds)"
+    # Verify presenceFromState uses the clamp helper
+    presence_fn = re.search(r'function\s+presencefromstate\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert presence_fn, "presenceFromState function not found"
+    presence_body = presence_fn.group(1)
+    assert "clamp" in presence_body, "presenceFromState does not use clamp helper"
+
+
+def eval_presence_state_read_only_no_fetch():
+    """Presence mapping functions are CSS/DOM-only and read-only."""
+    _skip_if_no_presence()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    forbidden = [
+        "fetch(", "food_debit", "add-food", "/pet/", "voice-preview",
+        "relationship-memory", "activity",
+        "microphone", "camera", "navigator.media", "navigator.geolocation",
+        "getusermedia", "screencapture",
+        "service-worker", "serviceworker", "notification",
+        "register(", "postmessage",
+    ]
+    # Find all presence-related functions
+    presence_fns = re.finditer(r'function\s+[a-z]*presence[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    found_any = False
+    for fn_match in presence_fns:
+        found_any = True
+        fn_body = fn_match.group(1)
+        fn_name = fn_match.group(0)[:50]
+        for pattern in forbidden:
+            assert pattern not in fn_body, f"presence function '{fn_name}' contains forbidden '{pattern}'"
+    assert found_any, "no presence functions found to validate"
+
+
+def eval_presence_state_no_voice_native_or_surveillance_copy():
+    """UI copy does not imply voice cloning, recording, native/PWA, surveillance, marketplace, or 3D/VRM drift."""
+    _skip_if_no_presence()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in presence UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in presence UI"
 
 
 def eval_cli_multiline_input():
