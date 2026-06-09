@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 55%
 - Status: in progress
-- Current focus: Pencil-restored Pet Room UI and next frontend architecture extraction slice.
+- Current focus: Pencil-restored Pet Room UI with native CSS token/module extraction complete; next slice is API/JS extraction planning.
 
 ## Completed This Phase
 
@@ -123,14 +123,20 @@ Last updated: 2026-06-09
   - Existing Pet Room functions remain preserved: food/status, identity editor, speech bubble/consent, expression/presence, greeting/reaction, skill shelf, diary/memory/actions.
   - Deterministic coverage locks the contract, markers, Pencil color tokens, local asset path/existence, no external hero image URL, and no marketplace/voice/native/PWA/3D scope drift.
   - Verification is green: 378 targeted tests OK, 719 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room design token and CSS module extraction:
+  - `mini_agent/static/styles/tokens.css` now owns Pencil/Pet Room CSS custom properties for canvas, wall/floor, chips, ceramic fallback, action dock, stat bars, speech bubble, typography, and room shell values.
+  - `mini_agent/static/styles/pet-room.css` now owns Pet Room CSS selectors while preserving DOM markers, `renderPet()` marker updates, local static serving, and no-build architecture.
+  - `mini_agent/static/index.html` links local `/static/styles/tokens.css` and `/static/styles/pet-room.css`, with non-Pet Room CSS left inline for now.
+  - Deterministic coverage locks CSS file presence, Pencil tokens after extraction, local stylesheet wiring, selector ownership, and no React/Vite/TypeScript/npm/Webpack/Rollup or product scope drift.
+  - Verification is green: 381 targeted tests OK, 724 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-180 closeout evidence chain is being finalized.
+- None. TASK-181 integration is approved and awaiting commit.
 
 ## Next
 
-1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: extract native design tokens and Pet Room CSS modules next.
-2. Then extract `api.js` without endpoint changes.
+1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`: extract `api.js` without endpoint changes.
+2. Then split Pet Room JS into bounded native modules only after API extraction is stable.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -183,6 +189,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 55% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, and Pencil Pet Room restoration complete
+- Phase 2 Voice & Presence: 55% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, and Pet Room CSS/token extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

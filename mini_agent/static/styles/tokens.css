@@ -1,0 +1,93 @@
+/*
+ * Nora Pet Room Design Tokens
+ *
+ * Source of truth: docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md
+ * Source design: designs/nora_pet_web_ui.pen — Room canvas (P7UnVG)
+ *
+ * These tokens implement the Pencil/Pet Room contract values.
+ * Do not add external URLs, build steps, or runtime dependencies.
+ */
+
+:root {
+  /* ── Canvas / Shell ───────────────────────────────── */
+  --pet-canvas-max-w: 880px;
+  --pet-canvas-fill: #F5F3EE;
+  --pet-canvas-stroke: #D8D1C8;
+  --pet-canvas-radius: 12px;
+  --pet-canvas-shadow: 0 2px 12px rgba(0,0,0,.06);
+
+  /* ── Wall / Floor bands ───────────────────────────── */
+  --pet-wall-fill: #F1EEE7;
+  --pet-wall-height: 340px;
+  --pet-floor-fill: #DDD5CA;
+  --pet-floor-height: 260px;
+
+  /* ── Ground shadow ────────────────────────────────── */
+  --pet-shadow-fill: #B9AA993D;
+
+  /* ── Status chips ─────────────────────────────────── */
+  --pet-chip-mood: #F6DDC6;
+  --pet-chip-mood-text: #6C412B;
+  --pet-chip-presence: #DDE6DC;
+  --pet-chip-presence-text: #385744;
+  --pet-chip-energy: #ECE3D6;
+  --pet-chip-energy-text: #5B4D3F;
+  --pet-chip-bond: #E8DED4;
+  --pet-chip-bond-text: #654C3E;
+  --pet-chip-radius: 10px;
+  --pet-chip-label-size: 11px;
+  --pet-chip-label-weight: 800;
+  --pet-chip-value-size: 14px;
+  --pet-chip-value-weight: 700;
+
+  /* ── Typography: pet name / role ──────────────────── */
+  --pet-name-size: 40px;
+  --pet-name-weight: 800;
+  --pet-role-size: 15px;
+  --pet-role-weight: 600;
+
+  /* ── Typography: chip label / value ───────────────── */
+  --pet-chip-label-size: 11px;
+  --pet-chip-label-weight: 800;
+  --pet-chip-value-size: 14px;
+  --pet-chip-value-weight: 700;
+
+  /* ── Ceramic body colors ──────────────────────────── */
+  --pet-ceramic-light: #d4cdc5;
+  --pet-ceramic-dark: #b8b0a6;
+  --pet-ceramic-border: #a09890;
+  --pet-ceramic-eye: #5a8a6a;
+  --pet-ceramic-mouth: #7a7068;
+  --pet-ceramic-core-light: #6db88a;
+  --pet-ceramic-core-dark: #3a8a5a;
+
+  /* ── Action dock ──────────────────────────────────── */
+  --pet-action-bg: #EFE9E0;
+  --pet-action-hover: #E5DDD3;
+  --pet-action-primary-bg: #8F5A3C;
+  --pet-action-primary-hover: #7A4E33;
+  --pet-action-radius: 8px;
+  --pet-action-height: 44px;
+  --pet-action-dock-bg: #fff;
+  --pet-action-dock-border: #D8D1C8;
+  --pet-action-dock-radius: 12px;
+
+  /* ── Stat bars ────────────────────────────────────── */
+  --pet-bar-bg: #e8e4dc;
+  --pet-bar-hunger: #e8755a;
+  --pet-bar-energy: #5a9de8;
+  --pet-bar-mood: #e8b55a;
+  --pet-bar-bond: #b55ae8;
+  --pet-bar-growth: #5ae875;
+  --pet-bar-food: #4fc3f7;
+
+  /* ── Notice / reaction borders ────────────────────── */
+  --pet-notice-border: #b7d2bd;
+
+  /* ── Speech bubble ────────────────────────────────── */
+  --pet-bubble-border: #b0bec5;
+  --pet-bubble-bg-start: #eceff1;
+  --pet-bubble-bg-end: #cfd8dc;
+  --pet-bubble-tail-top: #cfd8dc;
+  --pet-bubble-tail-border: #b0bec5;
+}

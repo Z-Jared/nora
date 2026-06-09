@@ -1,45 +1,40 @@
-# Claude B Completion Report
+# B DONE — TASK-181B
 
-Status: ready for Codex review
+**Status:** Complete — all design_tokens/pet_room_css evals PASS
 
 ## Summary
 
-TASK-180B completed deterministic smoke and safety coverage for the Pencil Pet Room design restoration.
+Added 5 deterministic evals for design token extraction and CSS module wiring. All evals active/pass when combined with TASK-181A. Also fixed TASK-180B `pet_room_design_tokens_match_pencil` eval to check CSS files after extraction, and fixed `pet_room_css_no_build_or_scope_drift` to use word-boundary regex for `react` (avoids false positive on `reaction`).
 
-- Added 5 active `pencil_design` / `pet_room_design` evals:
-  - `pencil_design_contract_present`
-  - `pet_room_design_markers_present`
-  - `pet_room_design_tokens_match_pencil`
-  - `pet_room_design_local_asset_only`
-  - `pet_room_design_no_scope_drift_copy`
-- Added/updated Web UI smoke tests for design shell/canvas/hero markers, status chips, name/role markers, local hero asset path, CSS fallback, and `renderPet()` marker updates.
-- Covered local asset existence and local `/static/nora-01-hero.jpg` reference.
-- Covered no external hero image URL usage.
-- Covered no scope drift into marketplace/payment, voice cloning/recording, microphone/camera/screen/location access, PWA/native behavior, plugin store/install, or 3D/VRM.
+## Evals Added
 
-## Diff
+1. **`design_tokens_files_present`** — `tokens.css` exists with Pencil colors (`#F5F3EE`, `#D8D1C8`, `#F1EEE7`, `#DDD5CA`, `#F6DDC6`, `#DDE6DC`, `#ECE3D6`, `#E8DED4`) and CSS variables.
+2. **`design_tokens_match_pencil_contract`** — tokens.css has radius and warm action color tokens.
+3. **`pet_room_css_module_wired`** — `index.html` links both `/static/styles/tokens.css` and `/static/styles/pet-room.css` with local paths.
+4. **`pet_room_css_preserves_markers`** — `pet-room.css` owns required selectors: `.pet-room-design-shell`, `.pet-room-canvas`, `.pet-room-hero-image`, `.pet-room-status-chip`, `.pet-actions`.
+5. **`pet_room_css_no_build_or_scope_drift`** — No build system (`react`, `vite`, `typescript`, `npm install`, `webpack`, `rollup` as standalone words) or scope drift markers.
 
-```text
- evals/run_evals.py         | 5 Pencil/Pet Room design evals
- tests/test_webui_smoke.py  | Pet Room design smoke coverage
- agent_tasks/B_DONE.md      | TASK-180B completion report
+## Fixes to Existing Evals
+
+- `pet_room_design_tokens_match_pencil` — Now checks HTML + CSS files (tokens were moved from HTML to CSS by TASK-181A)
+- `pet_room_css_no_build_or_scope_drift` — Uses `\breact\b` word-boundary regex instead of substring match (avoids false positive on `reaction` CSS classes)
+
+## Verification
+
+### Own worktree (no TASK-181A)
+
+```
+python3 evals/run_evals.py           → 719 passed, 0 failed, 5 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 378 tests OK
+git diff --check                     → clean
 ```
 
-## Tests
+### Combined check (applied onto Claude A's TASK-181A)
 
-```text
-python3 evals/run_evals.py
-719 passed, 0 failed, 0 skipped
-
-python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 378 tests — OK
-
-git diff --check
-clean
+```
+python3 evals/run_evals.py           → 9/9 design_tokens + pet_room_css evals PASS
 ```
 
-## Notes
+### `rg` scan
 
-- No push performed.
-- No implementation files were modified by TASK-180B beyond focused smoke coverage.
-- Known issues: none for TASK-180B closeout.
+All hits are negative safety assertions. No promotional or enabling language.

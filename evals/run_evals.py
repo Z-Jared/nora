@@ -266,6 +266,12 @@ def main() -> int:
         EvalCase("pet_room_design_tokens_match_pencil", eval_pet_room_design_tokens_match_pencil),
         EvalCase("pet_room_design_local_asset_only", eval_pet_room_design_local_asset_only),
         EvalCase("pet_room_design_no_scope_drift_copy", eval_pet_room_design_no_scope_drift_copy),
+        # TASK-181B: Design token and CSS module eval coverage
+        EvalCase("design_tokens_files_present", eval_design_tokens_files_present),
+        EvalCase("design_tokens_match_pencil_contract", eval_design_tokens_match_pencil_contract),
+        EvalCase("pet_room_css_module_wired", eval_pet_room_css_module_wired),
+        EvalCase("pet_room_css_preserves_markers", eval_pet_room_css_preserves_markers),
+        EvalCase("pet_room_css_no_build_or_scope_drift", eval_pet_room_css_no_build_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4546,13 +4552,21 @@ def eval_pet_room_design_markers_present():
 
 
 def eval_pet_room_design_tokens_match_pencil():
-    """Web UI contains key design tokens/colors from Pencil source."""
+    """Web UI or CSS files contain key design tokens/colors from Pencil source."""
     _skip_if_no_pencil_design()
+    # Check HTML and CSS files for Pencil design tokens
     html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = html
+    tokens_css = PROJECT_ROOT / "mini_agent" / "static" / "styles" / "tokens.css"
+    pet_room_css = PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css"
+    if tokens_css.exists():
+        all_content += tokens_css.read_text(encoding="utf-8").lower()
+    if pet_room_css.exists():
+        all_content += pet_room_css.read_text(encoding="utf-8").lower()
     # Key colors from Pencil design
     required_tokens = ["#f5f3ee", "#d8d1c8", "#f1eee7", "#ddd5ca"]
-    missing = [t for t in required_tokens if t not in html]
-    assert not missing, f"Web UI missing Pencil design tokens: {missing}"
+    missing = [t for t in required_tokens if t not in all_content]
+    assert not missing, f"Web UI/CSS missing Pencil design tokens: {missing}"
 
 
 def eval_pet_room_design_local_asset_only():
@@ -4600,6 +4614,98 @@ def eval_pet_room_design_no_scope_drift_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in design UI"
+
+
+# --- TASK-181B: Design token and CSS module eval coverage ---
+
+
+def _skip_if_no_design_tokens():
+    """Skip if TASK-181A design token extraction is not implemented."""
+    try:
+        tokens_css = PROJECT_ROOT / "mini_agent" / "static" / "styles" / "tokens.css"
+        pet_room_css = PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css"
+        if not tokens_css.exists() or not pet_room_css.exists():
+            raise AttributeError("CSS files not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-181A not integrated: design tokens/CSS modules not available")
+
+
+def eval_design_tokens_files_present():
+    """tokens.css exists and contains stable variables for key Pencil colors and typography."""
+    _skip_if_no_design_tokens()
+    tokens_css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "tokens.css").read_text(encoding="utf-8").lower()
+    # Key Pencil colors
+    required_colors = ["#f5f3ee", "#d8d1c8", "#f1eee7", "#ddd5ca"]
+    missing = [c for c in required_colors if c not in tokens_css]
+    assert not missing, f"tokens.css missing Pencil colors: {missing}"
+    # Additional design tokens
+    additional = ["#f6ddc6", "#dde6dc", "#ece3d6", "#e8ded4"]
+    missing2 = [c for c in additional if c not in tokens_css]
+    assert not missing2, f"tokens.css missing additional tokens: {missing2}"
+    # Must have CSS variables
+    assert "--" in tokens_css, "tokens.css missing CSS variable definitions"
+
+
+def eval_design_tokens_match_pencil_contract():
+    """tokens.css references match the Pencil frontend contract."""
+    _skip_if_no_design_tokens()
+    tokens_css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "tokens.css").read_text(encoding="utf-8").lower()
+    # Must have radius, typography, and action color tokens
+    assert "radius" in tokens_css or "12px" in tokens_css, "tokens.css missing radius token"
+    # Must have warm action color
+    assert "action" in tokens_css or "warm" in tokens_css or "#b9aa99" in tokens_css, \
+        "tokens.css missing warm action color token"
+
+
+def eval_pet_room_css_module_wired():
+    """index.html links both stylesheets with local /static/styles/ paths."""
+    _skip_if_no_design_tokens()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "/static/styles/tokens.css" in html, "index.html missing tokens.css link"
+    assert "/static/styles/pet-room.css" in html, "index.html missing pet-room.css link"
+    # Must be local paths, not external
+    assert "http://" not in html.split("tokens.css")[0][-100:], "tokens.css uses external source"
+    assert "http://" not in html.split("pet-room.css")[0][-100:], "pet-room.css uses external source"
+
+
+def eval_pet_room_css_preserves_markers():
+    """pet-room.css owns the required Pet Room selectors."""
+    _skip_if_no_design_tokens()
+    pet_room_css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css").read_text(encoding="utf-8").lower()
+    required_selectors = [
+        ".pet-room-design-shell", ".pet-room-canvas",
+        ".pet-room-hero-image", ".pet-room-status-chip", ".pet-actions",
+    ]
+    missing = [s for s in required_selectors if s not in pet_room_css]
+    assert not missing, f"pet-room.css missing selectors: {missing}"
+
+
+def eval_pet_room_css_no_build_or_scope_drift():
+    """No build-system drift or product scope drift in CSS/HTML."""
+    _skip_if_no_design_tokens()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    tokens_css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "tokens.css").read_text(encoding="utf-8").lower()
+    pet_room_css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css").read_text(encoding="utf-8").lower()
+    all_content = html + tokens_css + pet_room_css
+    # No build system (check for standalone words, not substrings of CSS classes like 'reaction')
+    import re
+    build_patterns = [
+        r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+        r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b',
+    ]
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found at pos {match.start()}"
+    # No scope drift
+    drift_markers = [
+        "plugin store", "premium skill", "marketplace",
+        "voice clone", "record by default", "always listening",
+        "microphone access", "camera access", "screen capture", "location access",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
 
 
 def eval_cli_multiline_input():

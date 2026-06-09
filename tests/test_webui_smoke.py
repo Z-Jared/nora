@@ -2767,3 +2767,27 @@ result.bondValue = document.getElementById('chip-bond-value').textContent;
         self.assertNotEqual(d['moodValue'], '—')
         self.assertNotEqual(d['energyValue'], '—')
         self.assertNotEqual(d['bondValue'], '—')
+
+    def test_stylesheet_links_exist(self):
+        """Pet Room must link to tokens.css and pet-room.css."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn('href="/static/styles/tokens.css"', html)
+        self.assertIn('href="/static/styles/pet-room.css"', html)
+
+    def test_pet_room_css_contains_design_tokens(self):
+        """pet-room.css must reference design token variables."""
+        css_path = STATIC_DIR / "styles" / "pet-room.css"
+        css = css_path.read_text(encoding="utf-8")
+        self.assertIn('--pet-canvas-fill', css)
+        self.assertIn('--pet-chip-mood', css)
+        self.assertIn('--pet-action-bg', css)
+
+    def test_tokens_css_defines_pencil_values(self):
+        """tokens.css must define Pencil-derived color values."""
+        css_path = STATIC_DIR / "styles" / "tokens.css"
+        css = css_path.read_text(encoding="utf-8")
+        self.assertIn('#F5F3EE', css)
+        self.assertIn('#F6DDC6', css)
+        self.assertIn('#DDE6DC', css)
+        self.assertIn('#ECE3D6', css)
+        self.assertIn('#E8DED4', css)

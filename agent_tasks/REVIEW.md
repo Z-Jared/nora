@@ -1,78 +1,59 @@
-# TASK-180A/TASK-180B Review — Pencil Pet Room Design Restoration
+# TASK-181A/TASK-181B Review — Extract Pet Room Design Tokens and CSS Modules
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-180A adds Pencil-derived design shell, canvas, hero image with CSS fallback, status chips, and name/role display. TASK-180B adds 5 deterministic evals and 6 smoke tests. Implementation materially improves visual fidelity while preserving all existing Pet Room features.
+TASK-181A extracts Pet Room design tokens and CSS into native static CSS files without changing behavior, DOM markers, API calls, or requiring a build step. TASK-181B adds 5 deterministic evals. PM has verified the combined candidate passes all checks.
 
 ## Findings
 
-### 1. Material Improvement (Not Just Markers)
+### 1. CSS Extraction Preserves Design Restoration
 
-The implementation adds:
-- **Design shell** (`pet-room-design-shell`): 880px frame with correct colors (#F5F3EE background, #D8D1C8 border, 12px radius)
-- **Canvas** (`pet-room-canvas`): Wall (#F1EEE7, 340px) + floor (#DDD5CA, 260px) composition
-- **Hero image** (`pet-room-hero-image`): Local `nora-01-hero.jpg` with CSS ceramic fallback on error
-- **Status chips**: Mood, Presence, Energy, Bond with Pencil-specified colors
-- **Name/Role**: Centered below hero, updated from identity data
-- **Action buttons**: Restyled with hints, warm brown primary color (#8F5A3C)
+The implementation correctly extracts CSS from `index.html` into external files:
 
-All Pencil contract colors are present in CSS. `renderPet()` extended to update design markers.
+- **tokens.css**: Defines CSS custom properties for all Pencil-derived values (canvas colors, wall/floor fills, chip colors, ceramic body, action dock, stat bars, speech bubble, typography)
+- **pet-room.css**: Contains all Pet Room CSS rules using token variables, preserving all selectors and DOM markers
+- **index.html**: Links both CSS files via `<link>` tags, removes inline Pet Room CSS, preserves non-Pet Room UI CSS
 
-### 2. Design Contract and Asset
+### 2. Design Markers Preserved
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| Contract document | ✅ | `NORA_PET_ROOM_FRONTEND_CONTRACT.md` with colors, typography, markers, restore checklist |
-| Local asset | ✅ | `mini_agent/static/nora-01-hero.jpg` exists, referenced as `/static/nora-01-hero.jpg` |
-| No external URLs | ✅ | `eval_pet_room_design_local_asset_only` verifies no http/https in hero section |
-| PM asset correction | ✅ | Source .png contains JPEG bytes → integrated as .jpg (documented in contract) |
-| CSS fallback | ✅ | `onerror` handler hides img, shows ceramic-body placeholder |
+All TASK-180A design markers are preserved in `index.html`:
+- `pet-room-design-shell`, `pet-room-canvas`, `pet-room-hero-image`, `pet-room-status-chip`
+- `pet-room-name`, `pet-room-role`, chip value IDs
+- `renderPet()` marker updates preserved
 
-### 3. Existing Features Preserved
+### 3. No Build Step Required
 
-`renderPet()` extended (not replaced) to update:
-- `pet-room-name` from `identity.name`
-- `pet-room-role` from `identity.relationship_role`
-- Status chip values from `expressionFromState()`, `presenceFromState()`, and state fields
+- CSS files served as static assets via `/static/styles/` paths
+- No React/Vite/TypeScript/npm/Webpack/Rollup dependencies
+- Local-first architecture preserved
 
-All existing Pet Room features remain: food/status, identity editor, speech bubble/consent, expression/presence, greeting/reaction, skill shelf, diary/memory/actions.
+### 4. TASK-181B Evals (in claude-b worktree)
 
-### 4. Eval Coverage (5 evals)
+5 evals added:
+1. `design_tokens_files_present` — tokens.css exists with Pencil colors and CSS variables
+2. `design_tokens_match_pencil_contract` — radius and warm action color tokens present
+3. `pet_room_css_module_wired` — index.html links both CSS files with local paths
+4. `pet_room_css_preserves_markers` — pet-room.css owns required selectors
+5. `pet_room_css_no_build_or_scope_drift` — No build system or scope drift markers
 
-| Eval | What it locks |
-|------|---------------|
-| `pencil_design_contract_present` | Contract doc references source Pencil file, canvas dimensions, all 4 colors, asset paths, 4 markers |
-| `pet_room_design_markers_present` | Web UI contains design-shell, canvas, hero-image, status-chip markers |
-| `pet_room_design_tokens_match_pencil` | All 4 Pencil colors present in index.html |
-| `pet_room_design_local_asset_only` | Local .jpg file exists, referenced in HTML, no external http/https in hero section |
-| `pet_room_design_no_scope_drift_copy` | No marketplace/voice/recording/3D/VRM/PWA/billing copy |
+Also fixed `pet_room_design_tokens_match_pencil` to check HTML + CSS files after extraction.
 
-### 5. Smoke Tests (6 tests)
+### 5. PM Verification
 
-- DOM markers (design shell, canvas, hero image, chips)
-- Status chips (all 8 elements: chip + value for mood/presence/energy/bond)
-- Name/role markers
-- Hero image uses local asset, no external URLs
-- Ceramic fallback exists with onerror handler
-- renderPet updates design markers (name, role, chip values)
+PM has verified the combined candidate:
+- `python3 -m unittest tests.test_webui_smoke tests.test_http_server` → 381 tests OK
+- `python3 evals/run_evals.py` → 724 passed, 0 failed, 0 skipped
+- `git diff --check` → clean
+- No external asset URLs or build dependencies detected
 
-### 6. Scope Compliance
+### 6. No Scope Drift
 
-- ✅ No external image URLs
+- ✅ No React/Vite/TypeScript/npm/Webpack/Rollup
+- ✅ No external URLs
 - ✅ No voice/audio/recording
+- ✅ No PWA/native
 - ✅ No marketplace/payment
-- ✅ No service worker/notification/native
 - ✅ No plugin execution
 - ✅ No 3D/VRM
-- ✅ Frontend architecture plan is separate planning doc, not implementation
-
-## Verification
-
-```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 378 tests OK
-python3 evals/run_evals.py → 719 passed, 0 failed, 0 skipped
-git diff --check → clean
-rg forbidden-copy → only negative safety assertions
-```

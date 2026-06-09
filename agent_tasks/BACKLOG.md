@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-181A: Extract Pet Room design tokens and CSS modules
-- 架构层: Avatar/Room UI / Voice & Presence / Frontend Architecture
-- 优先级: high
-- 预计: 1-2 hours
-- Worker: Claude A
-- 依赖: TASK-180A、TASK-180B 完成并集成。
-- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 1，把 Pencil/Pet Room 设计常量从 `mini_agent/static/index.html` 的内联 style 中抽到 `mini_agent/static/styles/tokens.css` 和 `mini_agent/static/styles/pet-room.css`，保持 DOM、JS 行为、API 和 visual contract 稳定。
-- 非目标: 不引入 React/Vite/TypeScript/npm/build step；不抽 `api.js`；不抽 JS component；不改 HTTP endpoint；不新增真实 voice/TTS/audio、PWA/native、billing/marketplace、插件执行或 3D/VRM。
-- 安全边界: 只移动/整理 CSS；动态文本继续使用现有 DOM text APIs/escapeHtml；不得引入外部 stylesheet/image/script URL；不得读取麦克风/摄像头/屏幕/位置；不得加入购买压力、marketplace、premium skill、voice cloning、recording/background listening 文案。
-- 持久证据: 新增 `mini_agent/static/styles/tokens.css` 和 `mini_agent/static/styles/pet-room.css`；`index.html` 使用本地 `/static/styles/...` stylesheet links；保留 `pet-room-design-shell`、`pet-room-canvas`、`pet-room-hero-image`、`pet-room-status-chip` 等 markers。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 1; `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`.
-
-### TASK-181B: Design token and CSS module deterministic coverage
-- 架构层: Eval/Review System / Avatar/Room UI / Frontend Architecture / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-180A、TASK-180B 完成并集成；与 TASK-181A 并行，但不得改实现文件。
-- 目标: 为 TASK-181A 的 tokens/CSS module extraction 添加 deterministic eval/smoke 覆盖，确保 stylesheet 文件存在、Pencil tokens 保留、index 本地链接正确、markers 未漂移、无 build-system 或产品 scope drift。
-- 非目标: 不实现 UI/CSS/JS；不修改 `mini_agent/static/index.html`、`mini_agent/static/styles/`、Pencil 原稿、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright 或 build 依赖。
-- 安全边界: 测试只读扫描 HTML/CSS/eval/test 文件；不得调用外部网络、生成图片、修改设计稿；必须阻断 React/Vite/TypeScript/npm/package.json/bundler drift，以及 marketplace/plugin store/premium skill、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM drift。
-- 持久证据: 新增 eval 名称包含 `design_tokens` 或 `pet_room_css`; 覆盖 `tokens.css` 和 `pet-room.css` 存在；覆盖关键 Pencil colors/typography/radius/action tokens；覆盖 local stylesheet links；覆盖 TASK-180 Pencil design eval 继续 active/pass。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 1; `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`; `evals/run_evals.py`; `tests/test_webui_smoke.py`.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-181A: Extract Pet Room design tokens and CSS modules ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 381 tests OK；`python3 evals/run_evals.py` 724 passed, 0 failed, 0 skipped；`git diff --check` OK；targeted forbidden-copy/build-system scan 仅命中既有负面断言、既有 LLM/API 示例 URL 和 `reaction` 命名中的 `react` 子串。
+- 内容: 新增 `mini_agent/static/styles/tokens.css` 和 `mini_agent/static/styles/pet-room.css`，把 Pencil/Pet Room 设计常量和 Pet Room CSS 从 `mini_agent/static/index.html` 的内联 style 中抽出；`index.html` 改为本地 `/static/styles/...` stylesheet links；保留 `pet-room-design-shell`、`pet-room-canvas`、`pet-room-hero-image`、`pet-room-status-chip`、name/role/chip marker 和 `renderPet()` 行为；不新增 build step、React/Vite/TypeScript/npm、endpoint、外部 asset、真实 voice/TTS、PWA/native、billing/marketplace、插件执行或 3D/VRM。
+
+### TASK-181B: Design token and CSS module deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 724 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 381 tests OK；`git diff --check` OK。
+- 内容: 新增 5 个 `design_tokens` / `pet_room_css` eval，覆盖 `tokens.css` / `pet-room.css` 存在、Pencil colors 与 radius/action tokens、本地 stylesheet links、Pet Room selector ownership、无 build-system 和产品 scope drift；更新 TASK-180 `pet_room_design_tokens_match_pencil` eval，使 Pencil token 检查在 CSS extraction 后继续扫描 HTML + CSS；新增/补强 smoke tests 锁住 stylesheet links、CSS token usage 和 Pencil 色值定义。
 
 ### TASK-180A: Pencil Pet Room design restoration contract and first-pass UI implementation ✅
 - 完成者: Claude A；Codex PM 修正静态资产扩展名后集成；reviewer gate 通过。
