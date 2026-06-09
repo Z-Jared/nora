@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 66%
 - Status: in progress
-- Current focus: Continuing Pet Room functional panel extraction one native module at a time after the food panel is stable.
+- Current focus: Extracting the Pet Room skill shelf into a bounded native module with deterministic read-only coverage.
 
 ## Completed This Phase
 
@@ -156,12 +156,12 @@ Last updated: 2026-06-09
   - Verification is green: 411 targeted tests OK, 744 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None. TASK-185A / TASK-185B are complete and integrated; waiting for the next PM dispatch cycle.
+- TASK-186A / TASK-186B: Extract the Pet Room skill shelf into a bounded native module and add deterministic read-only/no-tool coverage.
 
 ## Next
 
-1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `skill-shelf.js` in the next dispatch cycle.
-2. Keep the next slice bounded to frontend architecture extraction and deterministic coverage.
+1. Complete TASK-186A/B skill shelf extraction and coverage.
+2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `voice-preview.js` only after TASK-186 is reviewed and integrated.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -196,8 +196,8 @@ Phase 1 Exit Gate is complete. Phase 2 may start with the worker plan below.
 Phase 2 start worker plan:
 
 1. Keep Claude A and Claude B active only at Phase 2 start:
-   - Claude A: Voice/Profile/Presence product implementation.
-   - Claude B: deterministic evals, safety, cost transparency, and UI smoke coverage.
+   - Claude A: Voice/Profile/Presence product implementation; currently TASK-186A skill shelf module extraction.
+   - Claude B: deterministic evals, safety, cost transparency, and UI smoke coverage; currently TASK-186B skill shelf module coverage.
 2. Do not open Claude C/D for the first Phase 2 tasks because initial Voice/Profile/Presence work shares `mini_agent/pets.py`, `mini_agent/server.py`, `mini_agent/static/index.html`, test files, and eval files.
 3. Automatically open or configure additional Claude workers only when Phase 2 has independent workstreams with low file conflict risk:
    - Claude C for Web/PWA floating pet presence or responsive UI shell.

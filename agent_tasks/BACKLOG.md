@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-186A: Extract Pet Room Skill Shelf native module
+- 架构层: Avatar/Room UI / Frontend Architecture / Skill Runtime
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-185A、TASK-185B 完成并集成。
+- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4，创建 `mini_agent/static/components/skill-shelf.js`，把 Pet Room 的 deterministic skill ability shelf mapping/rendering 从 `mini_agent/static/index.html` 拆成 bounded native ES module，同时保持现有 UI、DOM markers、secret-like filtering、read-only/no-tool-execution 边界和本地 demo 行为不变。
+- 非目标: 不拆 voice preview、memory diary、identity editor；不新增/删除/重命名 HTTP endpoint；不改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/tts.py`、`mini_agent/static/api.js`；不引入 React/Vite/TypeScript/npm/build step；不新增真实 skill/tool/plugin execution、plugin install、marketplace、premium skill、外部 URL、真实 voice/audio、PWA/native、3D/VRM/Live2D runtime。
+- 安全边界: skill shelf module 必须保持 read-only DOM rendering，不得调用 `fetch`、`PetAPI`、`petAction`、tool/plugin/runtime APIs 或 `/pet/` endpoint；动态 skill label/icon 必须使用 DOM text APIs 或 `escapeHtml`；必须继续过滤 non-string、empty、overlong、special-character、secret-like skill labels；不得新增隐藏网络、credential logging、secret echo、诱导付费、marketplace/plugin store/premium skill copy、microphone/camera/screen/location access。
+- 持久证据: 新增 `mini_agent/static/components/skill-shelf.js`；`index.html` 使用本地 native module import；`pet-skill-shelf`、`pet-skill-list`、`pet-skill-empty`、`pet-skill-card`、`skill-icon`、`skill-name`、`data-skill-count` markers 保持稳定；valid skills 继续映射 icon，unknown skill 继续使用 default icon；empty/malformed skills 继续清除 stale cards；secret-like skills 继续不渲染。
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for external URLs/build-system/tool/plugin/payment/marketplace/scope drift in `mini_agent/static/index.html mini_agent/static/components/skill-shelf.js tests/test_webui_smoke.py`。
+- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`; existing TASK-179 skill shelf tests/evals.
+
+### TASK-186B: Skill Shelf module deterministic coverage
+- 架构层: Eval/Review System / Frontend Architecture / Skill Runtime / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-185A、TASK-185B 完成并集成；与 TASK-186A 并行，但不得改实现文件。
+- 目标: 为 TASK-186A 的 skill-shelf module extraction 添加 deterministic eval/smoke 覆盖，确保 component 文件存在、本地 module wiring、skill shelf markers 保留、read-only/no-fetch/no-tool/plugin execution、secret-like skill filtering、empty/malformed stale cleanup、no build-system drift、无 marketplace/plugin store/premium skill/payment/surveillance/product scope drift，且 TASK-185 food panel eval 继续 active/pass。
+- 非目标: 不实现 skill shelf module；不修改 `mini_agent/static/index.html`、`mini_agent/static/components/skill-shelf.js`、`mini_agent/static/components/food-panel.js`、`mini_agent/static/components/pet-room-canvas.js`、`mini_agent/static/components/status-chips.js`、CSS、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm。
+- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成图片、修改设计稿；必须阻断 direct fetch/PetAPI/petAction/tool/plugin/runtime drift、external URL/build-system drift、checkout/billing/real payment、marketplace/plugin store/premium skill、voice cloning、recording/background listening、microphone/camera/screen/location、PWA/service-worker/notification/native、3D/VRM/Live2D drift。
+- 持久证据: 新增 eval 名称包含 `skill_shelf_module` 或 `pet_skill_shelf_module`; 覆盖 component file exports、local module import wiring、required skill markers、read-only/no-tool boundary、secret-like filtering、empty/malformed stale cleanup、TASK-185 food panel eval 继续 active/pass。
+- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system/payment/plugin scan。
+- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `evals/run_evals.py`; `tests/test_webui_smoke.py`; `mini_agent/static/index.html`; existing TASK-179 skill shelf evals.
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
