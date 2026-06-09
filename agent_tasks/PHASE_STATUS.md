@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 35%
+- Percent: 40%
 - Status: in progress
-- Current focus: Deterministic Pet Room room-load greeting after CSS-only idle/presence signals.
+- Current focus: Next lightweight web-first Pet Room presence affordance after deterministic room-load greeting.
 
 ## Completed This Phase
 
@@ -91,17 +91,24 @@ Last updated: 2026-06-09
   - Dynamic presence label/detail use DOM text APIs.
   - Deterministic coverage locks markers/classes, bounded mapping fallback, malformed-state clamp behavior, function-body read-only checks, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
   - Verification is green: 317 targeted tests OK, 700 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Deterministic room-load greeting:
+  - Pet Room now renders a text-only room-load greeting when the current pet is displayed.
+  - Greeting text and meta derive only from bounded mood, energy, hunger, bond, and a coarse local time bucket.
+  - Pet Room exposes stable `pet-room-greeting`, `pet-room-greeting-text`, `pet-room-greeting-meta`, and `data-greeting` markers.
+  - Greeting updates are read-only: no provider/network calls, no voice preview call, no food debit, no state/activity/relationship-memory mutation, and no microphone/camera/screen/location access.
+  - Dynamic greeting text/meta use DOM text APIs.
+  - Deterministic coverage locks markers, state/time-bucket mapping fallback, function-body read-only checks, malformed-state handling, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
+  - Verification is green: 333 targeted tests OK, 704 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-177A: Pet Room deterministic room-load greeting.
-- TASK-177B: Room-load greeting deterministic eval and safety coverage.
+- None.
 
 ## Next
 
-1. Complete TASK-177A/TASK-177B through PM initial review and reviewer gate.
-2. Add the next lightweight web-first Pet Room presence affordance only after TASK-177 is integrated.
-3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+1. Publish the next lightweight web-first Pet Room presence affordance.
+2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
 ## Phase 1 Exit Criteria
 
@@ -152,6 +159,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 35% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, and CSS-only idle/presence signals complete
+- Phase 2 Voice & Presence: 40% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, and deterministic room-load greeting complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

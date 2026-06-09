@@ -301,6 +301,9 @@ button{border:0;cursor:pointer}
 .pet-identity-details{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.6}
 .pet-identity-details span{display:inline-block;margin-right:12px}
 .pet-room-notice{border:1px solid #b7d2bd;background:var(--accent-soft);border-radius:8px;padding:12px 16px;font-size:13px;color:#173f27;margin-bottom:16px;animation:fade-notice .3s ease}
+.pet-room-greeting{margin-bottom:16px;padding:10px 0}
+.pet-room-greeting-text{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:4px}
+.pet-room-greeting-meta{font-size:11px;color:var(--muted)}
 .pet-today-section{margin-bottom:20px}
 .pet-today-section h3{font-size:14px;font-weight:800;margin-bottom:10px}
 .pet-today-content{border:1px solid var(--line);border-radius:8px;background:var(--card);padding:12px 14px;font-size:12px;line-height:1.6;max-height:200px;overflow:auto}
@@ -523,6 +526,10 @@ button{border:0;cursor:pointer}
               <button class="pet-action-btn" id="speech-preview-btn" type="button">Preview</button>
             </div>
             <div class="speech-bubble-error" id="speech-bubble-error"></div>
+          </div>
+          <div class="pet-room-greeting" id="pet-room-greeting">
+            <div class="pet-room-greeting-text" id="pet-room-greeting-text"></div>
+            <div class="pet-room-greeting-meta" id="pet-room-greeting-meta"></div>
           </div>
           <div class="pet-stats" id="pet-stats">
             <div class="pet-stat hunger"><div class="label">Hunger</div><div class="value" id="stat-hunger">—</div><div class="bar"><div class="bar-fill" id="bar-hunger"></div></div></div>
@@ -795,6 +802,7 @@ button{border:0;cursor:pointer}
     loadTodayDiary(pet.pet_id);
     applyExpression(st);
     applyPresence(st);
+    applyRoomGreeting(st);
   }
 
   function expressionFromState(st){
@@ -869,6 +877,55 @@ button{border:0;cursor:pointer}
     if(iconEl) iconEl.textContent = pres.icon;
     if(labelEl) labelEl.textContent = pres.label;
     if(detailEl) detailEl.textContent = pres.detail;
+  }
+
+  function roomGreetingFromState(state, date){
+    var st = state || {};
+    var mood = clampState(st.mood, 50);
+    var energy = clampState(st.energy, 50);
+    var hunger = clampState(st.hunger, 50);
+    var bond = clampState(st.bond, 0);
+    var d = date instanceof Date ? date : new Date();
+    var hour = d.getHours();
+    // Coarse time buckets
+    var timeBucket, timeLabel;
+    if(hour >= 5 && hour < 12){ timeBucket = 'morning'; timeLabel = 'Good morning'; }
+    else if(hour >= 12 && hour < 17){ timeBucket = 'midday'; timeLabel = 'Good afternoon'; }
+    else if(hour >= 17 && hour < 21){ timeBucket = 'evening'; timeLabel = 'Good evening'; }
+    else { timeBucket = 'night'; timeLabel = 'Good night'; }
+    // State-sensitive greeting variants
+    var text, meta;
+    if(hunger >= 70){
+      text = timeLabel + '! I could use a snack.';
+      meta = 'Hunger is at ' + hunger + '/100.';
+    } else if(energy <= 25){
+      text = timeLabel + '. Feeling a bit tired...';
+      meta = 'Energy is at ' + energy + '/100.';
+    } else if(mood >= 75 && bond >= 60){
+      text = timeLabel + '! Great to see you!';
+      meta = 'Mood ' + mood + '/100, bond ' + bond + '/100.';
+    } else if(mood >= 75){
+      text = timeLabel + '! I\'m in a good mood.';
+      meta = 'Mood is at ' + mood + '/100.';
+    } else if(mood < 35){
+      text = timeLabel + '. I could use some company.';
+      meta = 'Mood is at ' + mood + '/100.';
+    } else {
+      text = timeLabel + '.';
+      meta = 'Mood ' + mood + '/100, energy ' + energy + '/100.';
+    }
+    return {key: timeBucket, text: text, meta: meta};
+  }
+
+  function applyRoomGreeting(state, date){
+    var greeting = roomGreetingFromState(state, date);
+    var root = document.getElementById('pet-room-greeting');
+    var textEl = document.getElementById('pet-room-greeting-text');
+    var metaEl = document.getElementById('pet-room-greeting-meta');
+    if(!root || !textEl) return;
+    root.setAttribute('data-greeting', greeting.key);
+    textEl.textContent = greeting.text;
+    if(metaEl) metaEl.textContent = greeting.meta;
   }
 
   function getMoodSummary(name, st){

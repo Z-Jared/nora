@@ -243,6 +243,11 @@ def main() -> int:
         EvalCase("presence_state_malformed_state_fallback", eval_presence_state_malformed_state_fallback),
         EvalCase("presence_state_read_only_no_fetch", eval_presence_state_read_only_no_fetch),
         EvalCase("presence_state_no_voice_native_or_surveillance_copy", eval_presence_state_no_voice_native_or_surveillance_copy),
+        # TASK-177B: Room-load greeting eval coverage
+        EvalCase("pet_room_greeting_markers_present", eval_pet_room_greeting_markers_present),
+        EvalCase("room_greeting_state_time_mapping_rules", eval_room_greeting_state_time_mapping_rules),
+        EvalCase("room_greeting_read_only_no_fetch", eval_room_greeting_read_only_no_fetch),
+        EvalCase("room_greeting_no_voice_native_pwa_or_surveillance_copy", eval_room_greeting_no_voice_native_pwa_or_surveillance_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4043,6 +4048,111 @@ def eval_presence_state_no_voice_native_or_surveillance_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in presence UI"
+
+
+# --- TASK-177B: Room-load greeting eval coverage ---
+
+
+def _skip_if_no_greeting():
+    """Skip if TASK-177A room-load greeting is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "room-greeting" not in html and "pet-greeting" not in html and "greeting" not in html.lower():
+            raise AttributeError("no greeting markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-177A not integrated: room-load greeting not available")
+
+
+def eval_pet_room_greeting_markers_present():
+    """Pet Room exposes stable greeting DOM markers/attributes."""
+    _skip_if_no_greeting()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "pet-room-greeting", "pet-room-greeting-text",
+        "pet-room-greeting-meta", "data-greeting",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required greeting markers: {missing}"
+
+
+def eval_room_greeting_state_time_mapping_rules():
+    """JS mapping derives greeting from state fields and time bucket with malformed fallback."""
+    _skip_if_no_greeting()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find greeting mapping function
+    greeting_fn = re.search(r'function\s+[a-z]*greeting[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    assert greeting_fn, "greeting mapping function not found"
+    fn_body = greeting_fn.group(1)
+    # Must reference state fields (mood, energy, hunger, bond)
+    state_fields = ["mood", "energy", "hunger", "bond"]
+    found = [f for f in state_fields if f in fn_body]
+    assert len(found) >= 1, f"greeting mapping references no state fields: {found}"
+    # Must reference time bucket (hour, morning, afternoon, evening, night)
+    time_markers = ["hour", "morning", "afternoon", "evening", "night", "gethours", "time"]
+    has_time = any(m in fn_body for m in time_markers)
+    assert has_time, "greeting mapping missing time bucket reference"
+    # Must have fallback for missing/malformed state
+    has_fallback = ("default" in fn_body or "else" in fn_body or "hello" in fn_body or
+                    "welcome" in fn_body or "clamp" in fn_body or "null" in fn_body)
+    assert has_fallback, "greeting mapping missing fallback for missing/malformed state"
+    # Must handle malformed date/time (NaN, invalid Date)
+    has_date_guard = ("isfinite" in fn_body or "isnan" in fn_body or "nan" in fn_body or
+                      "invalid" in fn_body or "gethours" in fn_body or "clamp" in fn_body)
+    assert has_date_guard, "greeting mapping missing malformed date/time guard"
+
+
+def eval_room_greeting_read_only_no_fetch():
+    """Greeting functions are CSS/DOM-only and read-only."""
+    _skip_if_no_greeting()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    forbidden = [
+        "fetch(", "food_debit", "add-food", "/pet/", "voice-preview",
+        "relationship-memory", "activity", "consent",
+        "microphone", "camera", "navigator.media", "navigator.geolocation",
+        "getusermedia", "screencapture",
+        "service-worker", "serviceworker", "notification",
+        "register(", "postmessage",
+    ]
+    # Find all greeting-related functions
+    greeting_fns = re.finditer(r'function\s+[a-z]*greeting[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    found_any = False
+    for fn_match in greeting_fns:
+        found_any = True
+        fn_body = fn_match.group(1)
+        fn_name = fn_match.group(0)[:50]
+        for pattern in forbidden:
+            assert pattern not in fn_body, f"greeting function '{fn_name}' contains forbidden '{pattern}'"
+    assert found_any, "no greeting functions found to validate"
+
+
+def eval_room_greeting_no_voice_native_pwa_or_surveillance_copy():
+    """UI copy does not imply voice cloning, recording, native/PWA, surveillance, marketplace, or 3D/VRM drift."""
+    _skip_if_no_greeting()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission", "install app",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in greeting UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in greeting UI"
 
 
 def eval_cli_multiline_input():

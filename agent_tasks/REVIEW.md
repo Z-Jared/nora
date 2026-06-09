@@ -1,58 +1,45 @@
-# TASK-176A/176B CCB Review
+# TASK-177A/177B Review — Pet Room Deterministic Room-Load Greeting
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-176A adds CSS-only idle presence signals with bounded numeric state normalization. TASK-176B adds 5 deterministic evals locking the presence state contract. All review criteria satisfied.
+Deterministic room-load greeting derived from bounded pet state (mood/energy/hunger/bond via `clampState`) and coarse local time bucket (morning/midday/evening/night). Text-only, read-only, DOM textAPI rendered. 16 smoke tests + 4 evals. No scope drift.
 
-## Review Findings
+## Findings
 
-### 1. CSS/DOM-Only Scope
+### Determinism & Read-Only
+- `roomGreetingFromState(state, date)` is pure: bounded state + time bucket → greeting. No fetch, no state mutation, no provider calls.
+- `applyRoomGreeting` uses `textContent` for all dynamic text, sets `data-greeting` attribute.
+- Malformed state (NaN/Infinity/negative/string/null/undefined) handled by `clampState()` — no raw values leak into greeting text. `test_room_greeting_malformed_state` verifies.
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| CSS-only classes | ✅ | 5 presence classes (resting/alert/drifting/charging/waiting) with CSS animation rules only |
-| DOM markers | ✅ | `pet-presence-state`, `pet-presence-icon`, `pet-presence-label`, `pet-presence-detail`, `data-presence` |
-| textContent rendering | ✅ | `applyPresence()` uses `textContent` for icon/label/detail |
-| No fetch/network | ✅ | `eval_presence_state_read_only_no_fetch` scans function bodies for forbidden patterns |
-| No state mutation | ✅ | No food/activity/memory/voice-preview/provider references in presence functions |
+### Bounded to State + Coarse Time
+- Time buckets: morning(5-12), midday(12-17), evening(17-21), night(21-5). Coarse enough to not leak precise timestamps.
+- State-sensitive variants: hungry→snack, low-energy→tired, high-mood+bond→cheerful, high-mood→good mood, low-mood→company, neutral→simple.
+- No LLM calls, no dynamic content beyond state+time.
 
-### 2. Malformed State Fallback
+### Safety
+- Forbidden-copy scan: only negative safety assertions in evals. No voice cloning/recording/PWA/native/3D/billing/marketplace/surveillance copy.
+- `eval_room_greeting_read_only_no_fetch` scans greeting function bodies for forbidden patterns (fetch, /pet/, microphone, service-worker, etc.).
+- `eval_room_greeting_no_voice_native_pwa_or_surveillance_copy` checks HTML for forbidden phrases with negation context.
 
-| Input Type | Handling | Evidence |
-|------------|----------|----------|
-| null/undefined | Returns default (50 for mood/energy/hunger, 0 for bond) | `clampState` line 830 |
-| NaN | Returns default | `isFinite(n)` check |
-| Infinity | Clamps to 100 | `n > 100` check |
-| Negative | Clamps to 0 | `n < 0` check |
-| >100 | Clamps to 100 | `n > 100` check |
-| String | Returns default | `typeof val === 'boolean'` + `Number()` coercion |
-| Boolean | Returns default | `typeof val === 'boolean'` check |
+### Eval Coverage (4 evals)
+1. **`pet_room_greeting_markers_present`** — DOM markers: pet-room-greeting, text, meta, data-greeting
+2. **`room_greeting_state_time_mapping_rules`** — Function references state fields, time bucket, has fallback, guards malformed date
+3. **`room_greeting_read_only_no_fetch`** — No forbidden patterns in greeting function bodies
+4. **`room_greeting_no_voice_native_pwa_or_surveillance_copy`** — No forbidden UI copy
 
-`clampState` function handles all edge cases. `eval_presence_state_malformed_state_fallback` locks this with regex-based function body analysis.
+### Smoke Tests (16 tests)
+- DOM markers, all 4 time buckets, 5 state variants (hungry/low-energy/low-mood/high-mood-no-bond/high-mood+bond), null/undefined/malformed state, missing date, DOM setting, textContent usage, plain text check.
 
-### 3. Eval Coverage (5 evals)
-
-| Eval | What it locks |
-|------|---------------|
-| `pet_presence_markers_present` | All 9 required markers: 4 DOM IDs + 5 CSS classes |
-| `presence_state_mapping_rules` | `presenceFromState` references ≥2 state fields, has fallback |
-| `presence_state_malformed_state_fallback` | `clampState` handles null/undefined, numeric coercion, finite check, range clamping |
-| `presence_state_read_only_no_fetch` | Function bodies contain no fetch/food/pet-endpoints/microphone/camera/screen/location/service-worker/notification |
-| `presence_state_no_voice_native_or_surveillance_copy` | No voice clone/recording/microphone/camera/screen/location/marketplace/3D/VRM/service-worker/notification copy |
-
-### 4. No Phase 2 Scope Drift
-
-✅ CSS-only, deterministic, read-only. No real audio/TTS provider, PWA/service worker, native/desktop, notifications, billing, marketplace, 3D/VRM, or surveillance.
-
-### 5. B_DONE Report Note
-
-B_DONE says "4 deterministic evals" but the diff adds 5 (including `presence_state_malformed_state_fallback`). Code diff is authoritative. Minor wording mismatch — not blocking.
+### B_DONE Report Accuracy
+- B_DONE says "4 deterministic evals" — code has 4. Consistent. ✅
 
 ## Verification
 
-- 317 unit tests OK
-- 700 evals passed, 0 failed, 0 skipped
-- git diff --check: clean
-- Forbidden-copy scan: only negative safety assertions in evals
+```
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 333 tests OK
+python3 evals/run_evals.py → 704 passed, 0 failed, 0 skipped
+git diff --check → clean
+rg forbidden-copy → only negative safety assertions
+```

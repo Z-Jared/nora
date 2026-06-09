@@ -1,38 +1,36 @@
-# B DONE — TASK-176B
+# B DONE — TASK-177B
 
-**Status:** Complete — PM-review coverage-strengthening revision
+**Status:** Complete — all room_greeting evals PASS
 
 ## Summary
 
-Added `presence_state_malformed_state_fallback` eval and strengthened `presence_state_mapping_rules`. All 5 evals active/pass when combined with TASK-176A.
+Added 4 deterministic evals for room-load greeting. All evals active/pass when combined with TASK-177A.
 
-## New Eval: `presence_state_malformed_state_fallback`
+## Evals Added
 
-Requires `clampState` (or equivalent) helper function that:
-- Handles null/undefined input
-- Coerces to number via `Number()`/`parseInt()`/`parseFloat()`
-- Checks for non-finite values (`isFinite`/`isNaN`)
-- Clamps to valid range (0-100)
-- Verifies `presenceFromState` uses the clamp helper
+1. **`pet_room_greeting_markers_present`** — Pet Room exposes all required greeting DOM markers: `pet-room-greeting`, `pet-room-greeting-text`, `pet-room-greeting-meta`, `data-greeting`.
+2. **`room_greeting_state_time_mapping_rules`** — Greeting mapping function references state fields (mood/energy/hunger/bond), time bucket (hour/morning/afternoon/evening), has fallback for missing/malformed state, and guards malformed date/time.
+3. **`room_greeting_read_only_no_fetch`** — All greeting functions are CSS/DOM-only: no fetch, food_debit, /pet/, voice-preview, consent, microphone, camera, service-worker, notification, or register patterns.
+4. **`room_greeting_no_voice_native_pwa_or_surveillance_copy`** — No voice cloning, recording, microphone/camera/screen/location access, marketplace, 3D/VRM, service worker, notification, or PWA install copy.
 
-## Strengthened Eval: `presence_state_mapping_rules`
+## Guard
 
-Now also accepts `clampstate`/`clamp` as valid fallback patterns (Claude A uses `clampState` helper instead of inline ternary defaults).
+Guard checks for `room-greeting`, `pet-greeting`, or `greeting` markers in `index.html`.
 
 ## Verification
 
-### Own worktree (no TASK-176A)
+### Own worktree (no TASK-177A)
 
 ```
-python3 evals/run_evals.py           → 695 passed, 0 failed, 5 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 297 tests OK
+python3 evals/run_evals.py           → 4/4 room_greeting evals SKIP
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 317 tests OK
 git diff --check                     → clean
 ```
 
-### Combined check (applied onto Claude A's TASK-176A)
+### Combined check (applied onto Claude A's TASK-177A)
 
 ```
-python3 evals/run_evals.py           → 5/5 presence_state evals PASS
+python3 evals/run_evals.py           → 4/4 room_greeting evals PASS
 ```
 
 ### `rg` scan

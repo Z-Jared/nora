@@ -1,87 +1,60 @@
-# TASK-176A: Pet Room CSS-only idle presence signals
+# TASK-177A: Pet Room deterministic room-load greeting — DONE
 
 ## Summary
 
-Added deterministic CSS-only idle/presence signals to the Pet Room robot avatar. Presence is derived solely from existing bounded pet state (`energy`, `hunger`, `mood`, `bond`) with no network calls, no state mutation, and no provider dependencies.
+Added a deterministic room-load greeting to the Pet Room that derives from bounded pet state (mood, energy, hunger, bond) and a coarse local time bucket. Greeting is text-only, read-only, and uses DOM text APIs.
 
 ## Changes
 
-### CSS Presence Classes (`mini_agent/static/index.html`)
+### `mini_agent/static/index.html`
 
-Added 5 presence CSS classes that modify robot avatar animation pacing and opacity:
+**New JS functions:**
+- `roomGreetingFromState(state, date)` — returns `{key, text, meta}` from bounded state + time bucket
+  - Time buckets: `morning` (5-12), `midday` (12-17), `evening` (17-21), `night` (21-5)
+  - State-sensitive variants: hungry (snack mention), low-energy (tired), high-mood+bond (cheerful), high-mood (good mood), low-mood (company), neutral (simple greeting)
+  - Uses `clampState()` for numeric normalization (NaN/Infinity/negative/over-100/strings/booleans → safe defaults)
+- `applyRoomGreeting(state, date)` — sets DOM markers via textContent + data-greeting attribute
 
-| Class | Trigger Condition | Visual Effect |
-|-------|------------------|---------------|
-| `presence-charging` | energy ≥ 80, hunger ≤ 30 | Fast core pulse, cyan eye glow, bright antenna |
-| `presence-resting` | energy ≤ 25 | Slow blink (6s), dim core, dim antenna, faded arms |
-| `presence-alert` | mood ≥ 70, energy ≥ 50 | Fast blink (1.5s), bright core, pulsing antenna |
-| `presence-drifting` | mood < 40, energy < 50 | Slow eye fade (4s), drifting antenna rotation |
-| `presence-waiting` | default/neutral | Moderate blink (2s), waiting antenna opacity cycle |
+**New CSS:**
+- `.pet-room-greeting`, `.pet-room-greeting-text`, `.pet-room-greeting-meta`
 
-### JavaScript Functions
+**New DOM markers:**
+- `pet-room-greeting` — root element with `data-greeting` attribute
+- `pet-room-greeting-text` — greeting text
+- `pet-room-greeting-meta` — state detail meta text
 
-- `clampState(val, defaultVal)` — Bounded numeric normalizer: coerces finite numbers, clamps 0..100, rejects NaN/Infinity/strings/booleans
-- `presenceFromState(st)` — Returns `{key, icon, label, detail}` from bounded numeric state via `clampState`
-- `applyPresence(st)` — Applies CSS class, `data-presence` attribute, and updates DOM markers
+**Integration:**
+- `applyRoomGreeting(st)` called in `renderPet()` after `applyPresence()`
 
-### DOM Markers
+### `tests/test_webui_smoke.py`
 
-- `pet-presence-state` — Container for presence display
-- `pet-presence-icon` — Emoji icon (⚡🌙👁️🌀⏳)
-- `pet-presence-label` — Text label (Charging/Resting/Alert/Drifting/Waiting)
-- `pet-presence-detail` — Numeric detail text (e.g., "Energy at 85/100, hunger at 20/100 — fully charged.")
-- `data-presence` attribute on `pet-avatar` root
+16 new tests:
+- `test_room_greeting_dom_markers_exist` — DOM markers exist
+- `test_room_greeting_morning_happy` — morning + high mood/bond → cheerful
+- `test_room_greeting_midday_default` — midday + neutral → simple greeting
+- `test_room_greeting_evening` — evening bucket
+- `test_room_greeting_night` — night bucket
+- `test_room_greeting_hungry_variant` — high hunger → snack mention
+- `test_room_greeting_low_energy_variant` — low energy → tired
+- `test_room_greeting_low_mood_variant` — low mood → company-seeking
+- `test_room_greeting_high_mood_no_bond` — high mood without bond
+- `test_room_greeting_null_state` — null state defaults safely
+- `test_room_greeting_undefined_state` — undefined state defaults safely
+- `test_room_greeting_malformed_state` — NaN/Infinity/negative/string → safe defaults, no raw values
+- `test_room_greeting_no_date_defaults_to_now` — missing date → current time
+- `test_apply_room_greeting_sets_dom` — sets text + data-greeting
+- `test_apply_room_greeting_uses_dom_text` — uses textContent
+- `test_room_greeting_text_is_plain` — no HTML tags
 
-### Integration
-
-- `applyPresence(st)` called from `renderPet()` alongside existing `applyExpression(st)`
-- No interaction with expression state, speech bubble, voice consent, food, activity, or relationship memory
-
-## Test Results
+## Verification
 
 ```
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 317 tests in 136.259s — OK
+Ran 333 tests in 121.716s — OK
 
 git diff --check
 (clean)
 
-rg scan for forbidden copy
+rg -n "voice clone|clone voice|..." mini_agent/static/index.html tests/test_webui_smoke.py
 (no matches)
 ```
-
-## New Tests (20 tests added total)
-
-### Original presence tests (12)
-- `test_presence_state_dom_markers_exist` — Verifies all DOM markers exist
-- `test_presence_from_state_charging` — High energy, low hunger → charging
-- `test_presence_from_state_resting` — Very low energy → resting
-- `test_presence_from_state_alert` — High mood, decent energy → alert
-- `test_presence_from_state_drifting` — Low mood, low energy → drifting
-- `test_presence_from_state_waiting` — Neutral state → waiting
-- `test_presence_from_state_missing_fields` — Missing fields default safely
-- `test_presence_from_state_null_state` — Null state defaults safely
-- `test_apply_presence_sets_data_attribute` — Sets `data-presence` and CSS class
-- `test_apply_presence_updates_dom_markers` — Updates icon/label/detail
-- `test_presence_class_cycling` — Swaps classes on state change
-- `test_presence_detail_uses_dom_text` — Uses textContent, not innerHTML
-
-### Malformed state safety tests (8) — PM review fix
-- `test_presence_from_state_string_values` — String values coerce to defaults
-- `test_presence_from_state_nan_values` — NaN values coerce to defaults
-- `test_presence_from_state_infinity_values` — Infinity clamps to 100
-- `test_presence_from_state_negative_values` — Negative values clamp to 0
-- `test_presence_from_state_over_100_values` — Values >100 clamp to 100
-- `test_presence_from_state_boolean_values` — Boolean values coerce to defaults
-- `test_presence_from_state_undefined_values` — Undefined values use defaults
-- `test_clamp_state_normalizes_values` — Comprehensive clampState normalization
-
-## Safety Boundaries
-
-- ✅ CSS-only, deterministic — no LLM or provider calls
-- ✅ No pet state/food/activity/relationship-memory/voice-preview mutation
-- ✅ No microphone/camera/screen/location access
-- ✅ No PWA/service worker, desktop floating pet, 3D/VRM, billing, marketplace
-- ✅ Dynamic text escaped via DOM text APIs (textContent)
-- ✅ Malformed state (NaN, Infinity, negatives, >100, strings, booleans) normalized via clampState
-- ✅ Existing expression state, speech bubble, voice consent behavior preserved

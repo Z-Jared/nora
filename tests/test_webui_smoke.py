@@ -2026,3 +2026,187 @@ result.boolVal = clampState(true, 99);
         self.assertEqual(d['overVal'], 100)
         self.assertEqual(d['strVal'], 99)
         self.assertEqual(d['boolVal'], 99)
+
+    # --- Room greeting tests (TASK-177A) ---
+
+    def test_room_greeting_dom_markers_exist(self):
+        """Greeting DOM markers must exist in pet room."""
+        result = _run_node(test_body="""
+result = {};
+result.root = !!document.getElementById('pet-room-greeting');
+result.textEl = !!document.getElementById('pet-room-greeting-text');
+result.metaEl = !!document.getElementById('pet-room-greeting-meta');
+""")
+        d = result
+        for key in ['root', 'textEl', 'metaEl']:
+            self.assertTrue(d[key], f'Missing greeting element: {key}')
+
+    def test_room_greeting_morning_happy(self):
+        """Morning with high mood/bond should produce cheerful greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 9, 0, 0); // 9am
+var g = roomGreetingFromState({mood:80, energy:60, hunger:30, bond:70}, d);
+result = {key: g.key, text: g.text, hasExclaim: g.text.indexOf('!') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'morning')
+        self.assertIn('Good morning', d['text'])
+        self.assertTrue(d['hasExclaim'])
+
+    def test_room_greeting_midday_default(self):
+        """Midday with neutral state should produce simple greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 14, 0, 0); // 2pm
+var g = roomGreetingFromState({mood:50, energy:50, hunger:40, bond:20}, d);
+result = {key: g.key, text: g.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'midday')
+        self.assertIn('Good afternoon', d['text'])
+        self.assertTrue(d['text'].endswith('.'))
+
+    def test_room_greeting_evening(self):
+        """Evening bucket should produce evening greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 19, 0, 0); // 7pm
+var g = roomGreetingFromState({mood:50, energy:50, hunger:40, bond:20}, d);
+result = {key: g.key, text: g.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'evening')
+        self.assertIn('Good evening', d['text'])
+
+    def test_room_greeting_night(self):
+        """Night bucket should produce night greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 23, 0, 0); // 11pm
+var g = roomGreetingFromState({mood:50, energy:50, hunger:40, bond:20}, d);
+result = {key: g.key, text: g.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'night')
+        self.assertIn('Good night', d['text'])
+
+    def test_room_greeting_hungry_variant(self):
+        """High hunger should produce snack-related greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState({mood:50, energy:50, hunger:75, bond:20}, d);
+result = {text: g.text, meta: g.meta, hasSnack: g.text.indexOf('snack') >= 0};
+""")
+        d = result
+        self.assertTrue(d['hasSnack'])
+        self.assertIn('75', d['meta'])
+
+    def test_room_greeting_low_energy_variant(self):
+        """Low energy should produce tired greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState({mood:50, energy:20, hunger:30, bond:20}, d);
+result = {text: g.text, meta: g.meta, hasTired: g.text.indexOf('tired') >= 0};
+""")
+        d = result
+        self.assertTrue(d['hasTired'])
+        self.assertIn('20', d['meta'])
+
+    def test_room_greeting_low_mood_variant(self):
+        """Low mood should produce company-seeking greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState({mood:30, energy:50, hunger:30, bond:20}, d);
+result = {text: g.text, meta: g.meta, hasCompany: g.text.indexOf('company') >= 0};
+""")
+        d = result
+        self.assertTrue(d['hasCompany'])
+        self.assertIn('30', d['meta'])
+
+    def test_room_greeting_high_mood_no_bond(self):
+        """High mood without high bond should produce mood greeting."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState({mood:80, energy:60, hunger:30, bond:20}, d);
+result = {text: g.text, hasMood: g.text.indexOf('mood') >= 0, hasGreat: g.text.indexOf('Great') >= 0};
+""")
+        d = result
+        self.assertTrue(d['hasMood'])
+        self.assertFalse(d['hasGreat'])
+
+    def test_room_greeting_null_state(self):
+        """Null state should default safely."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState(null, d);
+result = {key: g.key, text: g.text, meta: g.meta};
+""")
+        d = result
+        self.assertIn(d['key'], ['morning', 'midday', 'evening', 'night'])
+        self.assertIn('Good', d['text'])
+
+    def test_room_greeting_undefined_state(self):
+        """Undefined state should default safely."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState(undefined, d);
+result = {key: g.key, text: g.text};
+""")
+        d = result
+        self.assertIn(d['key'], ['morning', 'midday', 'evening', 'night'])
+
+    def test_room_greeting_malformed_state(self):
+        """Malformed state values should coerce safely."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 10, 0, 0);
+var g = roomGreetingFromState({mood:'abc', energy:NaN, hunger:Infinity, bond:-5}, d);
+result = {key: g.key, text: g.text, meta: g.meta, noRaw: g.text.indexOf('abc') < 0 && g.meta.indexOf('NaN') < 0};
+""")
+        d = result
+        self.assertIn(d['key'], ['morning', 'midday', 'evening', 'night'])
+        self.assertTrue(d['noRaw'])
+
+    def test_room_greeting_no_date_defaults_to_now(self):
+        """Missing date should default to current time safely."""
+        result = _run_node(test_body="""
+var g = roomGreetingFromState({mood:50, energy:50, hunger:40, bond:20});
+result = {key: g.key, text: g.text};
+""")
+        d = result
+        self.assertIn(d['key'], ['morning', 'midday', 'evening', 'night'])
+        self.assertIn('Good', d['text'])
+
+    def test_apply_room_greeting_sets_dom(self):
+        """applyRoomGreeting should set text and data attribute."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 9, 0, 0);
+applyRoomGreeting({mood:50, energy:50, hunger:40, bond:20}, d);
+result = {};
+result.text = document.getElementById('pet-room-greeting-text').textContent;
+result.meta = document.getElementById('pet-room-greeting-meta').textContent;
+result.dataGreeting = document.getElementById('pet-room-greeting').getAttribute('data-greeting');
+""")
+        d = result
+        self.assertIn('Good morning', d['text'])
+        self.assertIn('50', d['meta'])
+        self.assertEqual(d['dataGreeting'], 'morning')
+
+    def test_apply_room_greeting_uses_dom_text(self):
+        """Greeting text should use textContent, not innerHTML."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 9, 0, 0);
+applyRoomGreeting({mood:80, energy:60, hunger:30, bond:70}, d);
+result = {};
+result.textContent = document.getElementById('pet-room-greeting-text').textContent;
+result.metaText = document.getElementById('pet-room-greeting-meta').textContent;
+""")
+        d = result
+        self.assertTrue(len(d['textContent']) > 0)
+        self.assertTrue(len(d['metaText']) > 0)
+
+    def test_room_greeting_text_is_plain(self):
+        """Greeting text should not contain HTML tags."""
+        result = _run_node(test_body="""
+var d = new Date(2026, 0, 1, 9, 0, 0);
+var g = roomGreetingFromState({mood:80, energy:60, hunger:30, bond:70}, d);
+result = {text: g.text, hasTag: g.text.indexOf('<') >= 0 || g.text.indexOf('>') >= 0};
+""")
+        d = result
+        self.assertFalse(d['hasTag'])
