@@ -1,29 +1,17 @@
-# TASK-180A: Pencil Pet Room design restoration contract and first-pass UI implementation
+# TASK-181A: Extract Pet Room design tokens and CSS modules
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is 50% complete. The user explicitly wants to redesign the UI through Pencil first, and the current active Pencil design is:
+Phase 2 is 55% complete. TASK-180A/B restored the Pet Room from the Pencil design and established a durable front-end contract.
 
-- `/Users/mac/Documents/agent/designs/nora_pet_web_ui.pen`
-- Selected node: `P7UnVG` — `Room canvas`
-- Reference export: `/Users/mac/Documents/agent/.nora_design_exports/nora_pet_web_ui_screen.png`
+The next architecture step is documented in:
 
-Current Pencil structure for `Room canvas`:
+- `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`
+- `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`
 
-- Frame: 880 x 850, fill `#F5F3EE`, stroke `#D8D1C8`, radius 12, outer shadow.
-- Back wall: `#F1EEE7`, 880 x 550, radius top 12.
-- Soft floor: `#DDD5CA`, 880 x 300, y=550, radius bottom 12.
-- Pet ground shadow: ellipse `#B9AA993D`, 390 x 56, x=244, y=654.
-- Hero image: `designs/images/generated-1780975241297.png`, 410 x 530, x=235, y=122.
-- Name: `Nora-01`, Inter 40/800, centered, x=276, y=720, width 328.
-- Role: `ceramic desktop pet agent`, Inter 15/600, centered, x=255, y=768, width 370.
-- Chips:
-  - Mood chip: `#F6DDC6`, x=92, y=78, 150 x 54, text `Mood` / `focused`.
-  - Presence chip: `#DDE6DC`, x=610, y=116, 150 x 54, text `Presence` / `waiting with you`.
-  - Energy chip: `#ECE3D6`, x=104, y=500, 150 x 54, text `Energy` / `72`.
-  - Bond chip: `#E8DED4`, x=632, y=502, 150 x 54, text `Bond` / `41`.
+TASK-181A is an implementation-only architecture extraction. Keep DOM and JS behavior stable while moving the Pencil/Pet Room design constants out of the single inline style block.
 
 Read first:
 
@@ -32,54 +20,62 @@ Read first:
 - `docs/knowledge/DECISIONS.md`
 - `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`
 - `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`
+- `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`
+- `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`
 - `agent_tasks/PM_LOOP.md`
 - `agent_tasks/BACKLOG.md`
 - `agent_tasks/PHASE_STATUS.md`
-- `designs/nora_pet_web_ui.pen`
 - `mini_agent/static/index.html`
 - `tests/test_webui_smoke.py`
 
 ## Goal
 
-Create a durable front-end restoration contract from the Pencil room design, then apply a first-pass Pet Room UI restoration in `mini_agent/static/index.html` without losing current functional pet data.
+Extract Pet Room design tokens and Pet Room CSS into native static CSS files without changing behavior, DOM markers, API calls, or requiring a build step.
 
-The user problem to solve is: “Pencil design exists, but frontend restore is not close enough.” Your task is to make the design source explicit and implement the first front-end slice against that source.
+This is the first step toward a maintainable front-end architecture while preserving the current local-first Python-served Web UI.
 
 ## Required Work
 
-1. Create or update `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`.
-   - Treat `designs/nora_pet_web_ui.pen` `Room canvas` as the source of truth.
-   - Record dimensions, key colors, typography, image asset, status chip layout, and allowed responsive adaptations.
-   - Include clear implementation markers and a short restore checklist for future workers.
+1. Create `mini_agent/static/styles/tokens.css`.
+   - Define stable CSS custom properties for Pencil/Pet Room values:
+     - canvas max width, room radius, wall/floor heights if useful;
+     - `#F5F3EE`, `#D8D1C8`, `#F1EEE7`, `#DDD5CA`, `#B9AA993D`;
+     - chip colors `#F6DDC6`, `#DDE6DC`, `#ECE3D6`, `#E8DED4`;
+     - warm primary/action colors currently used by the Pet Room;
+     - type scale for pet room name, role, chip label/value;
+     - shadow/border/radius values used by the design shell.
+   - Reference `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md` in a short file comment.
 
-2. Update `mini_agent/static/index.html` Pet Room surface.
-   - Add stable markers:
-     - `pet-room-design-shell`
-     - `pet-room-canvas`
-     - `pet-room-hero-image`
-     - `pet-room-status-chip`
-   - Use the ceramic Nora-01 image asset from the repo, preferably by copying or referencing a controlled local static path. Do not use external image URLs.
-   - Bring the visual structure closer to Pencil: warm canvas, wall/floor bands, centered ceramic hero, status chips around the pet, name/role below.
-   - Preserve existing Pet Room functions: identity editor, food/status, speech bubble, consent panel, expression/presence, greeting, reaction, skill shelf, diary/memory/actions.
-   - Keep dynamic state and labels deterministic and safely rendered.
+2. Create `mini_agent/static/styles/pet-room.css`.
+   - Move the Pet Room CSS rules from `mini_agent/static/index.html` into this file.
+   - Use variables from `tokens.css` for Pencil-derived values.
+   - Keep selectors and DOM markers stable.
+   - Keep non-Pet Room Web UI CSS in `index.html` for now unless a tiny shared variable is already appropriate.
 
-3. Add focused smoke tests in `tests/test_webui_smoke.py` if needed.
-   - Lock the new design markers.
-   - Lock asset path/local-only behavior.
-   - Lock that existing core markers still exist.
+3. Update `mini_agent/static/index.html`.
+   - Add `<link rel="stylesheet" href="/static/styles/tokens.css">` and `<link rel="stylesheet" href="/static/styles/pet-room.css">`.
+   - Remove only the CSS that is now owned by `pet-room.css`.
+   - Do not change existing Pet Room DOM IDs/classes/markers.
+   - Do not change JS behavior.
+
+4. Add or adjust focused smoke tests only where needed.
+   - Lock that both stylesheet links exist.
+   - Lock that critical design markers still exist.
+   - Lock that `renderPet()` still updates design markers.
 
 ## Allowed Files
 
-- `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`
+- `mini_agent/static/styles/tokens.css`
+- `mini_agent/static/styles/pet-room.css`
 - `mini_agent/static/index.html`
 - `tests/test_webui_smoke.py`
-- local static asset copy only if needed under an existing static/assets path
 - `agent_tasks/A_DONE.md`
 
 ## Do Not Modify
 
 - `evals/run_evals.py` (Claude B owns eval coverage)
 - `designs/` or `.nora_design_exports/`
+- `mini_agent/static/nora-01-hero.jpg`
 - `mini_agent/pets.py`
 - `mini_agent/http_server.py`
 - `mini_agent/tts.py`
@@ -90,6 +86,7 @@ The user problem to solve is: “Pencil design exists, but frontend restore is n
 
 Do not add or implement:
 
+- React, Vite, TypeScript, Node build steps, npm packages, bundlers, or transpilers
 - Real voice/TTS/audio playback or recording
 - Microphone, camera, screen, location access
 - Desktop/native shell
@@ -98,7 +95,7 @@ Do not add or implement:
 - Real skill execution or plugin installation
 - 3D/VRM/Live2D runtime
 - New HTTP endpoints
-- A full front-end rewrite
+- New JS modules or API extraction; that is a later task
 
 ## Verification
 
@@ -107,11 +104,11 @@ Run:
 ```bash
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
 git diff --check
-rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|plugin store|premium skill|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission|install plugin|https?://" mini_agent/static/index.html tests/test_webui_smoke.py docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|plugin store|premium skill|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission|install plugin|https?://|react|vite|typescript|npm install|package.json" mini_agent/static/index.html mini_agent/static/styles tests/test_webui_smoke.py
 ```
 
-The `https?://` scan may hit unrelated existing links only if they are already present; document any hits. Do not introduce external image URLs.
+The `https?://` scan may hit unrelated existing LLM setup links only if they are already present in `index.html`; document any hits. Do not introduce external image URLs.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the standard format. Explicitly mention `TASK-180A`.
+Write `agent_tasks/A_DONE.md` using the standard format. Explicitly mention `TASK-181A`.
