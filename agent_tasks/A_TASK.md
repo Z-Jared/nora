@@ -1,10 +1,10 @@
-# TASK-177A: Pet Room deterministic room-load greeting
+# TASK-178A: Pet Room deterministic interaction reaction surface
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is in progress. Voice Profile v1, text-only TTS fallback, speech bubble preview, consent/cost boundary, CSS-only expression mapping, and CSS-only idle/presence signals are integrated. The next bounded presence step is a deterministic text greeting shown when the Pet Room renders.
+Phase 2 is in progress. Voice Profile v1, text-only TTS fallback, speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, and deterministic room-load greeting are integrated. The next bounded presence step is an immediate text reaction after existing Pet Room interactions.
 
 Read first:
 
@@ -21,22 +21,21 @@ Read first:
 
 ## Goal
 
-Add a deterministic room-load greeting to the Pet Room. The greeting should make Nora-01 feel present when the room loads, while remaining text-only, local, read-only, and derived only from bounded state plus a coarse local time bucket.
+Add a deterministic Pet Room interaction reaction surface. After existing Pet Room interactions such as feed, care, add demo food, and shared moment submission succeed, Nora-01 should show one short text-only reaction derived from bounded action type plus bounded current pet state.
 
 Suggested implementation shape:
 
-- Add a helper such as `roomGreetingFromState(state, date)` returning bounded values:
-  - greeting key or bucket, for example `morning`, `midday`, `evening`, `night`, plus state-sensitive variants
-  - short greeting text
+- Add a helper such as `reactionFromInteraction(action, state, result)` returning bounded values:
+  - reaction key, for example `fed`, `cared`, `food_added`, `shared_moment`, `neutral`
+  - short reaction text
   - short meta text
-- Reuse or add a bounded numeric normalizer for state fields.
-- Use a coarse local time bucket only. Do not store or send time data.
-- Add stable DOM markers near the avatar/speech area, for example:
-  - `pet-room-greeting`
-  - `pet-room-greeting-text`
-  - `pet-room-greeting-meta`
-  - optional `data-greeting` on the greeting root
-- Apply/update the greeting whenever the current pet is rendered/refreshed.
+- Reuse `clampState()` for state fields.
+- Add stable DOM markers near the avatar/speech/greeting area:
+  - `pet-room-reaction`
+  - `pet-room-reaction-text`
+  - `pet-room-reaction-meta`
+  - `data-reaction` on the reaction root
+- Apply/update the reaction only after successful existing interactions.
 - Render dynamic text with DOM text APIs.
 
 ## Scope
@@ -58,15 +57,16 @@ Do not modify:
 
 ## Required Behavior
 
-- Text/DOM-only and deterministic; no LLM calls and no provider/network calls for greeting mapping.
-- Greeting mapping must not mutate pet state, food, activity, relationship memory, expression state, presence state, voice preview state, or consent state.
-- Greeting must be derived only from bounded numeric state already available in `currentPet.state` and a coarse local time bucket.
-- Pet Room still renders safely when state fields or date/time inputs are missing or malformed.
-- Existing expression, presence, speech bubble, and voice consent behavior must continue to pass.
+- Text/DOM-only and deterministic; no LLM calls and no provider/network calls beyond the existing user-triggered interaction request.
+- Reaction mapping must not create extra pet state, food, activity, relationship memory, voice preview, consent, or persistence mutations.
+- Reaction must be derived only from bounded action type, existing interaction result, and bounded pet state already available in the UI.
+- Pet Room still renders safely when action/state/result inputs are missing or malformed.
+- Existing room greeting, expression, presence, speech bubble, and voice consent behavior must continue to pass.
 
 ## Non-Goals
 
-- Do not implement real TTS, audio playback, speech recognition, microphone/camera/screen/location access, PWA/service worker, desktop floating pet, notifications, 3D/VRM, billing, marketplace, cloud sync, relationship memory write, activity write, or Claude C/D worker setup.
+- Do not add or change HTTP endpoints.
+- Do not implement real TTS, audio playback, speech recognition, microphone/camera/screen/location access, PWA/service worker, desktop floating pet, notifications, 3D/VRM, billing, marketplace, cloud sync, extra relationship memory write, extra activity write, or Claude C/D worker setup.
 - Do not add promotional voice cloning, recording by default, always/background listening, hidden costs, purchase pressure, surveillance, marketplace, notification, PWA, or 3D/VRM copy.
 
 ## Verification
@@ -83,9 +83,9 @@ The `rg` command may find negative test/safety assertions only; explain any hits
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-177A` and include:
+Write `agent_tasks/A_DONE.md` using the AGENTS.md completion report format. It must explicitly mention `TASK-178A` and include:
 
-- Summary of room-load greeting mapping changes
+- Summary of interaction reaction mapping changes
 - Public DOM markers/classes/attributes added
 - Exact command results
 - Any coordination notes for Claude B / Codex PM

@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 40%
 - Status: in progress
-- Current focus: Next lightweight web-first Pet Room presence affordance after deterministic room-load greeting.
+- Current focus: Deterministic Pet Room interaction reaction surface after room-load greeting.
 
 ## Completed This Phase
 
@@ -102,11 +102,12 @@ Last updated: 2026-06-09
 
 ## In Progress
 
-- None.
+- TASK-178A: Pet Room deterministic interaction reaction surface.
+- TASK-178B: Interaction reaction deterministic eval and safety coverage.
 
 ## Next
 
-1. Publish the next lightweight web-first Pet Room presence affordance.
+1. Complete TASK-178A/TASK-178B through PM initial review and reviewer gate.
 2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
