@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 55%
 - Status: in progress
-- Current focus: Pencil-restored Pet Room UI with native CSS token/module extraction complete; next slice is API/JS extraction planning.
+- Current focus: Extracting the Pet Room API boundary into native `api.js` without endpoint changes.
 
 ## Completed This Phase
 
@@ -131,7 +131,8 @@ Last updated: 2026-06-09
   - Verification is green: 381 targeted tests OK, 724 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None. TASK-181 integration is approved and awaiting commit.
+- TASK-182A: Extract Pet Room API boundary into native `api.js`.
+- TASK-182B: Add deterministic API boundary coverage.
 
 ## Next
 
