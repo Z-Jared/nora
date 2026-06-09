@@ -2210,3 +2210,267 @@ result = {text: g.text, hasTag: g.text.indexOf('<') >= 0 || g.text.indexOf('>') 
 """)
         d = result
         self.assertFalse(d['hasTag'])
+
+
+class PetRoomReactionTests(unittest.TestCase):
+    """Tests for TASK-178A: deterministic interaction reaction surface."""
+
+    def test_reaction_dom_markers_exist(self):
+        """Reaction DOM markers must exist in pet room."""
+        result = _run_node(test_body="""
+result = {};
+result.root = !!document.getElementById('pet-room-reaction');
+result.textEl = !!document.getElementById('pet-room-reaction-text');
+result.metaEl = !!document.getElementById('pet-room-reaction-meta');
+""")
+        d = result
+        for key in ['root', 'textEl', 'metaEl']:
+            self.assertTrue(d[key], f'Missing reaction element: {key}')
+
+    def test_reaction_feed_happy(self):
+        """Feed with low hunger should produce positive reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:50, energy:50, hunger:20, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasSpot: r.text.indexOf('spot') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'fed')
+        self.assertTrue(d['hasSpot'])
+
+    def test_reaction_feed_hungry(self):
+        """Feed with high hunger should produce still-hungry reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:50, energy:50, hunger:80, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasHungry: r.text.indexOf('hungry') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'fed')
+        self.assertTrue(d['hasHungry'])
+
+    def test_reaction_feed_medium(self):
+        """Feed with medium hunger should produce standard reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:50, energy:50, hunger:50, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasNeeded: r.text.indexOf('needed') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'fed')
+        self.assertTrue(d['hasNeeded'])
+
+    def test_reaction_pat_happy(self):
+        """Pat with high mood should produce positive reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('pat', {mood:80, energy:50, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasNice: r.text.indexOf('nice') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasNice'])
+
+    def test_reaction_pat_low_mood(self):
+        """Pat with low mood should produce appreciative reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('pat', {mood:20, energy:50, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasAppreciate: r.text.indexOf('appreciate') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasAppreciate'])
+
+    def test_reaction_comfort_low_mood(self):
+        """Comfort with low mood should produce thankful reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('comfort', {mood:20, energy:50, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasHelps: r.text.indexOf('helps') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasHelps'])
+
+    def test_reaction_rest_tired(self):
+        """Rest with low energy should produce relief reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('rest', {mood:50, energy:15, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasBetter: r.text.indexOf('better') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasBetter'])
+
+    def test_reaction_play_energetic(self):
+        """Play with high energy and mood should produce fun reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('play', {mood:70, energy:80, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasFun: r.text.indexOf('fun') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasFun'])
+
+    def test_reaction_play_tired(self):
+        """Play with low energy should produce tired reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('play', {mood:50, energy:20, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text, hasTired: r.text.indexOf('tired') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['hasTired'])
+
+    def test_reaction_food_added(self):
+        """Food added should produce tokens-added reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('food_added', {mood:50, energy:50, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'food_added')
+        self.assertEqual(d['text'], 'Tokens added.')
+
+    def test_reaction_shared_moment(self):
+        """Shared moment should produce memory reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('shared_moment', {mood:50, energy:50, hunger:30, bond:60}, {ok:true});
+result = {key: r.key, text: r.text, hasMemory: r.text.indexOf('Memory') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'shared_moment')
+        self.assertTrue(d['hasMemory'])
+
+    def test_reaction_failed(self):
+        """Failed action should produce failed reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:50, energy:50, hunger:30, bond:10}, {ok:false});
+result = {key: r.key, text: r.text, hasWrong: r.text.indexOf('wrong') >= 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'failed')
+        self.assertTrue(d['hasWrong'])
+
+    def test_reaction_neutral_unknown(self):
+        """Unknown action should produce neutral reaction."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('unknown_action', {mood:50, energy:50, hunger:30, bond:10}, {ok:true});
+result = {key: r.key, text: r.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'neutral')
+        self.assertEqual(d['text'], 'Done.')
+
+    def test_reaction_null_state(self):
+        """Null state should default safely."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', null, {ok:true});
+result = {key: r.key, text: r.text, noError: true};
+""")
+        d = result
+        self.assertEqual(d['key'], 'fed')
+        self.assertTrue(d['noError'])
+
+    def test_reaction_undefined_state(self):
+        """Undefined state should default safely."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('pat', undefined, {ok:true});
+result = {key: r.key, text: r.text, noError: true};
+""")
+        d = result
+        self.assertEqual(d['key'], 'cared')
+        self.assertTrue(d['noError'])
+
+    def test_reaction_malformed_state(self):
+        """Malformed state values should coerce safely."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:'abc', energy:NaN, hunger:Infinity, bond:-5}, {ok:true});
+result = {key: r.key, text: r.text, noRaw: r.text.indexOf('abc') < 0 && r.meta.indexOf('NaN') < 0};
+""")
+        d = result
+        self.assertEqual(d['key'], 'fed')
+        self.assertTrue(d['noRaw'])
+
+    def test_reaction_null_result(self):
+        """Null result should default to failed."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:50, energy:50, hunger:30, bond:10}, null);
+result = {key: r.key, text: r.text};
+""")
+        d = result
+        self.assertEqual(d['key'], 'failed')
+
+    def test_reaction_meta_contains_state(self):
+        """Meta text should contain numeric state values."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:60, energy:70, hunger:40, bond:20}, {ok:true});
+result = {meta: r.meta, hasHunger: r.meta.indexOf('40') >= 0, hasEnergy: r.meta.indexOf('70') >= 0};
+""")
+        d = result
+        self.assertTrue(d['hasHunger'])
+        self.assertTrue(d['hasEnergy'])
+
+    def test_reaction_text_is_plain(self):
+        """Reaction text should not contain HTML tags."""
+        result = _run_node(test_body="""
+var r = reactionFromInteraction('feed', {mood:80, energy:60, hunger:30, bond:70}, {ok:true});
+result = {text: r.text, hasTag: r.text.indexOf('<') >= 0 || r.text.indexOf('>') >= 0};
+""")
+        d = result
+        self.assertFalse(d['hasTag'])
+
+    def test_apply_reaction_sets_dom(self):
+        """applyReaction should set text, meta, and data-reaction attribute."""
+        result = _run_node(test_body="""
+applyReaction('feed', {mood:50, energy:50, hunger:20, bond:10}, {ok:true});
+result = {};
+result.text = document.getElementById('pet-room-reaction-text').textContent;
+result.meta = document.getElementById('pet-room-reaction-meta').textContent;
+result.dataReaction = document.getElementById('pet-room-reaction').getAttribute('data-reaction');
+result.visible = document.getElementById('pet-room-reaction').style.display !== 'none';
+""")
+        d = result
+        self.assertTrue(len(d['text']) > 0)
+        self.assertTrue(len(d['meta']) > 0)
+        self.assertEqual(d['dataReaction'], 'fed')
+        self.assertTrue(d['visible'])
+
+    def test_apply_reaction_uses_text_content(self):
+        """Reaction should use textContent, not innerHTML."""
+        result = _run_node(test_body="""
+applyReaction('pat', {mood:80, energy:50, hunger:30, bond:10}, {ok:true});
+result = {};
+result.textContent = document.getElementById('pet-room-reaction-text').textContent;
+result.metaText = document.getElementById('pet-room-reaction-meta').textContent;
+""")
+        d = result
+        self.assertTrue(len(d['textContent']) > 0)
+        self.assertTrue(len(d['metaText']) > 0)
+
+    def test_add_food_endpoint_normalizes_to_food_added(self):
+        """petAction('/pet/add-food', ...) should trigger food_added reaction, not neutral."""
+        result = _run_node(setup_js="""
+var _capturedReactionKey = null;
+// Mock fetch to simulate successful add-food
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({
+    ok: true, status: 200,
+    json: () => Promise.resolve({
+      ok: true,
+      state: {mood:50, energy:50, hunger:30, bond:10, growth_level:1, compute_food_balance:600}
+    })
+  });
+};
+""", test_body="""
+// Override applyReaction to capture the action key
+applyReaction = function(action, state, result) {
+  _capturedReactionKey = action;
+};
+// Set currentPet with identity so renderPet doesn't crash
+currentPet = {
+  pet_id:'pet_1',
+  identity: {name:'Test', species:'cat', personality_traits:[], relationship_role:'pet', speech_style:'', skills:[], taste_profile:{}},
+  state: {mood:50, energy:50, hunger:30, bond:10, growth_level:1, compute_food_balance:500}
+};
+petAction('/pet/add-food', {pet_id:'pet_1', amount:500, reason:'local demo'}, null);
+await new Promise(r => setTimeout(r, 200));
+result = {capturedKey: _capturedReactionKey};
+""")
+        d = result
+        self.assertEqual(d['capturedKey'], 'food_added')

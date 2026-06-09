@@ -248,6 +248,11 @@ def main() -> int:
         EvalCase("room_greeting_state_time_mapping_rules", eval_room_greeting_state_time_mapping_rules),
         EvalCase("room_greeting_read_only_no_fetch", eval_room_greeting_read_only_no_fetch),
         EvalCase("room_greeting_no_voice_native_pwa_or_surveillance_copy", eval_room_greeting_no_voice_native_pwa_or_surveillance_copy),
+        # TASK-178B: Interaction reaction eval coverage
+        EvalCase("pet_room_reaction_markers_present", eval_pet_room_reaction_markers_present),
+        EvalCase("interaction_reaction_mapping_rules", eval_interaction_reaction_mapping_rules),
+        EvalCase("interaction_reaction_read_only_no_extra_fetch", eval_interaction_reaction_read_only_no_extra_fetch),
+        EvalCase("interaction_reaction_no_voice_native_pwa_or_surveillance_copy", eval_interaction_reaction_no_voice_native_pwa_or_surveillance_copy),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -4153,6 +4158,157 @@ def eval_room_greeting_no_voice_native_pwa_or_surveillance_copy():
             if negation.search(ctx):
                 continue
             assert False, f"promotional '{phrase}' found in greeting UI"
+
+
+# --- TASK-178B: Interaction reaction eval coverage ---
+
+
+def _skip_if_no_reaction():
+    """Skip if TASK-178A interaction reaction is not implemented."""
+    try:
+        html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+        if "pet-room-reaction" not in html and "pet-reaction" not in html and "interaction-reaction" not in html:
+            raise AttributeError("no reaction markers")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-178A not integrated: interaction reaction not available")
+
+
+def eval_pet_room_reaction_markers_present():
+    """Pet Room exposes stable reaction DOM markers/attributes."""
+    _skip_if_no_reaction()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    required_markers = [
+        "pet-room-reaction", "pet-room-reaction-text", "pet-room-reaction-meta",
+    ]
+    missing = [m for m in required_markers if m not in html]
+    assert not missing, f"Pet Room missing required reaction markers: {missing}"
+
+
+def eval_interaction_reaction_mapping_rules():
+    """UI integration path normalizes add-food action and mapper handles all required actions."""
+    _skip_if_no_reaction()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+
+    # 1. Check integration path: petAction or equivalent must normalize add-food before applyReaction
+    # Find petAction function using brace counting
+    pet_action_start = html.find('function petaction')
+    if pet_action_start < 0:
+        # Try broader match
+        pet_action_start = html.find('function ')
+        while pet_action_start >= 0:
+            next_fn = html.find('function ', pet_action_start + 1)
+            snippet = html[pet_action_start:pet_action_start + 200]
+            if 'applyreaction' in snippet or 'add-food' in snippet:
+                break
+            pet_action_start = next_fn
+    assert pet_action_start >= 0, "petAction integration function not found"
+    brace_start = html.find('{', pet_action_start)
+    assert brace_start >= 0, "petAction body start not found"
+    depth = 0
+    i = brace_start
+    while i < len(html):
+        if html[i] == '{':
+            depth += 1
+        elif html[i] == '}':
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    action_body = html[brace_start:i+1]
+    # Must have add-food normalization: actionName === 'add-food' ? 'food_added' : ...
+    has_add_food_bridge = ("add-food" in action_body and "food_added" in action_body)
+    assert has_add_food_bridge, \
+        "petAction missing add-food -> food_added normalization bridge"
+    # Must call applyReaction with the normalized key
+    assert "applyreaction" in action_body, "petAction does not call applyReaction"
+
+    # 2. Check mapper function handles required action branches
+    fn_start = html.find('function reactionfrominteraction')
+    if fn_start < 0:
+        fn_start = html.find('function reactionfrom')
+    assert fn_start >= 0, "reaction mapping function not found"
+    brace_start = html.find('{', fn_start)
+    assert brace_start >= 0, "reaction function body start not found"
+    depth = 0
+    i = brace_start
+    while i < len(html):
+        if html[i] == '{':
+            depth += 1
+        elif html[i] == '}':
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    fn_body = html[brace_start:i+1]
+    # Must handle food_added action
+    assert "food_added" in fn_body, "reaction mapper missing food_added branch"
+    # Must handle feed action
+    assert "feed" in fn_body, "reaction mapper missing feed branch"
+    # Must handle care actions
+    care_actions = ["pat", "comfort", "rest", "play"]
+    found_care = [a for a in care_actions if a in fn_body]
+    assert len(found_care) >= 2, f"reaction mapper missing care branches: found {found_care}"
+    # Must reference state/result
+    state_markers = ["mood", "energy", "hunger", "bond", "result", "ok"]
+    has_state = any(m in fn_body for m in state_markers)
+    assert has_state, "reaction mapper missing state/result reference"
+    # Must have fallback
+    has_fallback = ("else" in fn_body or "neutral" in fn_body)
+    assert has_fallback, "reaction mapper missing fallback"
+
+
+def eval_interaction_reaction_read_only_no_extra_fetch():
+    """Reaction functions are read-only beyond existing interaction: no extra fetch or mutation."""
+    _skip_if_no_reaction()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    forbidden = [
+        "fetch(", "food_debit", "/pet/voice-preview",
+        "/pet/relationship-memory", "/pet/activity",
+        "microphone", "camera", "navigator.media", "navigator.geolocation",
+        "getusermedia", "screencapture",
+        "service-worker", "serviceworker", "notification",
+        "register(", "postmessage",
+    ]
+    # Find all reaction-related functions
+    reaction_fns = re.finditer(r'function\s+[a-z]*reaction[a-z]*\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}', html)
+    found_any = False
+    for fn_match in reaction_fns:
+        found_any = True
+        fn_body = fn_match.group(1)
+        fn_name = fn_match.group(0)[:50]
+        for pattern in forbidden:
+            assert pattern not in fn_body, f"reaction function '{fn_name}' contains forbidden '{pattern}'"
+    assert found_any, "no reaction functions found to validate"
+
+
+def eval_interaction_reaction_no_voice_native_pwa_or_surveillance_copy():
+    """UI copy does not imply voice cloning, recording, native/PWA, surveillance, marketplace, or 3D/VRM drift."""
+    _skip_if_no_reaction()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    unconditional = [
+        "voice clone", "clone voice", "voice cloning",
+        "record by default", "always listening", "background listening",
+        "microphone access", "mic access", "camera access", "screen capture", "location access",
+        "checkout now", "subscribe now", "real payment",
+        "audio_url", "audio bytes",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission", "install app",
+    ]
+    for phrase in unconditional:
+        assert phrase not in html, f"forbidden '{phrase}' found in reaction UI"
+    import re
+    negation = re.compile(r'(no|not|without|无|没有|未|禁止|never)', re.IGNORECASE)
+    promotional = ["marketplace", "premium voice", "pay to speak"]
+    for phrase in promotional:
+        if phrase not in html:
+            continue
+        for match in re.finditer(re.escape(phrase), html):
+            ctx = html[max(0, match.start() - 30):match.start()]
+            if negation.search(ctx):
+                continue
+            assert False, f"promotional '{phrase}' found in reaction UI"
 
 
 def eval_cli_multiline_input():

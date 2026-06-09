@@ -1,60 +1,68 @@
-# TASK-177A: Pet Room deterministic room-load greeting — DONE
+# TASK-178A Completion Report
 
 ## Summary
 
-Added a deterministic room-load greeting to the Pet Room that derives from bounded pet state (mood, energy, hunger, bond) and a coarse local time bucket. Greeting is text-only, read-only, and uses DOM text APIs.
+Added deterministic Pet Room interaction reaction surface. After successful pet interactions (feed, care, add demo food, shared moment), Nora-01 shows a short text-only reaction derived from bounded action type plus bounded current pet state.
 
 ## Changes
 
-### `mini_agent/static/index.html`
-
-**New JS functions:**
-- `roomGreetingFromState(state, date)` — returns `{key, text, meta}` from bounded state + time bucket
-  - Time buckets: `morning` (5-12), `midday` (12-17), `evening` (17-21), `night` (21-5)
-  - State-sensitive variants: hungry (snack mention), low-energy (tired), high-mood+bond (cheerful), high-mood (good mood), low-mood (company), neutral (simple greeting)
-  - Uses `clampState()` for numeric normalization (NaN/Infinity/negative/over-100/strings/booleans → safe defaults)
-- `applyRoomGreeting(state, date)` — sets DOM markers via textContent + data-greeting attribute
-
-**New CSS:**
-- `.pet-room-greeting`, `.pet-room-greeting-text`, `.pet-room-greeting-meta`
+### `mini_agent/static/index.html` (+82 lines)
 
 **New DOM markers:**
-- `pet-room-greeting` — root element with `data-greeting` attribute
-- `pet-room-greeting-text` — greeting text
-- `pet-room-greeting-meta` — state detail meta text
+- `pet-room-reaction` — reaction container root with `data-reaction` attribute
+- `pet-room-reaction-text` — short reaction text (uses `textContent`)
+- `pet-room-reaction-meta` — state detail meta text
 
-**Integration:**
-- `applyRoomGreeting(st)` called in `renderPet()` after `applyPresence()`
+**New helper functions:**
+- `reactionFromInteraction(action, state, result)` — deterministic reaction mapping from bounded action type, state (via `clampState()`), and result. Returns `{key, text, meta}`.
+  - Actions: `feed`, `pat`, `comfort`, `rest`, `play`, `food_added`, `shared_moment`, `failed`, `neutral`
+  - State-sensitive variants: hungry feed → "More please...", low-mood pat → "I appreciate it.", tired play → "Fun but I'm tired..."
+  - Null/undefined/malformed state defaults safely
+- `applyReaction(action, state, result)` — applies reaction to DOM with 5s auto-hide
 
-### `tests/test_webui_smoke.py`
+**Integration points:**
+- `petAction()` callback — normalizes `add-food` endpoint to `food_added` reaction key via `reactionKey` variable, calls `applyReaction(reactionKey, currentPet.state, result)` after successful interactions
+- Shared moment submission — calls `applyReaction('shared_moment', currentPet.state, result)` after successful save
 
-16 new tests:
-- `test_room_greeting_dom_markers_exist` — DOM markers exist
-- `test_room_greeting_morning_happy` — morning + high mood/bond → cheerful
-- `test_room_greeting_midday_default` — midday + neutral → simple greeting
-- `test_room_greeting_evening` — evening bucket
-- `test_room_greeting_night` — night bucket
-- `test_room_greeting_hungry_variant` — high hunger → snack mention
-- `test_room_greeting_low_energy_variant` — low energy → tired
-- `test_room_greeting_low_mood_variant` — low mood → company-seeking
-- `test_room_greeting_high_mood_no_bond` — high mood without bond
-- `test_room_greeting_null_state` — null state defaults safely
-- `test_room_greeting_undefined_state` — undefined state defaults safely
-- `test_room_greeting_malformed_state` — NaN/Infinity/negative/string → safe defaults, no raw values
-- `test_room_greeting_no_date_defaults_to_now` — missing date → current time
-- `test_apply_room_greeting_sets_dom` — sets text + data-greeting
-- `test_apply_room_greeting_uses_dom_text` — uses textContent
-- `test_room_greeting_text_is_plain` — no HTML tags
+**CSS:**
+- `.pet-room-reaction` — styled with accent-soft background, fade animation
 
-## Verification
+### `tests/test_webui_smoke.py` (+264 lines)
+
+**New test class: `PetRoomReactionTests` (23 tests)**
+- DOM marker existence
+- Reaction mapping for all action types (feed happy/hungry/medium, pat happy/low-mood, comfort, rest tired, play energetic/tired, food_added, shared_moment, failed, neutral)
+- Null/undefined/malformed state safety
+- Null result defaults to failed
+- Meta contains numeric state values
+- Text is plain (no HTML tags)
+- `applyReaction` sets DOM correctly
+- Uses `textContent` not `innerHTML`
+- **Add-food integration test** — exercises real `petAction('/pet/add-food', ...)` path with mock fetch and `applyReaction` interception, verifies `food_added` reaction key
+
+## Verification Results
 
 ```
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 333 tests in 121.716s — OK
+Ran 356 tests in 150.190s — OK
 
 git diff --check
-(clean)
+(clean — no whitespace errors)
 
-rg -n "voice clone|clone voice|..." mini_agent/static/index.html tests/test_webui_smoke.py
+rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission" mini_agent/static/index.html tests/test_webui_smoke.py
 (no matches)
+
+git diff --stat HEAD
+ mini_agent/static/index.html |  82 ++++++++++++++
+ tests/test_webui_smoke.py    | 264 +++++++++++++++++++++++++++++++++++++++++++
+ agent_tasks/A_DONE.md        |  77 +++++++------
+ agent_tasks/PM_INBOX.md      |  10 ++
+ 4 files changed, 394 insertions(+), 39 deletions(-)
 ```
+
+## Coordination Notes
+- No HTTP endpoints added or changed
+- No extra state/persistence/memory mutations
+- Uses existing `clampState()` for numeric normalization
+- Existing room greeting, expression, presence, speech bubble, voice consent all pass
+- `evals/run_evals.py` not modified (Claude B owns eval coverage)

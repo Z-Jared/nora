@@ -300,6 +300,9 @@ button{border:0;cursor:pointer}
 .pet-mood-summary{font-size:14px;color:var(--accent);font-weight:700;margin-top:6px;font-style:italic}
 .pet-identity-details{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.6}
 .pet-identity-details span{display:inline-block;margin-right:12px}
+.pet-room-reaction{border:1px solid #b7d2bd;background:var(--accent-soft);border-radius:8px;padding:12px 16px;font-size:13px;color:#173f27;margin-bottom:12px;animation:fade-notice .3s ease}
+.pet-room-reaction-text{font-weight:600;margin-bottom:4px}
+.pet-room-reaction-meta{font-size:11px;color:var(--muted)}
 .pet-room-notice{border:1px solid #b7d2bd;background:var(--accent-soft);border-radius:8px;padding:12px 16px;font-size:13px;color:#173f27;margin-bottom:16px;animation:fade-notice .3s ease}
 .pet-room-greeting{margin-bottom:16px;padding:10px 0}
 .pet-room-greeting-text{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:4px}
@@ -545,6 +548,10 @@ button{border:0;cursor:pointer}
             <button class="pet-action-btn" id="pet-comfort-btn" type="button">Comfort</button>
             <button class="pet-action-btn" id="pet-rest-btn" type="button">Rest</button>
             <button class="pet-action-btn" id="pet-play-btn" type="button">Play</button>
+          </div>
+          <div class="pet-room-reaction" id="pet-room-reaction" style="display:none">
+            <div class="pet-room-reaction-text" id="pet-room-reaction-text"></div>
+            <div class="pet-room-reaction-meta" id="pet-room-reaction-meta"></div>
           </div>
           <div class="pet-room-notice" id="pet-room-notice" style="display:none"></div>
           <div class="pet-today-section" id="pet-today-section">
@@ -947,6 +954,78 @@ button{border:0;cursor:pointer}
     el._hideTimer = setTimeout(function(){ el.style.display = 'none'; }, 4000);
   }
 
+  function reactionFromInteraction(action, state, result){
+    var st = state || {};
+    var mood = clampState(st.mood, 50);
+    var energy = clampState(st.energy, 50);
+    var hunger = clampState(st.hunger, 50);
+    var bond = clampState(st.bond, 0);
+    var r = result || {};
+    var ok = result != null && r.ok !== false;
+    var key, text, meta;
+
+    if(!ok){
+      key = 'failed';
+      text = 'Something went wrong.';
+      meta = 'Action: ' + (action || 'unknown');
+    } else if(action === 'feed'){
+      key = 'fed';
+      if(hunger <= 30) text = 'That hit the spot!';
+      else if(hunger <= 60) text = 'Thanks, I needed that.';
+      else text = 'More please... still hungry.';
+      meta = 'Hunger ' + hunger + '/100, energy ' + energy + '/100.';
+    } else if(action === 'pat'){
+      key = 'cared';
+      if(mood >= 70) text = 'That feels nice!';
+      else if(mood >= 40) text = 'Thanks for the pat.';
+      else text = 'I appreciate it.';
+      meta = 'Mood ' + mood + '/100, bond ' + bond + '/100.';
+    } else if(action === 'comfort'){
+      key = 'cared';
+      if(mood < 40) text = 'That helps... thank you.';
+      else text = 'Comfort received.';
+      meta = 'Mood ' + mood + '/100, bond ' + bond + '/100.';
+    } else if(action === 'rest'){
+      key = 'cared';
+      if(energy <= 30) text = 'Ahh, much better.';
+      else text = 'Resting is nice.';
+      meta = 'Energy ' + energy + '/100.';
+    } else if(action === 'play'){
+      key = 'cared';
+      if(energy >= 60 && mood >= 50) text = 'That was fun!';
+      else if(energy < 30) text = 'Fun but I\'m tired...';
+      else text = 'Let\'s play again sometime.';
+      meta = 'Mood ' + mood + '/100, energy ' + energy + '/100.';
+    } else if(action === 'food_added'){
+      key = 'food_added';
+      text = 'Tokens added.';
+      meta = 'Balance updated.';
+    } else if(action === 'shared_moment'){
+      key = 'shared_moment';
+      text = 'Memory recorded.';
+      meta = 'Bond ' + bond + '/100.';
+    } else {
+      key = 'neutral';
+      text = 'Done.';
+      meta = '';
+    }
+    return {key: key, text: text, meta: meta};
+  }
+
+  function applyReaction(action, state, result){
+    var reaction = reactionFromInteraction(action, state, result);
+    var root = document.getElementById('pet-room-reaction');
+    var textEl = document.getElementById('pet-room-reaction-text');
+    var metaEl = document.getElementById('pet-room-reaction-meta');
+    if(!root || !textEl) return;
+    root.setAttribute('data-reaction', reaction.key);
+    textEl.textContent = reaction.text;
+    if(metaEl) metaEl.textContent = reaction.meta;
+    root.style.display = '';
+    clearTimeout(root._hideTimer);
+    root._hideTimer = setTimeout(function(){ root.style.display = 'none'; }, 5000);
+  }
+
   function loadTodayDiary(petId){
     Promise.all([
       fetch('/pet/activity?pet_id='+encodeURIComponent(petId)+'&limit=5', {headers:authHeaders()}).then(function(r){return r.json()}).catch(function(){return []}),
@@ -1021,6 +1100,7 @@ button{border:0;cursor:pointer}
   function petAction(endpoint, body, btn){
     if(btn) btn.disabled = true;
     var actionName = endpoint.split('/').pop();
+    var reactionKey = actionName === 'add-food' ? 'food_added' : actionName;
     fetch(endpoint, {method:'POST', headers:authHeaders(), body:JSON.stringify(body)})
       .then(function(r){
         if(handleAuthError(r)) throw new Error('auth');
@@ -1030,6 +1110,7 @@ button{border:0;cursor:pointer}
         if(result.state) renderPet({identity:currentPet.identity, state:result.state});
         if(currentPet) loadPetActivity(currentPet.pet_id);
         if(result.ok !== false) showRoomNotice(actionName + ' done.');
+        applyReaction(reactionKey, currentPet ? currentPet.state : null, result);
       })
       .finally(function(){if(btn) btn.disabled = false;});
   }
@@ -1122,6 +1203,7 @@ button{border:0;cursor:pointer}
         loadRelationshipMemories(currentPet.pet_id);
         loadTodayDiary(currentPet.pet_id);
         showRoomNotice('memory recorded.');
+        applyReaction('shared_moment', currentPet ? currentPet.state : null, result);
       }
     }).catch(function(){});
   };

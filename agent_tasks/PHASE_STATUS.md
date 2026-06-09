@@ -5,9 +5,9 @@ Last updated: 2026-06-09
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 40%
+- Percent: 45%
 - Status: in progress
-- Current focus: Deterministic Pet Room interaction reaction surface after room-load greeting.
+- Current focus: Next bounded Voice & Presence presence step after deterministic interaction reactions.
 
 ## Completed This Phase
 
@@ -99,15 +99,23 @@ Last updated: 2026-06-09
   - Dynamic greeting text/meta use DOM text APIs.
   - Deterministic coverage locks markers, state/time-bucket mapping fallback, function-body read-only checks, malformed-state handling, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
   - Verification is green: 333 targeted tests OK, 704 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Deterministic interaction reaction surface:
+  - Pet Room now shows a text-only immediate reaction after successful feed, care, add demo food, and shared moment interactions.
+  - Reaction text and meta derive only from bounded action type, existing interaction result, and bounded pet state.
+  - Pet Room exposes stable `pet-room-reaction`, `pet-room-reaction-text`, `pet-room-reaction-meta`, and `data-reaction` markers.
+  - `petAction('/pet/add-food', ...)` normalizes `add-food` to `food_added` before applying the reaction, so the demo food path does not fall through to neutral.
+  - Reaction updates are read-only beyond the existing user-triggered interaction request: no provider/network calls beyond the original endpoint, no voice preview call, no food debit, no state/activity/relationship-memory mutation, and no microphone/camera/screen/location access.
+  - Dynamic reaction text/meta use DOM text APIs.
+  - Deterministic coverage locks markers, action/state/result/fallback mapping, add-food normalization, function-body read-only checks, and no voice/native/PWA/surveillance/marketplace/3D scope drift.
+  - Verification is green: 356 targeted tests OK, 708 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
 
-- TASK-178A: Pet Room deterministic interaction reaction surface.
-- TASK-178B: Interaction reaction deterministic eval and safety coverage.
+- None assigned after TASK-178 integration.
 
 ## Next
 
-1. Complete TASK-178A/TASK-178B through PM initial review and reviewer gate.
+1. Select the next bounded Phase 2 presence task from the Voice & Presence plan.
 2. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 3. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -160,6 +168,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 40% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, and deterministic room-load greeting complete
+- Phase 2 Voice & Presence: 45% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, and deterministic interaction reactions complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started
