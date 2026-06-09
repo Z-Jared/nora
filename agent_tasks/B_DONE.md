@@ -1,44 +1,45 @@
-# B DONE — TASK-178B
+# Claude B Completion Report
 
-**Status:** Complete — PM second review coverage-strengthening revision
+Status: ready for Codex review
 
 ## Summary
 
-Strengthened `interaction_reaction_mapping_rules` to lock the add-food integration-path contract using brace-counting extraction of `petAction` function. All 4 evals active/pass when combined with TASK-178A.
+TASK-180B completed deterministic smoke and safety coverage for the Pencil Pet Room design restoration.
 
-## Strengthened Eval: `interaction_reaction_mapping_rules`
+- Added 5 active `pencil_design` / `pet_room_design` evals:
+  - `pencil_design_contract_present`
+  - `pet_room_design_markers_present`
+  - `pet_room_design_tokens_match_pencil`
+  - `pet_room_design_local_asset_only`
+  - `pet_room_design_no_scope_drift_copy`
+- Added/updated Web UI smoke tests for design shell/canvas/hero markers, status chips, name/role markers, local hero asset path, CSS fallback, and `renderPet()` marker updates.
+- Covered local asset existence and local `/static/nora-01-hero.jpg` reference.
+- Covered no external hero image URL usage.
+- Covered no scope drift into marketplace/payment, voice cloning/recording, microphone/camera/screen/location access, PWA/native behavior, plugin store/install, or 3D/VRM.
 
-**Problem:** First fix checked for `add-food`/`food_added` anywhere in the mapper body, but the real bug was in the UI integration path: `petAction` derived `actionName = 'add-food'` and passed it directly to `applyReaction`, which didn't have an `add-food` branch → neutral fallback.
+## Diff
 
-**Fix:** Now uses brace-counting to extract the full `petAction` function body and requires:
-- Both `add-food` AND `food_added` present (proves the bridge `actionName === 'add-food' ? 'food_added' : actionName` exists)
-- `applyReaction` is called with the normalized key
-- Mapper function handles `food_added`, `feed`, 2+ care actions, state/result reference, and fallback
-
-**Verification the eval catches the broken implementation:**
-- Broken impl: `add-food` present (from `endpoint.split('/').pop()`), `food_added` NOT present → eval FAILS ✅
-- Fixed impl: both `add-food` and `food_added` present (bridge exists) → eval PASSES ✅
-
-## Read-Only Eval Fix
-
-Removed `add-food` from forbidden list in `interaction_reaction_read_only_no_extra_fetch` — it's a safe normalization string, not an extra fetch/mutation.
-
-## Verification
-
-### Own worktree (no TASK-178A)
-
-```
-python3 evals/run_evals.py           → 704 passed, 0 failed, 4 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 333 tests OK
-git diff --check                     → clean
+```text
+ evals/run_evals.py         | 5 Pencil/Pet Room design evals
+ tests/test_webui_smoke.py  | Pet Room design smoke coverage
+ agent_tasks/B_DONE.md      | TASK-180B completion report
 ```
 
-### Combined check (applied onto Claude A's TASK-178A)
+## Tests
 
+```text
+python3 evals/run_evals.py
+719 passed, 0 failed, 0 skipped
+
+python3 -m unittest tests.test_webui_smoke tests.test_http_server
+Ran 378 tests — OK
+
+git diff --check
+clean
 ```
-python3 evals/run_evals.py           → 4/4 reaction evals PASS
-```
 
-### `rg` scan
+## Notes
 
-All hits are negative safety assertions. No promotional or enabling language.
+- No push performed.
+- No implementation files were modified by TASK-180B beyond focused smoke coverage.
+- Known issues: none for TASK-180B closeout.

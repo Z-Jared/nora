@@ -1,68 +1,41 @@
-# TASK-178A Completion Report
+# Claude A Completion Report
+
+Status: ready for Codex review
 
 ## Summary
 
-Added deterministic Pet Room interaction reaction surface. After successful pet interactions (feed, care, add demo food, shared moment), Nora-01 shows a short text-only reaction derived from bounded action type plus bounded current pet state.
+TASK-180A completed the Pencil Pet Room design restoration contract and first-pass UI implementation.
 
-## Changes
+- Added `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md` as the durable Pencil-to-front-end contract for `designs/nora_pet_web_ui.pen` `Room canvas`.
+- Updated `mini_agent/static/index.html` with the Pencil-derived Pet Room design shell, room canvas, hero image marker, status chips, name/role markers, and `renderPet()` design-marker updates.
+- Added the local static hero asset `mini_agent/static/nora-01-hero.jpg`.
+- Added/updated focused Web UI smoke tests for Pet Room design markers, local asset usage, CSS fallback, and `renderPet()` marker updates.
 
-### `mini_agent/static/index.html` (+82 lines)
+## Diff
 
-**New DOM markers:**
-- `pet-room-reaction` — reaction container root with `data-reaction` attribute
-- `pet-room-reaction-text` — short reaction text (uses `textContent`)
-- `pet-room-reaction-meta` — state detail meta text
-
-**New helper functions:**
-- `reactionFromInteraction(action, state, result)` — deterministic reaction mapping from bounded action type, state (via `clampState()`), and result. Returns `{key, text, meta}`.
-  - Actions: `feed`, `pat`, `comfort`, `rest`, `play`, `food_added`, `shared_moment`, `failed`, `neutral`
-  - State-sensitive variants: hungry feed → "More please...", low-mood pat → "I appreciate it.", tired play → "Fun but I'm tired..."
-  - Null/undefined/malformed state defaults safely
-- `applyReaction(action, state, result)` — applies reaction to DOM with 5s auto-hide
-
-**Integration points:**
-- `petAction()` callback — normalizes `add-food` endpoint to `food_added` reaction key via `reactionKey` variable, calls `applyReaction(reactionKey, currentPet.state, result)` after successful interactions
-- Shared moment submission — calls `applyReaction('shared_moment', currentPet.state, result)` after successful save
-
-**CSS:**
-- `.pet-room-reaction` — styled with accent-soft background, fade animation
-
-### `tests/test_webui_smoke.py` (+264 lines)
-
-**New test class: `PetRoomReactionTests` (23 tests)**
-- DOM marker existence
-- Reaction mapping for all action types (feed happy/hungry/medium, pat happy/low-mood, comfort, rest tired, play energetic/tired, food_added, shared_moment, failed, neutral)
-- Null/undefined/malformed state safety
-- Null result defaults to failed
-- Meta contains numeric state values
-- Text is plain (no HTML tags)
-- `applyReaction` sets DOM correctly
-- Uses `textContent` not `innerHTML`
-- **Add-food integration test** — exercises real `petAction('/pet/add-food', ...)` path with mock fetch and `applyReaction` interception, verifies `food_added` reaction key
-
-## Verification Results
-
+```text
+ docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md | new contract document
+ mini_agent/static/index.html                      | Pencil-derived Pet Room UI restoration
+ mini_agent/static/nora-01-hero.jpg                | local Nora-01 hero asset
+ tests/test_webui_smoke.py                         | Pet Room design smoke coverage
+ agent_tasks/A_DONE.md                             | TASK-180A completion report
 ```
+
+## Tests
+
+```text
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
-Ran 356 tests in 150.190s — OK
+Ran 378 tests — OK
+
+python3 evals/run_evals.py
+719 passed, 0 failed, 0 skipped
 
 git diff --check
-(clean — no whitespace errors)
-
-rg -n "voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission" mini_agent/static/index.html tests/test_webui_smoke.py
-(no matches)
-
-git diff --stat HEAD
- mini_agent/static/index.html |  82 ++++++++++++++
- tests/test_webui_smoke.py    | 264 +++++++++++++++++++++++++++++++++++++++++++
- agent_tasks/A_DONE.md        |  77 +++++++------
- agent_tasks/PM_INBOX.md      |  10 ++
- 4 files changed, 394 insertions(+), 39 deletions(-)
+clean
 ```
 
-## Coordination Notes
-- No HTTP endpoints added or changed
-- No extra state/persistence/memory mutations
-- Uses existing `clampState()` for numeric normalization
-- Existing room greeting, expression, presence, speech bubble, voice consent all pass
-- `evals/run_evals.py` not modified (Claude B owns eval coverage)
+## Notes
+
+- No push performed.
+- No new HTTP endpoint, frontend build step, external image URL, real audio/TTS, PWA/native behavior, marketplace/payment flow, plugin execution, or 3D/VRM runtime was added.
+- Known issues: none for TASK-180A closeout.

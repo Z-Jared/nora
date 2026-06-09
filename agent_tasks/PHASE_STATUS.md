@@ -125,7 +125,7 @@ Last updated: 2026-06-09
   - Verification is green: 378 targeted tests OK, 719 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-180 integration approved; final commit/push in progress.
+- TASK-180 closeout evidence chain is being finalized.
 
 ## Next
 
