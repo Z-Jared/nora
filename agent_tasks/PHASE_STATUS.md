@@ -7,7 +7,7 @@ Last updated: 2026-06-09
 - Phase: Phase 2 - Voice & Presence
 - Percent: 62%
 - Status: in progress
-- Current focus: Continuing Pet Room JavaScript module extraction after the canvas boundary is stable.
+- Current focus: Extracting Pet Room functional panels one native module at a time after the canvas boundary is stable.
 
 ## Completed This Phase
 
@@ -144,12 +144,12 @@ Last updated: 2026-06-09
   - Verification is green: 393 targeted tests OK, 734 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None currently assigned after TASK-183 integration.
+- TASK-184A / TASK-184B: Extract the Pet Room status chips into a bounded native module and add deterministic coverage.
 
 ## Next
 
-1. Follow `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4: extract functional panels one at a time, starting with `status-chips.js`.
-2. Keep every extracted component bounded, local, native-module-only, and marker-preserving.
+1. Complete TASK-184A/B status chip extraction and coverage.
+2. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with the next panel only after TASK-184 is reviewed and integrated.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 

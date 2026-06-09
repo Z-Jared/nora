@@ -1,10 +1,10 @@
-# TASK-183A: Extract Pet Room Canvas native module
+# TASK-184A: Extract Pet Room Status Chips native module
 
 You are Claude A. Work in `/Users/mac/Documents/agent/.ccb/workspaces/claude-a` only. Do not commit or push.
 
 ## Context
 
-Phase 2 is 60% complete. TASK-182 extracted Pet Room API calls into native `mini_agent/static/api.js`. The next frontend architecture slice is Step 3 in:
+Phase 2 is 62% complete. TASK-183 extracted the Pet Room visual canvas boundary into `mini_agent/static/components/pet-room-canvas.js`. The next frontend architecture slice is Step 4 in:
 
 - `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md`
 
@@ -22,52 +22,46 @@ Read first:
 - `agent_tasks/PHASE_STATUS.md`
 - `mini_agent/static/index.html`
 - `mini_agent/static/api.js`
+- `mini_agent/static/components/pet-room-canvas.js`
 - `mini_agent/static/styles/tokens.css`
 - `mini_agent/static/styles/pet-room.css`
 - `tests/test_webui_smoke.py`
 
 ## Goal
 
-Create `mini_agent/static/components/pet-room-canvas.js` and move the first-screen visual Pet Room canvas boundary into a native ES module without changing UI behavior, DOM markers, CSS selectors, asset paths, or API behavior.
+Create `mini_agent/static/components/status-chips.js` and move Mood/Presence/Energy/Bond chip text updates out of `pet-room-canvas.js` into a smaller native ES module without changing UI behavior, DOM markers, CSS selectors, asset paths, or API behavior.
 
 ## Required Work
 
-1. Create `mini_agent/static/components/pet-room-canvas.js`.
+1. Create `mini_agent/static/components/status-chips.js`.
    - Use native browser JavaScript only.
-   - Export a small render/update API for the visual canvas boundary.
-   - The module may own only:
-     - wall/floor room canvas wiring,
-     - Nora-01 hero image marker/reference,
-     - ground shadow / visual shell marker wiring,
-     - pet name and role text updates,
-     - Mood/Presence/Energy/Bond chip text updates.
-   - It must not call `fetch`, `PetAPI`, provider APIs, voice preview, food mutation, relationship memory, identity save, skill execution, or durable runtime tools.
-
-2. Update `mini_agent/static/index.html`.
-   - Import the canvas module with a local native module path.
-   - Use the module from existing `renderPet()` or the smallest equivalent call site.
-   - Preserve all existing DOM IDs/classes/markers, including:
-     - `pet-room-design-shell`
-     - `pet-room-canvas`
-     - `pet-room-hero-image`
-     - `pet-room-status-chip`
-     - `pet-room-name`
-     - `pet-room-role`
+   - Export a small render/update API for status chip text only.
+   - The module may own only these markers:
      - `chip-mood-value`
      - `chip-presence-value`
      - `chip-energy-value`
      - `chip-bond-value`
-   - Preserve local `/static/nora-01-hero.jpg` usage and CSS fallback behavior.
+   - It must use `textContent`, not HTML insertion.
+   - It must not call `fetch`, `PetAPI`, provider APIs, voice preview, food mutation, relationship memory, identity save, skill execution, or durable runtime tools.
+
+2. Update the smallest implementation boundary.
+   - Prefer importing `updateStatusChips` into `pet-room-canvas.js` and letting `updateCanvas()` delegate chip updates to it.
+   - Keep `index.html` imports local native modules only.
+   - Keep `renderPet()` behavior unchanged from the user's perspective.
+   - Preserve `pet-room-name` and `pet-room-role` updates in `pet-room-canvas.js`.
+   - Preserve all existing DOM IDs/classes/markers, especially `pet-room-status-chip` and all chip value IDs.
    - Keep all Pet Room API calls routed through `PetAPI` from `api.js`.
 
 3. Add or adjust focused smoke tests only where needed.
-   - Lock that the canvas module is locally wired.
-   - Lock that required design markers still exist.
-   - Lock that the canvas update path still updates name/role/chip text.
+   - Lock that the status chips module exists and is locally wired.
+   - Lock that it exports the expected update function.
+   - Lock that it is read-only/no-fetch/no-PetAPI.
+   - Lock that `renderPet()` still updates Mood/Presence/Energy/Bond chip text.
    - Keep existing Web UI and HTTP tests passing.
 
 ## Allowed Files
 
+- `mini_agent/static/components/status-chips.js`
 - `mini_agent/static/components/pet-room-canvas.js`
 - `mini_agent/static/index.html`
 - `tests/test_webui_smoke.py`
@@ -110,11 +104,11 @@ Run:
 ```bash
 python3 -m unittest tests.test_webui_smoke tests.test_http_server
 git diff --check
-rg -n "https?://|react|vite|typescript|npm install|package.json|webpack|rollup|fetch\\(|PetAPI|voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|plugin store|premium skill|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission|install plugin" mini_agent/static/index.html mini_agent/static/components/pet-room-canvas.js tests/test_webui_smoke.py
+rg -n "https?://|react|vite|typescript|npm install|package.json|webpack|rollup|fetch\\(|PetAPI|voice clone|clone voice|record by default|background listening|always listening|checkout now|subscribe now|marketplace|plugin store|premium skill|real payment|audio_url|audio bytes|microphone|mic access|camera access|screen capture|location access|3d model|vrm|live2d|service worker|notification permission|install plugin" mini_agent/static/index.html mini_agent/static/components/pet-room-canvas.js mini_agent/static/components/status-chips.js tests/test_webui_smoke.py
 ```
 
-The scan may hit allowed `PetAPI` usage in `index.html` and existing LLM setup URLs. `pet-room-canvas.js` itself must not contain `fetch(`, `PetAPI`, external URLs, build tooling, or scope-drift markers. Document any expected hits.
+The scan may hit allowed `PetAPI` usage in `index.html` and existing LLM setup URLs. `status-chips.js` itself must not contain `fetch(`, `PetAPI`, external URLs, build tooling, or scope-drift markers. Document any expected hits.
 
 ## Completion Report
 
-Write `agent_tasks/A_DONE.md` using the standard format. Explicitly mention `TASK-183A`.
+Write `agent_tasks/A_DONE.md` using the standard format. Explicitly mention `TASK-184A`.
