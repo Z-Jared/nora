@@ -1,69 +1,77 @@
-# TASK-186A/186B Review — Pet Room Skill Shelf native module extraction
+# TASK-187A/187B Review — Extract Pet Room Voice Preview native module
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-186A extracts Pet Room skill shelf into `skill-shelf.js` as a native ES module. TASK-186B adds 6 evals and fixes 4 stale TASK-179 evals. Implementation correctly preserves all UI behavior, DOM markers, filtering rules, and read-only safety boundaries.
+TASK-187A extracts Pet Room voice preview into `voice-preview.js` as a native ES module. TASK-187B adds 6 evals and fixes existing speech/consent evals for combined surface scanning. Implementation correctly preserves consent-before-call, validation, auth delegation, meta rendering, and API boundary contract.
 
 ## Findings
 
-### 1. skill-shelf.js Boundary — PASS
+### 1. voice-preview.js — Bounded Native ES Module ✅
 
-Module exports two functions:
-- `skillCardsFromIdentity(identity, state)` — derives skill cards from pet identity
-- `renderSkillShelf(identity, state)` — renders skill cards into DOM
+- Single exported function: `wireVoicePreview(getCurrentPet, api, onAuthError)`
+- Module docstring explicitly lists owned DOM elements and non-goals
+- Uses `escapeHtml` for meta tag rendering
+- No direct `fetch()`, no `PetAPI` literal, no `/pet/voice-preview` endpoint literal
+- Does NOT mutate pet state, food, activity, or relationship memory
 
-The module:
-- Uses `escapeHtml` for all dynamic content (icon, name)
-- No direct `fetch()`, no `PetAPI`, no `petAction`, no `/pet/` endpoints, no tool/plugin execution
-- Comments explicitly list non-goals (line 9)
-- Read-only eval strips comments before scanning forbidden patterns
+### 2. index.html — Minimal Boundary Wiring ✅
 
-### 2. DOM Markers / Filtering / Safety — PASS
+- Import: `import { wireVoicePreview } from '/static/components/voice-preview.js'`
+- Inline handler replaced with: `wireVoicePreview(function(){ return currentPet; }, PetAPI, handleAuthError)`
+- API delegation preserved: `api.previewVoice()` injected, not hardcoded
+- Auth delegation preserved: `onAuthError` callback injected
+- No `/pet/voice-preview` endpoint literal in index.html
 
-- **Icon mapping**: 24 skills → emoji, default ⚡ for unknown skills
-- **Secret-like filtering**: `SECRET_PATTERNS` (sk-, bearer, api_key, token, secret, password, credential, private_key, auth) + `isSecretLike()` function
-- **Stale cleanup**: `renderSkillShelf` clears `innerHTML` before returning on empty cards
-- **Input sanitization**: non-string, empty, overlong (>50 chars), special-character labels filtered
-- **DOM markers preserved**: `pet-skill-shelf`, `pet-skill-list`, `pet-skill-empty`, `pet-skill-card`, `skill-icon`, `skill-name`, `data-skill-count`
+### 3. Consent/Validation/Rendering Preserved ✅
 
-### 3. index.html Extraction — PASS
+- **Consent gate**: `consent.checked` validation before API call
+- **Empty/over-500 validation**: Bounded error messages, no API call
+- **Auth error delegation**: `onAuthError({status: 401})` on `_authError` rejection
+- **Preview failure**: Error message displayed, bubble hidden
+- **Text rendering**: `textContent` for bubble text (safe)
+- **Meta rendering**: `innerHTML` with `escapeHtml()` for tags (cost, no-audio, no-network, no-recording, no-food-debit, provider_status, audio_requires_confirmation)
 
-- Import: `import { skillCardsFromIdentity, renderSkillShelf } from '/static/components/skill-shelf.js'`
-- Removed inline: `SKILL_ICONS`, `SECRET_PATTERNS`, `isSecretLike`, `skillCardsFromIdentity`, `renderSkillShelf`
-- `renderPet()` call to `renderSkillShelf(id, st)` unchanged
-- Test harness updated with skill shelf functions for test isolation
+### 4. Tests — Strong Contract Coverage ✅
 
-### 4. Eval Coverage — PASS
+Tests updated to use `PetAPI.previewVoice` mock instead of `_fetchHandler`:
+- `test_speech_preview_calls_endpoint`: Verifies `api.previewVoice` called with `pet_id` and `text`, bubble visible, textContent set
+- `test_speech_preview_shows_meta_tags`: Verifies cost, no-audio, no-network, no-recording, no-food-debit, provider, audio_requires_confirmation tags
+- `test_speech_preview_empty_shows_error`: Empty input → error, no API call
+- `test_speech_preview_too_long_shows_error`: Over-500 input → error, no API call
+- `test_voice_consent_unchecked_blocks_preview`: Unchecked consent → error, no API call
 
-**6 new evals** (`skill_shelf_module_*`):
-- `skill_shelf_module_file_present` — file exists, has ES exports, no build tooling
-- `skill_shelf_module_wired` — index.html references skill-shelf with module import
-- `skill_shelf_module_markers_preserved` — 7 required markers present across HTML/JS
-- `skill_shelf_module_read_only_no_tool_execution` — strips comments, scans for forbidden patterns (fetch, petapi, petaction, /pet/, tool_call, execute_tool, run_tool, install, runtimetool, capabilityrouter)
-- `skill_shelf_module_secret_filtering_and_stale_cleanup` — secret filtering, stale card cleanup, empty/malformed fallback
-- `skill_shelf_module_no_marketplace_or_scope_drift` — no external URLs, build system markers, marketplace/payment/voice/PWA/3D drift
+### 5. Evals — Combined Surface Scanning ✅
 
-**4 fixed TASK-179 evals** — use `_read_skill_shelf_surface()` helper to read combined `index.html` + `skill-shelf.js`:
-- `pet_skill_shelf_markers_present`
-- `skill_shelf_mapping_rules`
-- `skill_shelf_no_stale_content_on_empty`
-- `skill_shelf_rejects_secret_like_skills`
+**6 new evals** (`voice_preview_module_*`):
+- `voice_preview_module_file_present` — file exists, has ES exports, no build tooling
+- `voice_preview_module_wired` — index.html references voice-preview with module import
+- `voice_preview_module_markers_preserved` — all required markers present across HTML/JS
+- `voice_preview_module_delegated_api_boundary` — uses `api.previewVoice` or `previewVoice` parameter, no direct fetch, no `/pet/voice-preview` literal
+- `voice_preview_module_consent_validation_and_escaping` — consent gate, validation, textContent/escapeHtml
+- `voice_preview_module_no_audio_or_scope_drift` — no external URLs, build system, audio/recording/marketplace/PWA/3D copy
 
-### 5. Scope Drift — PASS
+**Existing evals fixed** — use `_read_voice_preview_surface()` helper to scan combined `index.html` + `voice-preview.js`:
+- `eval_speech_bubble_markers_present`
+- `eval_voice_preview_ui_cost_and_no_audio_copy`
+- `eval_speech_bubble_escapes_preview_text`
 
-No evidence of:
-- React/Vite/TypeScript/npm/build step
-- External URLs in skill-shelf.js
-- Marketplace/payment/premium skill
-- Voice/native/PWA/3D/VRM
+All 9 required contract fields preserved: `cost_tokens`, `has_audio`, `no_network_call`, `no_recording`, `food_debit`, `provider_status`, `audio_requires_confirmation`, `cost` tag, `no-audio` tag.
+
+### 6. No Scope Drift ✅
+
+- ✅ No direct `fetch()` or `/pet/voice-preview` endpoint literal in module
+- ✅ No real TTS/audio/recording/voice cloning
+- ✅ No payment/marketplace
+- ✅ No PWA/native
+- ✅ No 3D/VRM
+- ✅ No build system markers
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 411 tests OK
-python3 evals/run_evals.py → 750 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 421 tests OK
+python3 evals/run_evals.py → 756 passed, 0 failed, 0 skipped
 git diff --check → clean
-rg scan → skill-shelf.js only hits negative safety comment
 ```

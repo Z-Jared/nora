@@ -563,6 +563,7 @@ import * as PetAPI from '/static/api.js';
 import { updateCanvas } from '/static/components/pet-room-canvas.js';
 import { updateFoodPanel, loadCostEstimates, wireFoodButtons } from '/static/components/food-panel.js';
 import { skillCardsFromIdentity, renderSkillShelf } from '/static/components/skill-shelf.js';
+import { wireVoicePreview } from '/static/components/voice-preview.js';
 window.PetAPI = PetAPI;
 (function(){
   var msgEl = document.getElementById('messages');
@@ -1004,49 +1005,8 @@ window.PetAPI = PetAPI;
     if(!currentPet) return;
     petAction('/pet/care', {pet_id:currentPet.pet_id, action:'play'}, this);
   };
-  // Speech bubble preview
-  document.getElementById('speech-preview-btn').onclick = function(){
-    if(!currentPet) return;
-    var consent = document.getElementById('voice-consent-checkbox');
-    var errorEl = document.getElementById('speech-bubble-error');
-    errorEl.textContent = '';
-    if(!consent.checked){
-      errorEl.textContent = 'Please confirm the consent boundary first.';
-      return;
-    }
-    var input = document.getElementById('speech-preview-input');
-    var text = input.value.trim();
-    var bubbleEl = document.getElementById('speech-bubble');
-    var textEl = document.getElementById('speech-bubble-text');
-    var metaEl = document.getElementById('speech-bubble-meta');
-    if(!text){ errorEl.textContent = 'Enter text to preview.'; return; }
-    if(text.length > 500){ errorEl.textContent = 'Text too long (max 500).'; return; }
-    PetAPI.previewVoice({pet_id:currentPet.pet_id, text:text}).then(function(result){
-      if(result.error){
-        errorEl.textContent = result.error;
-        bubbleEl.classList.remove('visible');
-        return;
-      }
-      textEl.textContent = result.text || '';
-      // Build meta tags
-      var tags = [];
-      tags.push('cost: ' + (result.cost_tokens || 0) + ' tokens');
-      tags.push(result.has_audio ? 'audio: yes' : 'audio: no (text only)');
-      if(result.no_network_call) tags.push('no network');
-      if(result.no_recording) tags.push('no recording');
-      if(result.food_debit === false) tags.push('no food debit');
-      if(result.provider_status) tags.push('provider: ' + result.provider_status);
-      if(result.audio_requires_confirmation) tags.push('audio requires confirmation');
-      metaEl.innerHTML = tags.map(function(t){
-        return '<span class="meta-tag">' + escapeHtml(t) + '</span>';
-      }).join('');
-      bubbleEl.classList.add('visible');
-    }).catch(function(err){
-      if(err && err._authError){ handleAuthError({status:401}); return; }
-      errorEl.textContent = 'Preview failed.';
-      bubbleEl.classList.remove('visible');
-    });
-  };
+  // Wire voice preview via voice-preview module
+  wireVoicePreview(function(){ return currentPet; }, PetAPI, handleAuthError);
   document.getElementById('pet-memory-moment-btn').onclick = function(){
     if(!currentPet) return;
     var summary = prompt('Describe the shared moment:');

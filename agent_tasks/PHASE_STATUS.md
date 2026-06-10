@@ -5,9 +5,9 @@ Last updated: 2026-06-10
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 68%
+- Percent: 70%
 - Status: in progress
-- Current focus: Continuing Pet Room frontend architecture extraction with the next bounded native module after skill shelf completion.
+- Current focus: Continuing Pet Room frontend architecture extraction with the next bounded native module after voice preview completion.
 
 ## Completed This Phase
 
@@ -160,14 +160,20 @@ Last updated: 2026-06-10
   - The module preserves icon mapping, unknown default icon behavior, secret-like filtering, special-character/overlong/non-string filtering, empty/malformed stale card cleanup, and stable `pet-skill-*` / `skill-*` / `data-skill-count` markers.
   - Deterministic coverage locks the new module, legacy skill shelf contracts after extraction, no external URL/build-system drift, no marketplace/payment/premium skill drift, and no voice/PWA/native/3D scope drift.
   - Verification is green: 411 targeted tests OK, 750 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native voice preview module extraction:
+  - `mini_agent/static/components/voice-preview.js` now owns the text-only voice preview consent gate, input validation, button wiring, fallback text rendering, and metadata tag rendering.
+  - `mini_agent/static/index.html` imports `wireVoicePreview()` locally while keeping preview calls delegated through injected `PetAPI.previewVoice` and auth errors delegated through `handleAuthError`.
+  - The module preserves consent-before-call, empty/over-500 validation, bounded preview failure copy, safe DOM text rendering, escaped meta tags, and stable `speech-bubble-*`, `voice-consent-*`, and `speech-preview-*` markers.
+  - Deterministic coverage locks module exports, local wiring, delegated API boundary, combined speech/consent surface scanning, no direct fetch/endpoint literal, no build-system drift, and no audio/recording/provider/payment/PWA/native/3D scope drift.
+  - Verification is green: 421 targeted tests OK, 756 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None. TASK-186A / TASK-186B are reviewed and integrated; next task publication should target the next bounded Pet Room frontend module.
+- None. TASK-187A / TASK-187B are reviewed and integrated; next task publication should target the next bounded Pet Room frontend module.
 
 ## Next
 
-1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `voice-preview.js`.
-2. Keep voice-preview extraction bounded to local UI orchestration only: no real audio provider, no recording, no food debit mutation, no new endpoint, no PWA/native, and no 3D/VRM.
+1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `memory-diary.js`.
+2. Keep memory-diary extraction bounded to local UI rendering/orchestration only: no new endpoint, no extra relationship-memory mutation, no provider/network call beyond existing delegated API boundaries, no PWA/native, and no 3D/VRM.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
@@ -202,8 +208,8 @@ Phase 1 Exit Gate is complete. Phase 2 may start with the worker plan below.
 Phase 2 start worker plan:
 
 1. Keep Claude A and Claude B active only at Phase 2 start:
-   - Claude A: Voice/Profile/Presence product implementation; currently TASK-186A skill shelf module extraction.
-   - Claude B: deterministic evals, safety, cost transparency, and UI smoke coverage; currently TASK-186B skill shelf module coverage.
+   - Claude A: Voice/Profile/Presence product implementation; last completed TASK-187A voice preview module extraction.
+   - Claude B: deterministic evals, safety, cost transparency, and UI smoke coverage; last completed TASK-187B voice preview module coverage.
 2. Do not open Claude C/D for the first Phase 2 tasks because initial Voice/Profile/Presence work shares `mini_agent/pets.py`, `mini_agent/server.py`, `mini_agent/static/index.html`, test files, and eval files.
 3. Automatically open or configure additional Claude workers only when Phase 2 has independent workstreams with low file conflict risk:
    - Claude C for Web/PWA floating pet presence or responsive UI shell.
@@ -220,6 +226,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 68% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, native food panel module extraction, and native skill shelf module extraction complete
+- Phase 2 Voice & Presence: 70% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, native food panel module extraction, native skill shelf module extraction, and native voice preview module extraction complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

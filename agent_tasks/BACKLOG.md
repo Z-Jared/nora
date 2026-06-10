@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-187A: Extract Pet Room Voice Preview native module
-- 架构层: Avatar/Room UI / Frontend Architecture / Voice/Expression System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-186A、TASK-186B 完成并集成。
-- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4，创建 `mini_agent/static/components/voice-preview.js`，把 Pet Room text-only voice preview 的 consent check、input validation、preview result rendering、meta tag rendering 和 button wiring 从 `mini_agent/static/index.html` 拆成 bounded native ES module，同时保持现有 UI、DOM markers、consent-before-call、cost/no-audio/no-recording/no-food-debit metadata、本地 demo 行为和 API wrapper delegation 不变。
-- 非目标: 不新增/删除/重命名 HTTP endpoint；不修改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/tts.py`、`mini_agent/static/api.js`；不抽 memory diary、identity editor、relationship memory、food panel、skill shelf；不引入 React/Vite/TypeScript/npm/build step；不新增真实 voice/TTS/audio playback、recording、provider config、food debit mutation、voice cloning、microphone/camera/screen/location access、PWA/native、marketplace/payment、3D/VRM/Live2D runtime。
-- 安全边界: voice-preview module 不得直接 `fetch`，不得直接调用 `/pet/voice-preview` endpoint literal；必须通过注入的 API object/function delegation 调用现有 `PetAPI.previewVoice`；未勾选 `voice-consent-checkbox` 时不得调用 preview API；动态 preview text 必须使用 DOM text APIs，meta HTML 必须经 `escapeHtml` 或 DOM text APIs；不得新增隐藏网络、audio bytes/audio_url、recording/background listening、credential logging、secret echo、诱导付费或 provider activation copy。
-- 持久证据: 新增 `mini_agent/static/components/voice-preview.js`；`index.html` 使用本地 native module import 并用小边界 wiring 调用；`speech-bubble-area`、`voice-consent-panel`、`voice-consent-checkbox`、`voice-consent-boundary`、`voice-consent-cost`、`voice-consent-provider`、`speech-bubble`、`speech-bubble-text`、`speech-bubble-meta`、`speech-preview-input`、`speech-preview-btn`、`speech-bubble-error` markers 保持稳定；unchecked consent、empty text、over-500 text、auth error、preview failure、text-only metadata rendering 行为保持不变。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for direct fetch/endpoint/build-system/audio/recording/payment/marketplace/PWA/native/3D drift in `mini_agent/static/index.html mini_agent/static/components/voice-preview.js tests/test_webui_smoke.py`。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`; existing speech bubble / voice consent evals.
-
-### TASK-187B: Voice Preview module deterministic coverage
-- 架构层: Eval/Review System / Frontend Architecture / Voice/Expression System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-186A、TASK-186B 完成并集成；与 TASK-187A 并行，但不得改实现文件。
-- 目标: 为 TASK-187A 的 `voice-preview.js` module extraction 添加 deterministic eval/smoke 覆盖，并修复旧 speech bubble / voice consent eval 在抽取后仍只扫描 `index.html` 的问题，确保 module local/native/read-only-by-default、consent-before-call、API delegated boundary、text-only fallback metadata、escaping、no recording/no hidden audio/no payment/no provider activation/no PWA/native/3D drift 都被锁住。
-- 非目标: 不实现 voice preview module；不修改 `mini_agent/static/index.html`、`mini_agent/static/components/voice-preview.js`、其他 component modules、CSS、图片资产、HTTP server、pets/tts/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm；不新增真实 TTS/provider/audio/recording/payment/native/PWA/3D 行为。
-- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成音频、修改设计稿；必须阻断 direct fetch/direct endpoint literal drift、unchecked consent API call、audio_url/audio bytes、voice cloning、recording/background listening、microphone/camera/screen/location、checkout/billing/real payment、provider activation、PWA/service-worker/notification/native、3D/VRM/Live2D drift。
-- 持久证据: 新增 eval 名称包含 `voice_preview_module`；覆盖 component file exports、local module import wiring、required voice/speech markers、delegated API boundary、consent-before-call, empty/overlong validation, text/meta escaping, existing speech bubble and voice consent evals remain active/pass after extraction.
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system/audio/recording/payment/native scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`; `evals/run_evals.py`; `tests/test_webui_smoke.py`; existing `speech_bubble_*` and `voice_consent_*` evals.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-187A: Extract Pet Room Voice Preview native module ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 421 tests OK；`python3 evals/run_evals.py` 756 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 native ES module `mini_agent/static/components/voice-preview.js`，把 Pet Room text-only voice preview 的 consent check、input validation、button wiring、preview result rendering 和 meta tag rendering 从 `index.html` 拆出；`index.html` 本地导入 `wireVoicePreview()` 并通过注入的 `PetAPI.previewVoice` / `handleAuthError` 保留 API/auth delegation；保留 `speech-bubble-*`、`voice-consent-*`、`speech-preview-*` markers，unchecked consent、empty/over-500 validation、auth failure、preview failure、text-only fallback metadata 行为不变；module 不直接 `fetch`、不包含 `/pet/voice-preview` endpoint literal、不新增 endpoint、外部 URL、build step、真实 audio/recording/provider activation、food debit、payment/marketplace、PWA/native 或 3D/VRM。
+
+### TASK-187B: Voice Preview module deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 756 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 421 tests OK；`git diff --check` OK。
+- 内容: 新增 6 个 `voice_preview_module_*` eval，覆盖 component file existence/native export、本地 module wiring、required voice/speech markers、delegated API boundary、consent-before-call、empty/overlong validation、text/meta escaping、no audio/recording/payment/provider/PWA/native/3D scope drift；同步修复 speech bubble 与 voice consent 旧 eval，使其通过 `_read_voice_preview_surface()` 扫描 `index.html` + `voice-preview.js` combined surface，确保抽取后旧契约仍 active/pass。
 
 ### TASK-186A: Extract Pet Room Skill Shelf native module ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

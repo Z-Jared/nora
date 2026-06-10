@@ -303,6 +303,13 @@ def main() -> int:
         EvalCase("skill_shelf_module_read_only_no_tool_execution", eval_skill_shelf_module_read_only_no_tool_execution),
         EvalCase("skill_shelf_module_secret_filtering_and_stale_cleanup", eval_skill_shelf_module_secret_filtering_and_stale_cleanup),
         EvalCase("skill_shelf_module_no_marketplace_or_scope_drift", eval_skill_shelf_module_no_marketplace_or_scope_drift),
+        # TASK-187B: Voice Preview module eval coverage
+        EvalCase("voice_preview_module_file_present", eval_voice_preview_module_file_present),
+        EvalCase("voice_preview_module_wired", eval_voice_preview_module_wired),
+        EvalCase("voice_preview_module_markers_preserved", eval_voice_preview_module_markers_preserved),
+        EvalCase("voice_preview_module_delegated_api_boundary", eval_voice_preview_module_delegated_api_boundary),
+        EvalCase("voice_preview_module_consent_validation_and_escaping", eval_voice_preview_module_consent_validation_and_escaping),
+        EvalCase("voice_preview_module_no_audio_or_scope_drift", eval_voice_preview_module_no_audio_or_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -3658,59 +3665,61 @@ def _skip_if_no_speech_bubble():
 def eval_speech_bubble_markers_present():
     """Pet Room contains all required speech bubble DOM markers."""
     _skip_if_no_speech_bubble()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
-    required_html_markers = [
+    # After TASK-187A, markers may be in voice-preview.js
+    all_content = _read_voice_preview_surface()
+    required_markers = [
         "speech-bubble-area", "speech-bubble", "speech-bubble-text",
         "speech-bubble-meta", "speech-preview-input", "speech-preview-btn",
         "speech-bubble-error",
     ]
-    missing = [m for m in required_html_markers if m not in html]
+    missing = [m for m in required_markers if m not in all_content]
     assert not missing, f"Pet Room missing required speech bubble markers: {missing}"
     # Endpoint may be in api.js after TASK-182A API boundary extraction
     api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
     if api_js.exists():
         api_content = api_js.read_text(encoding="utf-8")
-        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in html, \
+        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in all_content, \
             "voice-preview endpoint not found in api.js or index.html"
     else:
-        assert "/pet/voice-preview" in html, "voice-preview endpoint not found in index.html"
+        assert "/pet/voice-preview" in all_content, "voice-preview endpoint not found in index.html"
 
 
 def eval_voice_preview_ui_cost_and_no_audio_copy():
     """Speech bubble displays cost, text-only/no-audio, no-network/provider, and no-recording metadata."""
     _skip_if_no_speech_bubble()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = _read_voice_preview_surface().lower()
     # Must have cost indicator
     cost_markers = ["cost", "food cost", "token cost"]
-    has_cost = any(m in html for m in cost_markers)
+    has_cost = any(m in all_content for m in cost_markers)
     assert has_cost, "Speech bubble missing cost metadata"
     # Must have no-audio/text-only indicator
     no_audio_markers = ["no_audio", "no-audio", "text fallback", "text-only", "text only"]
-    has_no_audio = any(m in html for m in no_audio_markers)
+    has_no_audio = any(m in all_content for m in no_audio_markers)
     assert has_no_audio, "Speech bubble missing no-audio/text-only indicator"
     # Must have no-network/provider indicator
     no_network_markers = ["no provider", "no_network", "no network", "no tts", "local only"]
-    has_no_network = any(m in html for m in no_network_markers)
+    has_no_network = any(m in all_content for m in no_network_markers)
     assert has_no_network, "Speech bubble missing no-network/provider indicator"
     # Must have no-recording indicator
     no_recording_markers = ["no recording", "no_recording", "not recorded", "no mic"]
-    has_no_recording = any(m in html for m in no_recording_markers)
+    has_no_recording = any(m in all_content for m in no_recording_markers)
     assert has_no_recording, "Speech bubble missing no-recording indicator"
 
 
 def eval_speech_bubble_escapes_preview_text():
     """Speech bubble text uses textContent; meta tags use escapeHtml if innerHTML; preview request includes pet_id+text."""
     _skip_if_no_speech_bubble()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # After TASK-187A, rendering may be in voice-preview.js
+    all_content = _read_voice_preview_surface().lower()
     import re
     # Find JS code that references the speech-bubble-text element
-    text_path = re.search(r"""getelementbyid\(['"]speech-bubble-text['"]\)[\s\S]{0,2000}""", html)
+    text_path = re.search(r"""getelementbyid\(['"]speech-bubble-text['"]\)[\s\S]{0,2000}""", all_content)
     assert text_path, "speech-bubble-text JS rendering path not found"
     text_section = text_path.group(0)
     assert "textcontent" in text_section or "innertext" in text_section, \
         "speech-bubble-text must use textContent/innerText, not raw innerHTML"
     # Find meta tag rendering path
-    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", html)
+    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", all_content)
     if meta_path:
         meta_section = meta_path.group(0)
         if "innerhtml" in meta_section:
@@ -3719,7 +3728,6 @@ def eval_speech_bubble_escapes_preview_text():
     # Preview request must include pet_id and text
     # After TASK-182A, endpoint may be in api.js with PetAPI.previewVoice() wrapper
     api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
-    all_content = html
     if api_js.exists():
         all_content += api_js.read_text(encoding="utf-8").lower()
     has_preview_call = ("pet_id" in all_content and "text" in all_content and
@@ -3770,33 +3778,38 @@ def _skip_if_no_voice_consent():
 def eval_voice_consent_markers_present():
     """Pet Room contains all required consent/cost boundary DOM and API markers."""
     _skip_if_no_voice_consent()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
-    required_html_markers = [
+    # After TASK-187A, markers may be in voice-preview.js
+    all_content = _read_voice_preview_surface()
+    required_markers = [
         "voice-consent-panel",
         "voice-consent-checkbox",
         "voice-consent-boundary",
         "voice-consent-cost",
         "voice-consent-provider",
     ]
-    missing = [m for m in required_html_markers if m not in html]
+    missing = [m for m in required_markers if m not in all_content]
     assert not missing, f"Pet Room missing required consent markers: {missing}"
     # Endpoint may be in api.js after TASK-182A
     api_js = PROJECT_ROOT / "mini_agent" / "static" / "api.js"
     if api_js.exists():
         api_content = api_js.read_text(encoding="utf-8")
-        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in html, \
+        assert "/pet/voice-preview" in api_content or "/pet/voice-preview" in all_content, \
             "voice-preview endpoint not found in api.js or index.html"
     else:
         assert "/pet/voice-preview" in html, "voice-preview endpoint not found in index.html"
 
 
 def eval_voice_consent_unchecked_no_fetch():
-    """Preview button click handler reads consent checkbox, checks .checked, returns before fetch if unchecked."""
+    """Preview button click handler reads consent checkbox, checks .checked, returns before API call if unchecked."""
     _skip_if_no_voice_consent()
-    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # After TASK-187A, handler may be in voice-preview.js
+    all_content = _read_voice_preview_surface().lower()
     import re
-    # Locate speech-preview-btn click handler
-    handler_match = re.search(r"""speech-preview-btn['"]\)\s*\.onclick\s*=\s*function\s*\(\)\s*\{([\s\S]{0,3000})\}""", html)
+    # Locate speech-preview-btn click handler (may use addEventListener or onclick)
+    # Skip comment matches by looking for getElementById pattern
+    handler_match = re.search(r"""getelementbyid\(['"]speech-preview-btn['"]\)[\s\S]{0,500}?addeventlistener\s*\(\s*['"]click['"]\s*,\s*function\s*\(\)\s*\{([\s\S]{0,3000})\}""", all_content)
+    if not handler_match:
+        handler_match = re.search(r"""getelementbyid\(['"]speech-preview-btn['"]\)[\s\S]{0,500}?\.onclick\s*=\s*function\s*\(\)\s*\{([\s\S]{0,3000})\}""", all_content)
     assert handler_match, "speech-preview-btn click handler not found"
     handler = handler_match.group(1)
     # Must read voice-consent-checkbox
@@ -3826,6 +3839,7 @@ def eval_voice_cost_confirmation_metadata():
     """Consent panel and JS meta rendering path expose all required metadata fields."""
     _skip_if_no_voice_consent()
     html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = _read_voice_preview_surface().lower()
     import re
     # Consent panel HTML must contain cost, text-only, no-network, no-recording, no-debit indicators
     consent_panel = re.search(r'id=["\']voice-consent-panel["\'][\s\S]{0,2000}', html)
@@ -3836,8 +3850,8 @@ def eval_voice_cost_confirmation_metadata():
     assert "network" in panel or "provider" in panel, "consent panel missing no-network/provider indicator"
     assert "recording" in panel, "consent panel missing no-recording indicator"
     assert "debit" in panel or "food" in panel, "consent panel missing no-debit indicator"
-    # JS meta rendering path must use result fields
-    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", html)
+    # JS meta rendering path must use result fields (search combined surface)
+    meta_path = re.search(r"""getelementbyid\(['"]speech-bubble-meta['"]\)[\s\S]{0,2000}""", all_content)
     assert meta_path, "speech-bubble-meta JS rendering path not found"
     meta_section = meta_path.group(0)
     assert "food_debit" in meta_section, "meta rendering missing food_debit check"
@@ -5290,6 +5304,139 @@ def eval_skill_shelf_module_no_marketplace_or_scope_drift():
     ]
     for marker in drift_markers:
         assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-187B: Voice Preview module eval coverage ---
+
+
+def _skip_if_no_voice_preview_module():
+    """Skip if TASK-187A voice-preview module is not implemented."""
+    try:
+        vp_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js"
+        if not vp_js.exists():
+            raise AttributeError("voice-preview.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-187A not integrated: voice-preview.js not available")
+
+
+def _read_voice_preview_surface():
+    """Read combined voice preview surface: index.html + voice-preview.js if it exists."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    vp_js_path = PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js"
+    if vp_js_path.exists():
+        html += "\n" + vp_js_path.read_text(encoding="utf-8")
+    return html
+
+
+def eval_voice_preview_module_file_present():
+    """voice-preview.js exists and uses native JS exports."""
+    _skip_if_no_voice_preview_module()
+    vp_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js").read_text(encoding="utf-8").lower()
+    has_export = ("export " in vp_js or "export{" in vp_js or "export default" in vp_js)
+    assert has_export, "voice-preview.js missing native ES module export statements"
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in vp_js, f"voice-preview.js contains build tooling: '{marker}'"
+
+
+def eval_voice_preview_module_wired():
+    """voice-preview.js is wired through local native module import in index.html."""
+    _skip_if_no_voice_preview_module()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "voice-preview" in html, "index.html does not reference voice-preview"
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_voice_preview_module_markers_preserved():
+    """Required voice preview markers/classes remain present."""
+    _skip_if_no_voice_preview_module()
+    all_content = _read_voice_preview_surface()
+    required = [
+        "speech-bubble-area", "voice-consent-panel", "voice-consent-checkbox",
+        "voice-consent-boundary", "voice-consent-cost", "voice-consent-provider",
+        "speech-bubble", "speech-bubble-text", "speech-bubble-meta",
+        "speech-preview-input", "speech-preview-btn", "speech-bubble-error",
+    ]
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing voice preview markers: {missing}"
+
+
+def eval_voice_preview_module_delegated_api_boundary():
+    """Module uses delegated API boundary: no direct fetch or /pet/voice-preview endpoint literal."""
+    _skip_if_no_voice_preview_module()
+    vp_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js").read_text(encoding="utf-8")
+    import re
+    no_comments = re.sub(r'//.*?$', '', vp_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    # Must NOT have direct fetch or endpoint literal
+    assert "fetch(" not in content, "voice-preview.js uses direct fetch instead of delegated API"
+    assert "/pet/voice-preview" not in content, "voice-preview.js contains direct /pet/voice-preview endpoint literal"
+    # Must use some form of delegated API call
+    has_delegation = ("api." in content or "previewvoice" in content or "preview_voice" in content or
+                      "apifn" in content or "callapi" in content)
+    assert has_delegation, "voice-preview.js missing delegated API call"
+
+
+def eval_voice_preview_module_consent_validation_and_escaping():
+    """Module preserves consent-before-call, text validation, and DOM escaping."""
+    _skip_if_no_voice_preview_module()
+    all_content = _read_voice_preview_surface().lower()
+    vp_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js").read_text(encoding="utf-8").lower()
+    # Consent checkbox must be checked before call
+    has_consent_gate = ("checked" in vp_js and ("consent" in vp_js or "checkbox" in vp_js))
+    assert has_consent_gate, "voice-preview.js missing consent-before-call gate"
+    # Must validate empty text
+    has_empty_check = ("length" in vp_js or "trim" in vp_js or "!text" in vp_js or "text ==" in vp_js)
+    assert has_empty_check, "voice-preview.js missing empty text validation"
+    # Must validate over-500 text
+    has_length_check = ("500" in vp_js or "> 500" in vp_js or "max" in vp_js)
+    assert has_length_check, "voice-preview.js missing over-500 text validation"
+    # Must use textContent or escapeHtml for rendering
+    has_safe_render = ("textcontent" in vp_js or "escapehtml" in vp_js or "escape_html" in vp_js)
+    assert has_safe_render, "voice-preview.js missing safe rendering (textContent/escapeHtml)"
+
+
+def eval_voice_preview_module_no_audio_or_scope_drift():
+    """No real audio, recording, provider activation, or scope drift."""
+    _skip_if_no_voice_preview_module()
+    vp_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "voice-preview.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Strip comments from vp_js before checking drift
+    import re
+    vp_no_comments = re.sub(r'//.*?$', '', vp_js, flags=re.MULTILINE)
+    vp_no_comments = re.sub(r'/\*.*?\*/', '', vp_no_comments, flags=re.DOTALL)
+    all_content = vp_no_comments + html
+    assert "http://" not in vp_js, "voice-preview.js contains external HTTP URL"
+    assert "https://" not in vp_js, "voice-preview.js contains external HTTPS URL"
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    drift_markers = [
+        "audio_url", "audio bytes",
+        "voice clone", "clone voice", "record by default",
+        "background listening", "always listening",
+        "microphone access", "mic access", "camera access",
+        "screen capture", "location access",
+        "plugin store", "premium skill", "marketplace",
+        "checkout", "billing", "real payment",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    # Check drift markers with negation context for "recording" (allowed in "no recording" / "no_recording")
+    negation = re.compile(r'(no[_ ]?|not |without )', re.IGNORECASE)
+    for marker in drift_markers:
+        if marker not in all_content:
+            continue
+        # Find all occurrences and check if any are in non-negated context
+        for m in re.finditer(re.escape(marker), all_content):
+            ctx_start = max(0, m.start() - 20)
+            ctx = all_content[ctx_start:m.start()]
+            if not negation.search(ctx):
+                assert False, f"scope drift marker '{marker}' found at pos {m.start()}"
 
 
 def eval_cli_multiline_input():

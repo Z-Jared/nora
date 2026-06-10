@@ -142,11 +142,69 @@ function updateFoodPanel(state) {}
 function loadCostEstimates(petId, api) {}
 function wireFoodButtons(getPet, actionFn) {}
 
-// Skill shelf functions (extracted to skill-shelf.js module)
+// Voice preview — real implementation from voice-preview.js (export stripped)
 function escapeHtml(s) {
   if (typeof s !== 'string') return '';
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+function wireVoicePreview(getCurrentPet, api, onAuthError) {
+  var btn = document.getElementById('speech-preview-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var pet = getCurrentPet();
+    if (!pet) return;
+    var consent = document.getElementById('voice-consent-checkbox');
+    var errorEl = document.getElementById('speech-bubble-error');
+    var bubbleEl = document.getElementById('speech-bubble');
+    var textEl = document.getElementById('speech-bubble-text');
+    var metaEl = document.getElementById('speech-bubble-meta');
+    if (errorEl) errorEl.textContent = '';
+    if (!consent || !consent.checked) {
+      if (errorEl) errorEl.textContent = 'Please confirm the consent boundary first.';
+      return;
+    }
+    var input = document.getElementById('speech-preview-input');
+    var text = input ? input.value.trim() : '';
+    if (!text) {
+      if (errorEl) errorEl.textContent = 'Enter text to preview.';
+      return;
+    }
+    if (text.length > 500) {
+      if (errorEl) errorEl.textContent = 'Text too long (max 500).';
+      return;
+    }
+    api.previewVoice({ pet_id: pet.pet_id, text: text })
+      .then(function (result) {
+        if (result.error) {
+          if (errorEl) errorEl.textContent = result.error;
+          if (bubbleEl) bubbleEl.classList.remove('visible');
+          return;
+        }
+        if (textEl) textEl.textContent = result.text || '';
+        if (metaEl) {
+          var tags = [];
+          tags.push('cost: ' + (result.cost_tokens || 0) + ' tokens');
+          tags.push(result.has_audio ? 'audio: yes' : 'audio: no (text only)');
+          if (result.no_network_call) tags.push('no network');
+          if (result.no_recording) tags.push('no recording');
+          if (result.food_debit === false) tags.push('no food debit');
+          if (result.provider_status) tags.push('provider: ' + result.provider_status);
+          if (result.audio_requires_confirmation) tags.push('audio requires confirmation');
+          metaEl.innerHTML = tags.map(function (t) {
+            return '<span class="meta-tag">' + escapeHtml(t) + '</span>';
+          }).join('');
+        }
+        if (bubbleEl) bubbleEl.classList.add('visible');
+      })
+      .catch(function (err) {
+        if (onAuthError && err && err._authError) { onAuthError({ status: 401 }); return; }
+        if (errorEl) errorEl.textContent = 'Preview failed.';
+        if (bubbleEl) bubbleEl.classList.remove('visible');
+      });
+  });
+}
+
+// Skill shelf functions (extracted to skill-shelf.js module)
 var SKILL_ICONS = {
   'memory': '🧠', 'patrol': '🛡️', 'chat': '💬', 'code': '💻',
   'research': '🔍', 'browse': '🌐', 'plan': '📋', 'write': '✏️',
@@ -1568,35 +1626,29 @@ result.hasClass = document.getElementById('speech-bubble').classList.contains('v
         self.assertFalse(d['hasClass'])
 
     def test_speech_preview_calls_endpoint(self):
-        """Preview button must call /pet/voice-preview with pet_id and text after consent."""
-        result = _run_node(setup_js="""
-var _lastFetch = null;
-_fetchHandler = function(url, opts) {
-  _lastFetch = {url: url, body: opts && opts.body ? JSON.parse(opts.body) : null};
-  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
-    text:'Hello!', has_audio:false, source:'text_fallback', cost_tokens:0,
-    voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
-    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true,
-    requires_user_confirmation:true, confirmation_kind:'text_fallback_voice_preview',
-    audio_requires_confirmation:true, provider_status:'not_configured_text_fallback', food_debit:false
-  })});
+        """Preview button must call api.previewVoice with pet_id and text after consent."""
+        result = _run_node(test_body="""
+var _apiBody = null;
+PetAPI.previewVoice = function(body) {
+  _apiBody = body;
+  return Promise.resolve({
+    text:'Hello!', has_audio:false, cost_tokens:0,
+    no_network_call:true, no_recording:true, food_debit:false,
+    provider_status:'text_fallback', audio_requires_confirmation:true
+  });
 };
-""", test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
 document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'Hello!';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
-await new Promise(function(r){setTimeout(r,300)});
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,200)});
 result = {};
-result.url = _lastFetch ? _lastFetch.url : null;
-result.petId = _lastFetch && _lastFetch.body ? _lastFetch.body.pet_id : null;
-result.text = _lastFetch && _lastFetch.body ? _lastFetch.body.text : null;
+result.petId = _apiBody ? _apiBody.pet_id : null;
+result.text = _apiBody ? _apiBody.text : null;
 result.bubbleVisible = document.getElementById('speech-bubble').classList.contains('visible');
 result.bubbleText = document.getElementById('speech-bubble-text').textContent;
 """)
         d = result
-        self.assertEqual(d['url'], '/pet/voice-preview')
         self.assertEqual(d['petId'], 'pet_1')
         self.assertEqual(d['text'], 'Hello!')
         self.assertTrue(d['bubbleVisible'])
@@ -1604,23 +1656,19 @@ result.bubbleText = document.getElementById('speech-bubble-text').textContent;
 
     def test_speech_preview_shows_meta_tags(self):
         """Preview must display cost, no-audio, no-network, no-recording, no-food-debit tags."""
-        result = _run_node(setup_js="""
-_fetchHandler = function(url, opts) {
-  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({
-    text:'hi', has_audio:false, source:'text_fallback', cost_tokens:2,
-    voice_profile:{}, mood_context:{mood:'neutral',energy:'normal',hunger:'normal',expression:'calm'},
-    no_audio_reason:'text fallback only', no_network_call:true, no_recording:true,
-    requires_user_confirmation:true, confirmation_kind:'text_fallback_voice_preview',
-    audio_requires_confirmation:true, provider_status:'not_configured_text_fallback', food_debit:false
-  })});
+        result = _run_node(test_body="""
+PetAPI.previewVoice = function(body) {
+  return Promise.resolve({
+    text:'hi', has_audio:false, cost_tokens:2,
+    no_network_call:true, no_recording:true, food_debit:false,
+    provider_status:'text_fallback', audio_requires_confirmation:true
+  });
 };
-""", test_body="""
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{hunger:30,energy:60,mood:60,bond:0,growth_level:1,compute_food_balance:0}};
 document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'hi';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
-await new Promise(function(r){setTimeout(r,300)});
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,200)});
 result = {};
 result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
 """)
@@ -1634,64 +1682,56 @@ result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
         self.assertIn('audio requires confirmation', d['metaHtml'])
 
     def test_speech_preview_empty_shows_error(self):
-        """Empty input must show error, not call endpoint."""
-        result = _run_node(setup_js="""
-var _fetchCalled = false;
-_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
-""", test_body="""
+        """Empty input must show error, not call API."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi'}); };
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
-_fetchCalled = false;
 document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = '';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
-await new Promise(function(r){setTimeout(r,100)});
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,50)});
 result = {};
 result.error = document.getElementById('speech-bubble-error').textContent;
-result.fetchCalled = _fetchCalled;
+result.apiCalled = _apiCalled;
 """)
         d = result
         self.assertIn('Enter text', d['error'])
-        self.assertFalse(d['fetchCalled'])
+        self.assertFalse(d['apiCalled'])
 
     def test_speech_preview_too_long_shows_error(self):
-        """Over-limit input must show error, not call endpoint."""
-        result = _run_node(setup_js="""
-var _fetchCalled = false;
-_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
-""", test_body="""
+        """Over-limit input must show error, not call API."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi'}); };
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
-_fetchCalled = false;
 document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'x'.repeat(501);
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
-await new Promise(function(r){setTimeout(r,100)});
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,50)});
 result = {};
 result.error = document.getElementById('speech-bubble-error').textContent;
-result.fetchCalled = _fetchCalled;
+result.apiCalled = _apiCalled;
 """)
         d = result
         self.assertIn('too long', d['error'])
-        self.assertFalse(d['fetchCalled'])
+        self.assertFalse(d['apiCalled'])
 
     def test_speech_preview_no_pet_does_nothing(self):
-        """Without currentPet, preview must not call endpoint."""
-        result = _run_node(setup_js="""
-var _fetchCalled = false;
-_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({})}); };
-""", test_body="""
+        """Without currentPet, preview must not call API."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi'}); };
 currentPet = null;
-_fetchCalled = false;
 document.getElementById('speech-preview-input').value = 'hello';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
+document.getElementById('voice-consent-checkbox').checked = true;
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
 await new Promise(function(r){setTimeout(r,100)});
 result = {};
-result.fetchCalled = _fetchCalled;
+result.apiCalled = _apiCalled;
 """)
         d = result
-        self.assertFalse(d['fetchCalled'])
+        self.assertFalse(d['apiCalled'])
 
     def test_voice_consent_panel_elements_exist(self):
         """Consent panel must have checkbox, boundary, cost, provider markers."""
@@ -1708,44 +1748,38 @@ result.provider = !!document.getElementById('voice-consent-provider');
             self.assertTrue(d[key], f'Missing consent element: {key}')
 
     def test_voice_consent_unchecked_blocks_preview(self):
-        """Preview must not call endpoint if consent checkbox is unchecked."""
-        result = _run_node(setup_js="""
-var _fetchCalls = [];
-_fetchHandler = function(url, opts) { _fetchCalls.push(url); return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({text:'hi',has_audio:false,source:'text_fallback',cost_tokens:0})}); };
-""", test_body="""
+        """Preview must not call API if consent checkbox is unchecked."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi'}); };
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
-await new Promise(function(r){setTimeout(r,200)});
-_fetchCalls = [];
 document.getElementById('voice-consent-checkbox').checked = false;
 document.getElementById('speech-preview-input').value = 'hello';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
-await new Promise(function(r){setTimeout(r,100)});
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,50)});
 result = {};
-result.voicePreviewCalled = _fetchCalls.indexOf('/pet/voice-preview') >= 0;
+result.apiCalled = _apiCalled;
 result.error = document.getElementById('speech-bubble-error').textContent;
 """)
         d = result
-        self.assertFalse(d['voicePreviewCalled'])
+        self.assertFalse(d['apiCalled'])
         self.assertIn('consent', d['error'].lower())
 
     def test_voice_consent_checked_allows_preview(self):
-        """Preview must call endpoint if consent checkbox is checked."""
-        result = _run_node(setup_js="""
-var _fetchCalled = false;
-_fetchHandler = function(url, opts) { _fetchCalled = true; return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve({text:'hi',has_audio:false,source:'text_fallback',cost_tokens:0,voice_profile:{},mood_context:{},no_audio_reason:'text fallback only',no_network_call:true,no_recording:true,requires_user_confirmation:true,confirmation_kind:'text_fallback_voice_preview',audio_requires_confirmation:true,provider_status:'not_configured_text_fallback',food_debit:false})}); };
-""", test_body="""
+        """Preview must call API if consent checkbox is checked."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi',has_audio:false,cost_tokens:0,no_network_call:true,no_recording:true,food_debit:false,provider_status:'text_fallback',audio_requires_confirmation:true}); };
 currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
 document.getElementById('voice-consent-checkbox').checked = true;
 document.getElementById('speech-preview-input').value = 'hello';
-var btn = document.getElementById('speech-preview-btn');
-if(btn.onclick) btn.onclick();
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
 await new Promise(function(r){setTimeout(r,200)});
 result = {};
-result.fetchCalled = _fetchCalled;
+result.apiCalled = _apiCalled;
 """)
         d = result
-        self.assertTrue(d['fetchCalled'])
+        self.assertTrue(d['apiCalled'])
 
     def test_expression_state_dom_markers_exist(self):
         """Expression state DOM markers must exist in pet room."""
@@ -2979,10 +3013,11 @@ result.hasPost = typeof PetAPI.post === 'function';
         self.assertIn('PetAPI.getPetActivity(', html)
         self.assertIn('PetAPI.feedPet', html)
         self.assertIn('PetAPI.carePet', html)
-        self.assertIn('PetAPI.previewVoice(', html)
         self.assertIn('PetAPI.updatePetIdentity(', html)
         self.assertIn('PetAPI.createRelationshipMemory(', html)
         self.assertIn('PetAPI.getRelationshipMemory(', html)
+        # Voice preview delegated to module via wireVoicePreview
+        self.assertIn('wireVoicePreview(', html)
         # Food panel receives PetAPI as parameter (delegated, not inline)
         self.assertIn('loadCostEstimates(pet.pet_id, PetAPI)', html)
         # Verify no raw fetch to pet endpoints in the main script
@@ -3302,3 +3337,123 @@ result.calls = _apiCalls;
         self.assertIn('pet_1:chat', d['calls'])
         self.assertIn('pet_1:voice', d['calls'])
         self.assertIn('pet_1:work', d['calls'])
+
+
+class VoicePreviewModuleTests(unittest.TestCase):
+    """Tests for voice-preview.js module."""
+
+    def test_voice_preview_module_exists(self):
+        """voice-preview.js must exist as a native ES module."""
+        path = STATIC_DIR / "components" / "voice-preview.js"
+        self.assertTrue(path.exists(), "voice-preview.js not found")
+
+    def test_voice_preview_exports_wireVoicePreview(self):
+        """voice-preview.js must export wireVoicePreview."""
+        path = STATIC_DIR / "components" / "voice-preview.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("export function wireVoicePreview", content)
+
+    def test_voice_preview_no_direct_fetch(self):
+        """voice-preview.js must not call fetch directly."""
+        path = STATIC_DIR / "components" / "voice-preview.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", content)
+        self.assertNotIn("PetAPI", content)
+        self.assertNotIn("http://", content)
+        self.assertNotIn("https://", content)
+
+    def test_voice_preview_no_audio_recording_markers(self):
+        """voice-preview.js must not contain audio/recording/purchase markers."""
+        path = STATIC_DIR / "components" / "voice-preview.js"
+        content = path.read_text(encoding="utf-8")
+        for marker in ['audio_url', 'audio bytes', 'microphone', 'mic access',
+                       'record by default', 'background listening', 'voice clone',
+                       'purchase tokens', 'checkout now', 'marketplace']:
+            self.assertNotIn(marker, content, f"forbidden marker '{marker}' found in voice-preview.js")
+
+    def test_voice_preview_uses_escapeHtml(self):
+        """voice-preview.js must use escapeHtml for dynamic text."""
+        path = STATIC_DIR / "components" / "voice-preview.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("escapeHtml", content)
+
+    def test_index_imports_voice_preview(self):
+        """index.html must import from voice-preview.js."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn("from '/static/components/voice-preview.js'", html)
+        self.assertIn("wireVoicePreview", html)
+
+    def test_consent_before_call(self):
+        """Preview must not call API when consent checkbox is unchecked."""
+        result = _run_node(test_body="""
+var _apiCalled = false;
+PetAPI.previewVoice = function(body) { _apiCalled = true; return Promise.resolve({text:'hi'}); };
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+document.getElementById('voice-consent-checkbox').checked = false;
+document.getElementById('speech-preview-input').value = 'hello';
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r) { setTimeout(r, 50); });
+result = {};
+result.apiCalled = _apiCalled;
+result.error = document.getElementById('speech-bubble-error').textContent;
+""")
+        d = result
+        self.assertFalse(d['apiCalled'])
+        self.assertIn('consent', d['error'].lower())
+
+    def test_empty_text_shows_error(self):
+        """Preview must show error for empty text input."""
+        result = _run_node(test_body="""
+PetAPI.previewVoice = function(body) { return Promise.resolve({text:'hi'}); };
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+document.getElementById('voice-consent-checkbox').checked = true;
+document.getElementById('speech-preview-input').value = '';
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+result = {};
+result.error = document.getElementById('speech-bubble-error').textContent;
+""")
+        d = result
+        self.assertIn('Enter text', d['error'])
+
+    def test_overlong_text_shows_error(self):
+        """Preview must show error for text over 500 chars."""
+        result = _run_node(test_body="""
+PetAPI.previewVoice = function(body) { return Promise.resolve({text:'hi'}); };
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+document.getElementById('voice-consent-checkbox').checked = true;
+document.getElementById('speech-preview-input').value = 'x'.repeat(501);
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+result = {};
+result.error = document.getElementById('speech-bubble-error').textContent;
+""")
+        d = result
+        self.assertIn('too long', d['error'].lower())
+
+    def test_preview_renders_meta_tags(self):
+        """Successful preview must render meta tags for cost, audio, network, recording."""
+        result = _run_node(test_body="""
+PetAPI.previewVoice = function(body) {
+  return Promise.resolve({
+    text:'Hello!', cost_tokens:5, has_audio:false,
+    no_network_call:true, no_recording:true, food_debit:false,
+    provider_status:'text fallback', audio_requires_confirmation:true
+  });
+};
+currentPet = {pet_id:'pet_1', identity:{name:'Test'}, state:{}};
+document.getElementById('voice-consent-checkbox').checked = true;
+document.getElementById('speech-preview-input').value = 'Hello!';
+document.getElementById('speech-preview-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,200)});
+result = {};
+result.bubbleText = document.getElementById('speech-bubble-text').textContent;
+result.bubbleVisible = document.getElementById('speech-bubble').classList.contains('visible');
+result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
+""")
+        d = result
+        self.assertEqual(d['bubbleText'], 'Hello!')
+        self.assertTrue(d['bubbleVisible'])
+        self.assertIn('5 tokens', d['metaHtml'])
+        self.assertIn('no network', d['metaHtml'])
+        self.assertIn('no recording', d['metaHtml'])
+        self.assertIn('no food debit', d['metaHtml'])
+        self.assertIn('text fallback', d['metaHtml'])
