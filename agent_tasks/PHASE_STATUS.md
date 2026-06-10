@@ -7,7 +7,7 @@ Last updated: 2026-06-10
 - Phase: Phase 2 - Voice & Presence
 - Percent: 75%
 - Status: in progress
-- Current focus: TASK-189A / TASK-189B should shift from invisible module extraction to visible Pet Room first-screen experience.
+- Current focus: TASK-189A / TASK-189B visible Pet Room first-screen pet experience.
 
 ## Completed This Phase
 
@@ -174,12 +174,13 @@ Last updated: 2026-06-10
   - Verification is green: 435 targeted tests OK, 762 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- No active worker task after TASK-188 integration. Next PM publication should prioritize visible Pet Room first-screen pet experience.
+- TASK-189A: Pet Room first-screen pet-first experience — assigned to Claude A.
+- TASK-189B: First-screen pet experience deterministic coverage — assigned to Claude B.
 
 ## Next
 
-1. Publish TASK-189A / TASK-189B for visible Pet Room first-screen experience: make Nora-01 and the room unmistakable on initial Web UI load, with no dashboard/chat-first regression.
-2. Lock deterministic coverage that first screen exposes the pet image/canvas, state chips, food/status, interaction controls, diary/memory entry point, and speech bubble without requiring the user to hunt for the pet.
+1. Wait for Claude A/B completion reports for TASK-189A / TASK-189B.
+2. PM initial review must combine both changes and verify the first Web UI viewport makes Nora-01 and Pet Room unmistakable without dashboard/chat-first regression.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
