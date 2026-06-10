@@ -1,55 +1,32 @@
-# B DONE — TASK-187B
+# B DONE — TASK-188B
 
-**Status:** Complete — PM-review fix applied, all evals PASS
+**Status:** Complete — all memory_diary_module evals PASS
 
 ## Summary
 
-Fixed 2 evals that failed combined PM review with TASK-187A. Both now use `_read_voice_preview_surface()` to scan combined `index.html` + `voice-preview.js` surface.
+Added 6 deterministic evals for Memory Diary module extraction. All evals active/pass when combined with TASK-188A.
 
-## PM-Review Fix
+## Evals Added
 
-### `eval_voice_preview_ui_cost_and_no_audio_copy`
-- **Before:** Read only `index.html` — missed no-network/provider indicators in `voice-preview.js`
-- **After:** Uses `_read_voice_preview_surface()` to scan combined surface
-
-### `eval_voice_cost_confirmation_metadata`
-- **Before:** Searched `index.html` for `speech-bubble-meta` JS rendering path — not found after extraction
-- **After:** Consent panel HTML checks still from `index.html`; JS meta rendering path searched in combined surface
-
-Both evals preserve original assertions (cost, no-audio, no-network, no-recording, food_debit, provider_status, audio_requires_confirmation).
-
-## Evals Added (6)
-
-1. `voice_preview_module_file_present`
-2. `voice_preview_module_wired`
-3. `voice_preview_module_markers_preserved`
-4. `voice_preview_module_delegated_api_boundary`
-5. `voice_preview_module_consent_validation_and_escaping`
-6. `voice_preview_module_no_audio_or_scope_drift`
-
-## Existing Evals Updated (6)
-
-- `_read_voice_preview_surface()` helper for combined surface reading
-- `eval_speech_bubble_markers_present`
-- `eval_speech_bubble_escapes_preview_text`
-- `eval_voice_consent_markers_present`
-- `eval_voice_consent_unchecked_no_fetch`
-- `eval_voice_preview_ui_cost_and_no_audio_copy` (PM fix)
-- `eval_voice_cost_confirmation_metadata` (PM fix)
+1. **`memory_diary_module_file_present`** — `memory-diary.js` exists with native ES module exports, no build tooling.
+2. **`memory_diary_module_wired`** — `index.html` references `memory-diary` with `<script type="module">`.
+3. **`memory_diary_module_markers_preserved`** — All required markers present: `pet-today-content`, `pet-today-item`, `today-time`, `today-text`, `pet-memory-moment-btn`, `pet-memory-list`, `pet-memory-item`, `kind`, `mem-summary`, `mem-meta`.
+4. **`memory_diary_module_delegated_api_boundary`** — No direct `fetch(` or endpoint literals (`/pet/activity`, `/pet/relationship-memory`); uses delegated API calls.
+5. **`memory_diary_module_rendering_and_refresh_contract`** — Uses `textContent`/`escapeHtml` for rendering, has shared moment creation path, and refreshes diary/memories after moment creation.
+6. **`memory_diary_module_no_scope_drift`** — No external URLs, build system, or scope drift.
 
 ## Verification
 
-### Own worktree (no TASK-187A)
+### Own worktree (no TASK-188A)
 
 ```
-python3 evals/run_evals.py           → 750 passed, 0 failed, 6 skipped
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 411 tests OK
+python3 evals/run_evals.py           → 6 memory_diary evals SKIP
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 421 tests OK
 git diff --check                     → clean
 ```
 
-### Combined check (applied onto Claude A's TASK-187A)
+### Combined check (applied onto Claude A's TASK-188A)
 
 ```
-python3 evals/run_evals.py           → 756 passed, 0 failed, 0 skipped
-All voice_preview + speech_bubble + voice_consent evals PASS
+python3 evals/run_evals.py           → 6/6 memory_diary_module evals PASS
 ```

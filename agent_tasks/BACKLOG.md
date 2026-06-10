@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-188A: Extract Pet Room Memory Diary native module
-- 架构层: Avatar/Room UI / Frontend Architecture / Memory/Relationship System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-187A、TASK-187B 完成并集成。
-- 目标: 按 `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4，创建 `mini_agent/static/components/memory-diary.js`，把 Pet Room Today diary、relationship memory list rendering 和 shared moment button wiring 从 `mini_agent/static/index.html` 拆成 bounded native ES module，同时保持现有 UI、DOM markers、API wrapper delegation、auth delegation、escaped rendering、notice/reaction behavior 和 request shapes 不变。
-- 非目标: 不新增/删除/重命名 HTTP endpoint；不修改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/static/api.js`；不抽 identity editor、voice preview、food panel、skill shelf、general sidebar memory UI；不引入 React/Vite/TypeScript/npm/build step；不新增真实 voice/TTS/audio playback、recording、provider config、food debit mutation、voice cloning、microphone/camera/screen/location access、PWA/native、marketplace/payment、3D/VRM/Live2D runtime。
-- 安全边界: memory-diary module 不得直接 `fetch`，不得直接包含 `/pet/activity` 或 `/pet/relationship-memory` endpoint literal；必须通过注入的 API object/function delegation 调用现有 `PetAPI.getPetActivity`、`PetAPI.getRelationshipMemory`、`PetAPI.createRelationshipMemory`；动态 activity/memory text 必须使用 DOM text APIs 或先 `escapeHtml`；不得新增额外 relationship-memory mutation、隐藏网络、credential logging、secret echo、诱导付费、provider activation copy、native/PWA 或 3D scope drift。
-- 持久证据: 新增 `mini_agent/static/components/memory-diary.js`；`index.html` 使用本地 native module import 并用小边界 wiring 调用；`pet-today-content`、`pet-today-item`、`today-time`、`today-text`、`pet-memory-moment-btn`、`pet-memory-list`、`pet-memory-item`、`kind`、`mem-summary`、`mem-meta` markers 保持稳定；Today diary empty/activity/memory rendering、relationship memory empty/list rendering、shared moment prompt/request/refresh/notice/reaction/auth failure 行为保持不变。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for direct fetch/endpoint/build-system/audio/recording/payment/marketplace/PWA/native/3D drift in `mini_agent/static/index.html mini_agent/static/components/memory-diary.js tests/test_webui_smoke.py`。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`; `mini_agent/static/index.html`; `tests/test_webui_smoke.py`; existing Pet Room Today diary and relationship memory evals.
-
-### TASK-188B: Memory Diary module deterministic coverage
-- 架构层: Eval/Review System / Frontend Architecture / Memory/Relationship System / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-187A、TASK-187B 完成并集成；与 TASK-188A 并行，但不得改实现文件。
-- 目标: 为 TASK-188A 的 `memory-diary.js` module extraction 添加 deterministic eval/smoke 覆盖，并修复旧 Pet Room Today diary / relationship memory eval 在抽取后仍只扫描 `index.html` 的问题，确保 module local/native/read-only except explicit shared-moment action、API delegated boundary、escaping、auth delegation、no extra mutation/no payment/no provider activation/no PWA/native/3D drift 都被锁住。
-- 非目标: 不实现 memory diary module；不修改 `mini_agent/static/index.html`、`mini_agent/static/components/memory-diary.js`、其他 component modules、CSS、图片资产、HTTP server、pets/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm；不新增真实 TTS/provider/audio/recording/payment/native/PWA/3D 行为。
-- 安全边界: 测试只读扫描 HTML/JS/eval/test 文件；不得调用外部网络、生成音频、修改设计稿；必须阻断 direct fetch/direct endpoint literal drift、extra relationship-memory mutation、audio_url/audio bytes、voice cloning、recording/background listening、microphone/camera/screen/location、checkout/billing/real payment、provider activation、PWA/service-worker/notification/native、3D/VRM/Live2D drift。
-- 持久证据: 新增 eval 名称包含 `memory_diary_module`；覆盖 component file exports、local module import wiring、required Today diary / relationship memory markers、delegated API boundary、activity/memory rendering and escaping、shared moment request/refresh contract、existing Today diary and relationship memory evals remain active/pass after extraction.
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system/audio/recording/payment/native scan。
-- 参考: `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4; `docs/knowledge/PHASE_2_VOICE_PRESENCE_PLAN.md`; `evals/run_evals.py`; `tests/test_webui_smoke.py`; existing Today diary / relationship memory evals.
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,18 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+
+### TASK-188A: Extract Pet Room Memory Diary native module ✅
+- 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 435 tests OK；`python3 evals/run_evals.py` 762 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: 新增 native ES module `mini_agent/static/components/memory-diary.js`，把 Pet Room Today diary rendering、relationship memory list rendering 和 shared moment button wiring 从 `index.html` 拆出；`index.html` 本地导入 `loadTodayDiary()`、`loadRelationshipMemories()`、`wireMemoryDiary()` 并通过注入 `PetAPI` / `handleAuthError` / `showRoomNotice` / `applyReaction` 保留 API/auth/notice/reaction delegation；保留 `pet-today-*`、`today-*`、`pet-memory-*`、`kind`、`mem-summary`、`mem-meta` markers，Today diary empty/activity/memory rendering、relationship memory empty/list rendering、shared moment prompt/request/refresh/notice/reaction/auth failure 行为不变；module 不直接 `fetch`、不包含 `/pet/activity` 或 `/pet/relationship-memory` endpoint literal、不新增 endpoint、外部 URL、build step、真实 audio/recording/provider activation、payment/marketplace、PWA/native 或 3D/VRM/Live2D。
+
+### TASK-188B: Memory Diary module deterministic coverage ✅
+- 完成者: Claude B；Codex PM 初审和 reviewer gate 均通过。
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 762 passed, 0 failed, 0 skipped；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 435 tests OK；`git diff --check` OK。
+- 内容: 新增 6 个 `memory_diary_module_*` eval，覆盖 component file existence/native export、本地 module wiring、required Today diary / relationship memory markers、delegated API boundary、safe rendering、shared moment request/refresh contract、无 direct fetch/endpoint literal、无 external URL/build-system/audio/recording/payment/native/PWA/3D scope drift；补强 smoke tests 锁住 module exports、no direct fetch/PetAPI/URL、Today diary activity/memory/empty rendering、relationship memory list/empty rendering、shared moment request body、refresh/notice/reaction callbacks 和 no-pet/empty-summary guards。
 
 ### TASK-187A: Extract Pet Room Voice Preview native module ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

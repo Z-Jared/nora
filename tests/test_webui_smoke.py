@@ -142,6 +142,72 @@ function updateFoodPanel(state) {}
 function loadCostEstimates(petId, api) {}
 function wireFoodButtons(getPet, actionFn) {}
 
+// Memory diary — real implementation from memory-diary.js (export stripped)
+function loadTodayDiary(petId, api) {
+  if (!petId || !api) return;
+  Promise.all([
+    api.getPetActivity(petId, 5).catch(function () { return []; }),
+    api.getRelationshipMemory(petId, 3).catch(function () { return []; })
+  ]).then(function (results) {
+    var events = results[0] || [];
+    var memories = results[1] || [];
+    var el = document.getElementById('pet-today-content');
+    if (!el) return;
+    if (!events.length && !memories.length) {
+      el.innerHTML = '<div class="pet-loading">Start your first interaction above.</div>';
+      return;
+    }
+    var items = [];
+    events.forEach(function (e) {
+      var t = e.created_at ? e.created_at.substring(11, 16) : '';
+      items.push('<div class="pet-today-item"><span class="today-time">' + escapeHtml(t) + '</span><span class="today-text">' + escapeHtml(e.summary) + '</span></div>');
+    });
+    memories.forEach(function (m) {
+      items.push('<div class="pet-today-item"><span class="today-time">memory</span><span class="today-text">[' + escapeHtml(m.kind) + '] ' + escapeHtml(m.summary) + '</span></div>');
+    });
+    el.innerHTML = items.join('');
+  });
+}
+function loadRelationshipMemories(petId, api, onAuthError) {
+  if (!petId || !api) return;
+  api.getRelationshipMemory(petId).then(function (memories) {
+    var list = document.getElementById('pet-memory-list');
+    if (!list) return;
+    if (!memories.length) { list.innerHTML = '<div class="pet-loading">No memories yet.</div>'; return; }
+    list.innerHTML = memories.map(function (m) {
+      var t = m.created_at ? escapeHtml(m.created_at.substring(11, 16)) : '';
+      return '<div class="pet-memory-item">'
+        + '<div class="kind">' + escapeHtml(m.kind) + '</div>'
+        + '<div class="mem-summary">' + escapeHtml(m.summary) + '</div>'
+        + '<div class="mem-meta"><span>importance: ' + m.importance + '</span><span>' + t + '</span></div>'
+        + '</div>';
+    }).join('');
+  }).catch(function (err) {
+    if (onAuthError && err && err._authError) { onAuthError({ status: 401 }); }
+  });
+}
+function wireMemoryDiary(getCurrentPet, api, callbacks) {
+  var btn = document.getElementById('pet-memory-moment-btn');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var pet = getCurrentPet();
+    if (!pet) return;
+    var summary = prompt('Describe the shared moment:');
+    if (!summary || !summary.trim()) return;
+    api.createRelationshipMemory({ pet_id: pet.pet_id, kind: 'shared_moment', summary: summary.trim(), source: 'pet_room_demo' })
+      .then(function (result) {
+        if (!result.error) {
+          loadRelationshipMemories(pet.pet_id, api);
+          loadTodayDiary(pet.pet_id, api);
+          if (callbacks && callbacks.showRoomNotice) callbacks.showRoomNotice('memory recorded.');
+          if (callbacks && callbacks.applyReaction) callbacks.applyReaction('shared_moment', pet.state, result);
+        }
+      }).catch(function (err) {
+        if (err && err._authError) { if (callbacks && callbacks.onAuthError) callbacks.onAuthError({ status: 401 }); }
+      });
+  });
+}
+
 // Voice preview — real implementation from voice-preview.js (export stripped)
 function escapeHtml(s) {
   if (typeof s !== 'string') return '';
@@ -1560,7 +1626,7 @@ _fetchHandler = function(url, opts) {
   return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({})});
 };
 """, test_body="""
-loadTodayDiary('pet_1');
+loadTodayDiary('pet_1', PetAPI);
 await new Promise(function(r){setTimeout(r,300)});
 result = {};
 result.html = document.getElementById('pet-today-content').innerHTML;
@@ -1580,7 +1646,7 @@ _fetchHandler = function(url, opts) {
   return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
 };
 """, test_body="""
-loadTodayDiary('pet_1');
+loadTodayDiary('pet_1', PetAPI);
 await new Promise(function(r){setTimeout(r,300)});
 result = {};
 result.html = document.getElementById('pet-today-content').innerHTML;
@@ -3014,10 +3080,10 @@ result.hasPost = typeof PetAPI.post === 'function';
         self.assertIn('PetAPI.feedPet', html)
         self.assertIn('PetAPI.carePet', html)
         self.assertIn('PetAPI.updatePetIdentity(', html)
-        self.assertIn('PetAPI.createRelationshipMemory(', html)
-        self.assertIn('PetAPI.getRelationshipMemory(', html)
         # Voice preview delegated to module via wireVoicePreview
         self.assertIn('wireVoicePreview(', html)
+        # Memory diary delegated to module via wireMemoryDiary
+        self.assertIn('wireMemoryDiary(', html)
         # Food panel receives PetAPI as parameter (delegated, not inline)
         self.assertIn('loadCostEstimates(pet.pet_id, PetAPI)', html)
         # Verify no raw fetch to pet endpoints in the main script
@@ -3457,3 +3523,246 @@ result.metaHtml = document.getElementById('speech-bubble-meta').innerHTML;
         self.assertIn('no recording', d['metaHtml'])
         self.assertIn('no food debit', d['metaHtml'])
         self.assertIn('text fallback', d['metaHtml'])
+
+
+class MemoryDiaryModuleTests(unittest.TestCase):
+    """Tests for memory-diary.js module."""
+
+    def test_memory_diary_module_exists(self):
+        """memory-diary.js must exist as a native ES module."""
+        path = STATIC_DIR / "components" / "memory-diary.js"
+        self.assertTrue(path.exists(), "memory-diary.js not found")
+
+    def test_memory_diary_exports_functions(self):
+        """memory-diary.js must export loadTodayDiary, loadRelationshipMemories, wireMemoryDiary."""
+        path = STATIC_DIR / "components" / "memory-diary.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("export function loadTodayDiary", content)
+        self.assertIn("export function loadRelationshipMemories", content)
+        self.assertIn("export function wireMemoryDiary", content)
+
+    def test_memory_diary_no_direct_fetch(self):
+        """memory-diary.js must not call fetch directly or contain endpoint literals."""
+        path = STATIC_DIR / "components" / "memory-diary.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", content)
+        self.assertNotIn("/pet/activity", content)
+        self.assertNotIn("/pet/relationship-memory", content)
+        self.assertNotIn("PetAPI", content)
+        self.assertNotIn("http://", content)
+        self.assertNotIn("https://", content)
+
+    def test_memory_diary_uses_escapeHtml(self):
+        """memory-diary.js must use escapeHtml for dynamic text."""
+        path = STATIC_DIR / "components" / "memory-diary.js"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn("escapeHtml", content)
+
+    def test_index_imports_memory_diary(self):
+        """index.html must import from memory-diary.js."""
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        self.assertIn("from '/static/components/memory-diary.js'", html)
+        self.assertIn("loadTodayDiary", html)
+        self.assertIn("loadRelationshipMemories", html)
+        self.assertIn("wireMemoryDiary", html)
+
+    def test_today_diary_renders_events(self):
+        """loadTodayDiary must render activity events into today-content."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/pet/activity') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([
+      {event_type:'fed', summary:'fed 100', created_at:'2026-06-09T12:00:00'},
+      {event_type:'care', summary:'pat', created_at:'2026-06-09T12:01:00'}
+    ])});
+  }
+  if (url.indexOf('/pet/relationship-memory') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+  }
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({})});
+};
+""", test_body="""
+loadTodayDiary('pet_1', PetAPI);
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-today-content').innerHTML;
+result.hasFed = result.html.indexOf('fed 100') >= 0;
+result.hasPat = result.html.indexOf('pat') >= 0;
+result.hasTime = result.html.indexOf('12:00') >= 0;
+result.hasMemoryLabel = result.html.indexOf('memory') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasFed'], 'fed 100 not in today')
+        self.assertTrue(d['hasPat'], 'pat not in today')
+        self.assertTrue(d['hasTime'], 'timestamp not in today')
+
+    def test_today_diary_shows_empty_state(self):
+        """loadTodayDiary must show empty state when no events/memories."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+};
+""", test_body="""
+loadTodayDiary('pet_1', PetAPI);
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-today-content').innerHTML;
+result.hasEmpty = result.html.indexOf('Start your first') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasEmpty'], 'Empty state not shown')
+
+    def test_today_diary_renders_memories(self):
+        """loadTodayDiary must render memories with [kind] prefix."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/pet/activity') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+  }
+  if (url.indexOf('/pet/relationship-memory') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([
+      {kind:'shared_moment', summary:'had fun', created_at:'2026-06-09T15:30:00'}
+    ])});
+  }
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({})});
+};
+""", test_body="""
+loadTodayDiary('pet_1', PetAPI);
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-today-content').innerHTML;
+result.hasKind = result.html.indexOf('[shared_moment]') >= 0;
+result.hasSummary = result.html.indexOf('had fun') >= 0;
+result.hasMemoryTime = result.html.indexOf('memory') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasKind'], 'kind not in today')
+        self.assertTrue(d['hasSummary'], 'summary not in today')
+        self.assertTrue(d['hasMemoryTime'], 'memory time label not in today')
+
+    def test_relationship_memories_renders_list(self):
+        """loadRelationshipMemories must render memory items."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url.indexOf('/pet/relationship-memory') === 0) {
+    return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([
+      {kind:'shared_moment', summary:'played together', importance:8, created_at:'2026-06-09T15:30:00'}
+    ])});
+  }
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve({})});
+};
+""", test_body="""
+loadRelationshipMemories('pet_1', PetAPI);
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-memory-list').innerHTML;
+result.hasKind = result.html.indexOf('shared_moment') >= 0;
+result.hasSummary = result.html.indexOf('played together') >= 0;
+result.hasImportance = result.html.indexOf('importance: 8') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasKind'], 'kind not in memory list')
+        self.assertTrue(d['hasSummary'], 'summary not in memory list')
+        self.assertTrue(d['hasImportance'], 'importance not in memory list')
+
+    def test_relationship_memories_empty_state(self):
+        """loadRelationshipMemories must show empty state when no memories."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok:true, status:200, json:()=>Promise.resolve([])});
+};
+""", test_body="""
+loadRelationshipMemories('pet_1', PetAPI);
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.html = document.getElementById('pet-memory-list').innerHTML;
+result.hasEmpty = result.html.indexOf('No memories yet') >= 0;
+""")
+        d = result
+        self.assertTrue(d['hasEmpty'], 'Empty state not shown')
+
+    def test_shared_moment_wired(self):
+        """wireMemoryDiary must wire the pet-memory-moment-btn click handler."""
+        result = _run_node(setup_js="""
+_promptHandler = function() { return 'test moment'; };
+""", test_body="""
+var _apiBody = null;
+var _noticeMsg = null;
+var _reactionKey = null;
+var mockAPI = {
+  createRelationshipMemory: function(body) {
+    _apiBody = body;
+    return Promise.resolve({ok:true});
+  },
+  getRelationshipMemory: function() { return Promise.resolve([]); },
+  getPetActivity: function() { return Promise.resolve([]); },
+};
+currentPet = {pet_id:'pet_1', state:{mood:50, energy:50}};
+wireMemoryDiary(function(){ return currentPet; }, mockAPI, {
+  showRoomNotice: function(msg) { _noticeMsg = msg; },
+  applyReaction: function(key, state, result) { _reactionKey = key; },
+});
+document.getElementById('pet-memory-moment-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,300)});
+result = {};
+result.petId = _apiBody ? _apiBody.pet_id : null;
+result.kind = _apiBody ? _apiBody.kind : null;
+result.summary = _apiBody ? _apiBody.summary : null;
+result.source = _apiBody ? _apiBody.source : null;
+result.notice = _noticeMsg;
+result.reactionKey = _reactionKey;
+""")
+        d = result
+        self.assertEqual(d['petId'], 'pet_1')
+        self.assertEqual(d['kind'], 'shared_moment')
+        self.assertEqual(d['summary'], 'test moment')
+        self.assertEqual(d['source'], 'pet_room_demo')
+        self.assertEqual(d['notice'], 'memory recorded.')
+        self.assertEqual(d['reactionKey'], 'shared_moment')
+
+    def test_shared_moment_empty_summary_blocked(self):
+        """wireMemoryDiary must not call API when summary is empty."""
+        result = _run_node(setup_js="""
+_promptHandler = function() { return '   '; };
+""", test_body="""
+var _apiCalled = false;
+var mockAPI = {
+  createRelationshipMemory: function(body) { _apiCalled = true; return Promise.resolve({ok:true}); },
+};
+currentPet = {pet_id:'pet_1', state:{}};
+wireMemoryDiary(function(){ return currentPet; }, mockAPI, {});
+document.getElementById('pet-memory-moment-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.apiCalled = _apiCalled;
+""")
+        d = result
+        self.assertFalse(d['apiCalled'], 'API should not be called for empty summary')
+
+    def test_shared_moment_no_pet_blocked(self):
+        """wireMemoryDiary must not call API when currentPet is null."""
+        result = _run_node(setup_js="""
+_promptHandler = function() { return 'test'; };
+""", test_body="""
+var _apiCalled = false;
+var mockAPI = {
+  createRelationshipMemory: function(body) { _apiCalled = true; return Promise.resolve({ok:true}); },
+};
+currentPet = null;
+wireMemoryDiary(function(){ return currentPet; }, mockAPI, {});
+document.getElementById('pet-memory-moment-btn').dispatchEvent(new Event('click'));
+await new Promise(function(r){setTimeout(r,100)});
+result = {};
+result.apiCalled = _apiCalled;
+""")
+        d = result
+        self.assertFalse(d['apiCalled'], 'API should not be called without pet')
+
+    def test_memory_diary_no_forbidden_markers(self):
+        """memory-diary.js must not contain forbidden scope drift markers."""
+        path = STATIC_DIR / "components" / "memory-diary.js"
+        content = path.read_text(encoding="utf-8")
+        for marker in ['audio_url', 'microphone', 'mic access', 'camera',
+                       'payment', 'checkout', 'marketplace', 'premium',
+                       'service worker', 'notification', '3d model', 'vrm', 'live2d']:
+            self.assertNotIn(marker, content, f"forbidden marker '{marker}' found")

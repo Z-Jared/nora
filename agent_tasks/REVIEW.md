@@ -1,77 +1,71 @@
-# TASK-187A/187B Review — Extract Pet Room Voice Preview native module
+# TASK-188A/188B Review — Extract Pet Room Memory Diary native module
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-187A extracts Pet Room voice preview into `voice-preview.js` as a native ES module. TASK-187B adds 6 evals and fixes existing speech/consent evals for combined surface scanning. Implementation correctly preserves consent-before-call, validation, auth delegation, meta rendering, and API boundary contract.
+TASK-188A extracts Pet Room memory diary into `memory-diary.js` as a native ES module. TASK-188B adds comprehensive eval/smoke coverage. Implementation correctly preserves all behavior, DOM markers, auth delegation, shared moment contract, and notice/reaction callbacks.
 
 ## Findings
 
-### 1. voice-preview.js — Bounded Native ES Module ✅
+### 1. memory-diary.js — Read-Only, No Direct Fetch ✅
 
-- Single exported function: `wireVoicePreview(getCurrentPet, api, onAuthError)`
-- Module docstring explicitly lists owned DOM elements and non-goals
-- Uses `escapeHtml` for meta tag rendering
-- No direct `fetch()`, no `PetAPI` literal, no `/pet/voice-preview` endpoint literal
-- Does NOT mutate pet state, food, activity, or relationship memory
+- Three exported functions: `loadTodayDiary(petId, api)`, `loadRelationshipMemories(petId, api, onAuthError)`, `wireMemoryDiary(getCurrentPet, api, callbacks)`
+- Uses injected `api` namespace: `api.getPetActivity()`, `api.getRelationshipMemory()`, `api.createRelationshipMemory()`
+- No `fetch(`, no `/pet/activity`, no `/pet/relationship-memory`, no `PetAPI` literal, no `http://`/`https://`
+- Uses `escapeHtml` for all dynamic text rendering (timestamps, kind, summary)
 
-### 2. index.html — Minimal Boundary Wiring ✅
+### 2. index.html — Minimal Wiring ✅
 
-- Import: `import { wireVoicePreview } from '/static/components/voice-preview.js'`
-- Inline handler replaced with: `wireVoicePreview(function(){ return currentPet; }, PetAPI, handleAuthError)`
-- API delegation preserved: `api.previewVoice()` injected, not hardcoded
-- Auth delegation preserved: `onAuthError` callback injected
-- No `/pet/voice-preview` endpoint literal in index.html
+- Import: `import { loadTodayDiary, loadRelationshipMemories, wireMemoryDiary } from '/static/components/memory-diary.js'`
+- Inline functions removed: `loadTodayDiary`, `loadRelationshipMemories`, shared moment handler
+- `renderPet()` now calls `loadTodayDiary(pet.pet_id, PetAPI)` and `loadRelationshipMemories(pet.pet_id, PetAPI, handleAuthError)`
+- Shared moment wired via: `wireMemoryDiary(function(){ return currentPet; }, PetAPI, { showRoomNotice, applyReaction, onAuthError: handleAuthError })`
+- All DOM markers, copy, auth delegation, notice/reaction behavior preserved
 
-### 3. Consent/Validation/Rendering Preserved ✅
+### 3. Shared Moment Contract Preserved ✅
 
-- **Consent gate**: `consent.checked` validation before API call
-- **Empty/over-500 validation**: Bounded error messages, no API call
-- **Auth error delegation**: `onAuthError({status: 401})` on `_authError` rejection
-- **Preview failure**: Error message displayed, bubble hidden
-- **Text rendering**: `textContent` for bubble text (safe)
-- **Meta rendering**: `innerHTML` with `escapeHtml()` for tags (cost, no-audio, no-network, no-recording, no-food-debit, provider_status, audio_requires_confirmation)
+- Request body: `{pet_id, kind:'shared_moment', summary: summary.trim(), source:'pet_room_demo'}`
+- Success callback: refreshes `loadRelationshipMemories` + `loadTodayDiary`, calls `showRoomNotice('memory recorded.')`, calls `applyReaction('shared_moment', pet.state, result)`
+- Auth error delegation: `onAuthError({status: 401})` on `_authError` rejection
+- Empty summary guard: no API call when `!summary || !summary.trim()`
+- No-pet guard: no API call when `!pet`
 
 ### 4. Tests — Strong Contract Coverage ✅
 
-Tests updated to use `PetAPI.previewVoice` mock instead of `_fetchHandler`:
-- `test_speech_preview_calls_endpoint`: Verifies `api.previewVoice` called with `pet_id` and `text`, bubble visible, textContent set
-- `test_speech_preview_shows_meta_tags`: Verifies cost, no-audio, no-network, no-recording, no-food-debit, provider, audio_requires_confirmation tags
-- `test_speech_preview_empty_shows_error`: Empty input → error, no API call
-- `test_speech_preview_too_long_shows_error`: Over-500 input → error, no API call
-- `test_voice_consent_unchecked_blocks_preview`: Unchecked consent → error, no API call
+**Module tests** (6 tests):
+- Module exists, exports, no direct fetch/endpoints/PetAPI/URLs, uses escapeHtml, index imports
 
-### 5. Evals — Combined Surface Scanning ✅
+**Today diary tests** (3 tests):
+- Renders activity events with timestamps
+- Shows empty state when no events/memories
+- Renders memories with `[kind]` prefix
 
-**6 new evals** (`voice_preview_module_*`):
-- `voice_preview_module_file_present` — file exists, has ES exports, no build tooling
-- `voice_preview_module_wired` — index.html references voice-preview with module import
-- `voice_preview_module_markers_preserved` — all required markers present across HTML/JS
-- `voice_preview_module_delegated_api_boundary` — uses `api.previewVoice` or `previewVoice` parameter, no direct fetch, no `/pet/voice-preview` literal
-- `voice_preview_module_consent_validation_and_escaping` — consent gate, validation, textContent/escapeHtml
-- `voice_preview_module_no_audio_or_scope_drift` — no external URLs, build system, audio/recording/marketplace/PWA/3D copy
+**Relationship memory tests** (2 tests):
+- Renders memory items with kind, summary, importance
+- Shows empty state
 
-**Existing evals fixed** — use `_read_voice_preview_surface()` helper to scan combined `index.html` + `voice-preview.js`:
-- `eval_speech_bubble_markers_present`
-- `eval_voice_preview_ui_cost_and_no_audio_copy`
-- `eval_speech_bubble_escapes_preview_text`
+**Shared moment tests** (3 tests):
+- Correct request body (pet_id, kind, summary, source)
+- Callbacks invoked (showRoomNotice, applyReaction)
+- Empty summary blocked (no API call)
+- No-pet blocked (no API call)
 
-All 9 required contract fields preserved: `cost_tokens`, `has_audio`, `no_network_call`, `no_recording`, `food_debit`, `provider_status`, `audio_requires_confirmation`, `cost` tag, `no-audio` tag.
+**Safety test** (1 test):
+- No forbidden scope drift markers (audio, payment, marketplace, PWA, 3D/VRM, etc.)
 
-### 6. No Scope Drift ✅
+### 5. No Scope Drift ✅
 
-- ✅ No direct `fetch()` or `/pet/voice-preview` endpoint literal in module
-- ✅ No real TTS/audio/recording/voice cloning
-- ✅ No payment/marketplace
-- ✅ No PWA/native
-- ✅ No 3D/VRM
-- ✅ No build system markers
+- No real audio/recording/provider
+- No payment/marketplace
+- No PWA/native
+- No 3D/VRM/Live2D
+- No build system
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 421 tests OK
-python3 evals/run_evals.py → 756 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 435 tests OK
+python3 evals/run_evals.py → 762 passed, 0 failed, 0 skipped
 git diff --check → clean
 ```

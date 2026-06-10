@@ -310,6 +310,13 @@ def main() -> int:
         EvalCase("voice_preview_module_delegated_api_boundary", eval_voice_preview_module_delegated_api_boundary),
         EvalCase("voice_preview_module_consent_validation_and_escaping", eval_voice_preview_module_consent_validation_and_escaping),
         EvalCase("voice_preview_module_no_audio_or_scope_drift", eval_voice_preview_module_no_audio_or_scope_drift),
+        # TASK-188B: Memory Diary module eval coverage
+        EvalCase("memory_diary_module_file_present", eval_memory_diary_module_file_present),
+        EvalCase("memory_diary_module_wired", eval_memory_diary_module_wired),
+        EvalCase("memory_diary_module_markers_preserved", eval_memory_diary_module_markers_preserved),
+        EvalCase("memory_diary_module_delegated_api_boundary", eval_memory_diary_module_delegated_api_boundary),
+        EvalCase("memory_diary_module_rendering_and_refresh_contract", eval_memory_diary_module_rendering_and_refresh_contract),
+        EvalCase("memory_diary_module_no_scope_drift", eval_memory_diary_module_no_scope_drift),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -5437,6 +5444,125 @@ def eval_voice_preview_module_no_audio_or_scope_drift():
             ctx = all_content[ctx_start:m.start()]
             if not negation.search(ctx):
                 assert False, f"scope drift marker '{marker}' found at pos {m.start()}"
+
+
+# --- TASK-188B: Memory Diary module eval coverage ---
+
+
+def _skip_if_no_memory_diary():
+    """Skip if TASK-188A memory-diary module is not implemented."""
+    try:
+        diary_js = PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js"
+        if not diary_js.exists():
+            raise AttributeError("memory-diary.js not found")
+    except (FileNotFoundError, AttributeError):
+        raise unittest.SkipTest("TASK-188A not integrated: memory-diary.js not available")
+
+
+def _read_memory_diary_surface():
+    """Read combined memory diary surface: index.html + memory-diary.js if it exists."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    diary_js_path = PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js"
+    if diary_js_path.exists():
+        html += "\n" + diary_js_path.read_text(encoding="utf-8")
+    return html
+
+
+def eval_memory_diary_module_file_present():
+    """memory-diary.js exists and uses native JS exports."""
+    _skip_if_no_memory_diary()
+    diary_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js").read_text(encoding="utf-8").lower()
+    has_export = ("export " in diary_js or "export{" in diary_js or "export default" in diary_js)
+    assert has_export, "memory-diary.js missing native ES module export statements"
+    build_markers = ["import react", "from react", "require(", "webpack", "rollup", "vite", "typescript"]
+    for marker in build_markers:
+        assert marker not in diary_js, f"memory-diary.js contains build tooling: '{marker}'"
+
+
+def eval_memory_diary_module_wired():
+    """memory-diary.js is wired through local native module import in index.html."""
+    _skip_if_no_memory_diary()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "memory-diary" in html, "index.html does not reference memory-diary"
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_memory_diary_module_markers_preserved():
+    """Required memory diary markers/classes remain present."""
+    _skip_if_no_memory_diary()
+    all_content = _read_memory_diary_surface()
+    required = [
+        "pet-today-content", "pet-today-item", "today-time", "today-text",
+        "pet-memory-moment-btn", "pet-memory-list", "pet-memory-item",
+        "kind", "mem-summary", "mem-meta",
+    ]
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing memory diary markers: {missing}"
+
+
+def eval_memory_diary_module_delegated_api_boundary():
+    """Module uses delegated API boundary for activity and relationship memory calls."""
+    _skip_if_no_memory_diary()
+    diary_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js").read_text(encoding="utf-8")
+    import re
+    no_comments = re.sub(r'//.*?$', '', diary_js, flags=re.MULTILINE)
+    no_comments = re.sub(r'/\*.*?\*/', '', no_comments, flags=re.DOTALL)
+    content = no_comments.lower()
+    # Must NOT have direct fetch or endpoint literals
+    assert "fetch(" not in content, "memory-diary.js uses direct fetch instead of delegated API"
+    assert "/pet/activity" not in content, "memory-diary.js contains direct /pet/activity endpoint"
+    assert "/pet/relationship-memory" not in content, "memory-diary.js contains direct /pet/relationship-memory endpoint"
+    # Must use delegated API calls
+    has_activity_call = "getpetactivity" in content or "get_pet_activity" in content or "activity" in content
+    has_memory_call = "getrelationshipmemory" in content or "get_relationship_memory" in content or "relationshipmemory" in content
+    assert has_activity_call, "memory-diary.js missing delegated activity API call"
+    assert has_memory_call, "memory-diary.js missing delegated relationship memory API call"
+
+
+def eval_memory_diary_module_rendering_and_refresh_contract():
+    """Module preserves rendering, shared moment request, and refresh behavior."""
+    _skip_if_no_memory_diary()
+    diary_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js").read_text(encoding="utf-8").lower()
+    # Must use DOM text APIs or escaping for dynamic text
+    has_safe_render = ("textcontent" in diary_js or "escapehtml" in diary_js or "escape_html" in diary_js)
+    assert has_safe_render, "memory-diary.js missing safe rendering (textContent/escapeHtml)"
+    # Must have shared moment creation path
+    has_moment = "shared_moment" in diary_js or "createrelationshipmemory" in diary_js or "create_relationship_memory" in diary_js
+    assert has_moment, "memory-diary.js missing shared moment creation path"
+    # Must have refresh behavior after moment creation (reload diary/memories)
+    has_refresh = ("loadtodaydiary" in diary_js or "loadrelationshipmemories" in diary_js or
+                   "reload" in diary_js or "loaddiary" in diary_js or "loadmemory" in diary_js or
+                   "refresh" in diary_js)
+    assert has_refresh, "memory-diary.js missing refresh behavior after shared moment"
+
+
+def eval_memory_diary_module_no_scope_drift():
+    """No build system, direct fetch, endpoint literals, or scope drift."""
+    _skip_if_no_memory_diary()
+    diary_js = (PROJECT_ROOT / "mini_agent" / "static" / "components" / "memory-diary.js").read_text(encoding="utf-8").lower()
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    all_content = diary_js + html
+    assert "http://" not in diary_js, "memory-diary.js contains external HTTP URL"
+    assert "https://" not in diary_js, "memory-diary.js contains external HTTPS URL"
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    drift_markers = [
+        "audio_url", "audio bytes", "voice clone", "clone voice",
+        "record by default", "background listening", "always listening",
+        "microphone access", "mic access", "camera access",
+        "screen capture", "location access",
+        "plugin store", "premium skill", "marketplace",
+        "checkout", "billing", "real payment",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
 
 
 def eval_cli_multiline_input():

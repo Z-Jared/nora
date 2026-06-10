@@ -5,9 +5,9 @@ Last updated: 2026-06-10
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 70%
+- Percent: 75%
 - Status: in progress
-- Current focus: TASK-188A / TASK-188B extracting the Pet Room memory diary native module and deterministic coverage.
+- Current focus: TASK-189A / TASK-189B should shift from invisible module extraction to visible Pet Room first-screen experience.
 
 ## Completed This Phase
 
@@ -166,15 +166,20 @@ Last updated: 2026-06-10
   - The module preserves consent-before-call, empty/over-500 validation, bounded preview failure copy, safe DOM text rendering, escaped meta tags, and stable `speech-bubble-*`, `voice-consent-*`, and `speech-preview-*` markers.
   - Deterministic coverage locks module exports, local wiring, delegated API boundary, combined speech/consent surface scanning, no direct fetch/endpoint literal, no build-system drift, and no audio/recording/provider/payment/PWA/native/3D scope drift.
   - Verification is green: 421 targeted tests OK, 756 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room native memory diary module extraction:
+  - `mini_agent/static/components/memory-diary.js` now owns Today diary rendering, relationship memory list rendering, and shared moment button wiring.
+  - `mini_agent/static/index.html` imports `loadTodayDiary()`, `loadRelationshipMemories()`, and `wireMemoryDiary()` locally while keeping calls delegated through injected `PetAPI`, `handleAuthError`, `showRoomNotice`, and `applyReaction`.
+  - The module preserves Today diary empty/activity/memory rendering, relationship memory empty/list rendering, shared moment prompt/request shape, refresh behavior, `memory recorded.` notice, and `shared_moment` reaction callback.
+  - Deterministic coverage locks module exports, local wiring, required `pet-today-*` / `today-*` / `pet-memory-*` / `mem-*` markers, delegated API boundary, safe rendering, no direct fetch/endpoint literal, no build-system drift, and no audio/recording/payment/PWA/native/3D scope drift.
+  - Verification is green: 435 targeted tests OK, 762 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-188A: Extract Pet Room Memory Diary native module — assigned to Claude A.
-- TASK-188B: Memory Diary module deterministic coverage — assigned to Claude B.
+- No active worker task after TASK-188 integration. Next PM publication should prioritize visible Pet Room first-screen pet experience.
 
 ## Next
 
-1. Wait for Claude A/B completion reports for TASK-188A / TASK-188B.
-2. PM initial review must combine both changes and verify `memory-diary.js` preserves delegated API boundaries, escaped rendering, shared moment refresh behavior, and no direct endpoint/fetch drift.
+1. Publish TASK-189A / TASK-189B for visible Pet Room first-screen experience: make Nora-01 and the room unmistakable on initial Web UI load, with no dashboard/chat-first regression.
+2. Lock deterministic coverage that first screen exposes the pet image/canvas, state chips, food/status, interaction controls, diary/memory entry point, and speech bubble without requiring the user to hunt for the pet.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 

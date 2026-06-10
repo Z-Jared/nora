@@ -564,6 +564,7 @@ import { updateCanvas } from '/static/components/pet-room-canvas.js';
 import { updateFoodPanel, loadCostEstimates, wireFoodButtons } from '/static/components/food-panel.js';
 import { skillCardsFromIdentity, renderSkillShelf } from '/static/components/skill-shelf.js';
 import { wireVoicePreview } from '/static/components/voice-preview.js';
+import { loadTodayDiary, loadRelationshipMemories, wireMemoryDiary } from '/static/components/memory-diary.js';
 window.PetAPI = PetAPI;
 (function(){
   var msgEl = document.getElementById('messages');
@@ -652,7 +653,7 @@ window.PetAPI = PetAPI;
       petContentEl.style.display = '';
       renderPet(pet);
       loadPetActivity(pet.pet_id);
-      loadRelationshipMemories(pet.pet_id);
+      loadRelationshipMemories(pet.pet_id, PetAPI, handleAuthError);
     }).catch(function(err){
       if(err && err._authError){ handleAuthError({status:401}); return; }
       petLoadingEl.textContent = 'Failed to load pet.';
@@ -694,7 +695,7 @@ window.PetAPI = PetAPI;
     document.getElementById('stat-growth').textContent = st.growth_level;
     updateFoodPanel(st);
     loadCostEstimates(pet.pet_id, PetAPI);
-    loadTodayDiary(pet.pet_id);
+    loadTodayDiary(pet.pet_id, PetAPI);
     applyExpression(st);
     applyPresence(st);
     applyRoomGreeting(st);
@@ -915,30 +916,6 @@ window.PetAPI = PetAPI;
     root._hideTimer = setTimeout(function(){ root.style.display = 'none'; }, 5000);
   }
 
-  function loadTodayDiary(petId){
-    Promise.all([
-      PetAPI.getPetActivity(petId, 5).catch(function(){return []}),
-      PetAPI.getRelationshipMemory(petId, 3).catch(function(){return []})
-    ]).then(function(results){
-      var events = results[0] || [];
-      var memories = results[1] || [];
-      var el = document.getElementById('pet-today-content');
-      if(!el) return;
-      if(!events.length && !memories.length){
-        el.innerHTML = '<div class="pet-loading">Start your first interaction above.</div>';
-        return;
-      }
-      var items = [];
-      events.forEach(function(e){
-        var t = e.created_at ? e.created_at.substring(11,16) : '';
-        items.push('<div class="pet-today-item"><span class="today-time">'+escapeHtml(t)+'</span><span class="today-text">'+escapeHtml(e.summary)+'</span></div>');
-      });
-      memories.forEach(function(m){
-        items.push('<div class="pet-today-item"><span class="today-time">memory</span><span class="today-text">['+escapeHtml(m.kind)+'] '+escapeHtml(m.summary)+'</span></div>');
-      });
-      el.innerHTML = items.join('');
-    });
-  }
 
   function setStat(name, val){
     var bar = document.getElementById('bar-'+name);
@@ -1007,40 +984,12 @@ window.PetAPI = PetAPI;
   };
   // Wire voice preview via voice-preview module
   wireVoicePreview(function(){ return currentPet; }, PetAPI, handleAuthError);
-  document.getElementById('pet-memory-moment-btn').onclick = function(){
-    if(!currentPet) return;
-    var summary = prompt('Describe the shared moment:');
-    if(!summary || !summary.trim()) return;
-    PetAPI.createRelationshipMemory({pet_id:currentPet.pet_id, kind:'shared_moment', summary:summary.trim(), source:'pet_room_demo'})
-    .then(function(result){
-      if(!result.error){
-        loadRelationshipMemories(currentPet.pet_id);
-        loadTodayDiary(currentPet.pet_id);
-        showRoomNotice('memory recorded.');
-        applyReaction('shared_moment', currentPet ? currentPet.state : null, result);
-      }
-    }).catch(function(err){
-      if(err && err._authError) handleAuthError({status:401});
-    });
-  };
-
-  function loadRelationshipMemories(petId){
-    PetAPI.getRelationshipMemory(petId).then(function(memories){
-      var list = document.getElementById('pet-memory-list');
-      if(!list) return;
-      if(!memories.length){list.innerHTML='<div class="pet-loading">No memories yet.</div>';return;}
-      list.innerHTML = memories.map(function(m){
-        var t = m.created_at ? escapeHtml(m.created_at.substring(11,16)) : '';
-        return '<div class="pet-memory-item">'
-          + '<div class="kind">' + escapeHtml(m.kind) + '</div>'
-          + '<div class="mem-summary">' + escapeHtml(m.summary) + '</div>'
-          + '<div class="mem-meta"><span>importance: '+m.importance+'</span><span>'+t+'</span></div>'
-          + '</div>';
-      }).join('');
-    }).catch(function(err){
-      if(err && err._authError) handleAuthError({status:401});
-    });
-  }
+  // Wire memory diary via memory-diary module
+  wireMemoryDiary(function(){ return currentPet; }, PetAPI, {
+    showRoomNotice: showRoomNotice,
+    applyReaction: applyReaction,
+    onAuthError: handleAuthError,
+  });
 
   // --- Identity Editor ---
   var editorOpen = false;
