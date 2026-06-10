@@ -7,7 +7,7 @@ Last updated: 2026-06-10
 - Phase: Phase 2 - Voice & Presence
 - Percent: 70%
 - Status: in progress
-- Current focus: Continuing Pet Room frontend architecture extraction with the next bounded native module after voice preview completion.
+- Current focus: TASK-188A / TASK-188B extracting the Pet Room memory diary native module and deterministic coverage.
 
 ## Completed This Phase
 
@@ -168,12 +168,13 @@ Last updated: 2026-06-10
   - Verification is green: 421 targeted tests OK, 756 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- None. TASK-187A / TASK-187B are reviewed and integrated; next task publication should target the next bounded Pet Room frontend module.
+- TASK-188A: Extract Pet Room Memory Diary native module — assigned to Claude A.
+- TASK-188B: Memory Diary module deterministic coverage — assigned to Claude B.
 
 ## Next
 
-1. Continue `docs/knowledge/NORA_FRONTEND_ARCHITECTURE_PLAN.md` Step 4 with `memory-diary.js`.
-2. Keep memory-diary extraction bounded to local UI rendering/orchestration only: no new endpoint, no extra relationship-memory mutation, no provider/network call beyond existing delegated API boundaries, no PWA/native, and no 3D/VRM.
+1. Wait for Claude A/B completion reports for TASK-188A / TASK-188B.
+2. PM initial review must combine both changes and verify `memory-diary.js` preserves delegated API boundaries, escaped rendering, shared moment refresh behavior, and no direct endpoint/fetch drift.
 3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
 4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
