@@ -27,13 +27,25 @@
   box-shadow: var(--pet-canvas-shadow);
   overflow: hidden;
 }
-.pet-room-canvas { position: relative; min-height: 600px; }
+.pet-room-canvas {
+  position: relative;
+  min-height: 600px;
+  overflow: hidden;
+}
 .pet-room-wall {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   background: var(--pet-wall-fill);
   height: var(--pet-wall-height);
   border-radius: var(--pet-canvas-radius) var(--pet-canvas-radius) 0 0;
 }
 .pet-room-floor {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: var(--pet-floor-fill);
   height: var(--pet-floor-height);
   border-radius: 0 0 var(--pet-canvas-radius) var(--pet-canvas-radius);
@@ -41,11 +53,14 @@
 
 /* ── Hero area ──────────────────────────────────────── */
 .pet-room-hero-area {
-  position: relative;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px 0 0;
+  justify-content: center;
+  padding: 48px 0 28px;
 }
 .pet-room-ground-shadow {
   width: 240px;
