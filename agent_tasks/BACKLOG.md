@@ -4,6 +4,32 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
+### TASK-190A: Nora Code MiMo-inspired terminal wake surface
+- 架构层: Nora Code TUI / Terminal UX / Context Compiler / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude A
+- 依赖: TASK-189A/B 已完成并集成；`docs/knowledge/NORA_TUI_FRONTEND_CONTRACT.md` 已更新。
+- 目标: 参考 MiMo Code 的终端唤醒方式，把 Nora Code TTY 空启动页改成 terminal-native wake surface：居中 `NORA CODE` 标识、底部 docked 输入区、`Code · Nora Auto` 模式行、`tab`/`ctrl+p`/`@`/`/`/`$` 快捷提示，并保持 Claude Code-like 克制。
+- 非目标: 不实现真实 subagent dispatch、Goal Judge、Checkpoint 后端、右侧 rail 后端、Pet Room UI、Web UI、provider 配置变更、MCP/LSP 新集成；不改模型调用逻辑；不引入 curses/Textual/Rich 新依赖；不做 dashboard/card-heavy TUI。
+- 安全边界: TTY 首屏不得泄漏 API key、raw prompt、hidden reasoning、raw tool payload、raw shell output、环境变量或敏感路径；`@`/`$` 提示只作为 UI 文案，不得触发读取文件或派发 worker；保持 80x24 可用。
+- 持久证据: `mini_agent/interactive_cli.py` 的空启动渲染满足 Nora Code wake contract；底部输入仍固定；启动页在用户提交第一条消息后折叠；保留现有 slash/approval/typing 行为。
+- 验证: `python3 -m unittest tests.test_cli tests.test_tty_* 2>/dev/null || python3 -m unittest tests.test_cli`; `PYTHONPYCACHEPREFIX=/private/tmp/nora-pycache python3 evals/run_evals.py`; `git diff --check`; targeted TTY replay for 80x24 empty startup, typing, `/` panel, approval panel。
+- 参考: `docs/knowledge/NORA_TUI_FRONTEND_CONTRACT.md`; `mini_agent/interactive_cli.py`; MiMo Code screenshots from 2026-06-20 user request。
+
+### TASK-190B: Nora Code TUI deterministic coverage for wake/input shortcuts
+- 架构层: Eval/Review System / Nora Code TUI / Safety/Policy
+- 优先级: high
+- 预计: 1 hour
+- Worker: Claude B
+- 依赖: TASK-190A；可先并行准备 eval skeleton，但不得改实现文件。
+- 目标: 为 TASK-190A 增加 deterministic TTY/eval 覆盖，锁住 MiMo-inspired wake surface、bottom-docked input、mode/status line、shortcut hints、no leak、安全退化和 80x24 可用性。
+- 非目标: 不实现 TUI；不修改 `mini_agent/interactive_cli.py`；不新增真实 file picker/subagent dispatch/right rail 后端；不引入外部截图/Playwright/Node/Rich/Textual/curses 依赖。
+- 安全边界: 覆盖必须证明 `@`/`$` 只是 UI 唤醒提示而非读取文件/派发 worker；不得要求真实 provider/API key/MCP/LSP；不得记录 raw prompt、API key、hidden reasoning、raw shell output。
+- 持久证据: 新增 eval 名称包含 `nora_code_wake` 或 `tui_wake`；覆盖 `NORA CODE`、`Code · Nora Auto`、`/ 命令`、`@ 添加文件`、`$ 子智能体`、`tab 切换模式`、`ctrl+p 设置`、`esc interrupt` active-run hint、80x24 bottom input invariant、no dashboard/card-heavy regression。
+- 验证: `PYTHONPYCACHEPREFIX=/private/tmp/nora-pycache python3 evals/run_evals.py`; targeted `python3 -m unittest` for TTY/CLI tests; `git diff --check`。
+- 参考: `docs/knowledge/NORA_TUI_FRONTEND_CONTRACT.md`; existing `tty_real_screen_*` evals; current failing/fragile TTY approval fit baseline should be treated carefully and not weakened。
+
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
