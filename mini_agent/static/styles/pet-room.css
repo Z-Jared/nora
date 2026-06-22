@@ -11,7 +11,7 @@
 
 /* ── Room shell ─────────────────────────────────────── */
 .pet-room {
-  display: none;
+  display: block;
   padding: 24px;
   max-width: var(--pet-canvas-max-w);
   margin: 0 auto;

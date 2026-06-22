@@ -4,32 +4,6 @@ PM 从这里读取待分配的任务。每个任务格式：
 
 ## 待分配
 
-### TASK-189A: Pet Room first-screen pet-first experience
-- 架构层: Avatar/Room UI / Pet Room Experience / Voice & Presence / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude A
-- 依赖: TASK-188A、TASK-188B 完成并集成。
-- 目标: 回应用户“哪里有宠物”的体验问题，把 Web UI 初始视口改成明确的 Pet Room / Nora-01 首屏：进入页面后不用寻找，第一眼就能看到 Nora-01 宠物视觉、房间、状态芯片、食物/互动入口、语音气泡和日记/记忆入口。
-- 非目标: 不新增/删除/重命名 HTTP endpoint；不修改 `mini_agent/http_server.py`、`mini_agent/pets.py`、`mini_agent/static/api.js`；不引入 React/Vite/TypeScript/npm/build step；不新增真实 voice/TTS/audio playback、recording、provider config、food debit mutation、voice cloning、microphone/camera/screen/location access、PWA/native、marketplace/payment、3D/VRM/Live2D runtime。
-- 安全边界: 只做本地 Web UI 布局/文案/样式调整；Pet Room 仍通过现有 `PetAPI` 和已拆出的 native modules 取数；不得隐藏成本边界，不得加入诱导付费、假亲密、provider activation、recording/background listening、native/PWA 或 3D scope drift；所有动态文本继续使用现有 escaping/DOM text boundary。
-- 持久证据: 首屏 DOM/样式让 `pet-room-design-shell`、`pet-room-canvas`、`pet-room-hero-image`、`pet-room-name`、`pet-room-status-chip`、food panel、interaction dock、speech bubble、Today diary / memory entry 在初始 viewport 语义上成为主界面；保留现有 Pet Room markers、module imports、API delegation、auth delegation、reaction/notice/diary behavior。
-- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted scan for direct endpoint/build-system/audio/recording/payment/marketplace/PWA/native/3D drift in changed Web UI files。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`; `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`; `agent_tasks/PHASE_STATUS.md`; `mini_agent/static/index.html`; `mini_agent/static/styles/pet-room.css`; existing Pet Room modules.
-
-### TASK-189B: First-screen pet experience deterministic coverage
-- 架构层: Eval/Review System / Avatar/Room UI / Pet Room Experience / Safety/Policy
-- 优先级: high
-- 预计: 1 hour
-- Worker: Claude B
-- 依赖: TASK-188A、TASK-188B 完成并集成；与 TASK-189A 并行，但不得改实现文件。
-- 目标: 为 TASK-189A 添加 deterministic smoke/eval 覆盖，锁住 Web UI 初始体验必须是 pet-first，而不是 dashboard/chat-first；确保 Nora-01 宠物图像/房间/status/food/actions/speech/diary markers 在首屏主路径可见且不被普通 chat/task/runtime UI 淹没。
-- 非目标: 不实现布局；不修改 `mini_agent/static/index.html`、CSS、JS modules、图片资产、HTTP server、pets/runtime 文件；不新增 Playwright、Node build、React/Vite/TypeScript/npm；不新增真实 TTS/provider/audio/recording/payment/native/PWA/3D 行为。
-- 安全边界: 测试只读扫描 HTML/CSS/JS/eval/test 文件；不得调用外部网络、生成音频、修改设计稿；必须阻断 dashboard-first/chat-first 回退、external hero URL、build-system drift、audio/recording/payment/provider/native/PWA/3D scope drift。
-- 持久证据: 新增 eval 名称包含 `pet_first_screen` 或 `first_screen_pet`；覆盖 first-screen required markers、local Nora-01 asset、Pet Room primary ordering/visibility classes、food/status/actions/speech/diary/memory entry markers、no hidden pet room、no external URL/build-system/product scope drift；smoke tests 可补强首屏主路径。
-- 验证: `python3 evals/run_evals.py`; `python3 -m unittest tests.test_webui_smoke tests.test_http_server`; `git diff --check`; targeted forbidden-copy/build-system/audio/recording/payment/native scan。
-- 参考: `docs/knowledge/NORA_PET_AGENT_DIRECTION.md`; `docs/knowledge/NORA_PET_ROOM_FRONTEND_CONTRACT.md`; `evals/run_evals.py`; `tests/test_webui_smoke.py`; current user feedback: “哪里有宠物”。
-
 ## Phase 1 Exit Gate
 
 这些任务是 Phase 1 完成后的硬门禁。`TASK-167`、`TASK-168`、`TASK-169`、`TASK-170A`、`TASK-170B` 已完成。Phase 1 Exit Gate 已通过；Phase 2 可以从 Voice Profile / Presence 的小任务开始，但必须遵守 `agent_tasks/PM_LOOP.md` 的 Phase 2 Worker Scaling Protocol。
@@ -37,6 +11,16 @@ PM 从这里读取待分配的任务。每个任务格式：
 ## 进行中
 
 ## 已完成
+### TASK-189A: Pet Room first-screen pet-first experience ✅
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 -m unittest tests.test_webui_smoke tests.test_http_server` 438 tests OK；`python3 evals/run_evals.py` 768 passed, 0 failed, 0 skipped；`git diff --check` OK。
+- 内容: Web UI 默认视口改为 Pet Room 首屏；`currentView` 默认为 `'pet'`；Pet Room CSS 默认 `display:block`；聊天视图默认隐藏；启动时自动调用 `loadPet()`；新增 3 个 smoke test 锁定首屏标记、CSS 默认值和启动加载行为；修复 `test_add_food_endpoint_normalizes_to_food_added` mock 缺少 pet shape 的预存脆弱性。
+
+### TASK-189B: First-screen pet experience deterministic coverage ✅
+- Reviewer: CCB reviewer APPROVED (`agent_tasks/REVIEW.md`)
+- 验证: `python3 evals/run_evals.py` 768 passed, 0 failed, 0 skipped（含 6 个新增 pet_first_screen eval）；`python3 -m unittest tests.test_webui_smoke tests.test_http_server` 438 tests OK；`git diff --check` OK。
+- 内容: 新增 6 个 deterministic offline eval（`pet_first_screen_markers_present`、`pet_first_screen_local_hero_image`、`pet_first_screen_not_hidden`、`pet_first_screen_modules_wired`、`pet_first_screen_no_scope_drift`、`pet_first_screen_startup_loads_pet`）；锁住首屏标记、本地 hero 图片、非隐藏状态、模块接入、无构建系统/产品范围蔓延、启动路径自动加载 pet。
+
 
 ### TASK-188A: Extract Pet Room Memory Diary native module ✅
 - 完成者: Claude A；Codex PM 初审和 reviewer gate 均通过。

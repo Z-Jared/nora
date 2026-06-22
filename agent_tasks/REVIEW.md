@@ -1,71 +1,82 @@
-# TASK-188A/188B Review — Extract Pet Room Memory Diary native module
+# Review Report: TASK-189A + TASK-189B
 
 **Status: APPROVED**
 
 ## Summary
 
-TASK-188A extracts Pet Room memory diary into `memory-diary.js` as a native ES module. TASK-188B adds comprehensive eval/smoke coverage. Implementation correctly preserves all behavior, DOM markers, auth delegation, shared moment contract, and notice/reaction callbacks.
+TASK-189A makes the Web UI initial viewport unmistakably pet-first. TASK-189B locks that contract with 6 deterministic evals. Both tasks are correctly scoped, well-tested, and free of scope drift.
 
 ## Findings
 
-### 1. memory-diary.js — Read-Only, No Direct Fetch ✅
+### 1. Behavior Correctness ✅
 
-- Three exported functions: `loadTodayDiary(petId, api)`, `loadRelationshipMemories(petId, api, onAuthError)`, `wireMemoryDiary(getCurrentPet, api, callbacks)`
-- Uses injected `api` namespace: `api.getPetActivity()`, `api.getRelationshipMemory()`, `api.createRelationshipMemory()`
-- No `fetch(`, no `/pet/activity`, no `/pet/relationship-memory`, no `PetAPI` literal, no `http://`/`https://`
-- Uses `escapeHtml` for all dynamic text rendering (timestamps, kind, summary)
+- `currentView` defaults to `'pet'` — correct.
+- `.pet-room` CSS default changed to `display: block` — correct.
+- `thread-head` and `messages-wrap` get `style="display:none"` — correct for initial state.
+- `nav-pet` gets `active` class by default — correct.
+- Startup calls `loadPet()` when `currentView === 'pet'` — correct and minimal.
+- `switchView()` function properly handles both directions: pet→chat hides pet room and shows thread; chat→pet shows pet room and hides thread — no regression.
 
-### 2. index.html — Minimal Wiring ✅
+### 2. CSS/HTML Boundary ✅
 
-- Import: `import { loadTodayDiary, loadRelationshipMemories, wireMemoryDiary } from '/static/components/memory-diary.js'`
-- Inline functions removed: `loadTodayDiary`, `loadRelationshipMemories`, shared moment handler
-- `renderPet()` now calls `loadTodayDiary(pet.pet_id, PetAPI)` and `loadRelationshipMemories(pet.pet_id, PetAPI, handleAuthError)`
-- Shared moment wired via: `wireMemoryDiary(function(){ return currentPet; }, PetAPI, { showRoomNotice, applyReaction, onAuthError: handleAuthError })`
-- All DOM markers, copy, auth delegation, notice/reaction behavior preserved
+- Inline styles are minimal and justified: `display:block`/`display:none` for initial viewport state.
+- CSS rule change is a single property: `.pet-room { display: block }`.
+- No unnecessary CSS classes or over-engineering.
+- The approach is the smallest possible change to achieve the goal.
 
-### 3. Shared Moment Contract Preserved ✅
+### 3. Test Coverage ✅
 
-- Request body: `{pet_id, kind:'shared_moment', summary: summary.trim(), source:'pet_room_demo'}`
-- Success callback: refreshes `loadRelationshipMemories` + `loadTodayDiary`, calls `showRoomNotice('memory recorded.')`, calls `applyReaction('shared_moment', pet.state, result)`
-- Auth error delegation: `onAuthError({status: 401})` on `_authError` rejection
-- Empty summary guard: no API call when `!summary || !summary.trim()`
-- No-pet guard: no API call when `!pet`
+**Claude A smoke tests (3 new):**
+- `test_pet_room_default_css_visible` — locks CSS default to `display:block`
+- `test_pet_room_first_screen_markers` — locks 14 first-screen DOM markers + default view
+- `test_startup_loads_pet_content_without_switchView` — locks startup `loadPet()` path with async wait
 
-### 4. Tests — Strong Contract Coverage ✅
+**Claude B evals (6 new):**
+- `pet_first_screen_markers_present` — required markers exist in HTML/CSS
+- `pet_first_screen_local_hero_image` — local-only Nora-01 asset
+- `pet_first_screen_not_hidden` — no `display:none` on pet room root
+- `pet_first_screen_modules_wired` — all 5 native modules imported
+- `pet_first_screen_no_scope_drift` — no build-system or product scope drift
+- `pet_first_screen_startup_loads_pet` — startup calls `loadPet()` with conditional check
 
-**Module tests** (6 tests):
-- Module exists, exports, no direct fetch/endpoints/PetAPI/URLs, uses escapeHtml, index imports
+**Mock fix:** `test_add_food_endpoint_normalizes_to_food_added` now returns valid pet shape (pre-existing fragility exposed by startup `loadPet()` call).
 
-**Today diary tests** (3 tests):
-- Renders activity events with timestamps
-- Shows empty state when no events/memories
-- Renders memories with `[kind]` prefix
+### 4. No Scope Drift ✅
 
-**Relationship memory tests** (2 tests):
-- Renders memory items with kind, summary, importance
-- Shows empty state
+Scope drift scan clean. All `rg` hits are:
+- Existing `pet-room-reaction` CSS/HTML/JS (pre-existing)
+- Eval negative assertions checking forbidden patterns (pre-existing)
+- `setup_guidance` URL in `index.html` (pre-existing)
 
-**Shared moment tests** (3 tests):
-- Correct request body (pet_id, kind, summary, source)
-- Callbacks invoked (showRoomNotice, applyReaction)
-- Empty summary blocked (no API call)
-- No-pet blocked (no API call)
+No new forbidden markers introduced:
+- ❌ No React/Vite/TypeScript/npm/build system
+- ❌ No real audio/TTS/recording/voice cloning
+- ❌ No payment/billing/marketplace
+- ❌ No PWA/native/desktop
+- ❌ No 3D/VRM/Live2D
 
-**Safety test** (1 test):
-- No forbidden scope drift markers (audio, payment, marketplace, PWA, 3D/VRM, etc.)
+### 5. Backward Compatibility ✅
 
-### 5. No Scope Drift ✅
+- Chat view still accessible via nav toggle
+- `switchView('chat')` correctly shows thread-head, messages-wrap, composer
+- All existing Pet Room module wiring preserved
+- No endpoint changes, no API contract changes
 
-- No real audio/recording/provider
-- No payment/marketplace
-- No PWA/native
-- No 3D/VRM/Live2D
-- No build system
+### 6. Architecture Consistency ✅
+
+- Changes align with Pet Agent MVP first-screen requirement
+- Module boundaries (native ES modules) preserved
+- API delegation through `PetAPI` preserved
+- No new files outside allowed scope
 
 ## Verification
 
 ```
-python3 -m unittest tests.test_webui_smoke tests.test_http_server → 435 tests OK
-python3 evals/run_evals.py → 762 passed, 0 failed, 0 skipped
+python3 -m unittest tests.test_webui_smoke tests.test_http_server → 438 tests OK
+python3 evals/run_evals.py → 768 passed, 0 failed, 0 skipped
 git diff --check → clean
 ```
+
+## Verdict
+
+**APPROVED** — Both tasks are correctly implemented, well-tested, and ready for integration.

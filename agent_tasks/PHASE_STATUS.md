@@ -1,13 +1,13 @@
 # Nora Phase Status
 
-Last updated: 2026-06-10
+Last updated: 2026-06-14
 
 ## Current Phase
 
 - Phase: Phase 2 - Voice & Presence
-- Percent: 75%
+- Percent: 80%
 - Status: in progress
-- Current focus: TASK-189A / TASK-189B visible Pet Room first-screen pet experience.
+- Current focus: PM初审完成，等待 reviewer gate 完成后集成 TASK-189A/B。Phase 2 接近完成。
 
 ## Completed This Phase
 
@@ -60,6 +60,13 @@ Last updated: 2026-06-10
   - Preview is read-only: no compute food debit, no pet state mutation, no activity event, and no relationship-memory write.
   - Deterministic coverage locks fallback availability, cost transparency, secret rejection/no echo, read-only behavior across food/state/activity/memory, and no recording/background/voice-cloning/payment/marketplace copy.
   - Verification is green: 274 targeted tests OK, 682 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
+- Pet Room first-screen pet-first experience:
+  - Web UI 默认视口改为 Pet Room 首屏；`currentView` 默认为 `'pet'`。
+  - Pet Room CSS 默认 `display:block`；聊天视图默认隐藏。
+  - 启动时自动调用 `loadPet()`，无需用户手动切换视图。
+  - 用户打开页面第一眼即看到 Nora-01 宠物、房间、状态芯片、食物/互动入口、语音气泡和日记/记忆。
+  - 6 个新增 deterministic eval 锁住首屏标记、本地 hero 图片、非隐藏状态、模块接入、无范围蔓延、启动加载行为。
+  - Verification is green: 438 targeted tests OK, 768 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 - Pet Room speech bubble text fallback surface:
   - Pet Room now exposes a visible text-only speech bubble near the robot avatar.
   - The preview control calls `POST /pet/voice-preview` and displays fallback text plus cost/no-audio/no-network/no-recording metadata.
@@ -174,15 +181,15 @@ Last updated: 2026-06-10
   - Verification is green: 435 targeted tests OK, 762 evals passed, 0 failed, 0 skipped, `git diff --check` clean.
 
 ## In Progress
-- TASK-189A: Pet Room first-screen pet-first experience — assigned to Claude A.
-- TASK-189B: First-screen pet experience deterministic coverage — assigned to Claude B.
+- TASK-189A/B review integration — PM初审通过，等待 reviewer gate。
 
 ## Next
 
-1. Wait for Claude A/B completion reports for TASK-189A / TASK-189B.
-2. PM initial review must combine both changes and verify the first Web UI viewport makes Nora-01 and Pet Room unmistakable without dashboard/chat-first regression.
-3. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
-4. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
+1. Send TASK-189A/B to reviewer for deep review.
+2. After reviewer approval, commit and push.
+3. Evaluate whether Phase 2 is complete or needs remaining Voice/Presence tasks.
+4. Keep Phase 2 on A/B only until Web/PWA presence or desktop shell has independent file boundaries.
+5. Continue avoiding real audio/TTS providers, native/desktop presence, PWA/service workers, notifications, billing, marketplace, and 3D/VRM until explicit later-phase tasks.
 
 ## Phase 1 Exit Criteria
 
@@ -233,6 +240,6 @@ Phase 2 start worker plan:
 ## Four-Phase Overview
 
 - Phase 1 Pet Life MVP: 100% / complete
-- Phase 2 Voice & Presence: 70% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, native food panel module extraction, native skill shelf module extraction, and native voice preview module extraction complete
+- Phase 2 Voice & Presence: 80% / Voice Profile, TTS text fallback, Pet Room speech bubble preview, consent/cost boundary, CSS-only expression mapping, CSS-only idle/presence signals, deterministic room-load greeting, deterministic interaction reactions, deterministic skill ability shelf, Pencil Pet Room restoration, Pet Room CSS/token extraction, native Pet Room API boundary extraction, native Pet Room canvas module extraction, native status chips module extraction, native food panel module extraction, native skill shelf module extraction, and native voice preview module extraction and Pet Room first-screen pet-first experience complete
 - Phase 3 Skill Runtime Reframing: 0% / not started
 - Phase 4 Platform & Marketplace: 0% / not started

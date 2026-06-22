@@ -1503,7 +1503,7 @@ _fetchHandler = function(url, opts) {
 };
 """, test_body="""
 result = {};
-result.initialPetDisplay = document.getElementById('pet-room').style.display || 'none';
+result.defaultView = currentView;
 switchView('pet');
 result.petDisplay = document.getElementById('pet-room').style.display;
 result.petActive = document.getElementById('nav-pet').classList.contains('active');
@@ -1511,18 +1511,87 @@ result.chatNotActive = !document.getElementById('nav-chat').classList.contains('
 result.threadHidden = document.getElementById('thread-head').style.display;
 result.messagesHidden = document.getElementById('messages-wrap').style.display;
 switchView('chat');
-result.chatAfterSwitch = document.getElementById('nav-chat').classList.contains('active');
-result.petAfterSwitch = !document.getElementById('nav-pet').classList.contains('active');
+result.chatDisplay = document.getElementById('nav-chat').classList.contains('active');
+result.petAfterChat = !document.getElementById('nav-pet').classList.contains('active');
+result.threadAfterChat = document.getElementById('thread-head').style.display;
 """)
         d = result
-        self.assertEqual(d["initialPetDisplay"], "none")
+        self.assertEqual(d["defaultView"], "pet", "Default view should be pet")
         self.assertEqual(d["petDisplay"], "block")
         self.assertTrue(d["petActive"])
         self.assertTrue(d["chatNotActive"])
         self.assertEqual(d["threadHidden"], "none")
         self.assertEqual(d["messagesHidden"], "none")
-        self.assertTrue(d["chatAfterSwitch"])
-        self.assertTrue(d["petAfterSwitch"])
+        self.assertTrue(d["chatDisplay"], "nav-chat should be active after switchView('chat')")
+        self.assertTrue(d["petAfterChat"], "nav-pet should not be active after switchView('chat')")
+
+    def test_pet_room_default_css_visible(self):
+        """Pet Room CSS must default to display:block for pet-first experience."""
+        css = (STATIC_DIR / "styles" / "pet-room.css").read_text(encoding="utf-8")
+        import re
+        match = re.search(r'\.pet-room\s*\{[^}]*display\s*:\s*(\w+)', css)
+        self.assertIsNotNone(match, ".pet-room rule not found in pet-room.css")
+        self.assertEqual(match.group(1), "block", "Pet Room should default to display:block")
+
+    def test_pet_room_first_screen_markers(self):
+        """Pet Room must have all first-screen markers and default to pet view."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve({pet_id:'pet_1', identity:{name:'Nora-01',species:'ceramic pet',personality_traits:['curious','gentle'],speech_style:'warm'}, state:{hunger:30,energy:60,mood:60,bond:50,growth_level:5,compute_food_balance:400}})});
+};
+""", test_body="""
+result = {};
+// Default view should be pet
+result.currentView = currentView;
+// First-screen markers must exist
+result.heroImage = !!document.getElementById('pet-room-hero-image');
+result.canvas = !!document.getElementById('pet-room-canvas');
+result.designShell = !!document.getElementById('pet-room-design-shell');
+result.chips = !!document.getElementById('pet-room-chips');
+result.petName = !!document.getElementById('pet-room-name');
+result.petRole = !!document.getElementById('pet-room-role');
+result.petFeedBtn = !!document.getElementById('pet-feed-btn');
+result.petPatBtn = !!document.getElementById('pet-pat-btn');
+result.petComfortBtn = !!document.getElementById('pet-comfort-btn');
+result.petRestBtn = !!document.getElementById('pet-rest-btn');
+result.petPlayBtn = !!document.getElementById('pet-play-btn');
+result.speechBubbleArea = !!document.getElementById('speech-bubble-area');
+result.todaySection = !!document.getElementById('pet-today-section');
+result.memoryMomentBtn = !!document.getElementById('pet-memory-moment-btn');
+""")
+        d = result
+        self.assertEqual(d["currentView"], "pet", "currentView should default to 'pet'")
+        for key in ['heroImage', 'canvas', 'designShell', 'chips', 'petName', 'petRole',
+                     'petFeedBtn', 'petPatBtn', 'petComfortBtn', 'petRestBtn', 'petPlayBtn',
+                     'speechBubbleArea', 'todaySection', 'memoryMomentBtn']:
+            self.assertTrue(d[key], f"Missing first-screen marker: {key}")
+
+    def test_startup_loads_pet_content_without_switchView(self):
+        """Startup with currentView='pet' must load pet content automatically."""
+        result = _run_node(setup_js="""
+_fetchHandler = function(url, opts) {
+  if (url === '/pet/current' || url.indexOf('/pet/current') === 0) {
+    return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve({pet_id:'pet_1', identity:{name:'Nora-01',species:'ceramic pet',personality_traits:['curious','gentle'],speech_style:'warm',skills:[],taste_profile:{}}, state:{hunger:30,energy:60,mood:60,bond:50,growth_level:5,compute_food_balance:400}})});
+  }
+  return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve([])});
+};
+""", test_body="""
+// Startup path: currentView is 'pet', loadPet() should have been called
+// Wait for async loadPet to complete
+await new Promise(function(r){setTimeout(r, 500)});
+result = {};
+result.currentView = currentView;
+result.petLoadingHidden = document.getElementById('pet-loading').style.display === 'none';
+result.petContentVisible = document.getElementById('pet-content').style.display !== 'none';
+result.petNameRendered = document.getElementById('pet-name').textContent;
+result.petIdSet = currentPet ? currentPet.pet_id : null;
+""")
+        d = result
+        self.assertEqual(d["currentView"], "pet")
+        self.assertTrue(d["petLoadingHidden"], "pet-loading should be hidden after startup loadPet")
+        self.assertTrue(d["petContentVisible"], "pet-content should be visible after startup loadPet")
+        self.assertEqual(d["petNameRendered"], "Nora-01", "Pet name should be rendered from startup loadPet")
+        self.assertEqual(d["petIdSet"], "pet_1", "currentPet should be set from startup loadPet")
 
     def test_escape_html_escapes_tags(self):
         result = _run_node(test_body="""
@@ -2659,6 +2728,8 @@ _fetchHandler = function(url, opts) {
     ok: true, status: 200,
     json: () => Promise.resolve({
       ok: true,
+      pet_id: 'pet_1',
+      identity: {name:'Test', species:'cat', personality_traits:[], relationship_role:'pet', speech_style:'', skills:[], taste_profile:{}},
       state: {mood:50, energy:50, hunger:30, bond:10, growth_level:1, compute_food_balance:600}
     })
   });

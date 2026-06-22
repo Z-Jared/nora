@@ -275,8 +275,8 @@ button{border:0;cursor:pointer}
       <button class="new-chat" type="button" id="new-chat-btn">+ &nbsp; New conversation</button>
       <div class="side-section">
         <div class="side-title">Workspace</div>
-        <div class="nav-item active" id="nav-chat"><span class="nav-dot"></span>Chat</div>
-        <div class="nav-item" id="nav-pet"><span class="nav-dot"></span>Pet Room</div>
+        <div class="nav-item" id="nav-chat"><span class="nav-dot"></span>Chat</div>
+        <div class="nav-item active" id="nav-pet"><span class="nav-dot"></span>Pet Room</div>
       </div>
       <div class="side-section">
         <div class="side-title">Recent</div>
@@ -301,7 +301,7 @@ button{border:0;cursor:pointer}
       </div>
     </aside>
     <main class="main">
-      <div class="pet-room" id="pet-room">
+      <div class="pet-room" id="pet-room" style="display:block">
         <div class="pet-loading" id="pet-loading">Loading pet...</div>
         <div id="pet-content" style="display:none">
           <div class="pet-room-design-shell" id="pet-room-design-shell">
@@ -491,7 +491,7 @@ button{border:0;cursor:pointer}
           </div>
         </div>
       </div>
-      <div class="thread-head" id="thread-head">
+      <div class="thread-head" id="thread-head" style="display:none">
         <div class="thread-title">
           <h1>Nora</h1>
           <p>Local AI assistant · Web UI connected</p>
@@ -502,7 +502,7 @@ button{border:0;cursor:pointer}
           <button class="action-btn stop-btn" type="button" id="stop-btn" disabled>Stop</button>
         </div>
       </div>
-      <div class="messages-wrap" id="messages-wrap">
+      <div class="messages-wrap" id="messages-wrap" style="display:none">
         <div class="messages" id="messages">
           <div class="empty-state" id="empty-state"><strong>Ask Nora anything.</strong><span>Responses, tool calls, and progress appear here.</span></div>
         </div>
@@ -612,7 +612,7 @@ window.PetAPI = PetAPI;
   var memoryFormOpen = false;
   var sessionSaveFormOpen = false;
   var serverStatus = null;
-  var currentView = 'chat'; // 'chat' or 'pet'
+  var currentView = 'pet'; // 'chat' or 'pet'
   var currentPet = null;
 
   // --- Pet Room ---
@@ -2318,6 +2318,7 @@ window.PetAPI = PetAPI;
   loadSessions();
   fetchTask();
   fetchMemories();
+  if(currentView === 'pet') loadPet();
   input.focus();
 })();
 </script>

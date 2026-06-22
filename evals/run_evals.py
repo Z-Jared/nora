@@ -317,6 +317,13 @@ def main() -> int:
         EvalCase("memory_diary_module_delegated_api_boundary", eval_memory_diary_module_delegated_api_boundary),
         EvalCase("memory_diary_module_rendering_and_refresh_contract", eval_memory_diary_module_rendering_and_refresh_contract),
         EvalCase("memory_diary_module_no_scope_drift", eval_memory_diary_module_no_scope_drift),
+        # TASK-189B: First-screen pet experience eval coverage
+        EvalCase("pet_first_screen_markers_present", eval_pet_first_screen_markers_present),
+        EvalCase("pet_first_screen_local_hero_image", eval_pet_first_screen_local_hero_image),
+        EvalCase("pet_first_screen_not_hidden", eval_pet_first_screen_not_hidden),
+        EvalCase("pet_first_screen_modules_wired", eval_pet_first_screen_modules_wired),
+        EvalCase("pet_first_screen_no_scope_drift", eval_pet_first_screen_no_scope_drift),
+        EvalCase("pet_first_screen_startup_loads_pet", eval_pet_first_screen_startup_loads_pet),
         # TASK-134: CLI slash launcher/welcome deterministic eval coverage
         EvalCase("slash_launcher_returns_menu", eval_slash_launcher_returns_menu),
         EvalCase("slash_launcher_includes_required_commands", eval_slash_launcher_includes_required_commands),
@@ -5563,6 +5570,129 @@ def eval_memory_diary_module_no_scope_drift():
     ]
     for marker in drift_markers:
         assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+# --- TASK-189B: First-screen pet experience eval coverage ---
+
+
+def eval_pet_first_screen_markers_present():
+    """Pet-first required markers remain present in HTML/CSS."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css").read_text(encoding="utf-8")
+    all_content = html + css
+    required = [
+        "pet-room-design-shell", "pet-room-canvas", "pet-room-hero-image",
+        "pet-room-name", "pet-room-role", "pet-room-status-chip",
+        "speech-bubble-area", "pet-today-content", "pet-memory-list",
+    ]
+    # Food/interaction markers — check for at least some
+    food_markers = ["pet-food-panel", "pet-food-section", "pet-cost-table", "pet-feed-btn", "pet-add-food-btn"]
+    found_food = [m for m in food_markers if m in all_content]
+    assert len(found_food) >= 1, f"missing food/interaction markers: found {found_food}"
+    missing = [m for m in required if m not in all_content]
+    assert not missing, f"missing pet-first markers: {missing}"
+
+
+def eval_pet_first_screen_local_hero_image():
+    """Nora-01 hero image is local-only: /static/nora-01-hero.jpg, no external URL."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    assert "nora-01-hero" in html or "nora-01-hero.jpg" in html, "missing local Nora-01 hero image reference"
+    # No external hero image URLs
+    import re
+    hero_section = re.search(r'pet-room-hero-image[\s\S]{0,500}', html)
+    if hero_section:
+        section = hero_section.group(0)
+        assert "http://" not in section, "hero image uses external HTTP URL"
+        assert "https://" not in section, "hero image uses external HTTPS URL"
+
+
+def eval_pet_first_screen_not_hidden():
+    """Pet Room root is not hidden behind display:none or hidden class."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    # Check pet-room-design-shell is not hidden
+    import re
+    shell_match = re.search(r'id=["\']pet-room-design-shell["\'][^>]*>', html)
+    assert shell_match, "pet-room-design-shell element not found"
+    shell_tag = shell_match.group(0)
+    assert "display:none" not in shell_tag.replace(" ", ""), f"pet-room-design-shell is hidden: {shell_tag}"
+    assert 'class="hidden"' not in shell_tag, f"pet-room-design-shell has hidden class: {shell_tag}"
+    # Check CSS doesn't hide the pet room by default
+    css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css").read_text(encoding="utf-8").lower()
+    shell_css = re.search(r'\.pet-room-design-shell\s*\{[^}]*\}', css)
+    if shell_css:
+        assert "display:none" not in shell_css.group(0).replace(" ", ""), \
+            f"CSS hides pet-room-design-shell: {shell_css.group(0)}"
+
+
+def eval_pet_first_screen_modules_wired():
+    """Existing Pet Room modules remain wired in index.html."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    required_modules = [
+        "pet-room-canvas.js", "food-panel.js", "skill-shelf.js",
+        "voice-preview.js", "memory-diary.js",
+    ]
+    missing = [m for m in required_modules if m not in html]
+    assert not missing, f"missing module imports: {missing}"
+    assert 'type="module"' in html or "type='module'" in html, \
+        "index.html missing <script type=\"module\"> for native ES module loading"
+
+
+def eval_pet_first_screen_no_scope_drift():
+    """No build system or product scope drift in first-screen HTML/CSS."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    css = (PROJECT_ROOT / "mini_agent" / "static" / "styles" / "pet-room.css").read_text(encoding="utf-8").lower()
+    all_content = html + css
+    import re
+    build_patterns = [r'\breact\b', r'\bvite\b', r'\btypescript\b', r'\bnpm install\b',
+                      r'\bpackage\.json\b', r'\bwebpack\b', r'\brollup\b']
+    for pattern in build_patterns:
+        match = re.search(pattern, all_content)
+        assert not match, f"build system marker '{pattern}' found"
+    drift_markers = [
+        "audio_url", "audio bytes", "voice clone", "clone voice",
+        "record by default", "background listening", "always listening",
+        "microphone access", "mic access", "camera access",
+        "screen capture", "location access",
+        "plugin store", "premium skill", "marketplace",
+        "checkout", "billing", "real payment",
+        "3d model", "vrm", "live2d",
+        "service worker", "notification permission",
+    ]
+    for marker in drift_markers:
+        assert marker not in all_content, f"scope drift marker '{marker}' found"
+
+
+def eval_pet_first_screen_startup_loads_pet():
+    """Startup path must call loadPet() when currentView defaults to 'pet'."""
+    html = (PROJECT_ROOT / "mini_agent" / "static" / "index.html").read_text(encoding="utf-8").lower()
+    import re
+    # Find the main script block
+    script_match = re.search(r'<script[^>]*>([\s\S]*)</script>', html)
+    assert script_match, "script block not found"
+    script = script_match.group(1)
+    # 1. Default view must be 'pet'
+    has_default_pet = bool(re.search(r"var\s+currentview\s*=\s*['\"]pet['\"]", script))
+    assert has_default_pet, "currentView must default to 'pet' for pet-first experience"
+    # 2. Extract the startup initialization block (after last function def, before closing IIFE)
+    # Find the last function definition
+    last_fn_pos = 0
+    for m in re.finditer(r'\bfunction\s+\w+', script):
+        last_fn_pos = m.end()
+    startup_block = script[last_fn_pos:]
+    # 3. Check that loadPet() is called in the startup block (not just inside switchView)
+    # Remove switchView function body to avoid false positive
+    startup_without_switchview = re.sub(
+        r'function\s+switchview\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\}',
+        '', startup_block
+    )
+    has_startup_loadpet = 'loadpet()' in startup_without_switchview or 'loadpet(' in startup_without_switchview
+    # 4. Also check for conditional currentView-based load
+    has_conditional_load = bool(re.search(
+        r'if\s*\(\s*currentview\s*===?\s*[\'"]pet[\'"]\s*\).*?loadpet',
+        startup_without_switchview
+    ))
+    assert has_startup_loadpet or has_conditional_load, \
+        "startup path must call loadPet() when currentView is 'pet'"
 
 
 def eval_cli_multiline_input():
